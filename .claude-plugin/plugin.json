@@ -1,0 +1,20 @@
+{
+  "name": "custom-code-review-plugin",
+  "version": "1.0.0",
+  "description": "Modular code review workflows with full, fast, commit, and math review modes",
+  "author": {
+    "name": "bhmun"
+  },
+  "license": "MIT",
+  "homepage": "https://github.com/XsQuare01/claude-code-review-pluigin",
+  "repository": "https://github.com/XsQuare01/claude-code-review-pluigin",
+  "keywords": [
+    "code-review",
+    "review-rules",
+    "claude-plugin",
+    "fsd",
+    "tailwind",
+    "electron",
+    "math-review"
+  ]
+}
