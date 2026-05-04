@@ -114,7 +114,10 @@ const MAX_RETRY_COUNT = 3
 
 **동일 값 상수가 여러 파일에 각각 정의.** 매직값 → 상수 추출만으로는 부족. 단일 출처에서 관리되어야 함.
 
+**상수의 위치는 `lib/constants.ts`로 고정한다.** 신규/변경 상수가 다른 파일이나 폴더에 선언되면 단일 출처 규칙 위반으로 지적한다.
+
 - 동일 상수값 2+ 파일에서 선언
+- `lib/constants.ts` 외 위치에 상수 선언 또는 상수 전용 파일 추가
 - z-index, breakpoint, spacing 컴포넌트마다 개별 정의
 - API 엔드포인트, 유효성 상수, 에러 메시지 중복
 - localStorage 키, Query Key 여러 곳에 문자열 반복

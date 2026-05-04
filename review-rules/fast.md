@@ -134,6 +134,7 @@ barrel export/path alias 일관성, 매직 넘버/문자열, segment 구조 불�
 - **boolean/핸들러 접두어 누락**: `is/has/should/can`, `handle`, `on`
 - **매직 넘버**: 타임아웃·재시도·페이지 크기·z-index 인라인 하드코딩 → named constant
 - **상수 중복 정의**: 동일 값이 2+ 파일에 각각 선언 (Query Key, endpoint, localStorage key, 에러 메시지). **단일 출처**로 통합 필요
+- **상수 위치 고정**: 상수의 위치는 `lib/constants.ts`로 고정. 신규/변경 상수가 다른 파일이나 폴더에 선언되면 위반
 
 ### 🟡 주요
 
