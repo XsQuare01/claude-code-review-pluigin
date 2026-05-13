@@ -53,8 +53,8 @@ task(
   prompt="아래 지시에 따라 props drilling 및 인자 전달 구조 코드 리뷰를 수행하세요.
 
 ## 리뷰 대상
-- Base: {MERGE_BASE}
-- Head: HEAD
+- 기준: {MERGE_BASE}
+- 대상: HEAD
 - 변경 파일 (props/인자 전달 구조 관련 파일만): {CHANGED_PROP_FILES}
 
 ## 리뷰 수행 방법
@@ -71,6 +71,7 @@ task(
 이 문서 하나만 사용합니다. `~/.claude/review-rules/` 의 숫자 prefix 모듈(00~11), `fast.md`, `math.md`는 참조하지 마세요.
 
 ## 출력 원칙
+- 사용자가 다른 언어를 명시하지 않은 한 모든 리뷰 결과/코멘트/리포트는 한국어로 작성하세요.
 - severity 우선순위: 🔴 > 🟡 > 🔵
 - 위치(파일:line)와 규칙 번호(P-x)를 반드시 표기
 - diff에 없는 기존 props/인자 구조는 지적 금지
@@ -80,9 +81,9 @@ task(
 
 ## 출력 형식 (마크다운)
 
-# Props & Arguments Code Review Report
+# Props/인자 전달 코드 리뷰 리포트
 
-> **Base**: {MERGE_BASE} | **Head**: HEAD
+> **기준**: {MERGE_BASE} | **대상**: HEAD
 > **검사 파일**: {N}개 (props/인자 전달 구조 변경)
 
 ## 한눈에 보기
@@ -90,7 +91,7 @@ task(
 
 ## 위반 목록
 
-| Severity | 파일 | 위치 | 규칙 | 이슈 | 개선 방향 |
+| 심각도 | 파일 | 위치 | 규칙 | 이슈 | 개선 방향 |
 |----------|------|------|------|------|----------|
 | 🔴 | path/to/file | L123 | P-1 | ... | ... |
 | 🟡 | path/to/file | L45 | P-4 | ... | ... |
@@ -98,7 +99,7 @@ task(
 ## 통과
 - (이슈 없는 파일 리스트, 또는 '전부 통과' 요약)
 
-**머지 가능 여부**: 🔴 {N}개 → {Yes/No/With fixes}"
+**머지 가능 여부**: 🔴 {N}개 → {가능/불가/수정 후 가능}"
 )
 ```
 
