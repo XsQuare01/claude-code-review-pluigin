@@ -42,6 +42,13 @@
 - 값 그대로 반환 함수 (`const getId = (user) => user.id`)
 - 빈 useEffect, 빈 catch 블록
 
+## 2-3. Fast Refresh 규칙 우회 🔴
+
+- `// eslint-disable-next-line react-refresh/only-export-components` 또는 동등한 suppression으로 Fast Refresh 규칙을 우회하면 위반
+- 컴포넌트 파일에서 컴포넌트가 아닌 값/상수/헬퍼를 함께 export하려고 lint를 끈 경우, 파일 분리 또는 export 구조 정리를 요구
+- 정당한 이유 없이 suppression만 추가한 경우는 리뷰 우회로 본다
+- 예외는 라이브러리 제약이나 마이그레이션 중 임시 조치처럼 이유와 제거 조건이 diff 안에 명확한 경우만 허용
+
 ---
 
 ## 3-1. 코드 스타일 일관성 🟡
