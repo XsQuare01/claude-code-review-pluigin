@@ -98,7 +98,7 @@ task(
 {MODULE_RULES_CONTENT — numbered non-00 모듈 .md 파일 전체 내용, 모듈 순서 유지}
 
 00-rule.md와 모듈 규칙이 충돌하면 00-rule.md를 우선 적용하세요.
-Rule IDs in findings MUST include the module prefix, for example `01-3`, `12-1`, `13-2`, or `EX-1`.
+Rule IDs in findings MUST include the module prefix, for example `01-3`, `11-2`, `12-1`, or `EX-1`.
 
 ## 출력 형식
 위반 사항만 아래 형식으로 출력하세요. 위반이 없으면 '위반 없음'만 출력.
@@ -167,7 +167,7 @@ bounded 단일 통합 pass 완료 후:
 **권장 액션**: 🔴 {N}개 → {가능/불가/수정 후 가능}
 ```
 
-최종 리포트는 기본적으로 `.md` 파일로 저장한다. 저장 경로는 `C:\Users\bhmun\OneDrive\바탕 화면\Docs\code-review-commit-{branch-name}-{date}.md`를 우선 사용한다. 문서 내용은 **해당 커밋 patch 안에서 실제로 바뀐 내용** 중심으로 쓰고, 다른 커밋/브랜치의 일반론은 넣지 않는다. 기존 리뷰 문서가 이미 있어도 그 문서를 이유로 리뷰를 건너뛰지 말고 **항상 새 리뷰를 수행한 뒤 새 파일로 저장**한다. 이 워크플로우의 기본 `workflow-name`은 `commit`이다.
+최종 리포트는 기본적으로 `.md` 파일로 저장한다. 저장 경로는 `./review-reports/code-review-commit-{branch-name}-{date}.md`를 우선 사용한다. 문서 내용은 **해당 커밋 patch 안에서 실제로 바뀐 내용** 중심으로 쓰고, 다른 커밋/브랜치의 일반론은 넣지 않는다. 기존 리뷰 문서가 이미 있어도 그 문서를 이유로 리뷰를 건너뛰지 말고 **항상 새 리뷰를 수행한 뒤 새 파일로 저장**한다. 이 워크플로우의 기본 `workflow-name`은 `commit`이다.
 
 ## 사용법
 
