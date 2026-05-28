@@ -23,30 +23,30 @@ description: Use when the user invokes /code-review-full or asks for a full code
 2. 패스 순서는 일반 → Props → 수학 → 예외 → 요약/리포팅이다.
 3. 일반 패스 규칙.
     - 일반 패스는 단일 general review가 아니다. 숫자 prefix 모듈별 리뷰를 유지하되, 큐 포화와 timeout을 피하기 위해 bounded wave 방식으로 실행한다.
-    - `C:/Users/bhmun/.claude/review-rules/[0-9]*.md`를 반드시 스캔하고, 발견된 숫자 prefix 파일 각각을 필수 일반 리뷰 모듈로 간주한다.
+    - `~/.claude/review-rules/[0-9]*.md`를 반드시 스캔하고, 발견된 숫자 prefix 파일 각각을 필수 일반 리뷰 모듈로 간주한다.
     - `00-rule.md`는 모든 일반 모듈보다 먼저 읽고, 모든 일반 모듈에 우선 적용하는 공통 규칙으로 전달한다.
     - 각 숫자 prefix 모듈마다 별도의 sub-agent 하나를 사용하되, 한 wave에서 실행하는 일반 모듈은 **최대 2개(max concurrency 2)** 로 제한한다. 다음 wave는 직전 wave의 결과 수집이 끝난 뒤 시작한다.
     - `props.md`, `math.md`, `exception.md`, `fast.md`, 그리고 숫자 prefix가 없는 모든 파일은 일반 패스에서 명시적으로 제외한다.
     - 모든 숫자 prefix 모듈 결과를 수집해야 일반 패스가 완료된다. 누락, 실패, timeout, inactivity timeout, queue expiry가 발생한 숫자 prefix 모듈이 있으면 완료된 리뷰가 아니라 `FAILED orchestration`으로 처리한다.
     - 일부 wave 또는 모듈이 실패해도 이미 완료된 모듈 결과는 수집해 partial result로 보존한다. 단, 실패/누락/timeout 모듈 목록을 명시하고 전체 리뷰를 fully complete로 요약하지 않는다.
-    - 숫자 prefix 모듈 중 `01-fsd.md` 또는 `13-dangerous-change.md`가 존재하는데 실행/수집되지 않으면 architecture/dangerous-change coverage 누락으로 보고 `FAILED orchestration` 처리한다.
-    - 별도 architecture 또는 dangerous-change summary agent로 `01-fsd.md`/`13-dangerous-change.md` 결과를 대체하지 않는다. 해당 지적은 반드시 숫자 모듈 결과로 유지한다.
+    - 숫자 prefix 모듈 중 `01-fsd.md` 또는 `12-deletion-regression.md`가 존재하는데 실행/수집되지 않으면 architecture/deletion-regression coverage 누락으로 보고 `FAILED orchestration` 처리한다.
+    - 별도 architecture 또는 deletion-regression summary agent로 `01-fsd.md`/`12-deletion-regression.md` 결과를 대체하지 않는다. 해당 지적은 반드시 숫자 모듈 결과로 유지한다.
     - 일반 패스를 하나의 summary/general agent로 대체하거나 Props/수학/예외만 실행해서 일반 패스를 생략해서는 안 된다.
     - 변경된 파일만 평가하고 diff 밖 저장소 전체는 스캔하지 않는다.
     - 일반 코드 리뷰 패스에서 테스트/목 전용 경로를 제외한다: `__test__/**`, `__tests__/**`, `*.test.*`, `*.spec.*`, `__mocks__/**`, `mock/**`, `mocks/**`, `*.mock.*`, 전용 fixture/mock-data 자산.
  4. Props 패스 규칙.
     - props drilling, 과도한 props, handler tunneling, argument-passing 구조와 관련된 변경 파일만 본다.
-    - `C:/Users/bhmun/.claude/review-rules/props.md`만 읽는다.
+    - `~/.claude/review-rules/props.md`만 읽는다.
     - 관련 범위가 없으면 `SKIPPED`로 기록한다.
     - 범위를 만들기 위해 repo-wide 스캔으로 되돌아가지 않는다.
  5. 수학 패스 규칙.
      - 행렬 또는 선형대수 작업이 있는 변경 파일만 본다.
-     - `C:/Users/bhmun/.claude/review-rules/math.md`만 읽는다.
+     - `~/.claude/review-rules/math.md`만 읽는다.
      - 관련 범위가 없으면 `SKIPPED`로 기록한다.
      - 범위를 만들기 위해 repo-wide 스캔으로 되돌아가지 않는다.
  6. 예외 패스 규칙.
     - 예외 처리, 에러 전파, fallback, 복구, validation flow와 관련된 변경 파일만 본다.
-    - `C:/Users/bhmun/.claude/review-rules/exception.md`만 읽는다.
+    - `~/.claude/review-rules/exception.md`만 읽는다.
     - 관련 범위가 없으면 `SKIPPED`로 기록한다.
     - 범위를 만들기 위해 repo-wide 스캔으로 되돌아가지 않는다.
  7. 요약/리포팅 규칙.
@@ -56,12 +56,12 @@ description: Use when the user invokes /code-review-full or asks for a full code
 
 ## 리포팅
 - 네 패스의 리포트를 각각 개별로 출력하고, 각 패스 출력은 생성된 그대로 유지한다: 일반, Props, 수학, 예외.
-- 일반 패스 리포트는 `C:/Users/bhmun/.claude/review-rules/[0-9]*.md`에서 발견한 모든 숫자 prefix 모듈명을 나열하고, 모듈별 sub-agent 결과를 각각 표시한다.
+- 일반 패스 리포트는 `~/.claude/review-rules/[0-9]*.md`에서 발견한 모든 숫자 prefix 모듈명을 나열하고, 모듈별 sub-agent 결과를 각각 표시한다.
 - 숫자 prefix 모듈 중 실행 또는 수집이 누락된 항목이 있으면 `FAILED orchestration`으로 표시하고, 완료된 리뷰처럼 요약하지 않는다.
 - 개별 패스 리포트를 출력 전에 다시 쓰거나 압축하거나 합치지 않는다.
 - 패스에 적용 범위가 없으면 패스 이름, 사유, 그리고 `SKIPPED`가 비차단임을 명시해 `SKIPPED`로 출력한다.
 - 모든 패스가 끝난 뒤에는 사용자가 다른 언어를 명시하지 않은 한 한국어로 전체 요약 리포트를 출력한다.
-- 요약은 기존 review-doc 관례를 따라 실용적인 파일명 예시 `code-review-full-{branch-name}-{date}.md`로 저장한다.
+- 요약은 기존 review-doc 관례를 따라 실용적인 파일명 예시 `./review-reports/code-review-full-{branch-name}-{date}.md`로 저장한다.
 - sibling review skill들과 같은 문서 저장 관례를 유지하고, 프로젝트가 이미 관례를 따르고 있으면 절대 경로를 강제하지 않는다.
 
 ### 상세 지적 작성 규칙
@@ -69,7 +69,7 @@ description: Use when the user invokes /code-review-full or asks for a full code
 - 각 이슈는 일반 `code-review`와 같은 상세 스타일로 `문제 → 의도/현재 선택 → 왜 부족한지 → 개선 방향` 순서가 드러나게 쓴다.
 - 동작 여부만 확인하지 말고 문제 정의, 의도, 선택 근거, 장기 변경 비용까지 함께 검토해 지적에 반영한다.
 - 전체 요약은 추가 정보일 뿐이며, 패스별 상세 지적을 대체하거나 압축하지 않는다.
-- 최종 저장 문서 `code-review-full-{branch-name}-{date}.md`에는 일반, Props, 수학, 예외 패스의 상세 리포트를 먼저 포함하고, 그 뒤에 전체 요약을 둔다.
+- 최종 저장 문서 `./review-reports/code-review-full-{branch-name}-{date}.md`에는 일반, Props, 수학, 예외 패스의 상세 리포트를 먼저 포함하고, 그 뒤에 전체 요약을 둔다.
 
 ### 요약 내용
 - 일반, Props, 수학, 예외 패스 상태 표를 포함한다.
