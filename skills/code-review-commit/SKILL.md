@@ -60,16 +60,20 @@ ls ~/.claude/review-rules/[0-9]*.md
 
 `/code-review`와 동일하게 **숫자 prefix가 붙은 파일만** 리뷰 패스로 사용한다.
 
-### Step 5: 병렬 Sub-Agent Dispatch
+`00-rule.md`는 공통 규칙으로 항상 최우선 적용하며, numbered non-00 모듈 전체와 함께 단일 consolidated prompt에 포함한다.
 
-**각 리뷰 모듈마다** 하나의 sub-agent를 `run_in_background=true`로 dispatch한다.
+### Step 5: 안전한 bounded Sub-Agent Dispatch
+
+`/code-review-commit`은 **단일 통합 커밋 리뷰**를 수행한다. 숫자 prefix가 붙은 numbered non-00 리뷰 모듈 전체와 `00-rule.md` 공통 규칙을 하나의 sub-agent prompt에 포함하고, `run_in_background=false`로 즉시 실행한다. 이 bounded 기본 경로는 agent 폭증과 timeout 위험을 줄이기 위한 safe default이다.
+
+상세하고 exhaustive한 모듈별 multi-pass coverage가 필요하면 이 single-commit workflow를 확장하지 말고, 커밋 patch 범위를 명시한 별도 수동 리뷰로 분리한다.
 
 ```
 task(
   category="unspecified-high",
   load_skills=[],
-  run_in_background=true,
-  description="Commit Review: {MODULE_NAME}",
+  run_in_background=false,
+  description="Commit Review (bounded consolidated pass)",
   prompt="아래 지시에 따라 단일 커밋 코드 리뷰를 수행하세요.
 
 ## 리뷰 대상
@@ -79,14 +83,22 @@ task(
 ## 리뷰 수행 방법
 1. `git show --format=medium {TARGET_COMMIT}` 로 커밋 patch 전체를 확인하세요
 2. 변경된 파일들을 직접 읽어서 컨텍스트를 파악하세요
-3. 아래 리뷰 규칙에 따라 위반 사항을 찾으세요
-4. 위반이 없는 규칙은 출력하지 마세요
-5. 반드시 **이 커밋 patch 안의 변경 라인만** 지적하세요
-6. root commit 도 동일하게 `git show {TARGET_COMMIT}` 기준으로 해석하세요
-7. 동작 여부만 보지 말고, 문제 정의·의도·선택 근거·장기 변경 비용까지 함께 검토하세요
+3. `00-rule.md` 공통 규칙을 모든 모듈보다 우선 적용하세요
+4. 아래 numbered non-00 리뷰 모듈들을 모듈 순서대로 검토하세요
+5. 아래 리뷰 규칙에 따라 위반 사항을 찾으세요
+6. 위반이 없는 규칙은 출력하지 마세요
+7. 반드시 **이 커밋 patch 안의 변경 라인만** 지적하세요
+8. root commit 도 동일하게 `git show {TARGET_COMMIT}` 기준으로 해석하세요
+9. 동작 여부만 보지 말고, 문제 정의·의도·선택 근거·장기 변경 비용까지 함께 검토하세요
 
-## 리뷰 규칙
-{RULES_CONTENT — 해당 .md 파일 전체 내용}
+## 공통 리뷰 규칙
+{COMMON_RULES_CONTENT — 00-rule.md 전체 내용}
+
+## 모듈 리뷰 규칙
+{MODULE_RULES_CONTENT — numbered non-00 모듈 .md 파일 전체 내용, 모듈 순서 유지}
+
+00-rule.md와 모듈 규칙이 충돌하면 00-rule.md를 우선 적용하세요.
+Rule IDs in findings MUST include the module prefix, for example `01-3`, `12-1`, `13-2`, or `EX-1`.
 
 ## 출력 형식
 위반 사항만 아래 형식으로 출력하세요. 위반이 없으면 '위반 없음'만 출력.
@@ -107,13 +119,13 @@ task(
 )
 ```
 
-**중요**: 모든 sub-agent를 동시에 dispatch한 뒤, 완료 알림을 기다린다. 순차 실행하지 않는다.
+**중요**: `/code-review-commit`은 bounded 단일 통합 pass로 완료한다. bounded pass가 실패하거나 timeout되면 완료로 표시하지 말고, 어떤 범위가 성공/실패/미확인인지 최종 리포트에 정직하게 기록한다.
 
 ### Step 6: 결과 수집 및 통합
 
-모든 sub-agent 완료 후:
+bounded 단일 통합 pass 완료 후:
 
-1. `background_output(task_id="...")` 로 각 결과 수집
+1. 단일 통합 pass 결과를 확인한다
 2. 결과를 severity 순서로 병합: 🔴 ERROR → 🟡 WARNING → 🔵 INFO
 3. 같은 severity 내에서는 모듈 순서대로 정렬
 4. 위반 없는 모듈은 최하단에 "✅ 통과" 로 요약
@@ -169,7 +181,7 @@ task(
 
 ## 주의사항
 
-- 각 sub-agent는 독립적 — 서로의 결과를 참조하지 않는다
+- bounded 단일 통합 pass 안에서 `00-rule.md`와 numbered non-00 모듈 전체를 함께 검토한다
 - merge commit 은 기본적으로 지원하지 않는다. 그런 경우 일반 `/code-review` 또는 명시적 범위 리뷰로 전환한다
 - 이 skill은 commit patch 기준이므로, 이후 커밋에서 수정된 문제까지 미리 반영해서 판단하지 않는다
 - diff에 포함되지 않은 기존 코드는 리뷰 대상이 아니다
