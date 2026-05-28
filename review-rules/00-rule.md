@@ -31,9 +31,9 @@
 ## 0-3. 리뷰 문서 생성 규칙 🔴
 
 - 모든 리뷰 워크플로우는 최종 결과를 기본적으로 `.md` 파일로 생성해야 함 (사용자가 명시적으로 텍스트 응답만 원한다고 한 경우만 예외)
-- 저장 기본 위치는 `C:\Users\bhmun\OneDrive\바탕 화면\Docs`
+- 저장 기본 위치는 `./review-reports/`
 - 파일명 규칙은 `code-review-{workflow-name}-{branch-name}-{date}.md`
-- 현재 정의된 workflow-name 예시: `full`, `fast`, `commit`, `math`
+- 현재 정의된 workflow-name 예시: `default`, `full`, `fast`, `commit`, `props`, `math`, `exception`
 - 기존 리뷰 문서가 이미 있어도 그것을 완료 신호로 간주해 리뷰를 건너뛰지 않는다. 항상 **새 리뷰를 수행하고 새 문서를 생성**한다
 - 리뷰 완료 후에는 사용자에게 저장 경로를 함께 보고한다
 
