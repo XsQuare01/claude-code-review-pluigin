@@ -5,7 +5,7 @@ description: Use when the user wants a faster, shorter code review that highligh
 
 # Fast Code Review
 
-짧고 빠른 코드 리뷰 모드. `/code-review`와 달리 **압축된 단일 룰 문서(`~/.claude/review-rules/fast.md`)** 를 기반으로 **단일 sub-agent** 가 한 번에 전체를 검토한다. 숫자 prefix 상세 모듈(현재 00~11)을 각각 dispatch하는 기존 구조의 sub-agent 오버헤드와 tail latency를 제거한 버전이다.
+짧고 빠른 코드 리뷰 모드. `/code-review`와 달리 **압축된 단일 룰 문서(`~/.claude/review-rules/fast.md`)** 를 기반으로 **단일 sub-agent** 가 한 번에 전체를 검토한다. 숫자 prefix 상세 모듈(현재 00~13)을 사용하지 않아 상세 모듈 기반 검토의 sub-agent 오버헤드와 tail latency를 제거한 저지연 경로이며, 큐 포화(queue saturation), tail latency, timeout 위험이 우려될 때 적합하다.
 
 ## 핵심 원칙
 
@@ -17,7 +17,7 @@ description: Use when the user wants a faster, shorter code review that highligh
 ## 룰 문서 위치
 
 - **Fast 전용**: `~/.claude/review-rules/fast.md` — 이 skill에서만 사용하는 압축본 (상세 모듈과 같은 폴더에 함께 위치)
-- 같은 폴더의 숫자 prefix 상세 모듈(`00~11`)은 **참조하지 않는다**. 상세 리뷰가 필요하면 `/code-review`를 쓴다.
+- 같은 폴더의 숫자 prefix 상세 모듈(`00~13`)은 **참조하지 않는다**. 상세/포괄적 리뷰가 필요하면 `/code-review-full`을 쓴다.
 
 ## 실행 절차
 
@@ -65,7 +65,7 @@ task(
 아래 파일을 먼저 Read 한 뒤 그 규칙을 기반으로 리뷰하세요:
 - `C:\\Users\\bhmun\\.claude\\review-rules\\fast.md`
 
-이 문서 하나만 사용합니다. `~/.claude/review-rules/` 의 숫자 prefix 상세 모듈(00~11)은 참조하지 마세요.
+이 문서 하나만 사용합니다. `~/.claude/review-rules/` 의 숫자 prefix 상세 모듈(00~13)은 참조하지 마세요.
 
 ## 출력 원칙
 - 사용자가 다른 언어를 명시하지 않은 한 모든 리뷰 결과/코멘트/리포트는 한국어로 작성하세요.
@@ -121,8 +121,9 @@ sub-agent의 출력을 그대로 사용자에게 전달한다. 추가 편집/재
 
 ## 주의사항
 
-- 이 모드는 완전한 리뷰 대신 **우선순위 높은 지적만 빠르게 보는 용도**다
-- 상세/포괄적 리뷰가 필요하면 `/code-review`를 사용 (숫자 prefix 모듈 병렬)
-- fast 룰 문서(`fast.md`)는 숫자 prefix 상세 모듈(현재 00~11)의 압축본이며, 원본이 개정되면 fast.md도 별도로 갱신해야 한다
+- 이 모드는 완전한 리뷰 대신 **우선순위 높은 지적만 빠르게 보는 저지연/timeout-safe 경로**다
+- 큐 포화(queue saturation), tail latency, timeout 위험이 우려될 때 이 모드를 사용한다
+- 상세/포괄적 리뷰가 필요하면 `/code-review-full`을 사용한다
+- fast 룰 문서(`fast.md`)는 숫자 prefix 상세 모듈(현재 00~13)의 압축본이며, 원본이 개정되면 fast.md도 별도로 갱신해야 한다
 - 빈 diff면 리뷰를 수행하지 않는다
 - lint 자동 수정이 가능한 항목은 리뷰 전에 반영하고, 남은 핵심 이슈만 다룬다
