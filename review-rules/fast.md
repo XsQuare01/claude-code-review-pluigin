@@ -1,8 +1,8 @@
 # Fast Code Review Rules (압축본)
 
-> Sync note: 숫자 prefix 상세 모듈(현재 00~11)이 바뀌면 이 압축본도 함께 갱신해야 한다.
+> Sync note: 숫자 prefix 상세 모듈(`00-rule.md` through `12-deletion-regression.md`)이 바뀌면 이 압축본도 함께 갱신해야 한다.
 
-이 문서는 `~/.claude/review-rules/`의 숫자 prefix 상세 모듈(00~11)에서 **high-signal 지적 기준만** 추려낸 압축본이다. 상세 예시/코드 블록은 제거했고, 리뷰어가 **파일별 가장 중요한 이슈 1개**를 빠르게 판별하도록 구성했다.
+이 문서는 `~/.claude/review-rules/`의 숫자 prefix 상세 모듈(`00-rule.md` through `12-deletion-regression.md`)에서 **high-signal 지적 기준만** 추려낸 압축본이다. 상세 예시/코드 블록은 제거했고, 리뷰어가 **파일별 가장 중요한 이슈 1개**를 빠르게 판별하도록 구성했다.
 
 상세 리뷰가 필요하면 `/code-review`를 쓰고, 이 문서는 오직 `/code-review-fast`에서만 사용한다.
 
