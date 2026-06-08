@@ -1,10 +1,12 @@
 # Fast Code Review Rules (압축본)
 
-> Sync note: 숫자 prefix 상세 모듈(`00-rule.md` through `12-deletion-regression.md`)이 바뀌면 이 압축본도 함께 갱신해야 한다.
+> Sync note: 숫자 prefix 상세 모듈(현재 00~13, 15, 16, 19)이 바뀌면 이 압축본도 함께 갱신해야 한다.
 
-이 문서는 `~/.claude/review-rules/`의 숫자 prefix 상세 모듈(`00-rule.md` through `12-deletion-regression.md`)에서 **high-signal 지적 기준만** 추려낸 압축본이다. 상세 예시/코드 블록은 제거했고, 리뷰어가 **파일별 가장 중요한 이슈 1개**를 빠르게 판별하도록 구성했다.
+이 문서는 `~/.claude/review-rules/`의 숫자 prefix 상세 모듈(00~13, 15, 16, 19)에서 **high-signal 지적 기준만** 추려낸 압축본이다. 상세 예시/코드 블록은 제거했고, 리뷰어가 **파일별 가장 중요한 이슈 1개**를 빠르게 판별하도록 구성했다.
 
 상세 리뷰가 필요하면 `/code-review`를 쓰고, 이 문서는 오직 `/code-review-fast`에서만 사용한다.
+
+Non-numbered special modules such as `exception.md` are not automatically included unless the fast-review skill explicitly loads them.
 
 ## Severity
 
@@ -13,6 +15,15 @@
 - 🔵 INFO — 개선 제안 (네이밍, 스타일 미세 조정)
 
 우선순위: 🔴 > 🟡 > 🔵. 같은 파일에 여러 지적 후보가 있으면 severity 높은 것을 남긴다.
+
+## Fast Selection Algorithm / 파일별 1개 선택 규칙
+
+For each changed file:
+1. Collect only confirmed issues on diff lines or directly affected adjacent structures.
+2. Pick the highest severity issue.
+3. If tied, prefer in this order: dangerous change, API contract, concurrency/idempotency, deletion regression, architecture boundary, exception/failure flow, type safety, state/side effect, accessibility when user interaction is blocked, readability/style.
+4. Output at most one issue per file.
+5. Do not mention clean files.
 
 ## 최상위 공통 규칙 (00)
 
@@ -33,6 +44,8 @@
 - **Wildcard re-export 금지** (`export * from './ui'`)
 - **동일 레이어 cross-import 금지** — widgets/features/entities 슬라이스 간 직접 import. 예외: Redux 그룹의 공용 `model/`만 상대 경로 허용
 - **Feature 동사 강제** — `features/*` 이름은 반드시 동사구. `features/hw-interface`, `features/user`, `features/auth` 같은 명사형은 위반 → `features/connect-hw` + `features/capture-camera` + `features/shutdown-hw` 처럼 행위 단위로 분할. feature 끼리 cross-import 금지, 공통은 entities 또는 widget/page 합성으로
+- `import type`도 레이어 방향, cross-import, process boundary 우회 수단이 아니다
+- `index.ts` named export라도 private helper/internal hook/segment 내부 구현을 공개하면 Public API 누수로 본다
 
 ### 🟡 역할 배치
 
@@ -48,7 +61,9 @@
 ### 🟡 프로세스/Segment
 
 - Renderer에서 `fs`/`path` 직접 사용 금지, Preload는 `contextBridge`만, IPC 타입은 cross-process 공유 위치
+- Renderer는 main/preload 직접 import 금지. raw IPC 호출은 preload/shared adapter 또는 shared IPC contract로 캡슐화되어야 한다
 - `ui`에 비즈니스 로직, `model`에 UI, `api`에 도메인 판단, `hooks`에 범용 util, `lib`에 도메인 불명 `utils/helpers` 뭉치 → 위반
+- 변경 파일의 import/export/index 변경은 파일별 최우선 후보로 보고, 동작보다 경계 위반을 먼저 판단한다
 
 ### 🔵 일관성
 
@@ -285,6 +300,89 @@ DIP, Idempotency (더블 클릭 중복 요청), Transparency, Robustness, Tell D
 
 - 성능보다 단순함, 단순함보다 확장성을 택한 이유를 짧게 남기면 좋아짐
 - 파일별 핵심 이슈를 쓸 때는 가능하면 **문제 → 현재 선택 → 왜 부족한지** 순서로 적는다
+
+---
+
+## 12. 삭제 회귀 점검 (12)
+
+### 🔴 필수
+
+- 삭제된 production export/function/type/constant/helper/runtime config/schema/API contract는 기본적으로 회귀를 의심한다. diff에 대체 경로, 이동/리네임, 호출부·import·export 갱신, 명시적 제거 의도가 보여야 안전하다.
+- 삭제 후 기능·계약은 유지되는데 구현만 사라졌거나 공통 helper 제거로 중복이 늘면 ERROR 후보. tests pass만으로 삭제 안전성을 증명하지 않는다.
+
+### 🟡 제외/범위
+
+- `__test__`, `*.test.*`, `*.spec.*`, `__mocks__`, mock/test/fixture 전용 삭제는 일반 fast 리뷰에서 보통 제외한다.
+- 전체 저장소 탐색으로 범위를 넓히지 말고, 삭제된 심볼과 인접 경로에 대한 targeted reference check만 한다.
+
+---
+
+## 13. 위험 변경 점검 (13)
+
+### 🔴 필수
+
+- public API/schema/route/IPC/config/env/permission 변경은 호환성 증거가 필요하다. 호출부·타입·검증·대체 경로 없이 contract를 바꾸면 ERROR 후보.
+- auth/payment/save/delete/file-write 같은 고위험 흐름 변경은 권한, 재시도, 중복 실행, rollback/idempotency, audit/user confirmation을 확인한다.
+- migration/storage/schema 변경은 forward/backward compatibility, rollback, partial-apply recovery, data backfill 안전성이 보여야 한다.
+
+### 🟡 검증 신호
+
+- 테스트 부재가 자동 위반은 아니지만, 데이터·권한·결제·저장/삭제·배포 호환성에 영향이 큰데 안전 증거가 없으면 지적한다.
+- 검증 신호는 테스트뿐 아니라 schema validation, typed contract, migration guard, feature flag rollout, runtime assertion, 문서화된 대체 경로일 수 있다.
+
+---
+
+## 15. 접근성 (15)
+
+### 🔴 필수
+
+- **Semantic controls**: 클릭 가능한 `div/span` 대신 button/link/input 등 native control 우선. role로 잘못 덧칠하면 위반 후보.
+- **Keyboard access**: custom control, hover/drag 전용 UI, menu/tab/option 등이 keyboard-only로 같은 작업을 못 하면 ERROR 후보.
+- **Focus management**: modal/dialog/popover/flyout/route transition에서 focus 진입·복원·trap 또는 stale focus 처리가 빠지면 지적.
+- **Labels/names**: icon-only button, form control, dialog/landmark/region에 accessible name/label 연결이 없으면 지적.
+- **Form error announcement**: error text가 control과 연결되지 않거나 submit 실패가 focus/live/status 없이 조용히 추가되면 지적.
+- 의미 있는 image/icon/SVG/canvas/chart/color-only 상태에 alt, text summary, aria text 같은 visual alternative가 없음.
+- `aria-expanded/selected/checked/current/hidden`, role, id reference가 실제 UI 상태·허용 조합과 맞지 않는 ARIA misuse.
+
+### 🟡 주요
+
+- motion/contrast는 diff에서 animation/token/color 조합으로 직접 추론 가능하고 사용자 경로를 막을 때만 다룬다.
+
+---
+
+## 16. API Contract (16)
+
+### 🔴 필수
+
+- **Request/response shape**: field 제거·rename·required화, nullable/optional 축소, enum 축소, serialization 방식 변경은 호환성 증거 필요.
+- **Status/error format**: status code, success/failure 의미, error body/code 변경이 caller retry/UI/telemetry 해석을 깨면 지적.
+- **Route/query/pagination semantics**: path/param/default/filter/sort/page/cursor 의미 변경은 같은 요청의 결과를 바꾸므로 contract 변경으로 본다.
+- **Versioning/deprecation**: breaking endpoint/channel/export 제거·의미 변경에는 adapter, fallback, staged rollout, migration/deprecation 근거가 필요.
+- **Auth contract**: header/cookie/token claim/role/scope/tenant 요구사항과 `401/403` 의미 변경은 caller와 denial flow 정합성을 확인.
+
+### 🟡 주요
+
+- Schema/DTO/runtime validation/generated type/mapper/serialized payload가 서로 어긋나면 contract 위반 후보.
+- IPC channel, event/webhook payload, ack/result shape, replay/idempotency semantics 변경은 producer·consumer 양쪽 호환성 확인.
+- env/config/feature flag/public export/SDK signature 변경은 old key fallback, alias, migration note 없이 바로 바꾸면 breaking 후보.
+
+---
+
+## 19. Concurrency & Idempotency (19)
+
+### 🔴 필수
+
+- **Duplicate submit**: save/delete/payment/order/notification/mutation이 double click, re-entry, StrictMode, repeated event로 두 번 실행될 수 있으면 방어 증거 필요.
+- **Idempotency key**: 외부 부작용 반복 요청에 stable operation/event ID, dedupe boundary, unique constraint, atomic claim이 없으면 지적.
+- **Retry safety**: non-idempotent operation을 retry가 그대로 재실행하거나 retry budget/backoff/abort/error 분류가 없으면 위험.
+- **Race/order hazards**: 느린 이전 응답·out-of-order event가 최신 상태를 덮으면 sequence/version/request token/latest-only guard 필요.
+- **Transaction/read-modify-write**: balance/count/inventory/status/DB/file update의 read→calculate→write 흐름에 lock, transaction, CAS, version guard가 없으면 lost update 후보.
+
+### 🟡 주요
+
+- Webhook/job replay, queue consumer, event subscriber는 processed event ID, atomic claim, replay log, partial-failure recovery가 필요.
+- Cancellation/stale work: route change, unmount, cancel 뒤 이전 async work가 publish하지 않도록 abort/cleanup/request token 증거 확인.
+- Optimistic rollback/reconciliation: 실패, retry, out-of-order completion, server canonical response와 충돌할 때 복원·무효화·version 정리가 필요.
 
 ---
 
