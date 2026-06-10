@@ -14,6 +14,7 @@
 
 - 약어/한 글자 변수 (`d`, `temp`, `val` — 루프 `i` 제외)
 - 모호한 이름 (`data`, `info`, `item`, `stuff`) — 단, `Result<T, E>` 같은 표준 결과 타입/패턴 문맥의 `result`는 예외 가능
+- 지나치게 긴 이름 — 조건, 구현 세부사항, 비즈니스 문맥을 한 식별자에 과도하게 합쳐 사람이 훑어 읽거나 발음하기 어려움. 단, 구체적인 이름 자체는 권장하며, 짧게 줄이기보다 책임 분리나 중간 개념 추출로 스캔하기 쉽게 만든다
 - 동사 없는 함수명
 - boolean에 `is/has/should/can` 접두어 없음 — 단, 플랫폼/HTML 표준 속성과 맞춘 `disabled`, `checked`, `selected`, `required`, `readOnly`, `open` 같은 이름은 예외 가능
 - 핸들러에 `handle` 접두어 없음
@@ -22,10 +23,12 @@
 // ❌
 const d = new Date()
 const [open, setOpen] = useState(false)
+const shouldShowPaymentRetryButtonWhenUserHasExpiredCardAndCheckoutSessionIsRecoverable = true
 
 // ✅
 const createdAt = new Date()
 const [isOpen, setIsOpen] = useState(false)
+const canRetryPayment = hasExpiredCard && isCheckoutRecoverable
 ```
 
 ## 1-2. 컴포넌트 네이밍 🟡
