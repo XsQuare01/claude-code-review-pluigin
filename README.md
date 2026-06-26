@@ -11,7 +11,7 @@ This plugin packages a local review system into a reusable structure with:
 - `/code-review-props` — props and argument flow review
 - `/code-review-math` — linear algebra / matrix-focused review
 - `/code-review-exception` — exception handling and recovery review
-- `/code-review-qualitative` — diff의 정성 품질을 LLM-as-a-judge 5인 패널로 1~5점 채점 (아키텍처 적절성·일관성). 일반 리뷰에서 자동 제외.
+- `/code-review-qualitative` — qualitative 1~5 rubric scoring via an LLM-as-a-judge panel
 - `/full-project-review`: manual risk-based whole-project release gate
 
 ## Included Rule Sets
@@ -120,7 +120,7 @@ Reviews matrix and linear algebra logic with shape-tracking rules.
 Reviews exception handling, error propagation, fallback, and recovery paths.
 
 ### `/code-review-qualitative`
-diff의 정성 품질을 LLM-as-a-judge 5인 패널로 1~5점 채점 (아키텍처 적절성·일관성). 일반 리뷰에서 자동 제외.
+Scores a diff on 1~5 qualitative rubrics (architecture appropriateness, consistency/convention fit) via a 5-judge LLM-as-a-judge panel. Excluded from the default `/code-review`.
 
 ### `/full-project-review`
 Runs a separate manual, risk-based whole-project release gate. It is not a replacement for `/code-review` or `/code-review-full`, and those commands remain separate existing workflows.
