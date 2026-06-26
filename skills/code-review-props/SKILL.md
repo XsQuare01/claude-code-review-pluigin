@@ -10,7 +10,7 @@ Props drilling, 과도한 props 전달, 함수 인자 과다를 **독립적으�
 ## 룰 문서 위치
 
 - **Props 전용**: `~/.claude/review-rules/props.md` — 이 skill에서만 사용
-- 같은 폴더의 숫자 prefix 모듈(`00-rule.md` through `12-deletion-regression.md`), `fast.md`, `math.md`는 **참조하지 않는다**
+- 같은 폴더의 숫자 prefix 모듈(`00~13`), `fast.md`, `math.md`는 **참조하지 않는다**
 - 일반 리뷰가 필요하면 `/code-review` 또는 `/code-review-fast`를 별도로 실행한다
 
 ## 검사 범위
@@ -66,9 +66,9 @@ task(
 
 ## 리뷰 규칙
 아래 파일을 먼저 Read 한 뒤 그 규칙을 기반으로 리뷰하세요:
-- `~/.claude/review-rules/props.md`
+- `C:\\Users\\bhmun\\.claude\\review-rules\\props.md`
 
-이 문서 하나만 사용합니다. `~/.claude/review-rules/` 의 숫자 prefix 모듈(`00-rule.md` through `12-deletion-regression.md`), `fast.md`, `math.md`는 참조하지 마세요.
+이 문서 하나만 사용합니다. `~/.claude/review-rules/` 의 숫자 prefix 모듈(00~13), `fast.md`, `math.md`는 참조하지 마세요.
 
 ## 출력 원칙
 - 사용자가 다른 언어를 명시하지 않은 한 모든 리뷰 결과/코멘트/리포트는 한국어로 작성하세요.
@@ -109,7 +109,7 @@ sub-agent의 출력을 그대로 사용자에게 전달한다. 명백한 형식 
 
 ### Step 5: 문서 저장
 
-리포트는 기본적으로 `./review-reports/code-review-props-{branch-name}-{date}.md`로 저장하고 경로를 보고한다. 문서 내용은 **이번 브랜치 diff 안에서 props/인자 전달 구조가 바뀐 파일과 그 구조적 이슈** 중심으로 쓴다. 기존 리뷰 문서가 이미 있어도 그 문서를 이유로 리뷰를 건너뛰지 말고 **항상 새 리뷰를 수행한 뒤 새 파일로 저장**한다. `workflow-name`은 `props`다.
+리포트는 기본적으로 `C:\Users\bhmun\OneDrive\바탕 화면\Docs\code-review-props-{branch-name}-{date}.md`로 저장하고 경로를 보고한다. 문서 내용은 **이번 브랜치 diff 안에서 props/인자 전달 구조가 바뀐 파일과 그 구조적 이슈** 중심으로 쓴다. 기존 리뷰 문서가 이미 있어도 그 문서를 이유로 리뷰를 건너뛰지 말고 **항상 새 리뷰를 수행한 뒤 새 파일로 저장**한다. `workflow-name`은 `props`다.
 
 ## 사용법
 

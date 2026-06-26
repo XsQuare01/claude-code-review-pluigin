@@ -2,7 +2,15 @@
 
 이 문서는 모든 리뷰 모듈보다 먼저 적용하는 최상위 규칙입니다. 아래 항목은 개별 모듈보다 우선합니다.
 
-## Severity 기준
+## Agent Contract / 적용 우선순위
+
+- MUST apply this file before every other review module.
+- MUST follow this file when it conflicts with a module-specific rule.
+- MUST limit findings to changed diff lines or adjacent structures directly broken by those changes.
+- MUST NOT request new mock/test/stub files only to satisfy review.
+- OUTPUT language: Korean, unless the user explicitly requests another language.
+
+## Severity / 심각도 기준
 
 | Severity | 의미 |
 |----------|------|
@@ -30,10 +38,10 @@
 
 ## 0-3. 리뷰 문서 생성 규칙 🔴
 
-- 모든 리뷰 워크플로우는 최종 결과를 기본적으로 `.md` 파일로 생성해야 함 (사용자가 명시적으로 텍스트 응답만 원한다고 한 경우만 예외)
-- 저장 기본 위치는 `./review-reports/`
+- 기본적으로 최종 결과를 `.md` 파일로 생성한다. 단, 사용자가 텍스트 응답만 원하거나 파일 수정/생성을 금지한 경우에는 생성하지 않는다.
+- 저장 기본 위치는 `C:\Users\bhmun\OneDrive\바탕 화면\Docs`
 - 파일명 규칙은 `code-review-{workflow-name}-{branch-name}-{date}.md`
-- 현재 정의된 workflow-name 예시: `default`, `full`, `fast`, `commit`, `props`, `math`, `exception`
+- 현재 정의된 workflow-name 예시: `full`, `fast`, `commit`, `math`
 - 기존 리뷰 문서가 이미 있어도 그것을 완료 신호로 간주해 리뷰를 건너뛰지 않는다. 항상 **새 리뷰를 수행하고 새 문서를 생성**한다
 - 리뷰 완료 후에는 사용자에게 저장 경로를 함께 보고한다
 
@@ -51,6 +59,8 @@
 - 자동 수정 가능한 lint 문제는 먼저 정리하고, 리뷰는 남은 문제 중심으로 수행
 - import만 맞다고 통과시키지 말고, 파일 위치/레이어 책임/네이밍까지 함께 검토
 - "편해서 shared/common에 둠" 같은 임시 배치는 위반 후보로 본다
+- 변경 라인이 import/export/index/public API/process boundary에 닿으면 아키텍처 경계 검토를 우선 수행한다. 동작이 맞아도 경계를 깨면 blocking 이슈로 본다.
+- `import type`, barrel export, alias/relative path 선택은 구현 세부가 아니라 경계 설계 신호로 본다.
 - 코드가 동작하더라도 **왜 이 선택을 했는지, 더 단순하거나 더 표준적인 대안 대비 정당한지** 함께 검토한다
 - 전체 파일을 읽는 것은 **컨텍스트 파악용**일 뿐, 리뷰 범위를 파일 전체로 넓히는 근거가 아니다
 - 사용자가 범위를 넓히라고 명시하지 않은 한, 지적은 **diff에 포함된 변경 라인** 또는 그 변경 때문에 직접 깨진 **인접 라인/인접 구조**에만 한정한다

@@ -10,14 +10,19 @@
 
 ---
 
-## 1-1. diff 삭제 항목 우선 확인 🔴
+## Trigger / 적용 조건
+
+Apply this module when the diff removes files, exports, functions, types, constants, runtime config, schemas, API contracts, or shared helpers.
+MUST NOT treat test/mock/fixture-only deletion as a normal review issue unless production behavior is affected.
+
+## 12-1. diff 삭제 항목 우선 확인 🔴
 
 - `git diff`에서 제거된 파일과 `-` 라인을 먼저 본다.
 - 삭제된 항목이 production export, function, type, constant, helper, runtime config, schema, API contract에 해당하면 회귀 가능성을 우선 의심한다.
 - `__test__`, `__tests__`, `*.test.*`, `*.spec.*`, `__mocks__`, mock/mocks, fixture/mock data 전용 파일은 일반 `/code-review` 범위에서 제외한다.
 - 삭제가 단순 정리인지, 실제 동작 제거인지 diff만으로 판단하지 말고 변경 전후 흐름까지 확인한다.
 
-## 1-2. 아직 필요할 수 있는 production 코드 삭제 🔴
+## 12-2. 아직 필요할 수 있는 production 코드 삭제 🔴
 
 - production 코드 삭제는 자동으로 안전하다고 보지 않는다.
 - 아래 중 하나라도 보이면 삭제 회귀로 본다.
@@ -27,7 +32,7 @@
   - 삭제된 함수/타입의 대체 호출부 변경이 diff 안에 없음
 - 코드가 이동/통합된 경우에는 새 위치와 대체 호출 경로가 diff 안에 보여야 한다.
 
-## 1-3. production 코드 삭제 점검 🔴
+## 12-3. production 코드 삭제 점검 🔴
 
 - 삭제된 export, function, type, constant가 여전히 참조되는지 확인한다.
 - 직접 참조가 없더라도 다음이면 삭제를 경계한다.
@@ -36,7 +41,7 @@
   - 숨은 계약(API, schema, 이벤트, 직렬화 포맷)을 깨뜨림
 - 이동/개편이라면 삭제와 동시에 대체 위치, 재-export, 호출 변경이 함께 보여야 한다.
 
-## 1-4. 합법적 삭제와 회귀 삭제 구분 🟡
+## 12-4. 합법적 삭제와 회귀 삭제 구분 🟡
 
 - 아래 증거가 있으면 합법적 삭제로 볼 수 있다.
   - 동일 책임의 코드가 다른 파일로 이동됨
@@ -45,7 +50,7 @@
   - 기능 제거가 제품 요구사항에 의해 명시됨
 - 반대로, 삭제만 있고 대체/이관/설명 증거가 없으면 회귀 후보로 본다.
 
-## 1-5. 참조 확인은 국소적으로만 🔴
+## 12-5. 참조 확인은 국소적으로만 🔴
 
 - 범위는 diff 기반으로 유지하고, 삭제된 파일/심볼에 한해 targeted reference check를 한다.
 - 전체 저장소를 넓게 훑지 말고, 삭제된 이름과 인접 경로에 대한 직접 참조만 확인한다.
@@ -53,7 +58,7 @@
 
 ---
 
-## 2-1. 출력 형식 🟡
+## 12-OUTPUT. 출력 형식 🟡
 
 - 리뷰 코멘트는 실행 가능한 이슈만 남긴다.
 - 각 지적은 아래 정보를 포함한다.
@@ -63,15 +68,16 @@
   - 복구/이동/대체 제안
 - 단순히 "삭제됨"만 적지 말고, 실제 영향과 회복 방법을 함께 적는다.
 
-## 2-2. 제외 범위 및 00-rule.md 와의 관계 🟡
+## 12-SCOPE. 제외 범위 및 00-rule.md 와의 관계 🟡
 
 - 이 규칙은 `__test__`, `__tests__`, test/spec 파일, mock/mocks/fixture 전용 파일을 일반 리뷰 대상으로 삼지 않는다.
 - `00-rule.md`의 mock / test 추가 금지와 충돌하지 않도록, 리뷰 중 새 mock/test 추가를 요구하지 않는다.
 - 실제 동작이 사라진 것이 아니라면 삭제를 정리로 오판하지 말고, 필요한 검증과 구현을 함께 유지한다.
+- 삭제가 아닌 public contract, 권한, 저장/삭제/결제 흐름, 마이그레이션 위험은 `13-dangerous-change.md`를 우선 적용한다.
 
 ---
 
-## 3-1. 판단 기준 요약 🔴
+## 12-SUMMARY. 판단 기준 요약 🔴
 
 - 삭제된 것이 production code인지, 일반 리뷰 제외 대상(test/mock 전용 자산)인지 먼저 분류한다.
 - 대체 경로, 이동, 리네임, 호출부 수정이 함께 있는지 본다.
