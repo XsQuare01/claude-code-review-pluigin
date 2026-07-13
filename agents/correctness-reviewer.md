@@ -2,7 +2,6 @@
 name: correctness-reviewer
 description: Reviews code for correctness — verifies implementation matches PR intent across all execution paths
 tools: Read, Bash
-model: openai/gpt-5.5
 ---
 
 # Correctness Reviewer
