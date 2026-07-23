@@ -5,7 +5,7 @@ description: Use when the user asks to review code, invokes /code-review, before
 
 # Multi-Pass Code Review
 
-모듈러 코드 리뷰 시스템. `~/.claude/review-rules/` 폴더에서 **숫자 prefix가 붙은 `.md` 파일**(`00-rule.md` through `12-deletion-regression.md`)만 리뷰 모듈로 사용한다. 기본 `/code-review`는 안전한 bounded 전략으로 단일 통합 리뷰 pass를 수행한다. 상세하고 exhaustive한 모듈별 multi-pass coverage가 필요하면 `/code-review-full`을 사용한다.
+모듈러 코드 리뷰 시스템. `~/.claude/review-rules/` 폴더에서 **숫자 prefix가 붙은 `.md` 파일**(`00-rule.md` ~ `13-dangerous-change.md` 등)만 리뷰 모듈로 사용한다. 기본 `/code-review`는 안전한 bounded 전략으로 단일 통합 리뷰 pass를 수행한다. 상세하고 exhaustive한 모듈별 multi-pass coverage가 필요하면 `/code-review-full`을 사용한다.
 
 `00-rule.md`는 모든 리뷰 모듈보다 먼저 읽고 우선 적용하는 최상위 공통 규칙이다. 개별 모듈과 충돌하면 `00-rule.md` 기준을 따른다.
 
@@ -99,7 +99,7 @@ task(
 {MODULE_RULES_CONTENT — numbered non-00 모듈 .md 파일 전체 내용, 모듈 순서 유지}
 
 00-rule.md와 모듈 규칙이 충돌하면 00-rule.md를 우선 적용하세요.
-Rule IDs in findings MUST include the module prefix, for example `01-3`, `11-2`, `12-1`, or `EX-1`.
+Rule IDs in findings MUST include the module prefix, for example `01-3`, `12-1`, `13-2`, or `EX-1`.
 
 ## 출력 형식
 위반 사항만 아래 형식으로 출력하세요. 위반이 없으면 '위반 없음'만 출력.
@@ -169,7 +169,7 @@ bounded pass 완료 후:
 **머지 가능 여부**: 🔴 {N}개 → {가능/불가/수정 후 가능}
 ```
 
-최종 리포트는 기본적으로 `.md` 파일로 저장한다. 단, 사용자가 파일 생성/수정을 금지했거나 텍스트 응답만 요청한 경우에는 저장하지 않는다. 저장 경로는 `./review-reports/code-review-{branch-name}-{date}.md`를 우선 사용하고, 저장 경로를 함께 보고한다. 문서 내용은 **이번 브랜치 diff와 실제 변경 파일 기준**으로 작성하고, 저장소 전체 일반론이나 diff 밖의 장황한 설명은 피한다. 기존 리뷰 문서가 이미 있어도 그 문서를 이유로 리뷰를 건너뛰지 말고 **항상 새 리뷰를 수행한 뒤 새 파일로 저장**한다. 이 워크플로우의 `workflow-name`은 `default`이다.
+최종 리포트는 기본적으로 `.md` 파일로 저장한다. 단, 사용자가 파일 생성/수정을 금지했거나 텍스트 응답만 요청한 경우에는 저장하지 않는다. 저장 경로는 `C:\Users\bhmun\OneDrive\바탕 화면\Docs\code-review-full-{branch-name}-{date}.md`를 우선 사용하고, 저장 경로를 함께 보고한다. 문서 내용은 **이번 브랜치 diff와 실제 변경 파일 기준**으로 작성하고, 저장소 전체 일반론이나 diff 밖의 장황한 설명은 피한다. 기존 리뷰 문서가 이미 있어도 그 문서를 이유로 리뷰를 건너뛰지 말고 **항상 새 리뷰를 수행한 뒤 새 파일로 저장**한다. 이 워크플로우의 `workflow-name`은 `full`이다.
 
 ## 사용법
 

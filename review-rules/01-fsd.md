@@ -14,19 +14,38 @@
 
 ---
 
-## 1-1. 레이어 경계 및 의존성 방향 🔴
+## Agent Checklist / 적용 순서
+
+1. FIRST check changed import/export/index.ts lines.
+2. THEN classify the file by FSD layer and segment.
+3. THEN check layer direction, public API exposure, same-layer cross-import, and Electron process boundary.
+4. ONLY report issues on diff lines or adjacent import/export structures directly affected by the diff.
+
+## 적용 절차
+
+변경 파일이 FSD/Electron 경계와 관련되면 단순 diff 라인만 보지 말고, diff 때문에 직접 연결되는 import/export 경로를 함께 확인한다.
+
+- 변경 파일의 import 목록과 export 목록을 확인한다.
+- 변경된 `index.ts`는 Public API 표면으로 간주하고, 외부에 공개해도 되는 타입/함수/컴포넌트만 named export 하는지 확인한다.
+- `import type`도 레이어 방향, 동일 레이어 cross-import, process boundary 규칙을 우회할 수 없다.
+- 지적 위치는 diff 라인 또는 diff 때문에 직접 깨진 인접 import/export 구조로 제한한다.
+
+## 01-1. 레이어 경계 및 의존성 방향 🔴
 
 `app → pages → widgets → features → entities → shared` 방향만 허용. 하위→상위 import, 순환 의존, type-only import 위반도 모두 찾으세요.
 
-## 1-2. Public API 및 import 경로 🔴
+## 01-2. Public API 및 import 경로 🔴
 
 외부 접근은 반드시 각 슬라이스 `index.ts`를 통해서만. 다음 위반을 찾으세요:
 
 - 내부 경로 직접 import (`@renderer/entities/user/model/...`)
 - wildcard re-export (`export * from './ui'`)
 - 크로스 레이어인데 상대 경로 사용, 또는 슬라이스 내부인데 alias 사용
+- `index.ts`가 내부 구현을 무분별하게 공개하는 경우. wildcard가 아니어도 private helper, internal hook, segment 내부 구현을 public surface로 올리면 위반
+- 외부 레이어/슬라이스가 `index.ts`를 거치더라도, 그 export 자체가 공개하면 안 되는 내부 구현이면 위반
+- shared public API는 범용 기반만 공개해야 하며, 특정 entity/feature 도메인 타입이나 화면 전용 helper를 shared index로 공개하면 위반
 
-## 1-3. 동일 레이어 Cross-import 금지 🔴
+## 01-3. 동일 레이어 Cross-import 금지 🔴
 
 같은 레이어 슬라이스 간 직접 import 금지. `widgets`, `features`, `entities` 모두 포함. 단, **Redux 그룹 폴더 예외** — 같은 그룹의 공용 `model/`만 상대 경로로 허용, 하위 feature 간 직접 import는 금지.
 
@@ -35,7 +54,7 @@
 2. 공유 도메인 데이터면 entities/shared로 이동
 3. 조합 책임이면 widget/page hooks로 올리기
 
-## 1-4. Layer 역할 배치 🟡
+## 01-4. Layer 역할 배치 🟡
 
 각 변경 파일이 **왜 이 레이어에 있어야 하는지**까지 검증하세요. import 방향만 맞고 역할이 틀리면 위반입니다.
 
@@ -51,14 +70,18 @@
 - "당장은 편해서" 올린 shared/common 코드는 허용하지 않음
 - feature/entity/widget 중 어디에 둬야 하는지 애매하면, 사용자 액션인지/조회인지/조합인지 기준으로 반드시 판정
 
-## 1-5. 프로세스/IPC 경계 🟡
+## 01-5. 프로세스/IPC 경계 🟡
 
 - **Renderer**: UI, Three.js, Query, WebSocket 담당. `fs`/`path` 직접 사용 금지
 - **Preload**: `contextBridge`로 안전한 API만 노출. renderer feature 내부 경로 import 금지
 - **Main**: 파일 I/O, OS API, `ipcMain.handle()` 담당
 - IPC 타입은 `shared/ipc-types` 등 cross-process 공유 위치에 두고, `unknown` 남용·에러 삼킴 대신 명시적 result 패턴 사용
+- Renderer는 main/preload 파일을 직접 import 하지 않는다. IPC는 preload가 노출한 안전한 adapter 또는 shared contract를 통해서만 사용한다.
+- Preload는 renderer의 feature/entity/widget 내부 경로를 import 하지 않는다. 필요한 타입은 `shared/ipc-types` 같은 cross-process contract에서 가져온다.
+- `ipcRenderer.invoke/send`가 UI 컴포넌트나 feature 내부에 흩어져 있으면 위반 후보. preload/shared adapter로 캡슐화한다.
+- IPC channel name, request/response 타입, error result 타입은 한 곳에서 관리되어야 한다. 문자열 채널명 하드코딩이 여러 레이어에 퍼지면 지적한다.
 
-## 1-6. Segment 규칙 🟡
+## 01-6. Segment 규칙 🟡
 
 | Segment | 허용 | 금지 |
 |---------|------|------|
@@ -69,7 +92,9 @@
 | `lib` | 내부 순수 함수 | 도메인 불명 `utils/helpers` 뭉치 |
 | `config/context` | 설정, 상수, React Context | 런타임 비즈니스 로직 |
 
-## 1-7. 상태 관리 및 렌더링 🟡
+segment 이름이 맞아도 책임이 틀리면 위반이다. 예: `model` 안의 fetcher, `api` 안의 도메인 의사결정, `ui` 안의 mutation orchestration, `lib` 안의 여러 도메인 혼합 helper.
+
+## 01-7. 상태 관리 및 렌더링 🟡
 
 - 서버 캐시 상태는 TanStack Query 기준으로 `entities/*/api|hooks`
 - 클라이언트 UI 상태는 `shared/store` 또는 `features/*/model`
@@ -78,15 +103,17 @@
 - 비즈니스 로직은 custom hook으로 분리하고 컴포넌트는 가능한 한 순수 렌더링 유지
 - `useFrame()` 내부의 객체 생성, selector 구독 등 프레임별 재렌더 유발 패턴은 지적
 
-## 1-8. 네이밍 및 구조 일관성 🔵
+## 01-8. 네이밍 및 구조 일관성 🔵
 
 - 단수/복수 혼용 (`user/` vs `products/`)
 - 슬라이스 이름이 segment와 충돌 (`features/ui`)
 - 자기 index를 다시 import하는 순환 구조
 
-## 1-9. Feature 네이밍은 **동사** 강제 🔴
+## 01-9. Feature 네이밍은 **동사** 강제 🔴
 
 `features/*` 슬라이스 이름은 **반드시 동사구**여야 한다. 명사·도메인 객체명·"무엇을" 만 드러나는 이름은 위반.
+
+Agent heuristic: if `features/<name>` names a domain object rather than a user action, treat it as a violation candidate. Prefer verb phrases such as `sign-in`, `connect-device`, `update-profile`.
 
 **위반 예시**
 
@@ -108,5 +135,5 @@
 
 1. 명사형 feature 안의 mutation/액션 단위를 추출해 동사 슬라이스로 분할 (예: `feature/hw-interface` → `feature/connect-hw` + `feature/capture-camera` + `feature/shutdown-hw`)
 2. 분할 후 공통 타입·엔드포인트는 같은 도메인의 `entities/*/api` 또는 `entities/*/model` 로 내려보냄
-3. 여러 동사 feature 가 같은 entity API 를 import 하는 형태가 정답 — feature 끼리는 cross-import 하지 않음 (1-3 적용)
+3. 여러 동사 feature 가 같은 entity API 를 import 하는 형태가 정답 — feature 끼리는 cross-import 하지 않음 (`01-3` 적용)
 4. 분할이 과도해 보일 정도로 작은 동작이면 widget 또는 page hooks 로 합성하는 것이 더 적절한지 재검토

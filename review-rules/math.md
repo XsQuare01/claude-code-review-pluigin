@@ -57,6 +57,17 @@
 
 라이브러리 경계를 넘나드는 코드(예: numpy → WebGL uniform)에서 **transpose 누락/중복**이 있는지 확인. `Matrix4.elements[1]`이 수학 표기로 `M[0][1]`이 아닌 `M[1][0]`임을 놓친 코드 지적.
 
+### A-4b. 행렬 계산 추적 프로토콜 🔴
+
+변경 diff의 행렬 생성/변환/곱셈 표현식은 주석이나 변수명만 믿지 말고, 직접 shape table을 만들어 추적한다. 범위는 변경된 줄과 그 결과에 직접 영향을 주는 인접 행렬 계산 context로 제한한다.
+
+- 변경된 matrix 변수와 matrix-producing expression마다 `입력 shape`, `출력 shape`, `row/column vector convention`, `좌표계`, `handedness`, `library semantics`를 표로 설명한다.
+- 곱셈은 차원 호환만 보지 않는다. `A @ B`가 shape상 가능해도 의미상 `B @ A`여야 하는지, pre/post multiplication 방향이 코드의 벡터 convention과 맞는지 확인한다.
+- transform chain에서는 local/world/view/projection 등 좌표계 전환 순서, row-vector vs column-vector convention, left-handed/right-handed handedness 혼용, transpose로 convention을 덮어쓴 흔적을 확인한다.
+- rotation 변환(행렬↔quaternion↔Euler↔axis-angle)은 축 순서, degree/radian, intrinsic/extrinsic, 좌표계 handedness가 같은지 확인한다.
+- normal matrix가 필요한 조명/법선 변환에서는 모델 행렬을 그대로 쓰지 않았는지, 비균일 scale이 있으면 inverse-transpose(`(M^-1)^T`)가 필요한지 확인한다.
+- 그래픽스/좌표 변환 전용 항목은 해당 코드가 transform, rotation, normal, camera/projection 계산을 바꿀 때 적용한다. 모든 일반 행렬 연산에 강제로 지적하지 않는다.
+
 ### A-5. Index 기반 실수 🟡
 
 - 수식은 1-indexed, 코드는 0-indexed — 변환 누락 (`A[i-1][j-1]`이 빠짐)
