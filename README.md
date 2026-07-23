@@ -11,6 +11,8 @@ This plugin packages a local review system into a reusable structure with:
 - `/code-review-props` — props and argument flow review
 - `/code-review-math` — linear algebra / matrix-focused review
 - `/code-review-exception` — exception handling and recovery review
+- `/code-review-qualitative` — qualitative 1~5 rubric scoring via an LLM-as-a-judge panel
+- `/full-project-review`: manual risk-based whole-project release gate
 
 ## Included Rule Sets
 
@@ -31,6 +33,7 @@ This plugin packages a local review system into a reusable structure with:
 - Props-specific review rules
 - Math-specific review rules
 - Exception-specific review rules
+- Full-project release-gate rules
 
 ## Important Assumptions
 
@@ -58,14 +61,17 @@ custom-code-review-plugin/
 │   ├── code-review-full/SKILL.md
 │   ├── code-review-props/SKILL.md
 │   ├── code-review-math/SKILL.md
-│   └── code-review-exception/SKILL.md
+│   ├── code-review-exception/SKILL.md
+│   ├── code-review-qualitative/SKILL.md
+│   └── full-project-review/SKILL.md
 ├── review-rules/
 │   ├── 00-rule.md
 │   ├── 01-fsd.md … 12-deletion-regression.md
 │   ├── fast.md
 │   ├── props.md
 │   ├── math.md
-│   └── exception.md
+│   ├── exception.md
+│   └── full-project-review.md
 └── README.md
 ```
 
@@ -82,6 +88,8 @@ At minimum, the following must stay together:
 - `skills/code-review-props/`
 - `skills/code-review-math/`
 - `skills/code-review-exception/`
+- `skills/code-review-qualitative/`
+- `skills/full-project-review/`
 - `review-rules/`
 
 Do not copy only the skill files without the review rules.
@@ -100,6 +108,8 @@ Scopes review to a single commit patch instead of a whole branch.
 ### `/code-review-full`
 Runs exhaustive multi-pass review across general, props, math, and exception coverage.
 
+This remains a separate existing command. It is not replaced by, aliased to, or delegated to `/full-project-review`.
+
 ### `/code-review-props`
 Reviews props drilling, handler tunneling, and excessive argument passing.
 
@@ -108,6 +118,14 @@ Reviews matrix and linear algebra logic with shape-tracking rules.
 
 ### `/code-review-exception`
 Reviews exception handling, error propagation, fallback, and recovery paths.
+
+### `/code-review-qualitative`
+Scores a diff on 1~5 qualitative rubrics (architecture appropriateness, consistency/convention fit) via a 5-judge LLM-as-a-judge panel. Excluded from the default `/code-review`.
+
+### `/full-project-review`
+Runs a separate manual, risk-based whole-project release gate. It is not a replacement for `/code-review` or `/code-review-full`, and those commands remain separate existing workflows.
+
+The top-level result is `PASS`, `WARN`, or `BLOCK`. Only Critical project defects produce release-blocking `BLOCK`; non-Critical findings stay `WARN` or TODO unless the review cannot meaningfully run, which is reported as `BLOCK: Orchestration Failure`.
 
 ## Maintenance Notes
 
