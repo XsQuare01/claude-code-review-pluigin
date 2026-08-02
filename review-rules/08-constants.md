@@ -1,0 +1,93 @@
+# 상수 & 매직값
+
+이 모듈은 **의미 없는 리터럴과 흩어진 상수**를 본다.
+
+## Severity 기준
+
+| Severity | 의미 |
+|----------|------|
+| 🔴 ERROR | 값이 여러 곳에 흩어져 한쪽만 바뀌면 버그가 나는 구조 |
+| 🟡 WARNING | 의미 불명확, 지역화·타입 안전성 저해 |
+| 🔵 INFO | 더 명확한 표현 가능 |
+
+---
+
+## 08-1. 매직 넘버 🔴
+
+- 의미 불분명 숫자 리터럴 → named constant
+- 타임아웃, 재시도 횟수, 페이지 크기, z-index, breakpoint 인라인 하드코딩
+- 동일 값이 여러 곳에 흩어짐
+
+```typescript
+// ❌
+setTimeout(callback, 3000)
+if (retryCount > 3) throw new Error('Failed')
+
+// ✅
+const TOAST_DURATION_MS = 3000
+const MAX_RETRY_COUNT = 3
+```
+
+## 08-2. 매직 문자열 🟡
+
+- API 엔드포인트, 라우트, localStorage 키가 문자열 리터럴로 산재
+- 상태값을 문자열 비교 → 유니온 타입 또는 상수 객체
+- 사용자에게 직접 노출되는 문구(UI 라벨, 버튼 텍스트, placeholder, tooltip, toast, dialog 메시지, empty state 문구)를 코드에 하드코딩
+
+사용자 노출 문자열을 지적할 때는 가능하면 아래 방향으로 제안한다:
+
+- 단순 상수 추출보다 **i18n 적용**을 우선 권장
+- 번역 키/메시지 카탈로그/locale 파일로 이동
+- 테스트용/임시 디버그 문구가 아니라면, 제품 표면의 문자열은 지역화 가능한 구조로 정리
+
+단, 아래는 예외 가능:
+
+- 로그 전용 문자열
+- 개발자 전용 에러 문구
+- 테스트 코드 내부 문자열
+- protocol / key / route / enum-like 상태값처럼 번역 대상이 아닌 식별자 문자열
+
+## 08-3. 상수 중복 정의 🔴
+
+**동일 값 상수가 여러 파일에 각각 정의되면 위반.** 매직값 → 상수 추출만으로는 부족하고, 단일 출처에서 관리되어야 한다.
+
+- 동일 상수값이 2개+ 파일에서 선언됨
+- z-index, breakpoint, spacing이 컴포넌트마다 개별 정의
+- API 엔드포인트, 유효성 상수, 에러 메시지 중복
+- localStorage 키, Query Key가 여러 곳에 문자열로 반복
+- 설정값(타임아웃, 페이지 크기)이 사용처마다 개별 선언
+
+```typescript
+// ❌ Query Key 산재
+useQuery({ queryKey: ['user', userId], ... })  // 파일 A
+useQuery({ queryKey: ['user', userId], ... })  // 파일 B
+queryClient.invalidateQueries({ queryKey: ['user'] })  // 오타 시 무효화 실패
+
+// ✅ 단일 출처
+export const queryKeys = {
+  user: (userId: string) => ['user', userId] as const,
+} as const
+```
+
+**발견법**: 변경된 파일에 새로 선언된 `const` 값이 같은 diff의 다른 파일이나 인접 모듈에 이미 있는지 확인한다. 저장소 전체 스캔으로 범위를 넓히지 않는다 (`00-rule.md`).
+
+## 08-4. 상수 위치 🟡
+
+상수는 **프로젝트가 정한 단일 위치 규칙**을 따라야 한다. 새 상수가 그 규칙 밖에 선언되거나, 같은 성격의 상수가 프로젝트 안에서 서로 다른 위치에 흩어지면 지적한다.
+
+FSD를 쓰는 프로젝트에서는 `01-fsd.md`의 레이어·segment 규칙이 우선한다. 일반적인 배치는 다음과 같다:
+
+| 상수 성격 | 위치 |
+|-----------|------|
+| 여러 레이어 공통 설정·키 | `shared/config` |
+| 도메인 상수, 상태 enum | `entities/*/model` |
+| 특정 화면/기능 전용 상수 | 해당 슬라이스의 `config` segment |
+| 단일 컴포넌트 전용 | 그 컴포넌트 파일 상단 (모듈 스코프) |
+
+FSD를 쓰지 않는 프로젝트라면 프로젝트가 이미 쓰고 있는 위치(`lib/constants.ts` 등)를 단일 출처로 보고, 그 밖에 새로 선언된 상수만 지적한다. **리뷰어가 임의로 위치 규칙을 새로 정하지 않는다.**
+
+## 08-5. 상수 표현 🔵
+
+- 관련 상수들이 흩어져 있어 함께 바뀌어야 함을 알기 어려움 → 상수 객체로 묶고 `as const`
+- 상태값 유니온을 문자열 리터럴로만 관리해 오타가 컴파일에서 안 잡힘
+- 단위가 이름에 없어 오해 가능 (`TIMEOUT` → `TIMEOUT_MS`)

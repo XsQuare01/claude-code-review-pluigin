@@ -9,8 +9,10 @@ description: Use when the user invokes /code-review-math or wants a specialized 
 
 ## 룰 문서 위치
 
-- **Math 전용**: `~/.claude/review-rules/math.md` — 이 skill에서만 사용
-- 같은 폴더의 숫자 prefix 모듈(`00-rule.md` through `12-deletion-regression.md`) 및 `fast.md`는 **참조하지 않는다**
+`RULES_DIR`은 다음 순서로 존재하는 첫 번째 디렉터리다: `${CLAUDE_PLUGIN_ROOT}/review-rules/` → `./review-rules/` → `~/.claude/review-rules/`.
+
+- **Math 전용**: `$RULES_DIR/math.md` — 이 skill에서만 사용
+- 같은 폴더의 숫자 prefix 모듈과 `fast.md`, `props.md`, `exception.md`는 **참조하지 않는다**
 - 일반 아키텍처/타입/상태 리뷰가 필요하면 `/code-review` 또는 `/code-review-fast`를 별도로 실행한다
 
 ## 검사 범위
@@ -37,13 +39,18 @@ description: Use when the user invokes /code-review-math or wants a specialized 
 ### Step 1: Diff 범위 결정
 
 ```bash
-BASE_BRANCH=dev
+for candidate in dev main master; do
+  if git rev-parse --verify --quiet "$candidate" >/dev/null; then
+    BASE_BRANCH=$candidate; break
+  fi
+done
+BASE_BRANCH=${BASE_BRANCH:-$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD | sed 's|origin/||')}
 MERGE_BASE=$(git merge-base $BASE_BRANCH HEAD)
 git diff --stat $MERGE_BASE..HEAD
 git diff $MERGE_BASE..HEAD
 ```
 
-사용자가 특정 범위를 지정하면 그것을 사용. 지정하지 않으면 기본적으로 `dev` 브랜치를 기준으로 범위를 계산한다. 빈 diff면 리뷰를 수행하지 않는다. 변경 파일 중 **행렬 연산이 포함된 파일만** 리뷰 대상으로 좁힌다 (행렬 연산이 전혀 없는 UI 전용 파일은 제외).
+사용자가 특정 범위를 지정하면 그것을 사용한다. 지정하지 않았고 후보 브랜치가 모두 없으면 사용자에게 base를 묻는다. 빈 diff면 리뷰를 수행하지 않는다. 변경 파일 중 **행렬/3D 변환 연산이 포함된 파일만** 리뷰 대상으로 좁힌다 (해당 연산이 전혀 없는 UI 전용 파일은 제외).
 
 ### Step 2: Lint 자동 수정 (선택)
 
@@ -73,9 +80,9 @@ task(
 
 ## 리뷰 규칙
 아래 파일을 먼저 Read 한 뒤 그 규칙을 기반으로 리뷰하세요:
-- `~/.claude/review-rules/math.md`
+- `{RULES_DIR}/math.md`
 
-이 문서 하나만 사용합니다. `~/.claude/review-rules/` 의 숫자 prefix 모듈(`00-rule.md` through `12-deletion-regression.md`)과 `fast.md`는 참조하지 마세요.
+이 문서 하나만 사용합니다. 같은 폴더의 숫자 prefix 모듈과 `fast.md`, `props.md`, `exception.md`는 참조하지 마세요.
 
 ## 출력 원칙
 - 사용자가 다른 언어를 명시하지 않은 한 모든 리뷰 결과/코멘트/리포트는 한국어로 작성하세요.

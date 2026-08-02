@@ -9,8 +9,10 @@ description: Use when the user invokes /code-review-exception or wants a standal
 
 ## 룰 문서 위치
 
-- **Exception 전용**: `~/.claude/review-rules/exception.md` — 이 skill에서만 사용
-- 같은 폴더의 숫자 prefix 모듈(`00-rule.md` through `12-deletion-regression.md`)과 `fast.md`, `math.md`, `props.md`는 **참조하지 않는다**
+`RULES_DIR`은 다음 순서로 존재하는 첫 번째 디렉터리다: `${CLAUDE_PLUGIN_ROOT}/review-rules/` → `./review-rules/` → `~/.claude/review-rules/`.
+
+- **Exception 전용**: `$RULES_DIR/exception.md` — 이 skill에서만 사용
+- 같은 폴더의 숫자 prefix 모듈과 `fast.md`, `math.md`, `props.md`는 **참조하지 않는다**
 - 일반 리뷰가 필요하면 `/code-review` 또는 `/code-review-fast`를 별도로 실행한다
 
 ## 검사 범위
@@ -26,13 +28,18 @@ description: Use when the user invokes /code-review-exception or wants a standal
 ### Step 1: Diff 범위 결정
 
 ```bash
-BASE_BRANCH=dev
+for candidate in dev main master; do
+  if git rev-parse --verify --quiet "$candidate" >/dev/null; then
+    BASE_BRANCH=$candidate; break
+  fi
+done
+BASE_BRANCH=${BASE_BRANCH:-$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD | sed 's|origin/||')}
 MERGE_BASE=$(git merge-base $BASE_BRANCH HEAD)
 git diff --stat $MERGE_BASE..HEAD
 git diff $MERGE_BASE..HEAD
 ```
 
-사용자가 특정 범위를 지정하면 그것을 사용. 지정하지 않으면 기본적으로 `dev` 브랜치를 기준으로 범위를 계산한다. 빈 diff면 리뷰를 수행하지 않는다.
+사용자가 특정 범위를 지정하면 그것을 사용한다. 지정하지 않았고 후보 브랜치가 모두 없으면 사용자에게 base를 묻는다. 빈 diff면 리뷰를 수행하지 않는다.
 
 변경 파일 중 예외 처리, 에러 전파, fallback, 복구, 검증 로직이 바뀐 파일만 리뷰 대상으로 좁힌다. 관련 변경이 없으면 `SKIPPED`로 종료한다. repo-wide fallback 스캔은 하지 않는다.
 
@@ -64,14 +71,14 @@ task(
 
 ## 리뷰 규칙
 아래 파일을 먼저 Read 한 뒤 그 규칙을 기반으로 리뷰하세요:
-- `~/.claude/review-rules/exception.md`
+- `{RULES_DIR}/exception.md`
 
-이 문서 하나만 사용합니다. `~/.claude/review-rules/` 의 숫자 prefix 모듈(`00-rule.md` through `12-deletion-regression.md`), `fast.md`, `math.md`, `props.md`는 참조하지 마세요.
+이 문서 하나만 사용합니다. 같은 폴더의 숫자 prefix 모듈과 `fast.md`, `math.md`, `props.md`는 참조하지 마세요.
 
 ## 출력 원칙
 - 사용자가 다른 언어를 명시하지 않은 한 모든 리뷰 결과/코멘트/리포트는 한국어로 작성하세요.
 - severity 우선순위: 🔴 > 🟡 > 🔵
-- 위치(파일:line)와 규칙 번호(E-x)를 반드시 표기
+- 위치(파일:line)와 규칙 번호(`EX-x`)를 반드시 표기 — `exception.md`의 표기와 정확히 일치해야 합니다
 - diff에 없는 기존 예외 흐름은 지적 금지
 - 추측 금지 — 의심스러우면 '검증 필요'로 표기
 - 이슈 없으면 '위반 없음'만 출력
@@ -90,8 +97,8 @@ task(
 
 | 심각도 | 파일 | 위치 | 규칙 | 이슈 | 개선 방향 |
 |----------|------|------|------|------|----------|
-| 🔴 | path/to/file | L123 | E-1 | ... | ... |
-| 🟡 | path/to/file | L45 | E-4 | ... | ... |
+| 🔴 | path/to/file | L123 | EX-1 | ... | ... |
+| 🟡 | path/to/file | L45 | EX-5 | ... | ... |
 
 ## 통과
 - (이슈 없는 파일 리스트, 또는 '전부 통과' 요약)

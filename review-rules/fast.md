@@ -1,400 +1,175 @@
 # Fast Code Review Rules (압축본)
 
-> Sync note: 숫자 prefix 상세 모듈(현재 00~13, 15, 16, 19)이 바뀌면 이 압축본도 함께 갱신해야 한다.
+> **Sync note**: 숫자 prefix 모듈은 현재 `00` ~ `20` 이며 빈 번호가 없다. 모듈을 추가·삭제·재배치하면 이 문서의 해당 섹션도 같이 고쳐야 한다. 압축 과정에서 **원본의 예외 조항을 빠뜨리지 않는다** — 예외를 지우면 오탐이 된다.
 
-이 문서는 `~/.claude/review-rules/`의 숫자 prefix 상세 모듈(00~13, 15, 16, 19)에서 **high-signal 지적 기준만** 추려낸 압축본이다. 상세 예시/코드 블록은 제거했고, 리뷰어가 **파일별 가장 중요한 이슈 1개**를 빠르게 판별하도록 구성했다.
+이 문서는 숫자 prefix 상세 모듈에서 **high-signal 지적 기준만** 추려낸 압축본이다. 오직 `/code-review-fast`에서만 사용한다. 상세 리뷰가 필요하면 `/code-review` 또는 `/code-review-full`을 쓴다.
 
-상세 리뷰가 필요하면 `/code-review`를 쓰고, 이 문서는 오직 `/code-review-fast`에서만 사용한다.
-
-Non-numbered special modules such as `exception.md` are not automatically included unless the fast-review skill explicitly loads them.
+`exception.md`, `props.md`, `math.md` 같은 특수 모듈은 fast 리뷰에 포함되지 않는다.
 
 ## Severity
 
 - 🔴 ERROR — 머지 전 필수 수정 (런타임 버그, 경계/원칙 위반)
 - 🟡 WARNING — 수정 권장 (가독성, 일관성, 패턴 이탈)
-- 🔵 INFO — 개선 제안 (네이밍, 스타일 미세 조정)
+- 🔵 INFO — 개선 제안
 
-우선순위: 🔴 > 🟡 > 🔵. 같은 파일에 여러 지적 후보가 있으면 severity 높은 것을 남긴다.
+## 파일별 1개 선택 규칙
 
-## Fast Selection Algorithm / 파일별 1개 선택 규칙
+각 변경 파일에 대해:
 
-For each changed file:
-1. Collect only confirmed issues on diff lines or directly affected adjacent structures.
-2. Pick the highest severity issue.
-3. If tied, prefer in this order: dangerous change, API contract, concurrency/idempotency, deletion regression, architecture boundary, exception/failure flow, type safety, state/side effect, accessibility when user interaction is blocked, readability/style.
-4. Output at most one issue per file.
-5. Do not mention clean files.
+1. diff 라인 또는 그 변경 때문에 직접 깨진 인접 구조에서 **확인된** 이슈만 모은다.
+2. severity가 가장 높은 것을 고른다.
+3. 동점이면 다음 순서로: 위험 변경(18) → API 계약(16) → 동시성(17) → 삭제 회귀(20) → React 규칙(03) → 아키텍처 경계(01) → 타입(02) → 상태/이펙트(04) → 접근성(12, 사용 경로가 막힐 때) → 나머지.
+4. 파일당 최대 1개만 출력한다.
+5. 위반 없는 파일은 언급하지 않는다.
 
-## 최상위 공통 규칙 (00)
+규칙 ID는 `00-rule.md` 00-2의 표기 규칙을 따른다.
 
-- 🔴 리뷰 통과용 mock/test/stub 신규 추가 금지 — 실제 요구사항 없는 `__test__`, `*.test.*`, mock 데이터는 "리뷰 우회" 신호
-- 🔴 네이밍 혼용 금지 — 같은 개념을 `user`/`userData`/`currentUser`로 부르면 위반
+---
+
+## 00. 공통
+
+- 🔴 리뷰 통과용 mock/test/stub 신규 추가 금지 — "리뷰 우회" 신호
+- 🔴 같은 개념을 `user`/`userData`/`currentUser`로 혼용
 - 🟡 자동 수정 가능한 lint는 리뷰 전에 정리, 남은 이슈만 다룬다
 - 🟡 "편해서 shared/common에 둠" 같은 임시 배치는 위반 후보
-- 🟡 동작만 한다고 통과시키지 말고, 왜 이 선택을 했는지와 더 단순한 대안 대비 정당성을 함께 본다
+
+## 01. FSD 아키텍처
+
+🔴 — 레이어 방향(`app → pages → widgets → features → entities → shared`) 역행·순환, `import type`을 통한 우회 / 슬라이스 내부 경로 직접 import / wildcard re-export / 동일 레이어 cross-import / `index.ts`로 private 구현 누출 / `features/*` 이름이 명사형(동사구 강제)
+
+🟡 — 역할 배치 오류: app에 도메인 로직, pages에 재사용 블록, features에 `*-api.ts` 정의 파일(정의는 entities, 호출만 features), entities에 라우팅·하드코딩 URL, shared에 도메인 종속 코드. Electron: renderer에서 `fs`/`path` 직접 사용, main/preload 직접 import
+
+🔵 — 단수/복수 혼용, 슬라이스명-segment 충돌(`features/ui`)
+
+## 02. 타입 안전성
+
+🔴 — `any`, `@ts-ignore`, 근거 없는 `as`, `as unknown as T`, `[key: string]: any` Props / 인라인 Props 타입 / 인라인 타입 3필드 초과·유틸리티 타입 3단 중첩·무명 유니온 5멤버 초과
+
+🟡 — API nullable인데 Props non-optional, snake_case↔camelCase 변환 누락, null narrowing 없이 접근, exhaustive check 누락, 판별자 필드 혼용, 제네릭 `extends` 누락
+
+## 03. React 규칙
+
+🔴 — 조건문·루프·early return 이후·일반 함수에서 hook 호출 / 렌더 중 `setState`·외부 변이·`Math.random()`·`Date.now()` / 렌더 중 생성한 값을 `key`로 사용 / props를 `useState`에 복사한 뒤 `useEffect`로 동기화
+
+🟡 — 정렬·삭제가 있는 리스트에 index key, 외부 시스템 동기화가 아닌 effect(핸들러나 렌더 중 계산으로 옮겨야 함), ref/state 오용, 외부 스토어를 effect+state로 구독(`useSyncExternalStore` 필요), `useId` 없이 만든 DOM id
+
+## 04. 상태 & 사이드이펙트
+
+🔴 — effect 클린업 누락(구독/타이머/리스너/`AbortController`) / 의존성 배열 누락·오용·객체 참조 직접 삽입 / `exhaustive-deps` suppression에 근거 없음 / 로딩·에러·데이터 상태 미반영, 경쟁 조건, 미처리 rejection / 한 effect에 무관한 작업 혼합
+
+🟡 — 상태 라이브러리 혼용, 서버/클라이언트 상태 경계 불명확, Context value 매 렌더 새 객체, 하나의 Context에 값·액션·UI 상태 혼재, stale closure(`setCount(count+1)`), 직접 변이(`push`), 연관 state 분리로 인한 동기화 버그
+
+## 05. 함수 & 컴포넌트 구조
+
+🔴 — 함수 20줄 초과(추상화 수준 혼재/중첩 3단+/독립 작업 3개+) / 컴포넌트 150줄 초과 + 관심사 혼재 / 한 파일에 export 컴포넌트 2개+
+
+🟡 — if-else 중첩 2단+ → early return, 매개변수 3개 초과, 훅 반환값 10개+, 훅 이름으로 역할 유추 불가, 2곳+ 동일 로직 복사, 핸들러 5줄 초과
+
+## 06. JSX
+
+🔴 — `{count && <X/>}`에서 `0`/`''`가 그대로 렌더됨
+
+🟡 — 삼항 2단+ 중첩, 조건부 블록 10줄+, `map` 콜백 10줄+, `map` 안 hook 호출, Props 4개+ 한 줄, 인라인 함수 5줄+, 불필요 Fragment, 무분별한 `{...props}`, 컴포넌트 본문 안에서 컴포넌트 정의
+
+## 07. 네이밍 & 주석
+
+🔴 — 모호한 이름(`d`, `temp`, `data`, `info`, `item`, `stuff`) — **단, `Result<T, E>` 문맥의 `result`는 예외** / 지나치게 긴 이름 / boolean `is/has/should/can` 누락(HTML 표준 속성명은 예외) / 핸들러 `handle`·콜백 props `on` 누락 / 같은 개념 이름 혼용
+
+🟡 — 컴포넌트명이 내용 설명 못 함, `Container`/`Wrapper` 단독, `use` 접두어 없는 커스텀 훅, `{Component}Props` 미준수, 파일 네이밍 혼용, 불필요 주석·미연결 TODO, 필수 주석 누락(비자명 규칙, 복잡한 정규식, workaround 이유+제거 시점)
+
+## 08. 상수 & 매직값
+
+🔴 — 의미 불분명 숫자 리터럴(타임아웃·재시도·페이지 크기·z-index) / 동일 상수값이 2+ 파일에 각각 선언(Query Key, endpoint, localStorage key)
+
+🟡 — 매직 문자열 산재, 상태값 문자열 비교 → 유니온, 사용자 노출 문구 하드코딩 → i18n 권장(로그·개발자 에러·식별자 문자열은 예외), 프로젝트가 정한 상수 위치 규칙 이탈
+
+## 09. Import & Dead Code & 일관성
+
+🔴 — dead code(도달 불가·미사용·주석 블록·비활성 flag) / 같은 목적의 이전·새 구현 공존 / 패턴 불일치(같은 성격 컴포넌트 구조 상이, useQuery·fetch 혼용) / `react-refresh/only-export-components` suppression
+
+🟡 — import 순서·미사용 import, named/default 혼용, 한 파일 5+ export, 로직 없는 wrapper, 빈 effect/catch, 에러 표시 표면 불일치, 이중 부정, 5단+ destructuring, `!!value`, 3+ 조건 논리식
+
+## 10. 개발 원칙
+
+🔴 — `10-SSOT`, `10-SRP`, `10-SoC`, `10-FailFast`(빈 catch, 미검증 입력), `10-Immutability`
+
+🟡 — DRY, KISS, YAGNI, OCP, ISP, LoD, PoLA, CQS, Composition, Encapsulation, Defensive, DataPresentation, LeastPrivilege, Colocation, Explicit, CoC 중 해당하는 것
+
+🔵 — DIP, Idempotency, Transparency, Robustness, TellDontAsk, UniformAccess, NoPrematureOpt, Parsimony
+
+## 11. 스타일링 *(Tailwind 프로젝트 전용)*
+
+🔴 — 정적 값에 `style={{}}` / 색상·배경·border·shadow에 hex 하드코딩 또는 Tailwind 기본 팔레트(`gray-800`)
+
+🟡 — 유한 조건 분기를 인라인 style로, 단순 레이아웃 때문에 새 `.css`, `!important`, `@apply` 남용
+
+## 12. 접근성
+
+🔴 — 클릭 가능한 `div`/`span`으로 button/link 흉내 / keyboard activation 경로 없음 / modal·dialog·route transition에 focus 진입·복원·trap 없음 / icon-only button·form control·dialog에 accessible name 없음 / error text가 control과 연결되지 않거나 조용히 추가됨 / 의미 있는 image·icon·chart·색상 전용 상태에 텍스트 대안 없음 / `aria-*`가 실제 UI 상태와 불일치
+
+🟡 — reduced-motion 대안 없는 애니메이션, diff에서 직접 보이는 contrast 저하
+
+## 13. DX
+
+🔴 — 이름만으로 역할 파악 불가, public API 사용법 불명확 / 한 군데 수정에 여러 파일을 암묵적으로 알아야 함, side effect 경계 숨김
+
+🟡 — 같은 기능군의 호출 패턴 제각각, 신규 코드 추가 위치가 구조상 모호, 파일 위치 부적합
+
+## 14. React 성능
+
+🔴 — 상한이 열린 대형 리스트를 가상화·페이지네이션 없이 전량 렌더
+
+🟡 — 라우트/모달/에디터/차트를 정적 import(코드 스플리팅 부재), 입력마다 무거운 렌더를 동기 실행(`useDeferredValue`/`useTransition` 미검토), 렌더 중 대형 정렬·정규식·`Intl` 인스턴스 반복 생성, 이미지 크기 미지정·lazy 미적용, Suspense 경계 과대·부재
+
+## 15. 알고리즘 복잡도
+
+🔴 — 중첩 루프 + `.find`/`.includes`(O(N²)) → Map/Set / 같은 컬렉션 반복 선형 탐색 / 루프 내 누적 spread / 재계산·memo 없는 DP 후보 / N+1 I/O(루프 내 await) → 배치 또는 `Promise.all`
+
+🟡 — 자료구조 부적합, min/max에 전체 sort, 원본 배열 변이하는 `sort()`, 큰 데이터의 불필요한 중간 배열, 루프 내 정규식 생성, 문자열 누적, 재귀 깊이 N
+
+**지적 원칙**: 실제 데이터 규모 고려. 10건 배열의 O(N²)는 대부분 문제 아님.
+
+## 16. API 계약
+
+🔴 — 타입만 바꾸고 runtime parser/schema/generated client/mapper가 그대로 / 응답 shape 변경인데 소비 측 컴포넌트·훅 미갱신 / query key 변경인데 `invalidateQueries` 호출부 미갱신 / route·param·query default 의미 변경으로 기존 URL이 깨짐
+
+🟡 — (제공자일 때) field 제거·rename·required화, status/error body 의미 변경, IPC/event payload 변경, env·config·public export rename에 fallback 없음, breaking 변경에 versioning/migration 증거 없음
+
+## 17. 동시성 & 멱등성
+
+🔴 — save/delete/payment/mutation이 double click·StrictMode·retry로 두 번 실행 가능한데 방어 없음 / 느린 이전 응답이 최신을 덮어씀 / 언마운트·route change 후에도 이전 async work가 결과를 publish
+
+🟡 — optimistic update 실패 시 rollback 없음. (서버 측 코드일 때) 멱등성 키 부재, non-idempotent retry, read-modify-write에 트랜잭션·버전 가드 없음, replay-unsafe consumer
+
+## 18. 위험 변경
+
+🔴 — 클라이언트 gating만 바꾸고 서버·main 권한 검사 그대로 / 삭제·덮어쓰기·마이그레이션에 확인·롤백·복구 경로 없음 / 금액·수량 계산 변경에 검증 없음 / 토큰·개인정보가 로그·URL·클라이언트 번들에 노출
+
+🟡 — feature flag 기본값 변경에 롤아웃 계획 없음, env 키 rename에 fallback 없음, 위험 흐름 변경인데 안전 증거가 하나도 없음
+
+## 19. 의도 & 선택 근거
+
+🔴 — 문제와 해결 방식이 어긋남(단순 요구에 과한 추상화 / 복잡한 요구에 임시 우회) / 핵심 트레이드오프가 숨겨짐 / workaround인데 이유·제거 시점 없음
+
+🟡 — 왜 이 코드가 필요한지 파악 불가, 표준 패턴으로 충분한데 커스텀 구조, React 기본 동작을 수동 구현으로 대체하고 근거 없음
+
+## 20. 삭제 회귀
+
+🔴 — 삭제된 production export/function/type/constant/schema에 대체 경로·이동·호출부 갱신 증거 없음 / 기능은 유지되는데 구현만 사라짐 / effect cleanup·의존성 항목·`key`·Suspense 경계 삭제
+
+🟡 — test/mock/fixture 전용 삭제는 fast 리뷰에서 제외. 전체 저장소 탐색 대신 삭제된 심볼의 targeted reference check만.
 
 ---
 
-## 1. FSD 아키텍처 (01)
-
-### 🔴 필수
-
-- **레이어 경계**: `app → pages → widgets → features → entities → shared` 방향만 허용. 역방향·순환·type-only 우회 모두 지적
-- **Public API**: 슬라이스 내부 경로 직접 import 금지 (`@renderer/entities/user/model/...`). 외부 접근은 `index.ts` 경유만
-- **Wildcard re-export 금지** (`export * from './ui'`)
-- **동일 레이어 cross-import 금지** — widgets/features/entities 슬라이스 간 직접 import. 예외: Redux 그룹의 공용 `model/`만 상대 경로 허용
-- **Feature 동사 강제** — `features/*` 이름은 반드시 동사구. `features/hw-interface`, `features/user`, `features/auth` 같은 명사형은 위반 → `features/connect-hw` + `features/capture-camera` + `features/shutdown-hw` 처럼 행위 단위로 분할. feature 끼리 cross-import 금지, 공통은 entities 또는 widget/page 합성으로
-- `import type`도 레이어 방향, cross-import, process boundary 우회 수단이 아니다
-- `index.ts` named export라도 private helper/internal hook/segment 내부 구현을 공개하면 Public API 누수로 본다
-
-### 🟡 역할 배치
-
-파일이 **왜 이 레이어에 있어야 하는지**까지 본다. import만 맞고 역할이 어긋나면 위반.
-
-- **app**: 초기화/provider/store 합성/전역 설정만. 도메인 로직 있으면 위반
-- **pages**: 라우트 단위 조립만. 재사용 블록·도메인 액션은 아래로
-- **widgets**: entity/feature 조합. 도메인 상태 변경은 feature public API로
-- **features**: 사용자 액션 / mutation 호출 / 검증. **API 정의 파일(`*-api.ts`) 직접 두지 않음** — entities API import 해서 mutation 호출만. 조회 전용·표현 전용은 올리면 안 됨
-- **entities**: 타입 / 조회(GET) / **API 정의 파일 자체 (`*-api.ts`, mutation 엔드포인트 정의 포함)** / 기본 표현. mutation 의 *호출* 위치는 feature 이지만 *정의* 는 여기. 라우팅·하드코딩 URL·단일 feature 전용 로직 금지
-- **shared**: 여러 레이어 재사용 기반만. 도메인 종속·화면 전용 코드 금지
-
-### 🟡 프로세스/Segment
-
-- Renderer에서 `fs`/`path` 직접 사용 금지, Preload는 `contextBridge`만, IPC 타입은 cross-process 공유 위치
-- Renderer는 main/preload 직접 import 금지. raw IPC 호출은 preload/shared adapter 또는 shared IPC contract로 캡슐화되어야 한다
-- `ui`에 비즈니스 로직, `model`에 UI, `api`에 도메인 판단, `hooks`에 범용 util, `lib`에 도메인 불명 `utils/helpers` 뭉치 → 위반
-- 변경 파일의 import/export/index 변경은 파일별 최우선 후보로 보고, 동작보다 경계 위반을 먼저 판단한다
-
-### 🔵 일관성
-
-단수/복수 혼용 (`user/` vs `products/`), 슬라이스명-segment 충돌 (`features/ui`), 자기 index 재import.
-
----
-
-## 2. 타입 안전성 (02)
-
-### 🔴 필수
-
-- **타입 우회**: `any`, `@ts-ignore`, `@ts-expect-error`, 근거 없는 `as` 단언, `[key: string]: any` Props
-- **Props 인터페이스**: 인라인 타입 대신 named interface/type. 이벤트 핸들러 타입 명시
-- **타입 복잡도**: 인라인 타입 3필드 초과, 유틸리티 타입 3단+ 중첩, 이름 없는 유니온 5멤버+ → 추출
-
-### 🟡 주요
-
-- API 응답 nullable인데 Props non-optional, snake_case ↔ camelCase 변환 누락
-- 유니온 null/undefined narrowing 없이 접근, discriminated union exhaustive check 누락
-- 판별자 필드 혼용 (`kind` vs `type`), 제네릭 단일 문자 + `extends` 없음
-
-### 🔵 기타
-
-public 함수/훅 반환 타입 생략, 미사용 타입, 제네릭 3개+ 의미 없는 이름.
-
----
-
-## 3. 상태 관리 & 사이드이펙트 (03)
-
-### 🔴 필수
-
-- **useEffect 클린업 누락**: 구독/타이머/리스너/fetch (`AbortController`) 언마운트 처리
-- **의존성 배열**: 누락, 빈 `[]` 오용, 객체/배열 참조 직접 삽입
-- **hook deps suppression**: `eslint-disable-next-line react-hooks/exhaustive-deps` 로 검사를 우회하고도 정당한 이유/구조적 대안이 보이지 않음
-- **useEffect 의도**: 주석 없고 여러 무관 작업 혼합, 의존성 5개+ → 분리 신호
-- **비동기 경쟁 조건**: 빠른 연속 요청 시 이전 응답이 최신 덮어씀, 미처리 rejection
-
-### 🟡 주요
-
-- 동일 성격 state를 다른 라이브러리 혼용 (Zustand vs Context+useState)
-- Prop drilling 3단+ 또는 중간 컴포넌트가 자기 책임과 무관한 state/handler를 전달만 함
-- Context Provider value가 매 렌더 새 객체 (`useMemo` 누락), `React.memo` 자식에 새 참조 전달
-- 파생 값을 별도 state로 관리, stale closure (`setCount(count+1)` vs functional)
-- 직접 변이 (`push`, `splice`)
-- 커스텀 훅 반환값 10개+, `handle`/`on` 접두어 없는 핸들러/Props
-
-### 🔵 기타
-
-페칭 라이브러리 일관성, staleTime/cacheTime 설정, optimistic update 적절성.
-
----
-
-## 4. 컴포넌트 구조 & JSX (04)
-
-### 🔴 필수
-
-- **함수 20줄 초과** → 분할 검토 (추상화 수준 혼재, 중첩 3단+, 독립 작업 3개+)
-- **컴포넌트 150줄 초과** → 반드시 분할 (JSX 인라인 로직 10줄+, useState 5개+)
-- **삼항 2단+ 중첩**, `{count && <X/>}`의 falsy(`0`/`''`) 렌더링 함정
-- **파일당 하나의 컴포넌트** — export 컴포넌트 2개+ 금지 (내부 헬퍼 제외)
-
-### 🟡 주요
-
-- if-else 중첩 2단+ → early return으로 평탄화
-- 매개변수 3개 초과 → 객체 파라미터, boolean 파라미터 호출부 불분명
-- Props 4개+ 한 줄, 인라인 함수 5줄+, 인라인 스타일 3속성+, 불필요 Fragment
-- `map` 콜백 10줄+ → 별도 컴포넌트, key에 index 사용
-- 무분별 `{...props}` 전달 (rest는 HTML 요소에만)
-- 컴포넌트 300줄 초과, UI+비즈니스 로직 혼재 → 훅 분리
-- 2+ 슬라이스/훅/컴포넌트에 동일 로직 복사 → 공용화 또는 한쪽 삭제로 단일 출처 유지
-
-### 🔵 기타
-
-barrel export/path alias 일관성, 매직 넘버/문자열, segment 구조 불일치.
-
----
-
-## 5. 네이밍 & 주석 & 상수 (05)
-
-### 🔴 필수
-
-- **모호한 이름**: `d`, `temp`, `data`, `info`, `item`, `stuff`, `result` (루프 `i` 제외)
-- **지나치게 긴 이름**: 조건·구현 세부사항·비즈니스 문맥을 한 식별자에 과도하게 합쳐 사람이 훑어 읽거나 발음하기 어려움. 구체성은 유지하되 책임 분리나 중간 개념 추출로 스캔 가능해야 함
-- **boolean/핸들러 접두어 누락**: `is/has/should/can`, `handle`, `on`
-- **매직 넘버**: 타임아웃·재시도·페이지 크기·z-index 인라인 하드코딩 → named constant
-- **상수 중복 정의**: 동일 값이 2+ 파일에 각각 선언 (Query Key, endpoint, localStorage key, 에러 메시지). **단일 출처**로 통합 필요
-- **상수 위치 고정**: 상수의 위치는 `lib/constants.ts`로 고정. 신규/변경 상수가 다른 파일이나 폴더에 선언되면 위반
-
-### 🟡 주요
-
-- 컴포넌트명이 내용 설명 못 함, `Container`/`Wrapper`/`Component` 단독, 파일명 불일치, `Manager`/`Processor` 남용
-- `I` 접두어 일관성, `{Component}Props` 패턴 미준수
-- 파일 네이밍 혼용 (PascalCase/kebab-case)
-- 불필요 주석(코드 반복/주석 처리 코드/오래된 설명), 이슈 미연결 TODO
-- 필수 주석 누락: 비자명 비즈니스 규칙, 복잡한 정규식, workaround(이유+제거 시점), 의도적 비표준
-- 매직 문자열 산재, 상태값 문자열 비교 → 유니온/enum
-- 사용자 노출 문자열(UI 문구, toast, dialog, empty state 등) 하드코딩 → i18n 적용 권장
-
----
-
-## 6. Import & Dead Code & 일관성 (06)
-
-### 🔴 필수
-
-- **Dead code**: 도달 불가 코드, 미사용 변수/함수/타입/import, 주석 처리 블록, 장기 비활성 feature flag
-- **중복 구현 공존**: 같은 목적의 이전/새 구현이 함께 남아 실제로 하나는 삭제 가능한 상태
-- **패턴 일관성**: 같은 성격 컴포넌트가 다른 구조, API 호출이 useQuery/fetch 혼용, 같은 데이터 `user`/`userData`/`currentUser` 혼용
-
-### 🟡 주요
-
-- Import 순서 혼란 (외부 → 절대 → 상대 → `import type` → 스타일), 미사용 import, `import type` 미사용
-- named/default export 혼용, re-export 내부 노출, 한 파일 5+ export
-- 로직 없는 wrapper 컴포넌트, 값 그대로 반환 함수, 빈 useEffect/catch
-- 스타일 불일치 (화살표 vs function 컴포넌트, 세미콜론/따옴표/trailing comma)
-- 에러 처리 통일 (toast/inline/Error Boundary), 사용자용 vs 개발자용 구분
-- 이중 부정 (`!isNotValid`), 부정형 변수명, `if (!x)` 블록이 else보다 김
-- 5단+ 중첩 destructuring, 과도한 rename
-- `!!value` → `Boolean(value)`, `if (array.length)` → `length > 0`
-- 3+ 조건 `&&`/`||` 연결 → 의미 있는 변수 추출
-
-### 🔵 테스트
-
-`test('test1', ...)`, 한/영 혼용, AAA 분리, 테스트 간 상태 공유.
-
----
-
-## 7. 개발 원칙 (07)
-
-### 🔴 원칙 위반 (반드시 지적)
-
-- **SSOT**: 동일 데이터가 여러 state, 서버값 로컬 복사, 상수/타입 중복
-- **SRP**: 페칭+로직+렌더링 전담 컴포넌트, 무관한 여러 상태 관리 훅
-- **SoC**: UI와 비즈니스 로직 혼재, 라우팅이 도메인 컴포넌트에 포함
-- **Fail Fast**: 빈 catch, 미검증 입력 깊이 전파, API 응답 미검증
-- **Immutability**: `push`/`splice`/`Object.assign(target)` 직접 변이
-
-### 🟡 주요 원칙 (골라서 지적)
-
-DRY, KISS, YAGNI, OCP, LSP, ISP, LoD (`a.b.c.d` 3단+ 체이닝), PoLA (`getX`가 변경, `isValid`가 throw), CQS, Composition > Inheritance, Encapsulation, Defensive(API/localStorage/URL 미검증), Data-Presentation 분리, Least Privilege, Colocation, Explicit(default export/`!!`/`==` 회피), CoC.
-
-### 🔵 기타
-
-DIP, Idempotency (더블 클릭 중복 요청), Transparency, Robustness, Tell Don't Ask, Uniform Access, Avoid Premature Optimization, Parsimony.
-
----
-
-## 8. 스타일링 (08)
-
-### 🔴 필수
-
-- **Tailwind 우선**: 정적 레이아웃/상태/hover/focus/유한 조건 분기는 `className`. `style={{}}` 하드코딩은 위반
-- **디자인 토큰**: 색상/배경/border/shadow는 프로젝트 시맨틱 토큰. hex 하드코딩, Tailwind 기본 팔레트(`gray-800`, `text-blue-500`) 사용 금지
-
-### 🟡 주요
-
-- `style={{}}`는 런타임 계산값(동적 위치/크기/transform)에만. 유한 조건은 조건부 className으로
-- CSS 파일은 keyframe/복잡 선택자/gradient/써드파티 오버라이드에만. 단순 레이아웃·spacing·flex·grid 때문에 새 `.css` 금지
-- `!important`, `@apply` 남용, 컴포넌트 전용 CSS를 전역에 올림
-
-### 🔵 기타
-
-긴 className 정리, 반복 스타일 묶음 추출, 전역은 `app/styles/`·컴포넌트 전용은 같은 폴더.
-
----
-
-## 9. 개발자 경험 (DX) (09)
-
-### 🔴 필수
-
-- **발견성**: 파일/폴더 이름만으로 역할 파악 불가, public API만 봐서 사용법 안 드러남, 비슷한 책임 코드가 여러 위치 산재
-- **수정 안전성**: 한 군데 수정에 여러 파일 암묵적으로 알아야 함, side effect/외부 호출 경계 숨김, 동일 개념이 여러 이름/형태로 노출
-
-### 🟡 주요
-
-- 같은 기능군인데 생성/조회/변경 방식 제각각, 훅/액션/selector/query key/IPC 호출 패턴 불일치
-- 짧은 usage 주석 필수 지점: 비자명 진입 순서, workaround 이유, 외부에서 오용하기 쉬운 public API
-- 슬라이스/컴포넌트/훅 신규 추가 위치가 구조만 봐서 모호, 상수/타입/helper 단일 출처 없음
-- 파일 위치 부적합 (지나치게 깊이 숨어 있거나, 특정 전용 코드가 shared에 올라감)
-
-### 🔵 기타
-
-2곳+ 반복되는데 공용 진입점 없음 vs 이른 추상화로 API 과복잡.
-
----
-
-## 10. 알고리즘 효율성 & 복잡도 (10)
-
-자료구조·알고리즘 복잡도 본질만 본다. React 렌더링 성능은 섹션 3, 함수 길이·중첩은 섹션 4에서 이미 커버됨.
-
-### 🔴 필수
-
-- **중첩 루프 선형 탐색**: 바깥 루프 × `.find`/`.includes`/`.indexOf`/`.some` → O(N²). Map/Set 빌드 후 O(1) 조회로 O(N+M)
-- **반복 선형 탐색**: 같은 컬렉션을 여러 번 `find`/`includes` → Map/Set 사전 구축
-- **누적 spread in loop**: `arr = [...arr, item]`, `obj = {...obj, k:v}`, `reduce((acc,x) => [...acc, f(x)])` → O(N²). `.push()` 또는 배치 spread
-- **메모이제이션 누락**: 같은 입력에 고비용 pure 재계산, DP 후보 재귀에 memo 없음
-- **N+1 I/O**: 루프 안 DB/API/파일 호출. 배치 엔드포인트 또는 `Promise.all` 병렬화, 독립 await chain 직렬화
-
-### 🟡 주요
-
-- 멤버십 체크에 Array(`.includes`) vs Set(`.has`), key 조회 빈도 높으면 Map
-- 우선순위 큐 필요에 매번 sort, 상위 k개에 전체 sort
-- `min`/`max` 하나만 필요한데 전체 sort → O(N) 단일 pass
-- `.map().filter().map()` 체인의 불필요한 중간 배열 (큰 데이터)
-- 루프 내 정규식/상수 객체/파서 반복 생성 → 루프 밖
-- `str += ...` in loop → push + join
-- 큰 파일 전체 로드 / 전체 JSON.parse → streaming
-- Sliding window/two-pointer로 O(1) 공간 가능한데 O(N) 보조 배열
-- 재귀 깊이 N 비례 → iterative 전환
-
-### 🔵 기타
-
-- brute force인데 분할정복·greedy·DP 후보, O(N²) sort, 그래프 알고리즘 선택 오류
-- hot path에 Big-O 주석 없음, 트레이드오프 이유 미기재
-- 내장 함수의 실제 복잡도(`Array.unshift` O(N) 등) 잘못 가정
-
-**지적 원칙**: 실제 데이터 규모를 고려. 10건 배열에 O(N²)는 대부분 문제 아님 — hot path·큰 데이터·수치상 차이가 드러나는 경우만.
-
----
-
-## 11. 문제-의도-선택 근거 (11)
-
-### 🔴 필수
-
-- 해결해야 할 문제와 구현 방식이 어긋남 (단순 요구에 과한 추상화, 복잡한 요구에 임시 우회)
-- 핵심 트레이드오프가 숨겨짐 (성능/단순성/확장성 중 무엇을 희생했는지 이유 없음)
-- workaround/비표준 패턴인데 왜 필요한지, 언제 제거할지 설명이 없음
-
-### 🟡 주요
-
-- 코드/이름/짧은 주석만으로 왜 이 코드가 필요한지 파악되지 않음
-- 더 단순한 표준 패턴으로 충분한데 커스텀 구조를 택한 근거가 약함
-- 지금은 동작하지만 다음 수정자가 암묵적 전제를 많이 알아야 하는 구조
-
-### 🔵 기타
-
-- 성능보다 단순함, 단순함보다 확장성을 택한 이유를 짧게 남기면 좋아짐
-- 파일별 핵심 이슈를 쓸 때는 가능하면 **문제 → 현재 선택 → 왜 부족한지** 순서로 적는다
-
----
-
-## 12. 삭제 회귀 점검 (12)
-
-### 🔴 필수
-
-- 삭제된 production export/function/type/constant/helper/runtime config/schema/API contract는 기본적으로 회귀를 의심한다. diff에 대체 경로, 이동/리네임, 호출부·import·export 갱신, 명시적 제거 의도가 보여야 안전하다.
-- 삭제 후 기능·계약은 유지되는데 구현만 사라졌거나 공통 helper 제거로 중복이 늘면 ERROR 후보. tests pass만으로 삭제 안전성을 증명하지 않는다.
-
-### 🟡 제외/범위
-
-- `__test__`, `*.test.*`, `*.spec.*`, `__mocks__`, mock/test/fixture 전용 삭제는 일반 fast 리뷰에서 보통 제외한다.
-- 전체 저장소 탐색으로 범위를 넓히지 말고, 삭제된 심볼과 인접 경로에 대한 targeted reference check만 한다.
-
----
-
-## 13. 위험 변경 점검 (13)
-
-### 🔴 필수
-
-- public API/schema/route/IPC/config/env/permission 변경은 호환성 증거가 필요하다. 호출부·타입·검증·대체 경로 없이 contract를 바꾸면 ERROR 후보.
-- auth/payment/save/delete/file-write 같은 고위험 흐름 변경은 권한, 재시도, 중복 실행, rollback/idempotency, audit/user confirmation을 확인한다.
-- migration/storage/schema 변경은 forward/backward compatibility, rollback, partial-apply recovery, data backfill 안전성이 보여야 한다.
-
-### 🟡 검증 신호
-
-- 테스트 부재가 자동 위반은 아니지만, 데이터·권한·결제·저장/삭제·배포 호환성에 영향이 큰데 안전 증거가 없으면 지적한다.
-- 검증 신호는 테스트뿐 아니라 schema validation, typed contract, migration guard, feature flag rollout, runtime assertion, 문서화된 대체 경로일 수 있다.
-
----
-
-## 15. 접근성 (15)
-
-### 🔴 필수
-
-- **Semantic controls**: 클릭 가능한 `div/span` 대신 button/link/input 등 native control 우선. role로 잘못 덧칠하면 위반 후보.
-- **Keyboard access**: custom control, hover/drag 전용 UI, menu/tab/option 등이 keyboard-only로 같은 작업을 못 하면 ERROR 후보.
-- **Focus management**: modal/dialog/popover/flyout/route transition에서 focus 진입·복원·trap 또는 stale focus 처리가 빠지면 지적.
-- **Labels/names**: icon-only button, form control, dialog/landmark/region에 accessible name/label 연결이 없으면 지적.
-- **Form error announcement**: error text가 control과 연결되지 않거나 submit 실패가 focus/live/status 없이 조용히 추가되면 지적.
-- 의미 있는 image/icon/SVG/canvas/chart/color-only 상태에 alt, text summary, aria text 같은 visual alternative가 없음.
-- `aria-expanded/selected/checked/current/hidden`, role, id reference가 실제 UI 상태·허용 조합과 맞지 않는 ARIA misuse.
-
-### 🟡 주요
-
-- motion/contrast는 diff에서 animation/token/color 조합으로 직접 추론 가능하고 사용자 경로를 막을 때만 다룬다.
-
----
-
-## 16. API Contract (16)
-
-### 🔴 필수
-
-- **Request/response shape**: field 제거·rename·required화, nullable/optional 축소, enum 축소, serialization 방식 변경은 호환성 증거 필요.
-- **Status/error format**: status code, success/failure 의미, error body/code 변경이 caller retry/UI/telemetry 해석을 깨면 지적.
-- **Route/query/pagination semantics**: path/param/default/filter/sort/page/cursor 의미 변경은 같은 요청의 결과를 바꾸므로 contract 변경으로 본다.
-- **Versioning/deprecation**: breaking endpoint/channel/export 제거·의미 변경에는 adapter, fallback, staged rollout, migration/deprecation 근거가 필요.
-- **Auth contract**: header/cookie/token claim/role/scope/tenant 요구사항과 `401/403` 의미 변경은 caller와 denial flow 정합성을 확인.
-
-### 🟡 주요
-
-- Schema/DTO/runtime validation/generated type/mapper/serialized payload가 서로 어긋나면 contract 위반 후보.
-- IPC channel, event/webhook payload, ack/result shape, replay/idempotency semantics 변경은 producer·consumer 양쪽 호환성 확인.
-- env/config/feature flag/public export/SDK signature 변경은 old key fallback, alias, migration note 없이 바로 바꾸면 breaking 후보.
-
----
-
-## 19. Concurrency & Idempotency (19)
-
-### 🔴 필수
-
-- **Duplicate submit**: save/delete/payment/order/notification/mutation이 double click, re-entry, StrictMode, repeated event로 두 번 실행될 수 있으면 방어 증거 필요.
-- **Idempotency key**: 외부 부작용 반복 요청에 stable operation/event ID, dedupe boundary, unique constraint, atomic claim이 없으면 지적.
-- **Retry safety**: non-idempotent operation을 retry가 그대로 재실행하거나 retry budget/backoff/abort/error 분류가 없으면 위험.
-- **Race/order hazards**: 느린 이전 응답·out-of-order event가 최신 상태를 덮으면 sequence/version/request token/latest-only guard 필요.
-- **Transaction/read-modify-write**: balance/count/inventory/status/DB/file update의 read→calculate→write 흐름에 lock, transaction, CAS, version guard가 없으면 lost update 후보.
-
-### 🟡 주요
-
-- Webhook/job replay, queue consumer, event subscriber는 processed event ID, atomic claim, replay log, partial-failure recovery가 필요.
-- Cancellation/stale work: route change, unmount, cancel 뒤 이전 async work가 publish하지 않도록 abort/cleanup/request token 증거 확인.
-- Optimistic rollback/reconciliation: 실패, retry, out-of-order completion, server canonical response와 충돌할 때 복원·무효화·version 정리가 필요.
-
----
-
-## 출력 형식 (최종)
-
-| Severity | 파일 | 핵심 이슈 | 이유 | 개선 방향 |
-|----------|------|----------|------|------------|
-| 🔴/🟡/🔵 | path/to/file | 가장 중요한 1개 | 왜 중요한지 | 짧은 수정 방향 |
+## 출력 형식
+
+| 심각도 | 파일 | 규칙 | 핵심 이슈 | 이유 | 개선 방향 |
+|--------|------|------|----------|------|----------|
+| 🔴/🟡/🔵 | path/to/file | 03-1 | 가장 중요한 1개 | 왜 중요한지 | 짧은 수정 방향 |
 
 **원칙**
+
 - 파일당 이슈는 최대 1개 (severity 높은 것)
-- 위반 없는 파일/영역은 상세 표에 포함하지 않음
+- 위반 없는 파일은 상세 표에 포함하지 않음
 - 단순 스타일·반복 지적·영향 작은 코멘트는 생략
 - diff에 없는 기존 코드 지적 금지, 추측 금지

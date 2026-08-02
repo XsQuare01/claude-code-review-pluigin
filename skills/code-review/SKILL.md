@@ -5,25 +5,39 @@ description: Use when the user asks to review code, invokes /code-review, before
 
 # Multi-Pass Code Review
 
-모듈러 코드 리뷰 시스템. `~/.claude/review-rules/` 폴더에서 **숫자 prefix가 붙은 `.md` 파일**(`00-rule.md` through `12-deletion-regression.md`)만 리뷰 모듈로 사용한다. 기본 `/code-review`는 안전한 bounded 전략으로 단일 통합 리뷰 pass를 수행한다. 상세하고 exhaustive한 모듈별 multi-pass coverage가 필요하면 `/code-review-full`을 사용한다.
+React 전용 모듈러 코드 리뷰 시스템. 리뷰 규칙 폴더에서 **숫자 prefix가 붙은 `.md` 파일 전체**를 리뷰 모듈로 사용한다. 기본 `/code-review`는 안전한 bounded 전략으로 단일 통합 리뷰 pass를 수행한다. 상세하고 exhaustive한 모듈별 multi-pass coverage가 필요하면 `/code-review-full`을 사용한다.
 
 `00-rule.md`는 모든 리뷰 모듈보다 먼저 읽고 우선 적용하는 최상위 공통 규칙이다. 개별 모듈과 충돌하면 `00-rule.md` 기준을 따른다.
 
 ## 리뷰 규칙 위치
 
-`~/.claude/review-rules/` — 숫자 prefix가 붙은 `.md` 파일만 모듈로 간주. 파일명 앞 숫자는 실행 순서, `00-rule.md`가 항상 최우선이다.
+다음 순서로 존재하는 첫 번째 디렉터리를 `RULES_DIR`로 사용한다.
 
-**자동 모듈 스캔에서 제외되는 파일**: 숫자 prefix가 없는 파일(예: `fast.md`, `math.md`)은 특수 워크플로우(`/code-review-fast`, `/code-review-math`) 전용이며, 일반 `/code-review`에서는 절대 로드하지 않는다.
+1. `${CLAUDE_PLUGIN_ROOT}/review-rules/` — 플러그인으로 설치된 경우
+2. `./review-rules/` — 저장소에 직접 포함된 경우
+3. `~/.claude/review-rules/` — 홈 디렉터리에 복사해 쓰는 경우
+
+**모듈 목록을 파일명으로 하드코딩하지 않는다.** 항상 `RULES_DIR`을 실제로 나열해서 발견되는 숫자 prefix 파일 전체를 모듈로 삼는다. 모듈이 추가·삭제되어도 이 스킬은 수정할 필요가 없어야 한다.
+
+파일명 앞 숫자는 실행 순서이며, `00-rule.md`가 항상 최우선이다.
+
+**자동 모듈 스캔에서 제외되는 파일**: 숫자 prefix가 없는 파일(`fast.md`, `props.md`, `math.md`, `exception.md`)은 특수 워크플로우 전용이며, 일반 `/code-review`에서는 절대 로드하지 않는다.
 
 ## 실행 절차
 
 ### Step 1: Diff 범위 결정
 
 ```bash
-# base 브랜치 결정 (기본: dev)
-BASE_BRANCH=dev
+# base 브랜치 결정: dev → main → master → origin/HEAD 순으로 존재하는 첫 번째를 사용
+for candidate in dev main master; do
+  if git rev-parse --verify --quiet "$candidate" >/dev/null; then
+    BASE_BRANCH=$candidate; break
+  fi
+done
+BASE_BRANCH=${BASE_BRANCH:-$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD | sed 's|origin/||')}
+
 MERGE_BASE=$(git merge-base $BASE_BRANCH HEAD)
-echo "Review range: $MERGE_BASE..HEAD"
+echo "Review range: $MERGE_BASE..HEAD (base: $BASE_BRANCH)"
 
 # 변경된 파일 목록
 git diff --stat $MERGE_BASE..HEAD
@@ -32,7 +46,7 @@ git diff --stat $MERGE_BASE..HEAD
 git diff $MERGE_BASE..HEAD
 ```
 
-사용자가 특정 범위를 지정하면 그것을 사용. 지정하지 않으면 기본적으로 `dev` 브랜치를 기준으로 범위를 계산한다.
+사용자가 특정 범위를 지정하면 그것을 사용한다. 지정하지 않았고 위 후보가 모두 없으면 사용자에게 base를 묻고, 임의로 리뷰 범위를 정하지 않는다. `MERGE_BASE == HEAD`이면 리뷰할 변경이 없는 것으로 보고 종료한다.
 
 리뷰 대상에서 아래 테스트/목 관련 경로는 제외한다. diff 확인 시 존재 여부를 볼 수는 있지만, sub-agent에 전달하는 변경 파일 목록과 리뷰 지적 범위에서는 제거한다.
 
@@ -55,10 +69,10 @@ git diff $MERGE_BASE..HEAD
 ### Step 3: 리뷰 모듈 목록 확인
 
 ```bash
-ls ~/.claude/review-rules/[0-9]*.md
+ls "$RULES_DIR"/[0-9]*.md
 ```
 
-**숫자 prefix가 붙은 파일만** 리뷰 패스(pass)로 사용. `fast.md`, `math.md` 같은 특수 워크플로우 전용 문서는 이 스캔에서 제외된다.
+**발견된 숫자 prefix 파일 전체**를 리뷰 패스(pass)로 사용한다. 목록을 미리 가정하지 말고 실제 출력에 따른다. `fast.md`, `props.md`, `math.md`, `exception.md`는 이 스캔에서 제외된다.
 
 `00-rule.md` is loaded as common rules for every module. Do not treat `00-rule.md` as a normal review module unless the user explicitly requests a common-rule-only pass. Numbered non-00 modules remain review modules, but default `/code-review` evaluates them through one consolidated bounded pass instead of per-module fan-out.
 
@@ -99,7 +113,7 @@ task(
 {MODULE_RULES_CONTENT — numbered non-00 모듈 .md 파일 전체 내용, 모듈 순서 유지}
 
 00-rule.md와 모듈 규칙이 충돌하면 00-rule.md를 우선 적용하세요.
-Rule IDs in findings MUST include the module prefix, for example `01-3`, `11-2`, `12-1`, or `EX-1`.
+규칙 ID는 `00-rule.md` 00-2 표기 규칙을 그대로 따르세요. 숫자 모듈은 파일 prefix와 동일한 `{파일번호}-{규칙번호}` 형식(`01-3`, `03-1`, `19-2`, `20-4`), 개발 원칙은 `10-{원칙 약어}`(`10-SSOT`) 형식입니다. 이 pass에서는 `EX-`, `P-`, `A-`, `C-` 계열 ID를 사용하지 마세요 — 해당 모듈은 여기서 로드되지 않습니다.
 
 ## 출력 형식
 위반 사항만 아래 형식으로 출력하세요. 위반이 없으면 '위반 없음'만 출력.
@@ -169,7 +183,7 @@ bounded pass 완료 후:
 **머지 가능 여부**: 🔴 {N}개 → {가능/불가/수정 후 가능}
 ```
 
-최종 리포트는 기본적으로 `.md` 파일로 저장한다. 단, 사용자가 파일 생성/수정을 금지했거나 텍스트 응답만 요청한 경우에는 저장하지 않는다. 저장 경로는 `./review-reports/code-review-{branch-name}-{date}.md`를 우선 사용하고, 저장 경로를 함께 보고한다. 문서 내용은 **이번 브랜치 diff와 실제 변경 파일 기준**으로 작성하고, 저장소 전체 일반론이나 diff 밖의 장황한 설명은 피한다. 기존 리뷰 문서가 이미 있어도 그 문서를 이유로 리뷰를 건너뛰지 말고 **항상 새 리뷰를 수행한 뒤 새 파일로 저장**한다. 이 워크플로우의 `workflow-name`은 `default`이다.
+최종 리포트는 기본적으로 `.md` 파일로 저장한다. 단, 사용자가 파일 생성/수정을 금지했거나 텍스트 응답만 요청한 경우에는 저장하지 않는다. 저장 경로는 `00-rule.md` 00-5의 규칙을 따라 `./review-reports/code-review-default-{branch-name}-{date}.md`를 사용하고, 저장 경로를 함께 보고한다. 문서 내용은 **이번 브랜치 diff와 실제 변경 파일 기준**으로 작성하고, 저장소 전체 일반론이나 diff 밖의 장황한 설명은 피한다. 기존 리뷰 문서가 이미 있어도 그 문서를 이유로 리뷰를 건너뛰지 말고 **항상 새 리뷰를 수행한 뒤 새 파일로 저장**한다. 이 워크플로우의 `workflow-name`은 `default`이다.
 
 ## 사용법
 

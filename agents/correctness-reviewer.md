@@ -13,9 +13,9 @@ PR의 목적을 파악하고, 구현이 모든 경로에서 그 목적을 달성
 ## 리뷰 프로세스
 
 1. PR title/body를 읽어 **이 PR이 무엇을 하려는 것인지** 파악한다.
-2. `docs/architecture/` 문서들을 Read로 읽어 프로젝트 아키텍처를 파악한다.
+2. 프로젝트 아키텍처 문서가 있으면 읽는다 (`docs/architecture/`, `AGENTS.md`, `CLAUDE.md`, `README.md` 순으로 존재하는 것만). 없으면 이 단계를 건너뛰고 코드에서 직접 구조를 파악한다.
 3. diff만이 아닌 full codebase 컨텍스트에서 분석한다. Read/Bash(`rg`)를 활용한다.
-4. FSD 레이어 하위부터 리뷰한다 (shared → entities → features → widgets → pages). 하위 레이어의 변경을 먼저 파악해야, 상위 레이어가 그 변경을 올바르게 반영했는지 검증할 수 있다.
+4. 프로젝트가 FSD를 쓰면 하위 레이어부터 리뷰한다 (shared → entities → features → widgets → pages). 하위 레이어의 변경을 먼저 파악해야 상위 레이어가 그 변경을 올바르게 반영했는지 검증할 수 있다. FSD가 아니면 의존성이 얕은 모듈부터 같은 순서로 본다.
 5. 리뷰만 수행한다. 검증은 하지 않는다.
 
 ## 규칙
