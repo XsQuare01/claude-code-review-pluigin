@@ -1,7 +1,7 @@
 {
-  "name": "custom-code-review-plugin",
-  "version": "1.0.0",
-  "description": "Modular code review workflows with full, fast, commit, and math review modes",
+  "name": "react-code-review-plugin",
+  "version": "2.0.0",
+  "description": "Modular React code review workflows with default, full, fast, commit, props, math, and exception review modes",
   "author": {
     "name": "bhmun"
   },
@@ -12,9 +12,12 @@
     "code-review",
     "review-rules",
     "claude-plugin",
+    "react",
+    "typescript",
+    "accessibility",
     "fsd",
     "tailwind",
     "electron",
-    "math-review"
+    "react-three-fiber"
   ]
 }

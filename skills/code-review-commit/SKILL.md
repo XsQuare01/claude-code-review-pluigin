@@ -9,9 +9,15 @@ description: Use when the user wants to review a single commit, invokes /code-re
 
 ## 리뷰 규칙 위치
 
-`~/.claude/review-rules/` — 숫자 prefix가 붙은 `.md` 파일만 리뷰 모듈로 간주. 파일명 앞 숫자는 실행 순서이며, `00-rule.md`가 항상 최우선이다.
+다음 순서로 존재하는 첫 번째 디렉터리를 `RULES_DIR`로 사용한다.
 
-**자동 모듈 스캔에서 제외되는 파일**: 숫자 prefix가 없는 파일(예: `fast.md`, `math.md`)은 특수 워크플로우(`/code-review-fast`, `/code-review-math`) 전용이며, 이 skill에서도 로드하지 않는다.
+1. `${CLAUDE_PLUGIN_ROOT}/review-rules/`
+2. `./review-rules/`
+3. `~/.claude/review-rules/`
+
+`RULES_DIR`에서 **숫자 prefix가 붙은 `.md` 파일 전체**를 리뷰 모듈로 간주한다. 모듈 목록을 파일명으로 하드코딩하지 말고 항상 실제로 나열해서 확인한다. 파일명 앞 숫자는 실행 순서이며, `00-rule.md`가 항상 최우선이다.
+
+**자동 모듈 스캔에서 제외되는 파일**: 숫자 prefix가 없는 파일(`fast.md`, `props.md`, `math.md`, `exception.md`)은 특수 워크플로우 전용이며, 이 skill에서도 로드하지 않는다.
 
 ## 실행 절차
 
@@ -55,10 +61,10 @@ git show --name-only --format=oneline $TARGET_COMMIT
 ### Step 4: 리뷰 모듈 목록 확인
 
 ```bash
-ls ~/.claude/review-rules/[0-9]*.md
+ls "$RULES_DIR"/[0-9]*.md
 ```
 
-`/code-review`와 동일하게 **숫자 prefix가 붙은 파일만** 리뷰 패스로 사용한다.
+`/code-review`와 동일하게 **발견된 숫자 prefix 파일 전체**를 리뷰 패스로 사용한다.
 
 `00-rule.md`는 공통 규칙으로 항상 최우선 적용하며, numbered non-00 모듈 전체와 함께 단일 consolidated prompt에 포함한다.
 
@@ -98,7 +104,7 @@ task(
 {MODULE_RULES_CONTENT — numbered non-00 모듈 .md 파일 전체 내용, 모듈 순서 유지}
 
 00-rule.md와 모듈 규칙이 충돌하면 00-rule.md를 우선 적용하세요.
-Rule IDs in findings MUST include the module prefix, for example `01-3`, `11-2`, `12-1`, or `EX-1`.
+규칙 ID는 `00-rule.md` 00-2 표기 규칙을 그대로 따르세요. 숫자 모듈은 파일 prefix와 동일한 `{파일번호}-{규칙번호}` 형식(`01-3`, `03-1`, `19-2`, `20-4`), 개발 원칙은 `10-{원칙 약어}`(`10-SSOT`) 형식입니다. 이 pass에서는 `EX-`, `P-`, `A-`, `C-` 계열 ID를 사용하지 마세요.
 
 ## 출력 형식
 위반 사항만 아래 형식으로 출력하세요. 위반이 없으면 '위반 없음'만 출력.
