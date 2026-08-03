@@ -7,13 +7,18 @@ description: Use when the user invokes /code-review-math or wants a specialized 
 
 선형대수학의 **행렬 계산** 전용 리뷰 모드. 일반 코드 품질·아키텍처 검사와는 분리된 특수 리뷰이며, 일반 `/code-review`에서는 자동 제외된다.
 
-## 룰 문서 위치
+## 공통 계약
 
-`RULES_DIR`은 다음 순서로 존재하는 첫 번째 디렉터리다: `${CLAUDE_PLUGIN_ROOT}/review-rules/` → `./review-rules/` → `~/.claude/review-rules/`.
+`RULES_DIR` 해석, 범위 결정, 제외 경로, 실행 안전, 리포트 저장, 실패 보고는 **`$RULES_DIR/workflow-contract.md`** 를 따른다. 아래는 이 워크플로우의 차이다.
 
-- **Math 전용**: `$RULES_DIR/math.md` — 이 skill에서만 사용
-- 같은 폴더의 숫자 prefix 모듈과 `fast.md`, `props.md`, `exception.md`는 **참조하지 않는다**
-- 일반 아키텍처/타입/상태 리뷰가 필요하면 `/code-review` 또는 `/code-review-fast`를 별도로 실행한다
+| 항목 | 이 워크플로우 |
+|------|---------------|
+| `workflow-name` | `math` |
+| 모듈 집합 | `$RULES_DIR/math.md` 단일 문서 (숫자 prefix 모듈·다른 특수 문서 미로드) |
+| 규칙 ID | `A-{n}` / `C-{n}` |
+| 적용 조건 | 행렬·선형대수 코드가 변경에 포함될 때. 없으면 `SKIPPED` (C-3, C-8) |
+
+일반 아키텍처/타입/상태 리뷰가 필요하면 `/code-review` 또는 `/code-review-fast`를 별도로 실행한다.
 
 ## 검사 범위
 
@@ -38,19 +43,7 @@ description: Use when the user invokes /code-review-math or wants a specialized 
 
 ### Step 1: Diff 범위 결정
 
-```bash
-for candidate in dev main master; do
-  if git rev-parse --verify --quiet "$candidate" >/dev/null; then
-    BASE_BRANCH=$candidate; break
-  fi
-done
-BASE_BRANCH=${BASE_BRANCH:-$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD | sed 's|origin/||')}
-MERGE_BASE=$(git merge-base $BASE_BRANCH HEAD)
-git diff --stat $MERGE_BASE..HEAD
-git diff $MERGE_BASE..HEAD
-```
-
-사용자가 특정 범위를 지정하면 그것을 사용한다. 지정하지 않았고 후보 브랜치가 모두 없으면 사용자에게 base를 묻는다. 빈 diff면 리뷰를 수행하지 않는다. 변경 파일 중 **행렬/3D 변환 연산이 포함된 파일만** 리뷰 대상으로 좁힌다 (해당 연산이 전혀 없는 UI 전용 파일은 제외).
+범위 결정은 `workflow-contract.md` C-4를 따른다. 결정된 범위로 `git diff --stat $MERGE_BASE..HEAD`와 `git diff $MERGE_BASE..HEAD`를 확인한다. 제외 경로는 C-5를 따른다. 변경 파일 중 **행렬/3D 변환 연산이 포함된 파일만** 리뷰 대상으로 좁힌다 (해당 연산이 전혀 없는 UI 전용 파일은 제외).
 
 ### Step 2: Lint 확인 (read-only, 선택)
 
@@ -123,7 +116,7 @@ sub-agent의 출력을 그대로 사용자에게 전달한다. 명백한 형식 
 
 ### Step 5: 문서 저장
 
-리포트는 기본적으로 `./review-reports/code-review-math-{branch-name}-{date}.md`로 저장하고 경로를 보고한다. 단, 사용자가 read-only 리뷰, 파일 생성/수정 금지, 텍스트 응답만을 요청했으면 저장하지 않는다 (`00-rule.md` 00-9 우선). 문서 내용은 **이번 브랜치 diff 안에서 행렬 연산이 바뀐 파일과 그 수학적 이슈** 중심으로 쓴다. 기존 리뷰 문서가 이미 있어도 그 문서를 이유로 리뷰를 건너뛰지 말고 **항상 새 리뷰를 수행한 뒤 새 파일로 저장**한다. `workflow-name`은 `math`다.
+리포트 저장은 `workflow-contract.md` C-7을 따른다 (`workflow-name`은 `math`). 문서 내용은 **이번 브랜치 diff 안에서 행렬 연산이 바뀐 파일과 그 수학적 이슈** 중심으로 쓴다.
 
 ## 사용법
 

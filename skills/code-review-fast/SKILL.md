@@ -14,30 +14,26 @@ description: Use when the user wants a faster, shorter code review that highligh
 3. 사소한 스타일, 중복 설명, 비슷한 지적 반복은 버린다
 4. 리뷰 결과는 **짧게**, 보통 파일당 1줄~2줄 수준으로 끝낸다
 
-## 룰 문서 위치
+## 공통 계약
 
-`RULES_DIR`은 다음 순서로 존재하는 첫 번째 디렉터리다: `${CLAUDE_PLUGIN_ROOT}/review-rules/` → `./review-rules/` → `~/.claude/review-rules/`.
+`RULES_DIR` 해석, 범위 결정, 제외 경로, 실행 안전, 리포트 저장, 실패 보고는 **`$RULES_DIR/workflow-contract.md`** 를 따른다. 아래는 이 워크플로우의 차이다.
 
-- **Fast 전용**: `$RULES_DIR/fast.md` — 이 skill에서만 사용하는 압축본 (상세 모듈과 같은 폴더에 함께 위치)
-- 같은 폴더의 숫자 prefix 상세 모듈은 **참조하지 않는다**. 상세/포괄적 리뷰가 필요하면 `/code-review-full`을 쓴다.
+| 항목 | 이 워크플로우 |
+|------|---------------|
+| `workflow-name` | `fast` |
+| 모듈 집합 | `$RULES_DIR/fast.md` 단일 문서 (숫자 prefix 상세 모듈 미로드) |
+| 분할 방식 | 단일 sub-agent |
+| 출력 밀도 | 파일당 최대 1개 |
+
+`fast.md` 안의 섹션별 적용 조건(RSC·Tailwind·SSR·React 19·서버 코드·contract 제공자 등)은 계약 C-3과 같은 기준으로 판정한다. 조건이 성립하지 않는 섹션은 적용하지 않는다.
+
+상세/포괄적 리뷰가 필요하면 `/code-review-full`을 쓴다.
 
 ## 실행 절차
 
 ### Step 1: Diff 범위 결정
 
-```bash
-for candidate in dev main master; do
-  if git rev-parse --verify --quiet "$candidate" >/dev/null; then
-    BASE_BRANCH=$candidate; break
-  fi
-done
-BASE_BRANCH=${BASE_BRANCH:-$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD | sed 's|origin/||')}
-MERGE_BASE=$(git merge-base $BASE_BRANCH HEAD)
-git diff --stat $MERGE_BASE..HEAD
-git diff $MERGE_BASE..HEAD
-```
-
-사용자가 특정 범위를 지정하면 그것을 사용한다. 지정하지 않았고 후보 브랜치가 모두 없으면 사용자에게 base를 묻는다. 빈 diff면 리뷰를 수행하지 않는다.
+범위 결정은 `workflow-contract.md` C-4를 따른다. 결정된 범위로 `git diff --stat $MERGE_BASE..HEAD`와 `git diff $MERGE_BASE..HEAD`를 확인한다. 제외 경로는 C-5를 따른다.
 
 ### Step 2: Lint 확인 (read-only)
 
@@ -119,7 +115,7 @@ sub-agent의 출력을 그대로 사용자에게 전달한다. 추가 편집/재
 
 ### Step 5: 문서 저장
 
-리포트는 기본적으로 `./review-reports/code-review-fast-{branch-name}-{date}.md`로 저장하고 경로를 보고한다. 단, 사용자가 read-only 리뷰, 파일 생성/수정 금지, 텍스트 응답만을 요청했으면 저장하지 않는다 (`00-rule.md` 00-9 우선). 문서 내용은 **이번 브랜치에서 바뀐 파일별 핵심 이슈** 중심으로 유지하고, 일반 설명은 최소화한다. 기존 리뷰 문서가 이미 있어도 그 문서를 이유로 리뷰를 건너뛰지 말고 **항상 새 리뷰를 수행한 뒤 새 파일로 저장**한다. 이 워크플로우의 `workflow-name`은 `fast`다.
+리포트 저장은 `workflow-contract.md` C-7을 따른다 (`workflow-name`은 `fast`). 문서 내용은 **이번 브랜치에서 바뀐 파일별 핵심 이슈** 중심으로 유지하고, 일반 설명은 최소화한다.
 
 ## 사용법
 

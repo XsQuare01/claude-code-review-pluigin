@@ -7,17 +7,16 @@ description: Use when the user wants to review a single commit, invokes /code-re
 
 하나의 커밋만 정밀 리뷰하는 모드. 일반 `/code-review`가 브랜치 전체 diff를 보는 것과 달리, 이 skill은 **지정한 단일 커밋 1개**의 patch만 리뷰 대상으로 삼는다. 리뷰 규칙과 결과 통합 방식은 `/code-review`와 동일하게 유지해, 범위만 더 좁고 명확하게 만든 버전이다.
 
-## 리뷰 규칙 위치
+## 공통 계약
 
-다음 순서로 존재하는 첫 번째 디렉터리를 `RULES_DIR`로 사용한다.
+`RULES_DIR` 해석, 모듈 탐색, 적용 조건 판정, 제외 경로, 실행 안전, 리포트 저장, 실패 보고는 **`$RULES_DIR/workflow-contract.md`** 를 따른다. 아래는 이 워크플로우의 차이다.
 
-1. `${CLAUDE_PLUGIN_ROOT}/review-rules/`
-2. `./review-rules/`
-3. `~/.claude/review-rules/`
-
-`RULES_DIR`에서 **숫자 prefix가 붙은 `.md` 파일 전체**를 리뷰 모듈로 간주한다. 모듈 목록을 파일명으로 하드코딩하지 말고 항상 실제로 나열해서 확인한다. 파일명 앞 숫자는 실행 순서이며, `00-rule.md`가 항상 최우선이다.
-
-**자동 모듈 스캔에서 제외되는 파일**: 숫자 prefix가 없는 파일(`fast.md`, `props.md`, `math.md`, `exception.md`)은 특수 워크플로우 전용이며, 이 skill에서도 로드하지 않는다.
+| 항목 | 이 워크플로우 |
+|------|---------------|
+| `workflow-name` | `commit` |
+| 범위 결정 | C-4의 merge-base 대신 **단일 커밋 patch** (Step 1) |
+| 모듈 집합 | numbered non-00 전체 |
+| 분할 방식 | 단일 통합 pass |
 
 ## 실행 절차
 
@@ -175,7 +174,7 @@ bounded 단일 통합 pass 완료 후:
 **권장 액션**: 🔴 {N}개 → {가능/불가/수정 후 가능}
 ```
 
-최종 리포트는 기본적으로 `.md` 파일로 저장한다. 저장 경로는 `./review-reports/code-review-commit-{branch-name}-{date}.md`를 우선 사용한다. 단, 사용자가 read-only 리뷰, 파일 생성/수정 금지, 텍스트 응답만을 요청했으면 저장하지 않는다 (`00-rule.md` 00-9 우선). 문서 내용은 **해당 커밋 patch 안에서 실제로 바뀐 내용** 중심으로 쓰고, 다른 커밋/브랜치의 일반론은 넣지 않는다. 기존 리뷰 문서가 이미 있어도 그 문서를 이유로 리뷰를 건너뛰지 말고 **항상 새 리뷰를 수행한 뒤 새 파일로 저장**한다. 이 워크플로우의 기본 `workflow-name`은 `commit`이다.
+리포트 저장은 `workflow-contract.md` C-7을 따른다 (`workflow-name`은 `commit`). 문서 내용은 **해당 커밋 patch 안에서 실제로 바뀐 내용** 중심으로 쓰고, 다른 커밋/브랜치의 일반론은 넣지 않는다.
 
 ## 사용법
 

@@ -61,12 +61,26 @@ Numbered modules (`review-rules/[0-9]*.md`) are loaded by the general review pas
 | 20 | `20-deletion-regression.md` | Deletion regression checks |
 | 21 | `21-rsc.md` | Server/client boundary, Server Functions, serialization *(RSC only)* |
 
-Non-numbered modules are excluded from the automatic scan and load only in their own workflow:
+Non-numbered files are excluded from the automatic scan:
 
 - `fast.md` — compressed ruleset for `/code-review-fast`
 - `props.md` — `P-x` rules for `/code-review-props`
 - `math.md` — `A-x` / `C-x` rules for `/code-review-math`
 - `exception.md` — `EX-x` rules for `/code-review-exception`
+- `workflow-contract.md` — shared execution contract (not a rule module)
+- `catalog.json` — applicability metadata (not a rule module)
+
+## Shared workflow contract
+
+`review-rules/workflow-contract.md` holds the procedure every workflow shares: rules-directory resolution, module discovery, applicability gating, diff range, excluded paths, execution safety, report naming, and honest failure reporting. Each skill references it and declares only what differs in its own mode — scope, module set, fan-out strategy, output density.
+
+The contract exists because the alternative had already failed: the same procedure copied into seven skill documents drifted apart, and workflows started behaving differently for the same request.
+
+## Applicability metadata
+
+`review-rules/catalog.json` records **when** a module applies — required profile (FSD, Tailwind, RSC, Electron, TanStack Query, server code, contract provider), minimum React version, which workflows load it, and which individual rules carry a narrower gate than their module. The Markdown modules stay canonical for **what** a rule says; the catalog never generates documentation and never restates rule text.
+
+A module whose profile does not hold is reported as `SKIPPED` with a reason. It is never silently dropped and never counted as passing — a rule that was not run and a rule that found nothing are different outcomes.
 
 ## Rule IDs
 
@@ -120,6 +134,8 @@ claude-code-review-plugin/
 │   └── code-review-exception/SKILL.md
 ├── review-rules/
 │   ├── 00-rule.md … 21-rsc.md
+│   ├── workflow-contract.md
+│   ├── catalog.json
 │   ├── fast.md
 │   ├── props.md
 │   ├── math.md

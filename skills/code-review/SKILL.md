@@ -9,51 +9,33 @@ React 전용 모듈러 코드 리뷰 시스템. 리뷰 규칙 폴더에서 **숫
 
 `00-rule.md`는 모든 리뷰 모듈보다 먼저 읽고 우선 적용하는 최상위 공통 규칙이다. 개별 모듈과 충돌하면 `00-rule.md` 기준을 따른다.
 
-## 리뷰 규칙 위치
+## 공통 계약
 
-다음 순서로 존재하는 첫 번째 디렉터리를 `RULES_DIR`로 사용한다.
+`RULES_DIR` 해석, 모듈 탐색, 적용 조건 판정, 범위 결정, 제외 경로, 실행 안전, 리포트 저장, 실패 보고는 **`$RULES_DIR/workflow-contract.md`** 를 따른다. 이 문서는 그 계약을 복제하지 않고, 아래 "이 워크플로우의 차이"만 선언한다.
 
-1. `${CLAUDE_PLUGIN_ROOT}/review-rules/` — 플러그인으로 설치된 경우
-2. `./review-rules/` — 저장소에 직접 포함된 경우
-3. `~/.claude/review-rules/` — 홈 디렉터리에 복사해 쓰는 경우
+리뷰를 시작하기 전에 `workflow-contract.md`를 먼저 읽는다.
 
-**모듈 목록을 파일명으로 하드코딩하지 않는다.** 항상 `RULES_DIR`을 실제로 나열해서 발견되는 숫자 prefix 파일 전체를 모듈로 삼는다. 모듈이 추가·삭제되어도 이 스킬은 수정할 필요가 없어야 한다.
+### 이 워크플로우의 차이
 
-파일명 앞 숫자는 실행 순서이며, `00-rule.md`가 항상 최우선이다.
-
-**자동 모듈 스캔에서 제외되는 파일**: 숫자 prefix가 없는 파일(`fast.md`, `props.md`, `math.md`, `exception.md`)은 특수 워크플로우 전용이며, 일반 `/code-review`에서는 절대 로드하지 않는다.
+| 항목 | 이 워크플로우 |
+|------|---------------|
+| `workflow-name` | `default` |
+| 모듈 집합 | numbered non-00 전체 (`--module` 필터 적용 가능) |
+| 분할 방식 | 단일 통합 bounded pass (모듈별 fan-out 없음) |
+| 출력 밀도 | 발견된 위반 전부 |
 
 ## 실행 절차
 
 ### Step 1: Diff 범위 결정
 
+`workflow-contract.md` C-4를 따른다. 결정된 범위로 아래를 확인한다.
+
 ```bash
-# base 브랜치 결정: dev → main → master → origin/HEAD 순으로 존재하는 첫 번째를 사용
-for candidate in dev main master; do
-  if git rev-parse --verify --quiet "$candidate" >/dev/null; then
-    BASE_BRANCH=$candidate; break
-  fi
-done
-BASE_BRANCH=${BASE_BRANCH:-$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD | sed 's|origin/||')}
-
-MERGE_BASE=$(git merge-base $BASE_BRANCH HEAD)
-echo "Review range: $MERGE_BASE..HEAD (base: $BASE_BRANCH)"
-
-# 변경된 파일 목록
 git diff --stat $MERGE_BASE..HEAD
-
-# 실제 diff
 git diff $MERGE_BASE..HEAD
 ```
 
-사용자가 특정 범위를 지정하면 그것을 사용한다. 지정하지 않았고 위 후보가 모두 없으면 사용자에게 base를 묻고, 임의로 리뷰 범위를 정하지 않는다. `MERGE_BASE == HEAD`이면 리뷰할 변경이 없는 것으로 보고 종료한다.
-
-리뷰 대상에서 아래 테스트/목 관련 경로는 제외한다. diff 확인 시 존재 여부를 볼 수는 있지만, sub-agent에 전달하는 변경 파일 목록과 리뷰 지적 범위에서는 제거한다.
-
-- `__test__/**`, `__tests__/**`
-- `*.test.*`, `*.spec.*`
-- `__mocks__/**`, `mock/**`, `mocks/**`
-- `*.mock.*`, `mockData/**`, `fixtures/**` 처럼 테스트/목 전용 자산임이 명확한 파일/폴더
+제외 경로는 C-5를 따른다.
 
 ### Step 2: Lint 확인 (read-only)
 
@@ -71,9 +53,9 @@ git diff $MERGE_BASE..HEAD
 ls "$RULES_DIR"/[0-9]*.md
 ```
 
-**발견된 숫자 prefix 파일 전체**를 리뷰 패스(pass)로 사용한다. 목록을 미리 가정하지 말고 실제 출력에 따른다. `fast.md`, `props.md`, `math.md`, `exception.md`는 이 스캔에서 제외된다.
+모듈 탐색과 `00-rule.md` 취급은 `workflow-contract.md` C-2를, 모듈별 적용 조건(FSD·Tailwind·RSC·SSR·React 버전 등) 판정은 C-3을 따른다. 전제가 성립하지 않는 모듈은 `SKIPPED`와 사유를 남기고, 조용히 빼지 않는다.
 
-`00-rule.md` is loaded as common rules for every module. Do not treat `00-rule.md` as a normal review module unless the user explicitly requests a common-rule-only pass. Numbered non-00 modules remain review modules, but default `/code-review` evaluates them through one consolidated bounded pass instead of per-module fan-out.
+기본 `/code-review`는 numbered non-00 모듈을 **하나의 통합 bounded pass**로 평가한다 (모듈별 fan-out은 `/code-review-full`).
 
 #### `--module` 필터
 
@@ -219,7 +201,7 @@ bounded pass 완료 후:
 **머지 가능 여부**: 🔴 {N}개 → {가능/불가/수정 후 가능}
 ```
 
-최종 리포트는 기본적으로 `.md` 파일로 저장한다. 단, 사용자가 read-only 리뷰, 파일 생성/수정 금지, 텍스트 응답만을 요청했으면 저장하지 않는다 — 이 요청은 `00-rule.md` 00-9에 따라 저장 규칙보다 우선한다. 저장 경로는 `00-rule.md` 00-5의 규칙을 따라 `./review-reports/code-review-default-{branch-name}-{date}.md`를 사용하고, 저장 경로를 함께 보고한다. 문서 내용은 **이번 브랜치 diff와 실제 변경 파일 기준**으로 작성하고, 저장소 전체 일반론이나 diff 밖의 장황한 설명은 피한다. 기존 리뷰 문서가 이미 있어도 그 문서를 이유로 리뷰를 건너뛰지 말고 **항상 새 리뷰를 수행한 뒤 새 파일로 저장**한다. 이 워크플로우의 `workflow-name`은 `default`이다.
+리포트 저장은 `workflow-contract.md` C-7을 따른다 (`workflow-name`은 `default`). 문서 내용은 **이번 브랜치 diff와 실제 변경 파일 기준**으로 작성하고, 저장소 전체 일반론이나 diff 밖의 장황한 설명은 피한다.
 
 ## 사용법
 
@@ -238,8 +220,5 @@ bounded pass 완료 후:
 - 기본 `/code-review`는 safe default로 bounded 단일 통합 리뷰를 사용한다
 - 상세/exhaustive 모듈별 multi-pass coverage가 필요하면 `/code-review-full`을 사용한다
 - diff에 포함되지 않은 기존 코드는 리뷰 대상이 아니다
-- `__test__`, `__tests__`, test/spec 파일, mock/mocks/fixture 전용 파일은 일반 `/code-review` 대상이 아니다
 - 리뷰 규칙 파일 추가/삭제만으로 리뷰 범위를 조절할 수 있다
-- 빈 diff (변경 없음)이면 리뷰를 수행하지 않는다
-- 리뷰는 read-only가 기본이다. lint는 수정 옵션 없이 실행하고, 자동 수정은 사용자가 요청했을 때만 한다 (`00-rule.md` 00-9)
-- 사용자가 read-only/파일 수정 금지/텍스트 응답만을 요청하면 리뷰 문서도 만들지 않는다
+- 나머지 실행 규칙(제외 경로, 빈 diff, read-only, 리포트 저장)은 `workflow-contract.md`를 따른다
