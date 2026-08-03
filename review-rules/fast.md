@@ -127,6 +127,8 @@
 
 ## 12. 접근성
 
+**적용 조건**: 변경 라인에 interactive UI 생성·변경, `onClick`·`onMouse*`·`onPointer*`·keyboard handler·`tabIndex`·`role`·`aria-*` 변경, modal·dialog·popover·dropdown·tooltip·drawer·route transition UI 변경, input·select·textarea·checkbox·radio·validation message 변경이 보일 때만 적용한다.
+
 🔴 — 클릭 가능한 `div`/`span`으로 button/link 흉내 / keyboard activation 경로 없음 / modal·dialog·route transition에 focus 진입·복원·trap 없음 / icon-only button·form control·dialog에 accessible name 없음 / error text가 control과 연결되지 않거나 조용히 추가됨 / 의미 있는 image·icon·chart·색상 전용 상태에 텍스트 대안 없음 / `aria-*`가 실제 UI 상태와 불일치
 
 🟡 — reduced-motion 대안 없는 애니메이션, diff에서 직접 보이는 contrast 저하
