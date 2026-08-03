@@ -67,8 +67,32 @@ const RichTextEditor = lazy(() => import('@/shared/ui/rich-text-editor'))
 - 검색어 입력마다 대형 리스트를 즉시 필터링·재정렬
 - 입력 state가 무거운 형제 트리까지 리렌더시킴
 - debounce/throttle 없이 매 keystroke 마다 네트워크 요청
+- 🔴 controlled input의 값 state를 transition 안에서 갱신 — transition은 중단·지연될 수 있으므로 입력이 씹히거나 커서가 튄다. 입력값 갱신은 긴급 업데이트로 두고, 그 값을 소비하는 무거운 렌더만 뒤로 미룬다
+- 🟡 transition/deferred로 갱신을 미뤄놓고 `isPending`이나 시각적 표시가 없어 사용자가 멈춘 것으로 인식
+- 🟡 `await` 이후에 상태를 갱신하면서 그 갱신을 transition으로 감싸지 않아 중단 가능성이 사라짐 (async 함수에서는 `await` 뒤가 별도 실행 컨텍스트다)
 
-**개선 방향**: `useDeferredValue`로 무거운 결과 갱신을 뒤로 미루거나, `useTransition`으로 비긴급 업데이트로 표시하거나, 입력 state를 하위로 격리한다. debounce는 네트워크 요청에, transition은 렌더 비용에 쓴다 — 둘을 혼동한 코드도 지적한다.
+**개선 방향**: `useDeferredValue`로 무거운 결과 갱신을 뒤로 미루거나, `useTransition`으로 비긴급 업데이트로 표시하거나, 입력 state를 하위로 격리한다.
+
+**혼동하기 쉬운 구분** — 둘을 뒤바꾼 코드도 지적한다.
+
+| 문제 | 도구 | 이유 |
+|------|------|------|
+| 렌더 비용이 커서 입력이 끊김 | `useTransition` / `useDeferredValue` | 렌더 우선순위 문제 |
+| 요청이 너무 자주 나감 | debounce / throttle | 호출 빈도 문제 |
+| 이전 요청 결과가 최신을 덮음 | abort / stale-result 무시 | 경쟁 조건 문제 (`04-state.md` 04-1) |
+
+`useDeferredValue`는 요청을 줄이지도, 취소하지도 않는다. 네트워크 호출 자체를 줄여야 하는 자리에 deferred를 쓴 코드는 문제가 그대로 남아 있는 것으로 본다.
+
+```tsx
+// ❌ 입력값 갱신이 transition 안에 있다 — 타이핑이 씹힌다
+<input onChange={e => startTransition(() => setQuery(e.target.value))} />
+
+// ✅ 입력은 즉시, 무거운 소비만 지연
+const [query, setQuery] = useState('')
+const deferredQuery = useDeferredValue(query)
+<input value={query} onChange={e => setQuery(e.target.value)} />
+<HeavyResults query={deferredQuery} />
+```
 
 ## 14-4. 렌더 중 고비용 계산 🟡
 
@@ -91,6 +115,11 @@ const RichTextEditor = lazy(() => import('@/shared/ui/rich-text-editor'))
 - 경계가 없어 lazy 컴포넌트나 데이터 대기 시 트리 전체가 멈춤
 - 로딩 fallback이 실제 콘텐츠와 높이가 달라 레이아웃 시프트 발생
 - 라우트 전환마다 전체 스켈레톤이 다시 그려져 체감 속도가 떨어짐
+- 🔴 갱신으로 이미 보이던 콘텐츠가 fallback으로 되돌아감 — 사용자가 보던 화면이 사라지는 회귀다. 갱신을 transition으로 감싸면 기존 콘텐츠를 유지한 채 새 내용을 준비한다
+- 🟡 Suspense 경계만 있고 그 안쪽에 Error Boundary가 없어, 데이터 로딩 실패가 무한 fallback이나 트리 전체 크래시로 이어짐
+- 🟡 형제 Suspense 경계를 잘게 쪼개 콘텐츠가 순차적으로 튀어나오며 레이아웃이 여러 번 흔들림 — 함께 나타나야 자연스러운 블록은 한 경계로 묶는다
+
+**판정 기준**: 경계 하나마다 "이 안이 로딩 중일 때 사용자가 무엇을 잃는가"를 묻는다. 잃는 범위가 필요 이상으로 넓으면 경계를 아래로, 화면이 산발적으로 흔들리면 경계를 위로 올린다.
 
 ## 14-7. 측정 근거 🔵
 

@@ -4,6 +4,20 @@ Modular code review workflows for **React** codebases, packaged as a Claude plug
 
 This is not a general-purpose review system. Every rule module assumes the code under review is a React application; modules that need more than that (FSD, Electron, Tailwind, React Three Fiber) declare it in their own header and are skipped when the assumption does not hold.
 
+## React version support
+
+The baseline is **React 18**. Rules that only hold on a newer version, or only under a particular rendering model, carry that condition in the rule text and are skipped when the condition is not met. The project's React version comes from `package.json`; when it cannot be determined, version-gated rules do not apply.
+
+| Gate | Applies when | Rules |
+|------|--------------|-------|
+| React 18+ | baseline | everything not listed below |
+| React 19+ | `react` >= 19 | `03-1` conditional `use`, `03-10` Actions / `useActionState` / `useFormStatus` / `useOptimistic`, ref-as-prop |
+| React Compiler | compiler enabled in build config | `03-10`, `04-6`, `14-4` — no manual memoization is demanded or removed |
+| SSR / SSG | server rendering in use | `03-8` hydration parity, `03-9` `getServerSnapshot` |
+| RSC | `'use client'` / `'use server'` present, or an RSC framework configured | all of `21-rsc.md` |
+
+A version-gated rule that fires on a project that cannot use the API is a false positive, not a suggestion to upgrade.
+
 ## Workflows
 
 | Command | Scope |
@@ -45,6 +59,7 @@ Numbered modules (`review-rules/[0-9]*.md`) are loaded by the general review pas
 | 18 | `18-dangerous-change.md` | Auth, destructive data changes, payments, secrets |
 | 19 | `19-intent.md` | Problem framing, trade-offs, justification |
 | 20 | `20-deletion-regression.md` | Deletion regression checks |
+| 21 | `21-rsc.md` | Server/client boundary, Server Functions, serialization *(RSC only)* |
 
 Non-numbered modules are excluded from the automatic scan and load only in their own workflow:
 
@@ -104,7 +119,7 @@ claude-code-review-plugin/
 │   ├── code-review-math/SKILL.md
 │   └── code-review-exception/SKILL.md
 ├── review-rules/
-│   ├── 00-rule.md … 20-deletion-regression.md
+│   ├── 00-rule.md … 21-rsc.md
 │   ├── fast.md
 │   ├── props.md
 │   ├── math.md
@@ -116,6 +131,6 @@ claude-code-review-plugin/
 
 ## Maintenance notes
 
-- Adding a numbered module: insert it at the position that matches its topic, renumber the neighbours, and update every cross-reference plus the matching section of `fast.md`.
-- `fast.md` is a hand-maintained compression of the numbered modules. When compressing, keep the original exception clauses — dropping them turns a rule into a false positive.
+- Adding a numbered module: **append the next free number — never renumber existing modules.** Rule IDs are quoted in review reports and in this repo's own cross-references, so renumbering silently invalidates every past report and breaks traceability, which is the one property the ID convention exists to provide. Grouping by topic is a readability preference; stable IDs are a correctness property, and the latter wins. Add the module to the README inventory and to the matching section of `fast.md` in the same change.
+- `fast.md` is a hand-maintained compression of the numbered modules. Three things must match the source exactly: **severity**, **applicability conditions**, and **exception clauses**. Lowering a severity changes the verdict, dropping a trigger widens the scope, and dropping an exception turns a rule into a false positive.
 - Project-specific assumptions belong in each module's header, not in this README.

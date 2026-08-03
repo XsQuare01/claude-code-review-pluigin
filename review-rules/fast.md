@@ -1,6 +1,6 @@
 # Fast Code Review Rules (압축본)
 
-> **Sync note**: 숫자 prefix 모듈은 현재 `00` ~ `20` 이며 빈 번호가 없다. 모듈을 추가·삭제·재배치하면 이 문서의 해당 섹션도 같이 고쳐야 한다.
+> **Sync note**: 숫자 prefix 모듈은 현재 `00` ~ `21` 이며 빈 번호가 없다. 모듈을 추가·삭제하면 이 문서의 해당 섹션도 같이 고쳐야 한다.
 >
 > 압축할 때 원본과 **반드시 일치시켜야 하는 세 가지**가 있다. 이 셋이 어긋나면 fast 리뷰는 원본과 다른 판정을 내리는 별개의 규칙 체계가 된다.
 >
@@ -24,7 +24,7 @@
 
 1. diff 라인 또는 그 변경 때문에 직접 깨진 인접 구조에서 **확인된** 이슈만 모은다.
 2. severity가 가장 높은 것을 고른다.
-3. 동점이면 다음 순서로: 위험 변경(18) → API 계약(16) → 동시성(17) → 삭제 회귀(20) → React 규칙(03) → 아키텍처 경계(01) → 타입(02) → 상태/이펙트(04) → 접근성(12, 사용 경로가 막힐 때) → 나머지.
+3. 동점이면 다음 순서로: 위험 변경(18) → RSC 경계(21, 비밀 유출·권한) → API 계약(16) → 동시성(17) → 삭제 회귀(20) → React 규칙(03) → 아키텍처 경계(01) → 타입(02) → 상태/이펙트(04) → 접근성(12, 사용 경로가 막힐 때) → 나머지.
 4. 파일당 최대 1개만 출력한다.
 5. 위반 없는 파일은 언급하지 않는다.
 
@@ -62,7 +62,13 @@
 
 🟡 — 정렬·삭제가 있는 리스트에 index key, 외부 시스템 동기화가 아닌 effect(핸들러나 렌더 중 계산으로 옮겨야 함), ref/state 오용, 외부 스토어를 effect+state로 구독(`useSyncExternalStore` 필요), `useId` 없이 만든 DOM id, prop 이름이 소유권 계약을 드러내지 않는데 동기화도 없음
 
-**지적하지 않음** — 조건부 `use(resource)` 호출(React 19+에서 허용), 자기 state를 이전 props와 비교해 조정하는 guarded render-phase adjustment(종료 조건 있고 부수효과 없음), `initialX`/`defaultX`로 받아 이후 동기화하지 않는 uncontrolled 패턴, 의도적 리셋을 위한 `key` 변경
+🔴 (SSR/SSG 프로젝트에만 적용) — 첫 렌더에서 `window`·`document`·`localStorage`·`navigator`·locale·timezone 등 서버가 모르는 값을 읽어 출력이 갈림 / `useId` 없이 만든 DOM id가 서버·클라이언트에서 다름
+
+🟡 — `getSnapshot`이 unchanged 데이터에 매번 새 참조 반환(무한 렌더), `subscribe`가 렌더마다 새로 생성돼 재구독, unsubscribe 미반환, SSR인데 `getServerSnapshot` 부재·불일치 / `suppressHydrationWarning`을 넓은 범위에 붙여 원인을 덮음
+
+🟡 (React 19+ 프로젝트에만 적용) — async Action 순서 역전으로 이전 결과가 최신을 덮음, Action 실패 경로 없음, `useActionState`/`useFormStatus`가 있는데 수동 `isLoading`을 병행해 두 출처가 어긋남, `useFormStatus`를 form 바깥에서 호출
+
+**지적하지 않음** — 조건부 `use(resource)` 호출(React 19+에서 허용), 자기 state를 이전 props와 비교해 조정하는 guarded render-phase adjustment(종료 조건 있고 부수효과 없음), `initialX`/`defaultX`로 받아 이후 동기화하지 않는 uncontrolled 패턴, 의도적 리셋을 위한 `key` 변경, React 19에서 남아 있는 기존 `forwardRef` 코드, Compiler가 켜진 프로젝트의 수동 memoization 추가·제거 요구
 
 ## 04. 상태 & 사이드이펙트
 
@@ -134,7 +140,11 @@
 
 🔴 — 상한이 열린 대형 리스트를 가상화·페이지네이션 없이 전량 렌더 (상한이 수십 건으로 고정된 목록은 지적하지 않음)
 
-🟡 — 라우트/모달/에디터/차트를 정적 import(코드 스플리팅 부재), 입력마다 무거운 렌더를 동기 실행(`useDeferredValue`/`useTransition` 미검토), 렌더 중 대형 정렬·정규식·`Intl` 인스턴스 반복 생성, 이미지 크기 미지정·lazy 미적용, Suspense 경계 과대·부재
+🔴 — controlled input의 값 state를 transition 안에서 갱신(입력 씹힘·커서 튐) / 갱신으로 이미 보이던 콘텐츠가 fallback으로 되돌아감(transition으로 감싸 기존 화면 유지)
+
+🟡 — 라우트/모달/에디터/차트를 정적 import(코드 스플리팅 부재), 입력마다 무거운 렌더를 동기 실행(`useDeferredValue`/`useTransition` 미검토), 렌더 중 대형 정렬·정규식·`Intl` 인스턴스 반복 생성, 이미지 크기 미지정·lazy 미적용, Suspense 경계 과대·부재, Suspense 안쪽에 Error Boundary 없음, transition/deferred 중 `isPending` 등 진행 표시 없음, `await` 뒤 상태 갱신을 transition으로 감싸지 않음
+
+**도구 혼동**: 렌더 비용 → transition/deferred, 호출 빈도 → debounce/throttle, 경쟁 조건 → abort/stale 무시. `useDeferredValue`는 요청을 줄이거나 취소하지 않는다 — 자리를 바꿔 쓴 코드도 지적한다.
 
 **지적 원칙**: 추정만으로 🔴을 주지 않는다. 측정 없이 `useMemo`/`useCallback`을 더 붙이라고 요구하지 않는다.
 
@@ -187,6 +197,14 @@
 🔴 — 삭제된 production export/function/type/constant/schema에 대체 경로·이동·호출부 갱신 증거 없음 / 기능은 유지되는데 구현만 사라짐 / effect cleanup·의존성 항목·`key`·Suspense 경계 삭제
 
 🟡 — test/mock/fixture 전용 삭제는 fast 리뷰에서 제외. 전체 저장소 탐색 대신 삭제된 심볼의 targeted reference check만.
+
+## 21. RSC & Server/Client 경계 *(RSC 프로젝트 전용)*
+
+**적용 조건**: 저장소에 `'use client'`/`'use server'` 지시어가 있거나 RSC 지원 프레임워크 설정이 확인될 때만 적용한다. **SPA·CRA·Electron renderer·RSC 아닌 SSR에는 적용하지 않는다.**
+
+🔴 — `'use server'`를 서버 컴포넌트 표시로 오해해 파일 export가 전부 공개 endpoint가 됨 / Server Function에 인증·인가 검사 없음, 클라이언트가 보낸 ID를 검증 없이 신뢰(IDOR), 입력 런타임 검증 없음 / 비밀·API 키·DB 클라이언트·서버 SDK가 클라이언트 경계 아래로 유입되거나 클라이언트 노출 env에 담김 / 함수·클래스 인스턴스·Map/Set 등 직렬화 불가 값을 클라이언트 컴포넌트 props로 전달
+
+🟡 — 트리 상단에 `'use client'`를 붙여 하위 전체가 클라이언트 번들로 끌려감 / 필요한 몇 필드 대신 거대한 서버 객체·ORM 엔티티를 통째로 props 전달 / 서버 전용 모듈에 `server-only` 가드 없음 / 서버 컴포넌트에서 `useState`·`useEffect`·이벤트 핸들러·브라우저 API 사용
 
 ---
 
