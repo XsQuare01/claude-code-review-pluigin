@@ -6,7 +6,12 @@
 
 - useEffect 클린업/의존성, 비동기 상태, 리렌더 최적화 → `04-state.md`
 - 컴포넌트 크기, JSX 가독성, 조건부 렌더링 표현 → `05-structure.md`, `06-jsx.md`
-- 가상화, 번들, lazy 로딩 → `14-react-performance.md`
+- 가상화, 번들, lazy 로딩, Suspense·Transition 배치 → `14-react-performance.md`
+- 서버/클라이언트 경계, Server Function, 직렬화 → `21-rsc.md`
+
+## 버전 전제
+
+이 모듈의 기본 대상은 **React 18 이상**이다. 특정 버전에서만 성립하는 규칙에는 해당 규칙 옆에 버전 조건을 표기한다. 프로젝트의 React 버전은 `package.json`에서 확인하고, 확인되지 않으면 버전 조건이 붙은 규칙은 적용하지 않는다.
 
 ## Severity 기준
 
@@ -177,10 +182,90 @@ function NameEditor({ initialName }: NameEditorProps) {
 
 React 18+ 는 렌더를 중단·재개·폐기할 수 있다. 다음은 그 전제를 깬다.
 
-- 모듈 스코프 mutable 변수로 렌더 간 상태를 나름 (컴포넌트 인스턴스별로 격리되지 않음)
-- 외부 스토어를 `useEffect` + `useState`로 직접 구독 → tearing 가능. `useSyncExternalStore` 사용
+- 모듈 스코프 mutable 변수로 렌더 간 상태를 나눔 (컴포넌트 인스턴스별로 격리되지 않음)
 - StrictMode의 effect 이중 실행(mount → unmount → mount)에서 구독·타이머·연결이 중복 등록됨
-- `useId` 없이 SSR/CSR 양쪽에서 생성되는 DOM id가 달라 hydration mismatch
+
+외부 스토어 구독은 03-9, hydration 일치는 03-8에서 다룬다.
+
+## 03-8. Hydration 일치 🔴 *(SSR/SSG를 쓰는 프로젝트에만 적용)*
+
+hydration은 **서버가 만든 HTML과 클라이언트의 첫 렌더 결과가 같다**는 전제 위에서 동작한다. 어긋나면 React는 그 subtree를 버리고 클라이언트에서 다시 그리며, 그 과정에서 서버 렌더의 이점이 사라지고 깜빡임·포커스 소실·잘못된 초기 상태가 나타난다.
+
+적용 조건: 프로젝트가 SSR, SSG, 또는 RSC를 사용할 때만 적용한다. 순수 CSR(Vite SPA, CRA, Electron renderer)에는 적용하지 않는다.
+
+- 🔴 서버에 없는 정보(`window`, `document`, `localStorage`, `navigator`, `matchMedia`)를 첫 렌더에서 읽어 분기
+- 🔴 사용자 locale, timezone, 화면 크기에 따라 첫 렌더 출력이 달라짐 (서버는 그 값을 모른다)
+- 🔴 `Math.random()`, `Date.now()`, `new Date()`로 첫 렌더 출력이 결정됨 (03-2와 함께 본다)
+- 🔴 `useId` 없이 만든 DOM id가 서버/클라이언트에서 달라짐
+- 🟡 외부 스토어를 쓰면서 `getServerSnapshot`을 제공하지 않거나 클라이언트 초기 snapshot과 다른 값을 반환 (03-9와 함께 본다)
+- 🟡 `suppressHydrationWarning`으로 불일치를 덮음 — 타임스탬프처럼 **불일치가 불가피하고 그 노드에 국한될 때만** 정당하다. 트리 상단이나 넓은 범위에 붙었으면 원인을 가린 것으로 본다
+
+**판정 기준**: "첫 렌더에서 서버가 알 수 없는 값을 읽는가"를 묻는다. 브라우저 전용 값이 필요하면 첫 렌더는 서버와 같은 출력을 내고, effect에서 갱신하는 2단계 구조여야 한다.
+
+```tsx
+// ❌ 서버에는 window가 없다 — 첫 렌더가 어긋난다
+const isWide = window.innerWidth > 768
+
+// ✅ 첫 렌더는 서버와 동일, 이후 effect에서 보정
+const [isWide, setIsWide] = useState(false)
+useEffect(() => {
+  const mq = window.matchMedia('(min-width: 768px)')
+  const update = () => setIsWide(mq.matches)
+  update()
+  mq.addEventListener('change', update)
+  return () => mq.removeEventListener('change', update)
+}, [])
+```
+
+## 03-9. 외부 스토어 구독 계약 🟡
+
+React 외부에 있는 상태(전역 스토어, 브라우저 API, 서드파티 SDK)를 구독할 때는 `useSyncExternalStore`가 요구하는 계약을 지켜야 한다. 계약을 어기면 무한 렌더, tearing, SSR 불일치가 난다.
+
+- 🔴 unchanged 데이터인데 `getSnapshot`이 매번 새 객체/배열을 반환 → 무한 렌더 루프. 값이 안 바뀌면 **같은 참조**를 돌려줘야 한다
+- 🔴 mutable 스토어에서 스냅샷을 즉석 생성 → 캐시된 immutable snapshot을 유지하고 변경 시에만 교체
+- 🟡 외부 스토어를 `useEffect` + `useState`로 직접 구독 → 동시성 렌더에서 tearing 가능. `useSyncExternalStore` 사용
+- 🟡 `subscribe` 함수가 렌더마다 새로 만들어져 구독이 매번 해제·재등록됨 → 컴포넌트 밖으로 옮기거나 `useCallback`으로 고정
+- 🟡 `subscribe`가 unsubscribe 함수를 반환하지 않거나, 반환한 것이 실제 등록 대상과 다름
+- 🟡 SSR을 쓰는데 `getServerSnapshot`이 없거나 클라이언트 초기 snapshot과 다른 값을 반환 (03-8과 함께 본다)
+
+```typescript
+// ❌ 매 호출 새 배열 — 무한 렌더
+const getSnapshot = () => store.items.filter(i => i.active)
+
+// ✅ 변경 시에만 새 참조를 만들고 그 사이엔 같은 참조를 반환
+let cached = store.items
+let cachedActive = cached.filter(i => i.active)
+const getSnapshot = () => {
+  if (store.items !== cached) {
+    cached = store.items
+    cachedActive = cached.filter(i => i.active)
+  }
+  return cachedActive
+}
+```
+
+## 03-10. React 19 API 사용 🟡 *(React 19+ 프로젝트에만 적용)*
+
+`package.json`의 React가 19 미만이면 이 규칙 전체를 적용하지 않는다. 아래 API가 없는 버전에서 "이걸 쓰라"고 요구하면 그 자체가 오탐이다.
+
+**Actions와 pending 상태**
+
+- 🔴 async Action이 연속 실행될 때 늦게 끝난 이전 Action이 최신 결과를 덮음 → 순서 보장은 `17-concurrency.md` 17-2와 함께 본다
+- 🟡 `useActionState`/`useFormStatus`로 pending을 표현할 수 있는데 수동 `isLoading` state를 병행해 두 출처가 어긋남
+- 🟡 Action의 에러 경로가 없어 실패가 조용히 사라짐 — 반환 state나 Error Boundary 중 하나로 드러나야 한다
+- 🟡 `useFormStatus`를 form 바깥에서 호출 — 같은 form 안의 자손 컴포넌트에서만 값을 읽을 수 있다
+
+**Optimistic UI**
+
+- 🟡 `useOptimistic`의 낙관값이 실제 결과로 수렴하지 않거나, 실패 시 되돌아가는 경로가 없음 → `17-concurrency.md` 17-4와 함께 본다
+
+**ref**
+
+- 🔵 React 19에서는 함수 컴포넌트가 `ref`를 일반 prop으로 받을 수 있다. 기존 `forwardRef` 코드가 남아 있다는 사실만으로 지적하지 않는다. 새 코드에서 `forwardRef`를 쓰는 경우에만 프로젝트 관례를 확인한다
+
+**React Compiler**
+
+- 🔵 Compiler가 켜져 있으면 memoization이 자동 삽입된다. 수동 `useMemo`/`useCallback`/`memo` 추가를 요구하지 않고, 반대로 기존 수동 memoization을 제거하라고 요구하지도 않는다 (`04-state.md` 04-6, `14-react-performance.md` 14-4와 같은 기준)
 
 ---
 
@@ -191,6 +276,8 @@ React 18+ 는 렌더를 중단·재개·폐기할 수 있다. 다음은 그 전�
 3. 새로 추가·변경된 `map` 렌더에서 key 표현식이 안정적인지 확인한다.
 4. `useState` 초기값이 props/서버 데이터이고 같은 값을 effect가 다시 set하는지 확인한다.
 5. 추가된 `useEffect`마다 "이게 외부 시스템 동기화인가?"를 묻는다.
+6. SSR/SSG 프로젝트라면 첫 렌더가 서버가 모르는 값을 읽는지 확인한다 (03-8).
+7. 새 외부 스토어 구독마다 `getSnapshot` 참조 안정성과 `subscribe` cleanup을 확인한다 (03-9).
 
 ## 03-OUTPUT. 출력 형식
 

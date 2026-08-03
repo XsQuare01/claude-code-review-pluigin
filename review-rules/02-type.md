@@ -1,5 +1,23 @@
 # 타입 안전성
 
+이 모듈은 **타입이 실제로 무엇을 보장하는지**를 본다. 타입은 컴파일러 설정이 켜져 있는 만큼만 보장하고, 값이 프로그램 밖에서 들어오는 지점에서는 아무것도 보장하지 않는다. 두 사실을 무시한 규칙은 안전하지 않은 코드를 통과시키거나 안전한 코드를 지적한다.
+
+## 리뷰 전 확인: tsconfig
+
+**같은 코드라도 컴파일러 설정에 따라 안전 여부가 달라진다.** 리뷰를 시작하기 전에 프로젝트의 `tsconfig.json`(및 상속 체인)에서 아래를 확인하고, 확인된 설정을 기준으로 판정한다. 설정을 확인하지 않은 채 "이 접근은 위험하다"고 판단하면 이미 컴파일러가 막고 있는 것을 지적하거나, 반대로 컴파일러가 안 막는 것을 안전하다고 넘긴다.
+
+| 설정 | 꺼져 있을 때 리뷰가 대신 봐야 하는 것 |
+|------|--------------------------------------|
+| `strict` / `strictNullChecks` | null·undefined 접근 전반. narrowing 규칙(02-5)의 판정 강도를 올린다 |
+| `useUnknownInCatchVariables` | `catch (e)`의 `e`가 `any`다. `e.message` 직접 접근을 지적한다 |
+| `noUncheckedIndexedAccess` | `arr[i]`, `record[key]`가 `undefined`일 수 있다. 인덱스 접근 후 바로 사용하는 코드를 지적한다 |
+| `exactOptionalPropertyTypes` | `{ x?: string }`에 명시적 `undefined`를 넣는 코드가 통과한다 |
+| `noImplicitReturns` | 일부 분기에서만 값을 반환하는 함수가 통과한다 |
+| `strictFunctionTypes` | 콜백 파라미터 반공변 검사가 없다 (02-13) |
+| `verbatimModuleSyntax` | 타입 전용 import의 소거 동작이 달라진다 (02-12) |
+
+**TypeScript 버전도 확인한다.** 새 버전의 기본값이나 새 문법을 이전 버전 프로젝트에 요구하지 않는다. 없는 기능을 쓰라는 지적은 개선 제안이 아니라 오탐이다.
+
 ## Severity 기준
 
 | Severity | 의미 |
@@ -176,3 +194,102 @@ function getId<TItem extends { id: string }>(item: TItem): string {
 - public 함수/훅 반환 타입 명시 여부
 - 커스텀 훅이 배열을 반환할 때 `as const` 없이 튜플 의도가 깨짐
 - 미사용 타입 정의
+
+## 02-9. 신뢰 경계와 런타임 검증 🔴
+
+프로그램 밖에서 들어오는 값에는 **타입 선언이 아무것도 보장하지 않는다.** 선언은 개발자의 기대일 뿐이고, 실제로 오는 것은 서버가 보낸 것이다. 신뢰 경계에서는 타입을 붙이는 것과 값을 확인하는 것이 완전히 다른 일이라는 점이 핵심이다.
+
+**신뢰 경계 목록** — 이 경계를 넘어 들어오는 값은 전부 미검증으로 본다.
+
+- 네트워크 응답 (`fetch`, axios, WebSocket, SSE)
+- `localStorage`, `sessionStorage`, IndexedDB, 쿠키
+- URL query/param, `location.hash`, postMessage, 브라우저 확장 메시지
+- 환경 변수, 런타임 config, feature flag 원본
+- 파일 입력, 클립보드, 드래그앤드롭 데이터
+- Electron IPC payload, 서버 → 클라이언트 직렬화 경계 (`21-rsc.md`와 함께 본다)
+
+**판정**
+
+- 🔴 위 경계에서 받은 값에 검증 없이 타입 단언·제네릭 인자로 타입을 부여하고 그대로 사용 (`await res.json() as User`, `JSON.parse(raw) as Config`)
+- 🔴 `localStorage`에서 읽은 값을 파싱만 하고 shape 확인 없이 state·store에 주입 — 이전 버전이 남긴 낡은 shape가 그대로 들어온다
+- 🔴 env·config 값을 `string`으로 단정하고 사용 (없으면 `undefined`다)
+- 🟡 런타임 스키마는 있는데 실제 사용처가 스키마 결과가 아니라 원본 값을 씀
+- 🟡 generated 타입(OpenAPI, GraphQL codegen)과 런타임 스키마가 각각 관리되어 서로 어긋날 수 있는데 정렬 근거가 없음 — 계약 자체의 호환성은 `16-api-contract.md` 16-1
+
+**요구하는 것은 특정 라이브러리가 아니다.** `unknown`으로 받아 type guard로 좁히는 것, 스키마 라이브러리로 parse하는 것, 수동 검증 함수를 통과시키는 것 모두 유효하다. 요구하는 것은 **검증되지 않은 값이 검증된 타입 이름을 달고 앱 내부로 들어가지 않는 것**이다.
+
+```typescript
+// ❌ 이름만 User다 — 서버가 무엇을 보냈는지 아무도 확인하지 않았다
+const user: User = await res.json()
+
+// ❌ 낡은 shape가 그대로 복원된다
+const draft = JSON.parse(localStorage.getItem('draft')!) as Draft
+
+// ✅ 경계에서 검증하고, 검증된 값만 안으로 보낸다
+const user = userSchema.parse(await res.json())
+```
+
+## 02-10. 단언 안전성 🔴
+
+단언은 컴파일러에게 "내가 안다"고 말하는 것이다. 그 주장이 틀리면 컴파일러는 더 이상 도와주지 않는다. 02-1이 단언의 **범위**를 본다면, 이 규칙은 단언의 **근거**를 본다.
+
+- 🔴 non-null 단언(`!`)의 근거가 코드에 없음 — 앞선 검사, 불변식, 초기화 순서 중 무엇도 그 값이 있음을 보장하지 않는다
+- 🔴 assertion function(`asserts x is T`)의 구현이 실제로 검사하지 않고 통과만 시킴 — 시그니처는 보장을 약속하는데 본문이 지키지 않으면 호출부 전체가 잘못된 전제 위에 선다
+- 🔴 `satisfies`나 타입 선언을 런타임 검증으로 오해 — `satisfies`는 값이 타입에 맞는지 **컴파일 시점**에만 확인한다. 외부 입력에는 아무 효력이 없다 (02-9)
+- 🟡 `!`가 연쇄로 붙어 어느 지점의 가정이 깨졌는지 추적 불가 (`a!.b!.c!`)
+- 🟡 optional chaining으로 문제를 숨긴 자리에 단언을 덧붙여 의도가 모순됨 (`obj?.x!`)
+- 🔵 테스트 코드나 초기화 직후처럼 불변식이 명확한 자리의 `!` → 지적하지 않음
+
+```typescript
+// ❌ 시그니처는 보장하는데 본문이 검사하지 않는다
+function assertUser(v: unknown): asserts v is User {
+  if (!v) throw new Error('missing')      // 객체 shape는 확인하지 않았다
+}
+
+// ✅ 약속한 만큼 검사한다
+function assertUser(v: unknown): asserts v is User {
+  if (!isUser(v)) throw new Error('invalid user')
+}
+```
+
+## 02-11. 컴파일러 설정에 기댄 판정 🟡
+
+리뷰 판정이 프로젝트 설정과 어긋나면, 있지도 않은 보장을 전제하거나 이미 있는 보장을 중복 지적한다. 리뷰 전 확인 표에 정리한 설정을 기준으로 본다.
+
+- 🟡 `strictNullChecks`가 꺼져 있는데 null 안전성을 컴파일러가 잡아준다고 전제
+- 🟡 `noUncheckedIndexedAccess`가 켜져 있는데 인덱스 접근 결과를 바로 사용 (`items[0].name`)
+- 🟡 `useUnknownInCatchVariables`가 꺼져 있어 `catch (e)`의 `e`가 `any`인데 `e.message`를 그대로 사용
+- 🟡 `exactOptionalPropertyTypes`가 켜져 있는데 optional 필드에 명시적 `undefined`를 넘김
+- 🔵 프로젝트가 이미 켠 설정 덕분에 컴파일러가 잡는 항목을 리뷰 지적으로 중복 나열
+
+**변경된 코드가 tsconfig 자체를 건드린 경우**는 별도로 본다. strict 계열 옵션을 끄거나 `skipLibCheck`·`ignoreDeprecations`를 새로 켜는 변경은 검사 범위를 줄이는 결정이므로, 왜 필요한지와 언제 되돌릴지가 함께 있어야 한다.
+
+## 02-12. 타입 import와 모듈 의미 🟡
+
+- 🟡 타입만 쓰는 import에 `import type`을 쓰지 않아 런타임 import가 남고 번들·순환 참조·사이드이펙트에 영향
+- 🟡 `verbatimModuleSyntax`가 켜진 프로젝트에서 값과 타입을 한 import 구문에 섞음
+- 🟡 재수출 barrel에서 타입과 값을 구분하지 않아 소비자가 무엇을 런타임에 쓰는지 알 수 없음
+- 🔵 FSD 레이어 경계를 `import type`으로 우회하는 경우 → 경계 위반 자체는 `01-fsd.md` 01-1
+
+## 02-13. 함수·콜백 variance 🟡
+
+- 🟡 콜백 파라미터를 더 넓은 타입으로 받아야 하는데 좁게 선언해 호출부가 단언으로 우회
+- 🟡 `strictFunctionTypes`가 켜진 프로젝트에서 함수 프로퍼티 대신 메서드 문법으로 선언해 반공변 검사를 피함 — 검사를 의도적으로 피한 것인지 확인한다
+- 🟡 이벤트 핸들러 타입을 구체 엘리먼트로 좁혀 재사용 시마다 단언이 필요해짐
+- 🔵 반환 타입을 넓게 선언해 호출부가 다시 좁혀야 함
+
+## 02-14. React API 타이핑 🟡
+
+- 🔴 `ref`의 엘리먼트 타입이 실제 부착 대상과 달라 `current` 접근이 런타임에 어긋남 (`useRef<HTMLDivElement>`인데 `<input>`에 부착)
+- 🟡 callback ref가 cleanup 함수를 반환하지 않거나, 반환값 타입이 맞지 않아 정리 시점이 불명확
+- 🟡 polymorphic `as` 컴포넌트가 대상 엘리먼트의 intrinsic prop과 충돌 — 자체 prop 이름이 DOM prop을 가려 잘못된 속성이 전달됨
+- 🟡 이벤트에서 `target`과 `currentTarget`을 혼동 — `target`은 실제 이벤트 발생 엘리먼트라 위임 상황에서 기대한 타입이 아니다. 핸들러를 붙인 엘리먼트가 필요하면 `currentTarget`을 쓴다
+- 🔵 children 타입이 실제 사용과 어긋남 → 02-2와 함께 본다
+
+```typescript
+// ❌ target은 내부 span일 수도 있다
+<button onClick={e => (e.target as HTMLButtonElement).disabled = true} />
+
+// ✅ 핸들러를 붙인 엘리먼트
+<button onClick={e => { e.currentTarget.disabled = true }} />
+```

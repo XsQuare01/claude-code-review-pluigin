@@ -7,17 +7,16 @@ description: Use when the user wants to review a single commit, invokes /code-re
 
 하나의 커밋만 정밀 리뷰하는 모드. 일반 `/code-review`가 브랜치 전체 diff를 보는 것과 달리, 이 skill은 **지정한 단일 커밋 1개**의 patch만 리뷰 대상으로 삼는다. 리뷰 규칙과 결과 통합 방식은 `/code-review`와 동일하게 유지해, 범위만 더 좁고 명확하게 만든 버전이다.
 
-## 리뷰 규칙 위치
+## 공통 계약
 
-다음 순서로 존재하는 첫 번째 디렉터리를 `RULES_DIR`로 사용한다.
+`RULES_DIR` 해석, 모듈 탐색, 적용 조건 판정, 제외 경로, 실행 안전, 리포트 저장, 실패 보고는 **`$RULES_DIR/workflow-contract.md`** 를 따른다. 아래는 이 워크플로우의 차이다.
 
-1. `${CLAUDE_PLUGIN_ROOT}/review-rules/`
-2. `./review-rules/`
-3. `~/.claude/review-rules/`
-
-`RULES_DIR`에서 **숫자 prefix가 붙은 `.md` 파일 전체**를 리뷰 모듈로 간주한다. 모듈 목록을 파일명으로 하드코딩하지 말고 항상 실제로 나열해서 확인한다. 파일명 앞 숫자는 실행 순서이며, `00-rule.md`가 항상 최우선이다.
-
-**자동 모듈 스캔에서 제외되는 파일**: 숫자 prefix가 없는 파일(`fast.md`, `props.md`, `math.md`, `exception.md`)은 특수 워크플로우 전용이며, 이 skill에서도 로드하지 않는다.
+| 항목 | 이 워크플로우 |
+|------|---------------|
+| `workflow-name` | `commit` |
+| 범위 결정 | C-4의 merge-base 대신 **단일 커밋 patch** (Step 1) |
+| 모듈 집합 | numbered non-00 전체 |
+| 분할 방식 | 단일 통합 pass |
 
 ## 실행 절차
 
@@ -47,16 +46,18 @@ git show --name-only --format=oneline $TARGET_COMMIT
 
 빈 변경이거나 patch를 얻을 수 없으면 리뷰를 수행하지 않는다.
 
-### Step 3: Lint 확인 및 자동 수정
+### Step 3: Lint 확인 (read-only)
+
+`00-rule.md` 00-9 실행 안전 계약을 따른다. **자동 수정은 실행하지 않는다.**
 
 이 단계는 `TARGET_COMMIT == HEAD` 인 경우에만 수행한다. 과거 커밋(`HEAD~N`, 직접 지정한 `<sha>`)을 리뷰할 때는 현재 working tree 기준 lint 결과가 섞여 오탐을 만들 수 있으므로 건너뛴다.
 
 - `TARGET_COMMIT == HEAD` 일 때만 `package.json`, lint config, CI/workflow 파일에서 실제 lint 명령을 찾는다
-- `TARGET_COMMIT == HEAD` 이고 `lint:fix` 같은 자동 수정 스크립트가 있으면 먼저 실행한다
-- 별도 `lint:fix`가 없어도 ESLint 기반이면 기존 lint 명령에 `--fix`를 붙인 동등 명령을 사용해 자동 수정 가능한 문제를 먼저 정리한다
-- 자동 수정 후에는 lint를 다시 실행해 남은 오류를 확인한다
-- 자동 수정으로 해결된 문제는 리뷰 이슈로 장황하게 반복하지 말고, 남은 위반이나 구조적 문제에 집중한다
-- `TARGET_COMMIT != HEAD` 이면 lint 자동 수정/재실행은 하지 말고, 리뷰 모듈이 commit patch 안에서 직접 보이는 lint성 문제만 지적하게 둔다
+- lint를 **수정 옵션 없이** 실행한다 (`--fix`, `--write` 금지)
+- 자동 수정 가능한 항목은 실행하지 말고 개수와 성격만 기록해 `도구 실행 결과` 섹션에 적는다
+- lint가 이미 잡는 항목은 리뷰 지적으로 중복 나열하지 말고 구조적 문제에 집중한다
+- 사용자가 명시적으로 자동 수정을 요청한 경우에만 `lint:fix` 계열을 실행하고, 무엇을 고쳤는지 리포트에 남긴다
+- `TARGET_COMMIT != HEAD` 이면 lint 실행 자체를 건너뛰고, 리뷰 모듈이 commit patch 안에서 직접 보이는 lint성 문제만 지적하게 둔다
 
 ### Step 4: 리뷰 모듈 목록 확인
 
@@ -173,7 +174,7 @@ bounded 단일 통합 pass 완료 후:
 **권장 액션**: 🔴 {N}개 → {가능/불가/수정 후 가능}
 ```
 
-최종 리포트는 기본적으로 `.md` 파일로 저장한다. 저장 경로는 `./review-reports/code-review-commit-{branch-name}-{date}.md`를 우선 사용한다. 문서 내용은 **해당 커밋 patch 안에서 실제로 바뀐 내용** 중심으로 쓰고, 다른 커밋/브랜치의 일반론은 넣지 않는다. 기존 리뷰 문서가 이미 있어도 그 문서를 이유로 리뷰를 건너뛰지 말고 **항상 새 리뷰를 수행한 뒤 새 파일로 저장**한다. 이 워크플로우의 기본 `workflow-name`은 `commit`이다.
+리포트 저장은 `workflow-contract.md` C-7을 따른다 (`workflow-name`은 `commit`). 문서 내용은 **해당 커밋 patch 안에서 실제로 바뀐 내용** 중심으로 쓰고, 다른 커밋/브랜치의 일반론은 넣지 않는다.
 
 ## 사용법
 
@@ -192,4 +193,4 @@ bounded 단일 통합 pass 완료 후:
 - 이 skill은 commit patch 기준이므로, 이후 커밋에서 수정된 문제까지 미리 반영해서 판단하지 않는다
 - diff에 포함되지 않은 기존 코드는 리뷰 대상이 아니다
 - fixup/squash 전 개별 커밋 품질을 점검할 때 특히 유용하다
-- `HEAD` 리뷰일 때만 lint를 먼저 확인하고, 자동 수정 가능한 항목은 선반영한 뒤 남은 문제만 리뷰한다
+- `HEAD` 리뷰일 때만 lint를 수정 옵션 없이 확인한다. 자동 수정은 사용자가 요청했을 때만 한다 (`00-rule.md` 00-9)

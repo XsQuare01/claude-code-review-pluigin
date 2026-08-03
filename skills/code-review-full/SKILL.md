@@ -15,19 +15,32 @@ description: Use when the user invokes /code-review-full or asks for a full code
 - `code-review-exception`는 독립 예외/에러 처리 리뷰 skill로 유지한다.
 - 이 skill은 더 넓은 오케스트레이션만 추가한다.
 
+## 공통 계약
+
+`RULES_DIR` 해석, 모듈 탐색, 적용 조건 판정, 범위 결정, 제외 경로, 실행 안전, 리포트 저장, 실패 보고는 **`$RULES_DIR/workflow-contract.md`** 를 따른다. 이 문서는 그 계약을 복제하지 않고 아래 차이만 선언한다.
+
+| 항목 | 이 워크플로우 |
+|------|---------------|
+| `workflow-name` | `full` |
+| 모듈 집합 | numbered non-00 전체 + props + math + exception |
+| 분할 방식 | 모듈별 sub-agent, max concurrency 2의 wave |
+| 완료 판정 | 모든 필수 모듈 수집 성공. 하나라도 실패하면 `FAILED orchestration` |
+
 ## 오케스트레이션
 1. 변경 집합만 기준으로 리뷰 범위를 결정한다.
-    - `dev` 브랜치가 있으면 그 merge-base를 우선 사용한다.
+    - 범위 결정은 `workflow-contract.md` C-4를 따른다. **사용자가 범위를 지정했으면 그것이 최우선**이고, 지정이 없을 때만 `dev` → `main` → `master` → `origin/HEAD` 순으로 base를 찾는다. 후보가 모두 없으면 사용자에게 묻고 임의로 정하지 않는다.
     - 그 기준 이후 변경된 파일만 리뷰한다.
-    - lint/autofix는 기존 리뷰 skill들과 같은 방향으로 맞춘다: 판단 전에 자동 수정 가능한 노이즈는 정리하되, 그 때문에 범위를 넓히지는 않는다.
+    - lint는 C-6(`00-rule.md` 00-9)을 따른다: **수정 옵션 없이 실행**하고 자동 수정은 사용자가 명시적으로 요청했을 때만 한다. 자동 수정 가능한 항목은 실행하지 않고 개수와 성격만 `도구 실행 결과` 섹션에 기록한다.
 2. 패스 순서는 일반 → Props → 수학 → 예외 → 요약/리포팅이다.
 3. 일반 패스 규칙.
     - 일반 패스는 단일 general review가 아니다. 숫자 prefix 모듈별 리뷰를 유지하되, 큐 포화와 timeout을 피하기 위해 bounded wave 방식으로 실행한다.
-    - `RULES_DIR`(`${CLAUDE_PLUGIN_ROOT}/review-rules/` → `./review-rules/` → `~/.claude/review-rules/` 순으로 존재하는 첫 번째)의 `[0-9]*.md`를 반드시 스캔하고, 발견된 숫자 prefix 파일 각각을 필수 일반 리뷰 모듈로 간주한다. 모듈 목록을 파일명으로 하드코딩하지 않는다.
-    - `00-rule.md`는 모든 일반 모듈보다 먼저 읽고, 모든 일반 모듈에 우선 적용하는 공통 규칙으로 전달한다.
-    - 각 숫자 prefix 모듈마다 별도의 sub-agent 하나를 사용하되, 한 wave에서 실행하는 일반 모듈은 **최대 2개(max concurrency 2)** 로 제한한다. 다음 wave는 직전 wave의 결과 수집이 끝난 뒤 시작한다.
-    - `props.md`, `math.md`, `exception.md`, `fast.md`, 그리고 숫자 prefix가 없는 모든 파일은 일반 패스에서 명시적으로 제외한다.
-    - 모든 숫자 prefix 모듈 결과를 수집해야 일반 패스가 완료된다. 누락, 실패, timeout, inactivity timeout, queue expiry가 발생한 숫자 prefix 모듈이 있으면 완료된 리뷰가 아니라 `FAILED orchestration`으로 처리한다.
+    - `RULES_DIR`의 `[0-9]*.md`를 반드시 스캔하고(C-1, C-2), 발견된 숫자 prefix 파일 중 **`00-rule.md`를 제외한 전부**를 필수 일반 리뷰 모듈로 간주한다. 모듈 목록을 파일명으로 하드코딩하지 않는다.
+    - 모듈별 적용 조건은 C-3을 따른다. 전제가 성립하지 않는 모듈은 sub-agent를 띄우지 않고 `SKIPPED`와 사유로 기록하며, 이는 누락이나 `FAILED orchestration`이 아니다.
+    - `00-rule.md`는 **공통 컨텍스트 전용**이다. 모든 일반 모듈보다 먼저 읽고 각 모듈 sub-agent의 prompt에 공통 규칙으로 함께 전달하되, **`00-rule.md`를 위한 독립 module pass나 별도 sub-agent를 실행하지 않는다.** 기본 `/code-review`와 같은 처리다.
+    - 따라서 필수 모듈 수와 wave 계획은 numbered non-00 모듈만으로 계산한다. `00-rule.md`가 독립 pass로 실행되지 않았다는 사실은 누락이나 `FAILED orchestration`이 아니다.
+    - 각 numbered non-00 모듈마다 별도의 sub-agent 하나를 사용하되, 한 wave에서 실행하는 일반 모듈은 **최대 2개(max concurrency 2)** 로 제한한다. 다음 wave는 직전 wave의 결과 수집이 끝난 뒤 시작한다.
+    - `00-rule.md`, `props.md`, `math.md`, `exception.md`, `fast.md`, 그리고 숫자 prefix가 없는 모든 파일은 일반 패스의 **독립 모듈 대상에서 제외**한다. (`00-rule.md`는 제외되지만 공통 규칙으로는 모든 모듈에 전달된다.)
+    - 모든 numbered non-00 모듈 결과를 수집해야 일반 패스가 완료된다. 누락, 실패, timeout, inactivity timeout, queue expiry가 발생한 모듈이 있으면 완료된 리뷰가 아니라 `FAILED orchestration`으로 처리한다.
     - 일부 wave 또는 모듈이 실패해도 이미 완료된 모듈 결과는 수집해 partial result로 보존한다. 단, 실패/누락/timeout 모듈 목록을 명시하고 전체 리뷰를 fully complete로 요약하지 않는다.
     - 숫자 prefix 모듈 중 `01-fsd.md` 또는 `20-deletion-regression.md`가 존재하는데 실행/수집되지 않으면 architecture/deletion-regression coverage 누락으로 보고 `FAILED orchestration` 처리한다.
     - 별도 architecture 또는 deletion-regression summary agent로 `01-fsd.md`/`20-deletion-regression.md` 결과를 대체하지 않는다. 해당 지적은 반드시 숫자 모듈 결과로 유지한다.
@@ -36,8 +49,8 @@ description: Use when the user invokes /code-review-full or asks for a full code
     - 일반 코드 리뷰 패스에서 테스트/목 전용 경로를 제외한다: `__test__/**`, `__tests__/**`, `*.test.*`, `*.spec.*`, `__mocks__/**`, `mock/**`, `mocks/**`, `*.mock.*`, 전용 fixture/mock-data 자산.
 
 ### 일반 모듈 실행 및 liveness failover 정책
-- 일반 패스의 모든 숫자 prefix 모듈은 initial dispatch부터 `subagent_type=general`, `run_in_background=true`로 실행한다. 동기 실행으로 시작한 뒤 background로 전환하지 않는다.
-- 숫자 prefix 모듈마다 별도의 sub-agent 하나를 반드시 유지한다. max concurrency는 정확히 2이며, fast review, generic summary, 또는 다른 모듈이 누락된 숫자 모듈을 대체할 수 없다. 특히 `01-fsd.md`와 `20-deletion-regression.md`는 다른 architecture/deletion-regression 요약으로 대체하지 않는다.
+- 일반 패스의 모든 numbered non-00 모듈은 initial dispatch부터 `subagent_type=general`, `run_in_background=true`로 실행한다. 동기 실행으로 시작한 뒤 background로 전환하지 않는다.
+- numbered non-00 모듈마다 별도의 sub-agent 하나를 반드시 유지한다. max concurrency는 정확히 2이며, fast review, generic summary, 또는 다른 모듈이 누락된 숫자 모듈을 대체할 수 없다. 특히 `01-fsd.md`와 `20-deletion-regression.md`는 다른 architecture/deletion-regression 요약으로 대체하지 않는다.
 - 각 모듈 상태는 `PENDING → DISPATCHED → COMPLETED or fresh retry → FAILED_ORCHESTRATION` 순서로 기록한다.
 - no-start, timeout, inactivity timeout, queue expiry, empty/missing result, `Task not found for session` 또는 session loss가 발생하면 해당 모듈은 죽은 세션으로 간주하고, fresh `general` background task로 최대 1회만 retry한다. dead/no-event/lost session은 `session_id`로 resume하지 않으며, synchronous task를 background task로 변환하지 않는다.
 - 정상 완료된 응답이 clarification만 요구하는 경우에는 live session을 재사용할 수 있다. 단, no-start, timeout, inactivity timeout, queue expiry, empty/missing result, `Task not found for session`, session loss 클래스는 live session으로 보지 않으며 재사용하지 않는다.
@@ -68,13 +81,14 @@ description: Use when the user invokes /code-review-full or asks for a full code
 
 ## 리포팅
 - 네 패스의 리포트를 각각 개별로 출력하고, 각 패스 출력은 생성된 그대로 유지한다: 일반, Props, 수학, 예외.
-- 일반 패스 리포트는 `RULES_DIR`의 `[0-9]*.md`에서 발견한 모든 숫자 prefix 모듈명을 나열하고, 모듈별 sub-agent 결과를 각각 표시한다.
-- 숫자 prefix 모듈 중 실행 또는 수집이 누락된 항목이 있으면 `FAILED orchestration`으로 표시하고, 완료된 리뷰처럼 요약하지 않는다.
+- 일반 패스 리포트는 `RULES_DIR`의 `[0-9]*.md`에서 발견한 numbered non-00 모듈명을 모두 나열하고, 모듈별 sub-agent 결과를 각각 표시한다. `00-rule.md`는 공통 규칙이므로 모듈 목록에 넣지 않는다.
+- numbered non-00 모듈 중 실행 또는 수집이 누락된 항목이 있으면 `FAILED orchestration`으로 표시하고, 완료된 리뷰처럼 요약하지 않는다.
+- lint/typecheck/test를 실행했으면 `도구 실행 결과` 섹션으로 분리해 보고하고, 리뷰 지적과 섞지 않는다 (`00-rule.md` 00-9).
 - 개별 패스 리포트를 출력 전에 다시 쓰거나 압축하거나 합치지 않는다.
 - 패스에 적용 범위가 없으면 패스 이름, 사유, 그리고 `SKIPPED`가 비차단임을 명시해 `SKIPPED`로 출력한다.
 - 모든 패스가 끝난 뒤에는 사용자가 다른 언어를 명시하지 않은 한 한국어로 전체 요약 리포트를 출력한다.
-- 요약은 기존 review-doc 관례를 따라 실용적인 파일명 예시 `./review-reports/code-review-full-{branch-name}-{date}.md`로 저장한다.
-- sibling review skill들과 같은 문서 저장 관례를 유지하고, 프로젝트가 이미 관례를 따르고 있으면 절대 경로를 강제하지 않는다.
+- 요약 저장은 `workflow-contract.md` C-7을 따른다 (`workflow-name`은 `full`).
+- 프로젝트가 이미 다른 문서 저장 관례를 따르고 있으면 절대 경로를 강제하지 않는다.
 
 ### 상세 지적 작성 규칙
 - 사용자가 다른 언어를 명시하지 않은 한 모든 패스의 상세 지적과 최종 저장 문서는 한국어로 작성한다.

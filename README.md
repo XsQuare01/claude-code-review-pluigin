@@ -4,6 +4,20 @@ Modular code review workflows for **React** codebases, packaged as a Claude plug
 
 This is not a general-purpose review system. Every rule module assumes the code under review is a React application; modules that need more than that (FSD, Electron, Tailwind, React Three Fiber) declare it in their own header and are skipped when the assumption does not hold.
 
+## React version support
+
+The baseline is **React 18**. Rules that only hold on a newer version, or only under a particular rendering model, carry that condition in the rule text and are skipped when the condition is not met. The project's React version comes from `package.json`; when it cannot be determined, version-gated rules do not apply.
+
+| Gate | Applies when | Rules |
+|------|--------------|-------|
+| React 18+ | baseline | everything not listed below |
+| React 19+ | `react` >= 19 | `03-1` conditional `use`, `03-10` Actions / `useActionState` / `useFormStatus` / `useOptimistic`, ref-as-prop |
+| React Compiler | compiler enabled in build config | `03-10`, `04-6`, `14-4` — no manual memoization is demanded or removed |
+| SSR / SSG | server rendering in use | `03-8` hydration parity, `03-9` `getServerSnapshot` |
+| RSC | `'use client'` / `'use server'` present, or an RSC framework configured | all of `21-rsc.md` |
+
+A version-gated rule that fires on a project that cannot use the API is a false positive, not a suggestion to upgrade.
+
 ## Workflows
 
 | Command | Scope |
@@ -16,6 +30,8 @@ This is not a general-purpose review system. Every rule module assumes the code 
 | `/code-review-math` | 3D transform / matrix logic (Three.js, R3F, WebGL) |
 | `/code-review-exception` | Exception handling, propagation, fallback, recovery |
 
+`/code-review` accepts `--module` to restrict the pass to specific rule modules. Tokens resolve against the module filenames at runtime — by number (`--module 01,02`), by slug (`--module fsd,type`), or by unambiguous slug prefix. An unknown or ambiguous token stops the review and lists the available modules rather than silently falling back to a full pass; modules that were filtered out are never reported as passing.
+
 ## Rule modules
 
 Numbered modules (`review-rules/[0-9]*.md`) are loaded by the general review passes. The numbering is contiguous and doubles as execution order — **rule IDs always match the file prefix**.
@@ -24,7 +40,7 @@ Numbered modules (`review-rules/[0-9]*.md`) are loaded by the general review pas
 |---|--------|-------|
 | 00 | `00-rule.md` | Common rules — scope, rule-ID convention, report output |
 | 01 | `01-fsd.md` | FSD layers, public API, feature naming *(FSD only)* |
-| 02 | `02-type.md` | Type safety, props typing, narrowing |
+| 02 | `02-type.md` | Type safety, trust boundaries, assertions, tsconfig-aware judgment |
 | 03 | `03-react-rules.md` | Hooks rules, render purity, key stability, derived state |
 | 04 | `04-state.md` | Effects, cleanup, deps, async state, rerenders |
 | 05 | `05-structure.md` | Function/component size, separation of concerns |
@@ -43,13 +59,28 @@ Numbered modules (`review-rules/[0-9]*.md`) are loaded by the general review pas
 | 18 | `18-dangerous-change.md` | Auth, destructive data changes, payments, secrets |
 | 19 | `19-intent.md` | Problem framing, trade-offs, justification |
 | 20 | `20-deletion-regression.md` | Deletion regression checks |
+| 21 | `21-rsc.md` | Server/client boundary, Server Functions, serialization *(RSC only)* |
 
-Non-numbered modules are excluded from the automatic scan and load only in their own workflow:
+Non-numbered files are excluded from the automatic scan:
 
 - `fast.md` — compressed ruleset for `/code-review-fast`
 - `props.md` — `P-x` rules for `/code-review-props`
 - `math.md` — `A-x` / `C-x` rules for `/code-review-math`
 - `exception.md` — `EX-x` rules for `/code-review-exception`
+- `workflow-contract.md` — shared execution contract (not a rule module)
+- `catalog.json` — applicability metadata (not a rule module)
+
+## Shared workflow contract
+
+`review-rules/workflow-contract.md` holds the procedure every workflow shares: rules-directory resolution, module discovery, applicability gating, diff range, excluded paths, execution safety, report naming, and honest failure reporting. Each skill references it and declares only what differs in its own mode — scope, module set, fan-out strategy, output density.
+
+The contract exists because the alternative had already failed: the same procedure copied into seven skill documents drifted apart, and workflows started behaving differently for the same request.
+
+## Applicability metadata
+
+`review-rules/catalog.json` records **when** a module applies — required profile (FSD, Tailwind, RSC, Electron, TanStack Query, server code, contract provider), minimum React version, which workflows load it, and which individual rules carry a narrower gate than their module. The Markdown modules stay canonical for **what** a rule says; the catalog never generates documentation and never restates rule text.
+
+A module whose profile does not hold is reported as `SKIPPED` with a reason. It is never silently dropped and never counted as passing — a rule that was not run and a rule that found nothing are different outcomes.
 
 ## Rule IDs
 
@@ -66,6 +97,12 @@ Every finding carries an ID that matches its source file, so a report can always
 ## Report output
 
 Reports are written to `./review-reports/code-review-{workflow-name}-{branch-name}-{date}.md`, where `workflow-name` is one of `default`, `full`, `fast`, `commit`, `props`, `math`, `exception`. An existing report never counts as a completed review — each run performs a fresh review and writes a new file.
+
+## Execution safety
+
+Every workflow is **read-only by default** (`review-rules/00-rule.md` 00-9). Reviews run lint, typecheck, and tests without mutating flags; auto-fix (`lint:fix`, `--fix`, `--write`) and code changes happen only when the user explicitly asks. Tool output is reported in its own section, separate from review findings, so what a tool caught is never confused with what the reviewer judged.
+
+If the user asks for a read-only review, says not to modify files, or wants a text-only answer, that request outranks every other rule — including report generation. No file is written and the result is returned in the response.
 
 ## Rule directory resolution
 
@@ -86,6 +123,9 @@ Skills never hardcode the module list; they enumerate the directory at runtime, 
 ```text
 claude-code-review-plugin/
 ├── .claude-plugin/plugin.json
+├── .github/workflows/validate.yml
+├── scripts/validate-rules.mjs
+├── tests/workflow-fixtures.md
 ├── agents/correctness-reviewer.md
 ├── skills/
 │   ├── code-review/SKILL.md
@@ -96,7 +136,9 @@ claude-code-review-plugin/
 │   ├── code-review-math/SKILL.md
 │   └── code-review-exception/SKILL.md
 ├── review-rules/
-│   ├── 00-rule.md … 20-deletion-regression.md
+│   ├── 00-rule.md … 21-rsc.md
+│   ├── workflow-contract.md
+│   ├── catalog.json
 │   ├── fast.md
 │   ├── props.md
 │   ├── math.md
@@ -106,8 +148,33 @@ claude-code-review-plugin/
 
 `skills/` and `review-rules/` must stay together. Do not copy the skill files without the rules.
 
+## Validation
+
+```bash
+node scripts/validate-rules.mjs
+```
+
+No dependencies, no install step. CI runs it on every pull request and a failure blocks the merge.
+
+It checks the properties this repo promises but cannot hold by hand:
+
+| Check | What it catches |
+|-------|-----------------|
+| `inventory` | gaps or duplicates in module numbering |
+| `rule-id` | a heading whose ID disagrees with its file prefix; duplicate IDs |
+| `cross-ref` | a reference to a module file or rule ID that does not exist |
+| `readme` | README inventory out of step with the actual files |
+| `skill` | a skill that does not defer to the contract, declares an unregistered `workflow-name`, or points at a missing rule document |
+| `fast-sync` | a missing digest section, a conditional rule whose severity or applicability was lost in compression, a stale module range |
+| `hardcoded-path` | `~/.claude/review-rules` re-introduced into a skill instead of using the resolution order |
+| `catalog` | a module with no catalog entry, an entry pointing at a missing file, an undefined profile |
+| `manifest` | missing manifest fields, plugin/marketplace disagreement, skill frontmatter without name or description |
+| `fixtures` | a contract clause with no scenario in `tests/workflow-fixtures.md` |
+
+**What it does not check.** Whether a workflow actually behaves as the contract says. A review workflow is prose executed by a language model, so its behaviour can only be observed by running a review. `tests/workflow-fixtures.md` lists those scenarios with expected outcomes for manual runs; the validator keeps that checklist in step with the contract but cannot execute it.
+
 ## Maintenance notes
 
-- Adding a numbered module: insert it at the position that matches its topic, renumber the neighbours, and update every cross-reference plus the matching section of `fast.md`.
-- `fast.md` is a hand-maintained compression of the numbered modules. When compressing, keep the original exception clauses — dropping them turns a rule into a false positive.
+- Adding a numbered module: **append the next free number — never renumber existing modules.** Rule IDs are quoted in review reports and in this repo's own cross-references, so renumbering silently invalidates every past report and breaks traceability, which is the one property the ID convention exists to provide. Grouping by topic is a readability preference; stable IDs are a correctness property, and the latter wins. Add the module to the README inventory and to the matching section of `fast.md` in the same change.
+- `fast.md` is a hand-maintained compression of the numbered modules. Three things must match the source exactly: **severity**, **applicability conditions**, and **exception clauses**. Lowering a severity changes the verdict, dropping a trigger widens the scope, and dropping an exception turns a rule into a false positive.
 - Project-specific assumptions belong in each module's header, not in this README.

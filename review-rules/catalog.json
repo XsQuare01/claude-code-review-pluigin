@@ -1,0 +1,124 @@
+{
+  "$comment": [
+    "Machine-readable applicability metadata for the rule modules.",
+    "The Markdown module documents remain canonical: this file records WHEN a module or rule applies,",
+    "never WHAT it says. Nothing here generates documentation.",
+    "Workflows consult this to decide skip/apply; the reasoning behind a finding always cites the module text.",
+    "Keep in sync with the module headers — review-rules/workflow-contract.md C-3."
+  ],
+  "version": 1,
+  "profiles": {
+    "react": "Always true for this plugin — every module assumes a React codebase.",
+    "fsd": "Feature-Sliced Design layout (app/pages/widgets/features/entities/shared directories).",
+    "electron": "Electron project with main/preload/renderer processes.",
+    "tailwind": "Tailwind CSS configured.",
+    "rsc": "React Server Components: 'use client'/'use server' directives present, or an RSC-capable framework configured.",
+    "ssr": "Server-side rendering or static generation in use (includes RSC).",
+    "three": "Three.js / React Three Fiber / WebGL in the codebase.",
+    "tanstack-query": "TanStack Query (React Query) used for server state.",
+    "server-code": "Server-side code reviewed in this repository (Electron main, BFF, route handlers).",
+    "contract-provider": "This repository provides a contract consumed by others (API, IPC, published package)."
+  },
+  "modules": [
+    {
+      "id": "00",
+      "path": "00-rule.md",
+      "title": "공통 리뷰 규칙",
+      "role": "common-context",
+      "workflows": ["default", "full", "fast", "commit", "props", "math", "exception"],
+      "requires": [],
+      "notes": "Never dispatched as an independent module pass — see workflow-contract.md C-2."
+    },
+    {
+      "id": "01",
+      "path": "01-fsd.md",
+      "title": "FSD 아키텍처",
+      "role": "module",
+      "workflows": ["default", "full", "fast"],
+      "requires": ["fsd"],
+      "partial": [{ "rules": ["01-5"], "requires": ["electron"] }]
+    },
+    {
+      "id": "02",
+      "path": "02-type.md",
+      "title": "타입 안전성",
+      "role": "module",
+      "workflows": ["default", "full", "fast"],
+      "requires": [],
+      "reads": ["tsconfig.json"],
+      "notes": "Judgment depends on compiler options; see the tsconfig table in the module."
+    },
+    {
+      "id": "03",
+      "path": "03-react-rules.md",
+      "title": "React 규칙 위반",
+      "role": "module",
+      "workflows": ["default", "full", "fast"],
+      "requires": [],
+      "reactMin": "18",
+      "partial": [
+        { "rules": ["03-8"], "requires": ["ssr"] },
+        { "rules": ["03-10"], "reactMin": "19" },
+        { "rules": ["03-1 use exception"], "reactMin": "19" }
+      ]
+    },
+    {
+      "id": "04",
+      "path": "04-state.md",
+      "title": "상태 관리 & 사이드이펙트",
+      "role": "module",
+      "workflows": ["default", "full", "fast"],
+      "requires": [],
+      "partial": [{ "rules": ["04-9"], "requires": ["tanstack-query"] }]
+    },
+    { "id": "05", "path": "05-structure.md", "title": "함수 & 컴포넌트 구조", "role": "module", "workflows": ["default", "full", "fast"], "requires": [] },
+    { "id": "06", "path": "06-jsx.md", "title": "JSX", "role": "module", "workflows": ["default", "full", "fast"], "requires": [] },
+    { "id": "07", "path": "07-naming.md", "title": "네이밍 & 주석", "role": "module", "workflows": ["default", "full", "fast"], "requires": [] },
+    { "id": "08", "path": "08-constants.md", "title": "상수 & 매직값", "role": "module", "workflows": ["default", "full", "fast"], "requires": [] },
+    { "id": "09", "path": "09-code-quality.md", "title": "코드 품질", "role": "module", "workflows": ["default", "full", "fast"], "requires": [] },
+    { "id": "10", "path": "10-principles.md", "title": "개발 원칙", "role": "module", "workflows": ["default", "full", "fast"], "requires": [], "idFormat": "10-{abbrev}" },
+    { "id": "11", "path": "11-styling.md", "title": "스타일링", "role": "module", "workflows": ["default", "full", "fast"], "requires": ["tailwind"] },
+    { "id": "12", "path": "12-accessibility.md", "title": "접근성", "role": "module", "workflows": ["default", "full", "fast"], "requires": [] },
+    { "id": "13", "path": "13-dx.md", "title": "DX", "role": "module", "workflows": ["default", "full", "fast"], "requires": [] },
+    {
+      "id": "14",
+      "path": "14-react-performance.md",
+      "title": "React 성능",
+      "role": "module",
+      "workflows": ["default", "full", "fast"],
+      "requires": [],
+      "reactMin": "18",
+      "trigger": "List/table rendering, route or large import added, heavy computation on input, media/3D assets, new global subscription."
+    },
+    { "id": "15", "path": "15-performance.md", "title": "알고리즘 복잡도", "role": "module", "workflows": ["default", "full", "fast"], "requires": [] },
+    {
+      "id": "16",
+      "path": "16-api-contract.md",
+      "title": "API 계약 호환성",
+      "role": "module",
+      "workflows": ["default", "full", "fast"],
+      "requires": [],
+      "partial": [
+        { "rules": ["16-5", "16-6", "16-7"], "requires": ["contract-provider"] },
+        { "rules": ["16-3"], "requires": ["tanstack-query"] }
+      ]
+    },
+    {
+      "id": "17",
+      "path": "17-concurrency.md",
+      "title": "동시성 & 멱등성",
+      "role": "module",
+      "workflows": ["default", "full", "fast"],
+      "requires": [],
+      "partial": [{ "rules": ["17-5", "17-6", "17-7"], "requires": ["server-code"] }]
+    },
+    { "id": "18", "path": "18-dangerous-change.md", "title": "위험 변경", "role": "module", "workflows": ["default", "full", "fast"], "requires": [] },
+    { "id": "19", "path": "19-intent.md", "title": "의도 & 선택 근거", "role": "module", "workflows": ["default", "full", "fast"], "requires": [] },
+    { "id": "20", "path": "20-deletion-regression.md", "title": "삭제 회귀", "role": "module", "workflows": ["default", "full", "fast"], "requires": [] },
+    { "id": "21", "path": "21-rsc.md", "title": "RSC & Server/Client 경계", "role": "module", "workflows": ["default", "full", "fast"], "requires": ["rsc"] },
+    { "id": "fast", "path": "fast.md", "title": "Fast 압축본", "role": "digest", "workflows": ["fast"], "requires": [], "notes": "Hand-maintained compression of the numbered modules. Severity, applicability, and exception clauses must match the source." },
+    { "id": "props", "path": "props.md", "title": "Props 전달 구조", "role": "specialist", "workflows": ["full", "props"], "requires": [], "idFormat": "P-{n}" },
+    { "id": "math", "path": "math.md", "title": "선형대수 / 행렬", "role": "specialist", "workflows": ["full", "math"], "requires": ["three"], "idFormat": "A-{n} / C-{n}" },
+    { "id": "exception", "path": "exception.md", "title": "예외 처리", "role": "specialist", "workflows": ["full", "exception"], "requires": [], "idFormat": "EX-{n}" }
+  ]
+}

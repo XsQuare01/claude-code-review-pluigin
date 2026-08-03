@@ -1,6 +1,12 @@
 # Fast Code Review Rules (압축본)
 
-> **Sync note**: 숫자 prefix 모듈은 현재 `00` ~ `20` 이며 빈 번호가 없다. 모듈을 추가·삭제·재배치하면 이 문서의 해당 섹션도 같이 고쳐야 한다. 압축 과정에서 **원본의 예외 조항을 빠뜨리지 않는다** — 예외를 지우면 오탐이 된다.
+> **Sync note**: 숫자 prefix 모듈은 현재 `00` ~ `21` 이며 빈 번호가 없다. 모듈을 추가·삭제하면 이 문서의 해당 섹션도 같이 고쳐야 한다.
+>
+> 압축할 때 원본과 **반드시 일치시켜야 하는 세 가지**가 있다. 이 셋이 어긋나면 fast 리뷰는 원본과 다른 판정을 내리는 별개의 규칙 체계가 된다.
+>
+> 1. **Severity** — 원본이 🔴인 규칙을 🟡로 낮추지 않는다. 서버 전용·제공자 전용처럼 조건부로만 적용되는 규칙도 적용될 때의 severity는 원본과 같다.
+> 2. **적용 조건(Trigger)** — 원본에 Trigger 섹션이 있으면 압축본에도 적용 조건과 제외 조건을 남긴다. 조건을 지우면 적용 대상이 아닌 코드까지 지적한다.
+> 3. **예외 조항** — 원본의 "지적하지 않음" 항목을 빠뜨리지 않는다. 예외를 지우면 오탐이 된다.
 
 이 문서는 숫자 prefix 상세 모듈에서 **high-signal 지적 기준만** 추려낸 압축본이다. 오직 `/code-review-fast`에서만 사용한다. 상세 리뷰가 필요하면 `/code-review` 또는 `/code-review-full`을 쓴다.
 
@@ -18,7 +24,7 @@
 
 1. diff 라인 또는 그 변경 때문에 직접 깨진 인접 구조에서 **확인된** 이슈만 모은다.
 2. severity가 가장 높은 것을 고른다.
-3. 동점이면 다음 순서로: 위험 변경(18) → API 계약(16) → 동시성(17) → 삭제 회귀(20) → React 규칙(03) → 아키텍처 경계(01) → 타입(02) → 상태/이펙트(04) → 접근성(12, 사용 경로가 막힐 때) → 나머지.
+3. 동점이면 다음 순서로: 위험 변경(18) → RSC 경계(21, 비밀 유출·권한) → API 계약(16) → 동시성(17) → 삭제 회귀(20) → React 규칙(03) → 아키텍처 경계(01) → 타입(02) → 상태/이펙트(04) → 접근성(12, 사용 경로가 막힐 때) → 나머지.
 4. 파일당 최대 1개만 출력한다.
 5. 위반 없는 파일은 언급하지 않는다.
 
@@ -28,9 +34,11 @@
 
 ## 00. 공통
 
-- 🔴 리뷰 통과용 mock/test/stub 신규 추가 금지 — "리뷰 우회" 신호
+- 🔴 리뷰 우회용 테스트/mock — assertion이 사실상 없거나, 검증 대상 로직 자체를 mock으로 대체하거나, 지적된 코드는 그대로 두고 테스트만 추가. **동작을 실제로 검증하는 테스트 추가·수정은 위반이 아니다** (00-1)
+- 변경된 테스트는 지적 대상은 아니지만 **영향 범위를 읽는 증거로 활용**한다 (00-3)
 - 🔴 같은 개념을 `user`/`userData`/`currentUser`로 혼용
-- 🟡 자동 수정 가능한 lint는 리뷰 전에 정리, 남은 이슈만 다룬다
+- 🔴 리뷰는 read-only가 기본. lint는 `--fix` 없이 실행하고, 자동 수정과 코드 수정은 사용자가 요청했을 때만 (00-9)
+- 🔴 사용자가 read-only/파일 수정 금지/텍스트 응답만을 요청하면 리뷰 문서도 만들지 않는다 (00-9 > 00-5)
 - 🟡 "편해서 shared/common에 둠" 같은 임시 배치는 위반 후보
 
 ## 01. FSD 아키텍처
@@ -43,9 +51,11 @@
 
 ## 02. 타입 안전성
 
-🔴 — `any`가 exported 타입·public 시그니처·앱 내부로 전파, `@ts-ignore`, 근거 없는 `as`, `as unknown as T`, `[key: string]: any` Props
+**리뷰 전 확인**: `tsconfig.json`의 `strict`/`strictNullChecks`, `useUnknownInCatchVariables`, `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`, `strictFunctionTypes`, `verbatimModuleSyntax`와 TypeScript 버전. 설정에 없는 보장을 전제하거나, 이미 컴파일러가 막는 것을 중복 지적하지 않는다. 새 버전 문법을 이전 버전 프로젝트에 요구하지 않는다.
 
-🟡 — 사유·제거 조건 없는 `@ts-expect-error`, exported 컴포넌트 Props가 인라인이라 참조할 이름 없음, contextual typing이 끊긴 자리(핸들러를 별도 선언)에 이벤트 타입 미명시, 인라인 타입·유틸리티 중첩·무명 유니온이 커져 의미를 못 읽음(3필드·3단·5멤버는 신호), 같은 인라인 타입 2곳+ 복제, API nullable인데 Props non-optional, snake_case↔camelCase 변환 누락, null narrowing 없이 접근, exhaustive check 누락, 판별자 필드 혼용, 제네릭이 입출력 관계를 보존하지 않거나 본문이 요구하는 capability가 제약에 없음
+🔴 — 신뢰 경계(네트워크 응답·storage·URL·env·파일·IPC)에서 받은 값에 검증 없이 타입 부여 후 사용(`res.json() as User`, `JSON.parse(raw) as Config`) / 근거 없는 non-null `!` / assertion function이 시그니처가 약속한 검사를 실제로 하지 않음 / `any`가 exported 타입·public 시그니처·앱 내부로 전파, `@ts-ignore`, 근거 없는 `as`, `as unknown as T`, `[key: string]: any` Props / `ref` 엘리먼트 타입이 부착 대상과 불일치
+
+🟡 — `satisfies`·타입 선언을 런타임 검증으로 오해, generated 타입과 런타임 스키마 정렬 근거 없음 / 사유·제거 조건 없는 `@ts-expect-error`, exported 컴포넌트 Props가 인라인이라 참조할 이름 없음, contextual typing이 끊긴 자리에 이벤트 타입 미명시, 인라인 타입·유틸리티 중첩·무명 유니온이 커져 의미를 못 읽음(3필드·3단·5멤버는 신호), 같은 인라인 타입 2곳+ 복제 / API nullable인데 Props non-optional, snake_case↔camelCase 변환 누락, null narrowing 없이 접근, exhaustive check 누락, 판별자 필드 혼용 / 제네릭이 입출력 관계를 보존하지 않거나 본문이 요구하는 capability가 제약에 없음 / 타입 전용 import에 `import type` 미사용 / 위임 상황에서 `currentTarget` 대신 `target` 사용 / strict 계열 옵션을 끄는 tsconfig 변경에 사유·복구 시점 없음
 
 **지적하지 않음** — 경계에 격리되고 검증된 타입으로 반환되는 `any`, 사유·제거 조건이 붙은 `@ts-expect-error`, 파일 내부 local 컴포넌트의 인라인 Props, JSX 인라인 핸들러의 이벤트 타입 생략, 관계만 보존하면 되는 제약 없는 `T`
 
@@ -55,7 +65,13 @@
 
 🟡 — 정렬·삭제가 있는 리스트에 index key, 외부 시스템 동기화가 아닌 effect(핸들러나 렌더 중 계산으로 옮겨야 함), ref/state 오용, 외부 스토어를 effect+state로 구독(`useSyncExternalStore` 필요), `useId` 없이 만든 DOM id, prop 이름이 소유권 계약을 드러내지 않는데 동기화도 없음
 
-**지적하지 않음** — 조건부 `use(resource)` 호출(React 19+에서 허용), 자기 state를 이전 props와 비교해 조정하는 guarded render-phase adjustment(종료 조건 있고 부수효과 없음), `initialX`/`defaultX`로 받아 이후 동기화하지 않는 uncontrolled 패턴, 의도적 리셋을 위한 `key` 변경
+🔴 (SSR/SSG 프로젝트에만 적용) — 첫 렌더에서 `window`·`document`·`localStorage`·`navigator`·locale·timezone 등 서버가 모르는 값을 읽어 출력이 갈림 / `useId` 없이 만든 DOM id가 서버·클라이언트에서 다름
+
+🟡 — `getSnapshot`이 unchanged 데이터에 매번 새 참조 반환(무한 렌더), `subscribe`가 렌더마다 새로 생성돼 재구독, unsubscribe 미반환, SSR인데 `getServerSnapshot` 부재·불일치 / `suppressHydrationWarning`을 넓은 범위에 붙여 원인을 덮음
+
+🟡 (React 19+ 프로젝트에만 적용) — async Action 순서 역전으로 이전 결과가 최신을 덮음, Action 실패 경로 없음, `useActionState`/`useFormStatus`가 있는데 수동 `isLoading`을 병행해 두 출처가 어긋남, `useFormStatus`를 form 바깥에서 호출
+
+**지적하지 않음** — 조건부 `use(resource)` 호출(React 19+에서 허용), 자기 state를 이전 props와 비교해 조정하는 guarded render-phase adjustment(종료 조건 있고 부수효과 없음), `initialX`/`defaultX`로 받아 이후 동기화하지 않는 uncontrolled 패턴, 의도적 리셋을 위한 `key` 변경, React 19에서 남아 있는 기존 `forwardRef` 코드, Compiler가 켜진 프로젝트의 수동 memoization 추가·제거 요구
 
 ## 04. 상태 & 사이드이펙트
 
@@ -111,6 +127,8 @@
 
 ## 12. 접근성
 
+**적용 조건**: 변경 라인에 interactive UI 생성·변경, `onClick`·`onMouse*`·`onPointer*`·keyboard handler·`tabIndex`·`role`·`aria-*` 변경, modal·dialog·popover·dropdown·tooltip·drawer·route transition UI 변경, input·select·textarea·checkbox·radio·validation message 변경이 보일 때만 적용한다.
+
 🔴 — 클릭 가능한 `div`/`span`으로 button/link 흉내 / keyboard activation 경로 없음 / modal·dialog·route transition에 focus 진입·복원·trap 없음 / icon-only button·form control·dialog에 accessible name 없음 / error text가 control과 연결되지 않거나 조용히 추가됨 / 의미 있는 image·icon·chart·색상 전용 상태에 텍스트 대안 없음 / `aria-*`가 실제 UI 상태와 불일치
 
 🟡 — reduced-motion 대안 없는 애니메이션, diff에서 직접 보이는 contrast 저하
@@ -123,9 +141,17 @@
 
 ## 14. React 성능
 
-🔴 — 상한이 열린 대형 리스트를 가상화·페이지네이션 없이 전량 렌더
+**적용 조건**: 변경 라인에 리스트/테이블/그리드 렌더, 페이지네이션·무한 스크롤, 라우트 추가, 대형 컴포넌트·라이브러리 import, 검색/필터/입력에 연결된 무거운 계산, 이미지·아이콘·폰트·차트·3D 씬 추가, 새 전역 상태 구독·Context Provider가 보일 때만 적용한다. **데이터 규모가 작고 정적인 UI 변경에는 적용하지 않는다.**
 
-🟡 — 라우트/모달/에디터/차트를 정적 import(코드 스플리팅 부재), 입력마다 무거운 렌더를 동기 실행(`useDeferredValue`/`useTransition` 미검토), 렌더 중 대형 정렬·정규식·`Intl` 인스턴스 반복 생성, 이미지 크기 미지정·lazy 미적용, Suspense 경계 과대·부재
+🔴 — 상한이 열린 대형 리스트를 가상화·페이지네이션 없이 전량 렌더 (상한이 수십 건으로 고정된 목록은 지적하지 않음)
+
+🔴 — controlled input의 값 state를 transition 안에서 갱신(입력 씹힘·커서 튐) / 갱신으로 이미 보이던 콘텐츠가 fallback으로 되돌아감(transition으로 감싸 기존 화면 유지)
+
+🟡 — 라우트/모달/에디터/차트를 정적 import(코드 스플리팅 부재), 입력마다 무거운 렌더를 동기 실행(`useDeferredValue`/`useTransition` 미검토), 렌더 중 대형 정렬·정규식·`Intl` 인스턴스 반복 생성, 이미지 크기 미지정·lazy 미적용, Suspense 경계 과대·부재, Suspense 안쪽에 Error Boundary 없음, transition/deferred 중 `isPending` 등 진행 표시 없음, `await` 뒤 상태 갱신을 transition으로 감싸지 않음
+
+**도구 혼동**: 렌더 비용 → transition/deferred, 호출 빈도 → debounce/throttle, 경쟁 조건 → abort/stale 무시. `useDeferredValue`는 요청을 줄이거나 취소하지 않는다 — 자리를 바꿔 쓴 코드도 지적한다.
+
+**지적 원칙**: 추정만으로 🔴을 주지 않는다. 측정 없이 `useMemo`/`useCallback`을 더 붙이라고 요구하지 않는다.
 
 ## 15. 알고리즘 복잡도
 
@@ -137,19 +163,29 @@
 
 ## 16. API 계약
 
-🔴 — 타입만 바꾸고 runtime parser/schema/generated client/mapper가 그대로 / 응답 shape 변경인데 소비 측 컴포넌트·훅 미갱신 / query key 변경인데 `invalidateQueries` 호출부 미갱신 / route·param·query default 의미 변경으로 기존 URL이 깨짐
+**적용 조건**: 변경 코드가 request/response shape, HTTP status, error body, route path/param, query default, pagination/sorting/filtering, auth surface, schema/DTO validation, serialization, IPC channel, event/webhook payload, SDK/public export, config/env key, cross-runtime adapter에 닿을 때만 적용한다. **같은 런타임 안에서만 쓰이는 private helper 시그니처는 contract가 아니다.**
 
-🟡 — (제공자일 때) field 제거·rename·required화, status/error body 의미 변경, IPC/event payload 변경, env·config·public export rename에 fallback 없음, breaking 변경에 versioning/migration 증거 없음
+🔴 (소비자 관점, 항상 적용) — 타입만 바꾸고 runtime parser/schema/generated client/mapper가 그대로 / 응답 shape 변경인데 소비 측 컴포넌트·훅 미갱신 / query key 변경인데 `invalidateQueries` 호출부 미갱신 / route·param·query default 의미 변경으로 기존 URL이 깨짐
+
+🔴 (제공자일 때만 적용) — field 제거·rename·required화, nullable→non-null 축소, enum 범위 축소 / status code·success 판정·error body shape·error code 의미 변경 / IPC channel·event name·payload schema 변경 / env·config·feature flag·public export·SDK 시그니처 rename에 fallback·alias·adapter 없음
+
+🟡 — breaking contract 변경에 versioning·adapter·staged rollout·compatibility layer·migration path 증거가 하나도 없음 (16-8)
 
 ## 17. 동시성 & 멱등성
 
-🔴 — save/delete/payment/mutation이 double click·rapid re-entry·네트워크 retry·중복 이벤트 전달로 두 번 실행 가능한데 방어 없음 / mutation이 effect·렌더 경로에 있어 재실행 때 함께 실행됨(핸들러로 이동) / 느린 이전 응답이 최신을 덮어씀 / 언마운트·route change 후에도 이전 async work가 결과를 publish
+**적용 조건**: 변경 코드가 shared state, async request ordering, retry/backoff, 외부 부작용, save/delete/payment/mutation, 반복 호출 경로, background job, webhook/event consumer, read-modify-write 흐름을 직접 건드릴 때만 적용한다. **read-only GET, 단순 조회, 순수 계산, 표시 전용 로컬 UI에는 적용하지 않는다.**
+
+🔴 (클라이언트) — save/delete/payment/mutation이 double click·rapid re-entry·네트워크 retry·중복 이벤트 전달로 두 번 실행 가능한데 방어 없음 / mutation이 effect·렌더 경로에 있어 재실행 때 함께 실행됨(핸들러로 이동) / 느린 이전 응답이 최신을 덮어씀 / 언마운트·route change 후에도 이전 async work가 결과를 publish
 
 **주의**: StrictMode는 click 등 사용자 이벤트를 두 번 dispatch하지 않는다. 사용자 경로 중복의 원인으로 적지 않는다.
 
-🟡 — optimistic update 실패 시 rollback 없음. (서버 측 코드일 때) 멱등성 키 부재, non-idempotent retry, read-modify-write에 트랜잭션·버전 가드 없음, replay-unsafe consumer
+🔴 (서버 측 코드일 때만 적용) — 반복 요청이 외부 관측 가능한 side effect를 만드는데 안정적인 멱등성 키·operation ID·dedup 경계 없음 / non-idempotent operation을 그대로 재호출하는 retry / read-modify-write에 lock·트랜잭션·CAS·버전 가드 없음 / replay-unsafe job·queue·webhook consumer
+
+🟡 — optimistic update 실패·out-of-order·server canonical 응답 불일치 시 rollback·reconciliation 없음 (17-4) / 위험 흐름을 건드렸는데 안전 증거가 하나도 없음 (17-8)
 
 ## 18. 위험 변경
+
+**적용 조건**: 변경 라인이 인증·인가·권한·세션·토큰, 결제·주문·정산·크레딧 소비, 저장·삭제·덮어쓰기·마이그레이션·스키마 변경, 파일 쓰기·OS API·Electron main의 시스템 접근, 배포 산출물 동작을 바꾸는 config/env/feature flag 기본값, 개인정보·민감정보의 저장·전송·로깅 경로에 닿을 때만 적용한다. **읽기 전용 조회, 표시 전용 UI, 순수 계산에는 적용하지 않는다.**
 
 🔴 — 클라이언트 gating만 바꾸고 서버·main 권한 검사 그대로 / 삭제·덮어쓰기·마이그레이션에 확인·롤백·복구 경로 없음 / 금액·수량 계산 변경에 검증 없음 / 토큰·개인정보가 로그·URL·클라이언트 번들에 노출
 
@@ -166,6 +202,14 @@
 🔴 — 삭제된 production export/function/type/constant/schema에 대체 경로·이동·호출부 갱신 증거 없음 / 기능은 유지되는데 구현만 사라짐 / effect cleanup·의존성 항목·`key`·Suspense 경계 삭제
 
 🟡 — test/mock/fixture 전용 삭제는 fast 리뷰에서 제외. 전체 저장소 탐색 대신 삭제된 심볼의 targeted reference check만.
+
+## 21. RSC & Server/Client 경계 *(RSC 프로젝트 전용)*
+
+**적용 조건**: 저장소에 `'use client'`/`'use server'` 지시어가 있거나 RSC 지원 프레임워크 설정이 확인될 때만 적용한다. **SPA·CRA·Electron renderer·RSC 아닌 SSR에는 적용하지 않는다.**
+
+🔴 — `'use server'`를 서버 컴포넌트 표시로 오해해 파일 export가 전부 공개 endpoint가 됨 / Server Function에 인증·인가 검사 없음, 클라이언트가 보낸 ID를 검증 없이 신뢰(IDOR), 입력 런타임 검증 없음 / 비밀·API 키·DB 클라이언트·서버 SDK가 클라이언트 경계 아래로 유입되거나 클라이언트 노출 env에 담김 / 함수·클래스 인스턴스·Map/Set 등 직렬화 불가 값을 클라이언트 컴포넌트 props로 전달
+
+🟡 — 트리 상단에 `'use client'`를 붙여 하위 전체가 클라이언트 번들로 끌려감 / 필요한 몇 필드 대신 거대한 서버 객체·ORM 엔티티를 통째로 props 전달 / 서버 전용 모듈에 `server-only` 가드 없음 / 서버 컴포넌트에서 `useState`·`useEffect`·이벤트 핸들러·브라우저 API 사용
 
 ---
 

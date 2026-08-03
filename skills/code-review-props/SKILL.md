@@ -7,13 +7,18 @@ description: Use when the user invokes /code-review-props or wants a standalone 
 
 Props drilling, 과도한 props 전달, 함수 인자 과다를 **독립적으로** 검토하는 전용 리뷰 모드. 일반 코드 품질·아키텍처 검사와는 분리된 특수 리뷰이며, 일반 `/code-review`에서는 자동 제외된다.
 
-## 룰 문서 위치
+## 공통 계약
 
-`RULES_DIR`은 다음 순서로 존재하는 첫 번째 디렉터리다: `${CLAUDE_PLUGIN_ROOT}/review-rules/` → `./review-rules/` → `~/.claude/review-rules/`.
+`RULES_DIR` 해석, 범위 결정, 제외 경로, 실행 안전, 리포트 저장, 실패 보고는 **`$RULES_DIR/workflow-contract.md`** 를 따른다. 아래는 이 워크플로우의 차이다.
 
-- **Props 전용**: `$RULES_DIR/props.md` — 이 skill에서만 사용
-- 같은 폴더의 숫자 prefix 모듈과 `fast.md`, `math.md`, `exception.md`는 **참조하지 않는다**
-- 일반 리뷰가 필요하면 `/code-review` 또는 `/code-review-fast`를 별도로 실행한다
+| 항목 | 이 워크플로우 |
+|------|---------------|
+| `workflow-name` | `props` |
+| 모듈 집합 | `$RULES_DIR/props.md` 단일 문서 (숫자 prefix 모듈·다른 특수 문서 미로드) |
+| 규칙 ID | `P-{n}` |
+| 범위 없음 | `SKIPPED`로 기록 (C-8) |
+
+일반 리뷰가 필요하면 `/code-review` 또는 `/code-review-fast`를 별도로 실행한다.
 
 ## 검사 범위
 
@@ -28,25 +33,13 @@ Props drilling, 과도한 props 전달, 함수 인자 과다를 **독립적으�
 
 ### Step 1: Diff 범위 결정
 
-```bash
-for candidate in dev main master; do
-  if git rev-parse --verify --quiet "$candidate" >/dev/null; then
-    BASE_BRANCH=$candidate; break
-  fi
-done
-BASE_BRANCH=${BASE_BRANCH:-$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD | sed 's|origin/||')}
-MERGE_BASE=$(git merge-base $BASE_BRANCH HEAD)
-git diff --stat $MERGE_BASE..HEAD
-git diff $MERGE_BASE..HEAD
-```
-
-사용자가 특정 범위를 지정하면 그것을 사용한다. 지정하지 않았고 후보 브랜치가 모두 없으면 사용자에게 base를 묻는다. 빈 diff면 리뷰를 수행하지 않는다.
+범위 결정은 `workflow-contract.md` C-4를 따른다. 결정된 범위로 `git diff --stat $MERGE_BASE..HEAD`와 `git diff $MERGE_BASE..HEAD`를 확인한다. 제외 경로는 C-5를 따른다.
 
 변경 파일 중 컴포넌트, 훅, 함수 시그니처, 서비스/API 호출, 상태 전달 구조가 바뀐 파일만 리뷰 대상으로 좁힌다. 관련 변경이 없으면 "대상 없음"으로 종료한다.
 
-### Step 2: Lint 자동 수정 (선택)
+### Step 2: Lint 확인 (read-only, 선택)
 
-일반 리뷰와 동일하게 lint가 설정돼 있으면 자동 수정 가능한 문제를 먼저 정리한다. 단, props/인자 구조 리뷰는 lint와 별도 축이므로 lint가 없어도 그대로 진행 가능하다.
+`00-rule.md` 00-9 실행 안전 계약을 따른다. lint가 설정돼 있으면 **수정 옵션 없이** 실행하고, 자동 수정은 사용자가 명시적으로 요청했을 때만 한다. props/인자 구조 리뷰는 lint와 별도 축이므로 lint가 없어도 그대로 진행 가능하다.
 
 ### Step 3: 단일 Sub-Agent Dispatch
 
@@ -116,7 +109,7 @@ sub-agent의 출력을 그대로 사용자에게 전달한다. 명백한 형식 
 
 ### Step 5: 문서 저장
 
-리포트는 기본적으로 `./review-reports/code-review-props-{branch-name}-{date}.md`로 저장하고 경로를 보고한다. 문서 내용은 **이번 브랜치 diff 안에서 props/인자 전달 구조가 바뀐 파일과 그 구조적 이슈** 중심으로 쓴다. 기존 리뷰 문서가 이미 있어도 그 문서를 이유로 리뷰를 건너뛰지 말고 **항상 새 리뷰를 수행한 뒤 새 파일로 저장**한다. `workflow-name`은 `props`다.
+리포트 저장은 `workflow-contract.md` C-7을 따른다 (`workflow-name`은 `props`). 문서 내용은 **이번 브랜치 diff 안에서 props/인자 전달 구조가 바뀐 파일과 그 구조적 이슈** 중심으로 쓴다.
 
 ## 사용법
 
