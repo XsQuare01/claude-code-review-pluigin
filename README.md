@@ -4,6 +4,47 @@ Modular code review workflows for **React** codebases, packaged as a Claude plug
 
 This is not a general-purpose review system. Every rule module assumes the code under review is a React application; modules that need more than that (FSD, Electron, Tailwind, React Three Fiber) declare it in their own header and are skipped when the assumption does not hold.
 
+## Install
+
+Run these in Claude Code:
+
+```
+/plugin marketplace add XsQuare01/claude-code-review-pluigin
+/plugin install react-code-review-plugin@react-code-review
+/reload-plugins
+```
+
+Choose the **user** scope so the workflows are available in every project. The commands become `/code-review`, `/code-review-fast`, and the rest — no files are copied into the project or into `~/.claude`.
+
+To develop against a local checkout instead, point the marketplace at the directory:
+
+```
+/plugin marketplace add /absolute/path/to/claude-code-review-pluigin
+```
+
+### Update and remove
+
+```
+/plugin marketplace update react-code-review    # pull the latest rules
+/plugin uninstall react-code-review-plugin@react-code-review
+```
+
+An installed plugin is pinned to the commit it was installed from. Updating the marketplace is what brings in new rules — editing the source repository does nothing on its own.
+
+### Verify the install
+
+```bash
+# which commit is installed
+cat ~/.claude/plugins/installed_plugins.json
+
+# rule consistency, run against the installed copy
+node ~/.claude/plugins/cache/react-code-review/react-code-review-plugin/*/scripts/validate-rules.mjs
+```
+
+Then run `/code-review` once and check the rules directory the report cites. It must be the plugin path.
+
+> **Do not copy `skills/` and `review-rules/` into `~/.claude/`.** That was the old way to use this repo and it drifts: the copy stops receiving rule updates while still looking installed, and reviews quietly run against stale rules. It is also the trap the third fallback below creates. If a copy already exists at `~/.claude/skills/code-review*`, remove it after installing the plugin.
+
 ## React version support
 
 The baseline is **React 18**. Rules that only hold on a newer version, or only under a particular rendering model, carry that condition in the rule text and are skipped when the condition is not met. The project's React version comes from `package.json`; when it cannot be determined, version-gated rules do not apply.
@@ -113,6 +154,8 @@ Skills resolve the rules directory in this order and use the first that exists:
 3. `~/.claude/review-rules/` — copied into the home configuration
 
 Skills never hardcode the module list; they enumerate the directory at runtime, so adding or removing a module requires no skill changes.
+
+The third entry is a fallback for older setups, and it is the one that bites: if the plugin fails to resolve, a stale `~/.claude/review-rules/` silently takes over and the review runs against whatever rules were copied there months ago. The resolved path is reported with every review (`workflow-contract.md` C-1) precisely so this is visible rather than assumed. If you have no reason to keep that directory, delete it.
 
 ## Included agent
 
