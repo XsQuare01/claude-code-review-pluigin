@@ -123,6 +123,9 @@ Skills never hardcode the module list; they enumerate the directory at runtime, 
 ```text
 claude-code-review-plugin/
 ├── .claude-plugin/plugin.json
+├── .github/workflows/validate.yml
+├── scripts/validate-rules.mjs
+├── tests/workflow-fixtures.md
 ├── agents/correctness-reviewer.md
 ├── skills/
 │   ├── code-review/SKILL.md
@@ -144,6 +147,31 @@ claude-code-review-plugin/
 ```
 
 `skills/` and `review-rules/` must stay together. Do not copy the skill files without the rules.
+
+## Validation
+
+```bash
+node scripts/validate-rules.mjs
+```
+
+No dependencies, no install step. CI runs it on every pull request and a failure blocks the merge.
+
+It checks the properties this repo promises but cannot hold by hand:
+
+| Check | What it catches |
+|-------|-----------------|
+| `inventory` | gaps or duplicates in module numbering |
+| `rule-id` | a heading whose ID disagrees with its file prefix; duplicate IDs |
+| `cross-ref` | a reference to a module file or rule ID that does not exist |
+| `readme` | README inventory out of step with the actual files |
+| `skill` | a skill that does not defer to the contract, declares an unregistered `workflow-name`, or points at a missing rule document |
+| `fast-sync` | a missing digest section, a conditional rule whose severity or applicability was lost in compression, a stale module range |
+| `hardcoded-path` | `~/.claude/review-rules` re-introduced into a skill instead of using the resolution order |
+| `catalog` | a module with no catalog entry, an entry pointing at a missing file, an undefined profile |
+| `manifest` | missing manifest fields, plugin/marketplace disagreement, skill frontmatter without name or description |
+| `fixtures` | a contract clause with no scenario in `tests/workflow-fixtures.md` |
+
+**What it does not check.** Whether a workflow actually behaves as the contract says. A review workflow is prose executed by a language model, so its behaviour can only be observed by running a review. `tests/workflow-fixtures.md` lists those scenarios with expected outcomes for manual runs; the validator keeps that checklist in step with the contract but cannot execute it.
 
 ## Maintenance notes
 
