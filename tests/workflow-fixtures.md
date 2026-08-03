@@ -27,6 +27,9 @@ Run these by hand after changing the contract or any skill document. Record the 
 | 17 | C-7 | A report for the same branch and date already exists | A fresh review runs anyway and a new file is written; the existing file is never treated as completion |
 | 18 | C-8 | Full run where one module sub-agent times out after its retry | Completed modules are preserved as partial results; the failed module is named; the run is `FAILED orchestration`, not a pass |
 | 19 | C-8 | A specialist pass has no applicable files | Reported `SKIPPED` with a reason, marked non-blocking |
+| 20 | C-3 | Full run on a project with no FSD, Tailwind, RSC, or Three.js | Those modules are `SKIPPED` **without a sub-agent ever being dispatched**; the report shows candidate count vs applicable count |
+| 21 | C-3 | Full run where the diff touches no auth, payment, delete, or secret path | `18-dangerous-change` may be skipped by trigger, and the reason states what was looked for and not found — never skipped silently |
+| 22 | C-8 | Full run, one module finishes far sooner than the other in flight | The freed slot takes the next queued module immediately; it does not wait for the slower one |
 
 ## Default-workflow-only scenarios
 
@@ -34,7 +37,7 @@ Run these by hand after changing the contract or any skill document. Record the 
 
 | # | Scenario | Expected |
 |---|----------|----------|
-| 20 | `--module fsd,type` | Only `01` and `02` run; the report states the filter and lists no other module as passing |
-| 21 | `--module 01,02,17` | Same selection by number |
-| 22 | `--module nope` | Review stops, names the unresolved token, lists available modules — it does not fall back to a full pass |
-| 23 | `--module 00` | Explains that common rules always apply, and asks whether a common-rules-only pass was intended |
+| 23 | `--module fsd,type` | Only `01` and `02` run; the report states the filter and lists no other module as passing |
+| 24 | `--module 01,02,17` | Same selection by number |
+| 25 | `--module nope` | Review stops, names the unresolved token, lists available modules — it does not fall back to a full pass |
+| 26 | `--module 00` | Explains that common rules always apply, and asks whether a common-rules-only pass was intended |

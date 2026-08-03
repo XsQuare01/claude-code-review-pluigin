@@ -22,9 +22,9 @@ description: Use when the user invokes /code-review-full or asks for a full code
 | 항목 | 이 워크플로우 |
 |------|---------------|
 | `workflow-name` | `full` |
-| 모듈 집합 | numbered non-00 전체 + props + math + exception |
-| 분할 방식 | 모듈별 sub-agent, max concurrency 2의 wave |
-| 완료 판정 | 모든 필수 모듈 수집 성공. 하나라도 실패하면 `FAILED orchestration` |
+| 모듈 집합 | 적용 대상 numbered non-00 + props + math + exception |
+| 분할 방식 | 모듈별 sub-agent, **in-flight 최대 2개의 sliding window** (배리어 없음) |
+| 완료 판정 | 적용 대상 모듈 전부 수집 성공. 하나라도 실패하면 `FAILED orchestration` |
 
 ## 오케스트레이션
 1. 변경 집합만 기준으로 리뷰 범위를 결정한다.
@@ -33,30 +33,70 @@ description: Use when the user invokes /code-review-full or asks for a full code
     - lint는 C-6(`00-rule.md` 00-9)을 따른다: **수정 옵션 없이 실행**하고 자동 수정은 사용자가 명시적으로 요청했을 때만 한다. 자동 수정 가능한 항목은 실행하지 않고 개수와 성격만 `도구 실행 결과` 섹션에 기록한다.
 2. 패스 순서는 일반 → Props → 수학 → 예외 → 요약/리포팅이다.
 3. 일반 패스 규칙.
-    - 일반 패스는 단일 general review가 아니다. 숫자 prefix 모듈별 리뷰를 유지하되, 큐 포화와 timeout을 피하기 위해 bounded wave 방식으로 실행한다.
-    - `RULES_DIR`의 `[0-9]*.md`를 반드시 스캔하고(C-1, C-2), 발견된 숫자 prefix 파일 중 **`00-rule.md`를 제외한 전부**를 필수 일반 리뷰 모듈로 간주한다. 모듈 목록을 파일명으로 하드코딩하지 않는다.
-    - 모듈별 적용 조건은 C-3을 따른다. 전제가 성립하지 않는 모듈은 sub-agent를 띄우지 않고 `SKIPPED`와 사유로 기록하며, 이는 누락이나 `FAILED orchestration`이 아니다.
+    - 일반 패스는 단일 general review가 아니다. 숫자 prefix 모듈별 리뷰를 유지하되, 큐 포화와 timeout을 피하기 위해 in-flight 개수를 제한해 실행한다.
+    - `RULES_DIR`의 `[0-9]*.md`를 반드시 스캔하고(C-1, C-2), 발견된 숫자 prefix 파일 중 `00-rule.md`를 제외한 전부를 **후보 모듈**로 삼는다. 모듈 목록을 파일명으로 하드코딩하지 않는다.
     - `00-rule.md`는 **공통 컨텍스트 전용**이다. 모든 일반 모듈보다 먼저 읽고 각 모듈 sub-agent의 prompt에 공통 규칙으로 함께 전달하되, **`00-rule.md`를 위한 독립 module pass나 별도 sub-agent를 실행하지 않는다.** 기본 `/code-review`와 같은 처리다.
-    - 따라서 필수 모듈 수와 wave 계획은 numbered non-00 모듈만으로 계산한다. `00-rule.md`가 독립 pass로 실행되지 않았다는 사실은 누락이나 `FAILED orchestration`이 아니다.
-    - 각 numbered non-00 모듈마다 별도의 sub-agent 하나를 사용하되, 한 wave에서 실행하는 일반 모듈은 **최대 2개(max concurrency 2)** 로 제한한다. 다음 wave는 직전 wave의 결과 수집이 끝난 뒤 시작한다.
-    - `00-rule.md`, `props.md`, `math.md`, `exception.md`, `fast.md`, 그리고 숫자 prefix가 없는 모든 파일은 일반 패스의 **독립 모듈 대상에서 제외**한다. (`00-rule.md`는 제외되지만 공통 규칙으로는 모든 모듈에 전달된다.)
-    - 모든 numbered non-00 모듈 결과를 수집해야 일반 패스가 완료된다. 누락, 실패, timeout, inactivity timeout, queue expiry가 발생한 모듈이 있으면 완료된 리뷰가 아니라 `FAILED orchestration`으로 처리한다.
-    - 일부 wave 또는 모듈이 실패해도 이미 완료된 모듈 결과는 수집해 partial result로 보존한다. 단, 실패/누락/timeout 모듈 목록을 명시하고 전체 리뷰를 fully complete로 요약하지 않는다.
-    - 숫자 prefix 모듈 중 `01-fsd.md` 또는 `20-deletion-regression.md`가 존재하는데 실행/수집되지 않으면 architecture/deletion-regression coverage 누락으로 보고 `FAILED orchestration` 처리한다.
-    - 별도 architecture 또는 deletion-regression summary agent로 `01-fsd.md`/`20-deletion-regression.md` 결과를 대체하지 않는다. 해당 지적은 반드시 숫자 모듈 결과로 유지한다.
+    - 따라서 모듈 수 계산은 numbered non-00 모듈만으로 한다. `00-rule.md`가 독립 pass로 실행되지 않았다는 사실은 누락이나 `FAILED orchestration`이 아니다.
     - 일반 패스를 하나의 summary/general agent로 대체하거나 Props/수학/예외만 실행해서 일반 패스를 생략해서는 안 된다.
-    - 변경된 파일만 평가하고 diff 밖 저장소 전체는 스캔하지 않는다.
+
+### 3a. 디스패치 전 준비 (에이전트를 띄우기 전에 한 번만 수행)
+
+**적용 대상 선별과 컨텍스트 수집을 오케스트레이터가 먼저 끝낸다.** 이 두 가지를 각 sub-agent 안에서 하면 같은 일이 모듈 수만큼 반복되고, 적용도 되지 않을 모듈에 에이전트를 띄우게 된다.
+
+**(1) 프로파일 판정 — 1회**
+
+C-3에 따라 프로젝트 프로파일(FSD, Electron, Tailwind, RSC, SSR, Three.js, TanStack Query, server-code, contract-provider)과 React/TypeScript 버전을 **한 번만** 판정한다. 결과를 모든 sub-agent prompt에 함께 넘겨, 각 에이전트가 다시 조사하지 않게 한다.
+
+**(2) 후보 모듈 → 적용 대상 모듈**
+
+`$RULES_DIR/catalog.json`의 `requires`와 (1)의 판정 결과를 대조해, 전제가 성립하지 않는 모듈은 **sub-agent를 띄우지 않고** `SKIPPED` + 사유로 기록한다. 판정할 수 없으면 `UNKNOWN`으로 두고 역시 띄우지 않는다.
+
+Trigger 섹션이 있는 모듈(`12`, `14`, `16`, `17`, `18`, `21`)은 diff에 해당 트리거가 전혀 없으면 `SKIPPED`로 둘 수 있다. 단 **판단이 애매하면 반드시 띄운다.** 여기서의 오판은 지적이 하나 늘어나는 게 아니라 검사 자체가 사라지는 것이므로, 비용이 비대칭이다. 트리거 부재를 근거로 skip할 때는 사유에 "diff에 X가 없음"처럼 확인한 내용을 적는다.
+
+**(3) diff 1회 수집**
+
+오케스트레이터가 `git diff {MERGE_BASE}..HEAD`와 변경 파일 목록을 한 번 읽어 **prompt에 담아 전달**한다. 각 sub-agent가 개별적으로 `git diff`를 다시 돌리지 않는다. 에이전트는 diff만으로 판단이 안 되는 경우에 한해 해당 파일을 추가로 읽는다.
+
+**(4) 실행 계획 기록**
+
+후보 N개 중 적용 대상 M개, `SKIPPED` 목록과 사유를 리포트에 남긴다. **M이 N보다 작다는 사실이 리포트에서 보여야 한다.** 보이지 않으면 전부 검토된 것으로 읽힌다.
+
+### 3b. 실행
+
+- 적용 대상 모듈마다 별도의 sub-agent 하나를 사용한다.
+- **in-flight sub-agent는 최대 2개**로 제한한다 (max concurrency 2). 큐 포화와 timeout을 피하기 위한 상한이며 올리지 않는다.
+- **배리어를 두지 않는다.** 어느 한 모듈이 terminal 상태(`COMPLETED` 또는 `FAILED_ORCHESTRATION`)가 되면 **즉시** 다음 대기 모듈을 그 슬롯에 넣는다. 두 모듈이 모두 끝나기를 기다리지 않는다 — 기다리면 빨리 끝난 슬롯이 느린 모듈이 끝날 때까지 놀고, 그 유휴 시간이 모듈 수만큼 누적된다.
+- 대기열 순서는 모듈 번호 순으로 하되, 순서 자체가 정확성 요건은 아니다. 결과는 리포팅 시점에 모듈 번호로 정렬한다.
+
+**각 모듈 sub-agent prompt에 담을 것** — 3a에서 이미 확보했으므로 에이전트가 다시 조사하지 않는다.
+
+| 항목 | 내용 |
+|------|------|
+| 리뷰 범위 | `{MERGE_BASE}`, HEAD, 변경 파일 목록 (제외 경로 적용 후) |
+| diff | 3a(3)에서 수집한 diff 본문 |
+| 프로젝트 프로파일 | 3a(1)의 판정 결과와 React/TypeScript 버전 |
+| 공통 규칙 | `00-rule.md` 전문 |
+| 담당 모듈 규칙 | 그 모듈 `.md` 전문 (하나만) |
+
+에이전트에게는 **diff로 판단이 서지 않을 때만** 해당 파일을 추가로 읽으라고 지시한다. 모든 에이전트가 습관적으로 변경 파일 전체를 다시 읽으면 3a(3)에서 없앤 중복이 그대로 돌아온다.
+- `00-rule.md`, `props.md`, `math.md`, `exception.md`, `fast.md`, 그리고 숫자 prefix가 없는 모든 파일은 일반 패스의 **독립 모듈 대상에서 제외**한다. (`00-rule.md`는 제외되지만 공통 규칙으로는 모든 모듈에 전달된다.)
+- **적용 대상 모듈(3a에서 확정된 M개) 결과를 전부 수집해야** 일반 패스가 완료된다. 누락, 실패, timeout, inactivity timeout, queue expiry가 발생한 모듈이 있으면 완료된 리뷰가 아니라 `FAILED orchestration`으로 처리한다.
+- `SKIPPED`와 `FAILED`를 구분한다 (C-8). 3a에서 전제 미성립으로 제외한 모듈은 `FAILED orchestration`이 아니다. 반대로 **적용 대상인데 결과가 없는 것**은 언제나 실패다.
+- 일부 모듈이 실패해도 이미 완료된 모듈 결과는 수집해 partial result로 보존한다. 단, 실패/누락/timeout 모듈 목록을 명시하고 전체 리뷰를 fully complete로 요약하지 않는다.
+- `01-fsd.md`와 `20-deletion-regression.md`가 **적용 대상인데** 실행/수집되지 않으면 architecture/deletion-regression coverage 누락으로 보고 `FAILED orchestration` 처리한다. (`01-fsd.md`는 FSD 프로젝트가 아니면 3a에서 `SKIPPED`가 되며, 그건 실패가 아니다.)
+- 별도 architecture 또는 deletion-regression summary agent로 `01-fsd.md`/`20-deletion-regression.md` 결과를 대체하지 않는다. 해당 지적은 반드시 숫자 모듈 결과로 유지한다.
+- 변경된 파일만 평가하고 diff 밖 저장소 전체는 스캔하지 않는다.
     - 일반 코드 리뷰 패스에서 테스트/목 전용 경로를 제외한다: `__test__/**`, `__tests__/**`, `*.test.*`, `*.spec.*`, `__mocks__/**`, `mock/**`, `mocks/**`, `*.mock.*`, 전용 fixture/mock-data 자산.
 
 ### 일반 모듈 실행 및 liveness failover 정책
-- 일반 패스의 모든 numbered non-00 모듈은 initial dispatch부터 `subagent_type=general`, `run_in_background=true`로 실행한다. 동기 실행으로 시작한 뒤 background로 전환하지 않는다.
-- numbered non-00 모듈마다 별도의 sub-agent 하나를 반드시 유지한다. max concurrency는 정확히 2이며, fast review, generic summary, 또는 다른 모듈이 누락된 숫자 모듈을 대체할 수 없다. 특히 `01-fsd.md`와 `20-deletion-regression.md`는 다른 architecture/deletion-regression 요약으로 대체하지 않는다.
+- 일반 패스의 모든 적용 대상 모듈은 initial dispatch부터 `subagent_type=general`, `run_in_background=true`로 실행한다. 동기 실행으로 시작한 뒤 background로 전환하지 않는다.
+- 적용 대상 모듈마다 별도의 sub-agent 하나를 반드시 유지한다. in-flight 상한은 정확히 2이며, fast review, generic summary, 또는 다른 모듈이 누락된 숫자 모듈을 대체할 수 없다. 특히 `01-fsd.md`와 `20-deletion-regression.md`는 다른 architecture/deletion-regression 요약으로 대체하지 않는다.
 - 각 모듈 상태는 `PENDING → DISPATCHED → COMPLETED or fresh retry → FAILED_ORCHESTRATION` 순서로 기록한다.
 - no-start, timeout, inactivity timeout, queue expiry, empty/missing result, `Task not found for session` 또는 session loss가 발생하면 해당 모듈은 죽은 세션으로 간주하고, fresh `general` background task로 최대 1회만 retry한다. dead/no-event/lost session은 `session_id`로 resume하지 않으며, synchronous task를 background task로 변환하지 않는다.
 - 정상 완료된 응답이 clarification만 요구하는 경우에는 live session을 재사용할 수 있다. 단, no-start, timeout, inactivity timeout, queue expiry, empty/missing result, `Task not found for session`, session loss 클래스는 live session으로 보지 않으며 재사용하지 않는다.
 - 런타임이 first-event 또는 heartbeat 관측을 지원하면 bounded startup window 안에서 첫 이벤트를 확인한다. 현재 task API처럼 completion/error notification만 노출되는 런타임에서는 첫 timeout, expiry, error에 반응하고 같은 session에 두 번째 long wait를 쓰지 않는다.
 - 각 숫자 모듈마다 가능한 경우 task ID, session ID, attempt count, last observed event/result, failure class를 기록한다.
-- 다음 wave는 현재 wave의 두 모듈이 모두 `COMPLETED` 또는 terminal `FAILED_ORCHESTRATION` 상태가 된 뒤에만 시작한다.
+- 어느 모듈이든 terminal 상태가 되는 즉시 대기열의 다음 모듈을 그 슬롯에 투입한다. 다른 in-flight 모듈의 완료를 기다리지 않는다. retry도 슬롯 하나를 차지하며 같은 상한을 따른다.
 - retry까지 실패한 모듈은 정확한 모듈명을 `FAILED_ORCHESTRATION`으로 표시하고, 이미 완료된 다른 모듈의 partial result는 보존한다. 필수 숫자 모듈 실패는 전체 리뷰의 `FAILED orchestration` 상태를 유지한다.
 - `.claude/commands/review-pr.md`의 "skip errored/empty agent" 정책은 full review에 적용하지 않는다. full review는 빈 결과나 errored module을 건너뛰지 않고 실패한 필수 모듈로 보고한다.
  4. Props 패스 규칙.
