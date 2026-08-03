@@ -1,0 +1,30 @@
+{
+  "name": "react-code-review",
+  "owner": {
+    "name": "bhmun"
+  },
+  "metadata": {
+    "description": "React code review workflows for Claude Code",
+    "version": "1.0.0"
+  },
+  "plugins": [
+    {
+      "name": "react-code-review-plugin",
+      "source": "./",
+      "description": "Modular React code review workflows with default, full, fast, commit, props, math, and exception review modes",
+      "version": "2.0.0",
+      "author": {
+        "name": "bhmun"
+      },
+      "homepage": "https://github.com/XsQuare01/claude-code-review-pluigin",
+      "license": "MIT",
+      "keywords": [
+        "code-review",
+        "review-rules",
+        "react",
+        "typescript",
+        "accessibility"
+      ]
+    }
+  ]
+}
