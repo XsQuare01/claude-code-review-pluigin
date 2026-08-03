@@ -193,4 +193,4 @@ const fullName = `${firstName} ${lastName}`.trim()
 - 페칭 라이브러리(React Query 등) 사용 일관성
 - 캐싱 전략 (staleTime, gcTime)
 - 동일 데이터 중복 요청
-- Optimistic update 적절 사용 여부 — 실패 시 rollback 경로는 `17-concurrency.md` 17-8
+- Optimistic update 적절 사용 여부 — 실패 시 rollback 경로는 `17-concurrency.md` 17-4

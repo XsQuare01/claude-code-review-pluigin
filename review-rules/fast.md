@@ -1,6 +1,12 @@
 # Fast Code Review Rules (압축본)
 
-> **Sync note**: 숫자 prefix 모듈은 현재 `00` ~ `20` 이며 빈 번호가 없다. 모듈을 추가·삭제·재배치하면 이 문서의 해당 섹션도 같이 고쳐야 한다. 압축 과정에서 **원본의 예외 조항을 빠뜨리지 않는다** — 예외를 지우면 오탐이 된다.
+> **Sync note**: 숫자 prefix 모듈은 현재 `00` ~ `20` 이며 빈 번호가 없다. 모듈을 추가·삭제·재배치하면 이 문서의 해당 섹션도 같이 고쳐야 한다.
+>
+> 압축할 때 원본과 **반드시 일치시켜야 하는 세 가지**가 있다. 이 셋이 어긋나면 fast 리뷰는 원본과 다른 판정을 내리는 별개의 규칙 체계가 된다.
+>
+> 1. **Severity** — 원본이 🔴인 규칙을 🟡로 낮추지 않는다. 서버 전용·제공자 전용처럼 조건부로만 적용되는 규칙도 적용될 때의 severity는 원본과 같다.
+> 2. **적용 조건(Trigger)** — 원본에 Trigger 섹션이 있으면 압축본에도 적용 조건과 제외 조건을 남긴다. 조건을 지우면 적용 대상이 아닌 코드까지 지적한다.
+> 3. **예외 조항** — 원본의 "지적하지 않음" 항목을 빠뜨리지 않는다. 예외를 지우면 오탐이 된다.
 
 이 문서는 숫자 prefix 상세 모듈에서 **high-signal 지적 기준만** 추려낸 압축본이다. 오직 `/code-review-fast`에서만 사용한다. 상세 리뷰가 필요하면 `/code-review` 또는 `/code-review-full`을 쓴다.
 
@@ -124,9 +130,13 @@
 
 ## 14. React 성능
 
-🔴 — 상한이 열린 대형 리스트를 가상화·페이지네이션 없이 전량 렌더
+**적용 조건**: 변경 라인에 리스트/테이블/그리드 렌더, 페이지네이션·무한 스크롤, 라우트 추가, 대형 컴포넌트·라이브러리 import, 검색/필터/입력에 연결된 무거운 계산, 이미지·아이콘·폰트·차트·3D 씬 추가, 새 전역 상태 구독·Context Provider가 보일 때만 적용한다. **데이터 규모가 작고 정적인 UI 변경에는 적용하지 않는다.**
+
+🔴 — 상한이 열린 대형 리스트를 가상화·페이지네이션 없이 전량 렌더 (상한이 수십 건으로 고정된 목록은 지적하지 않음)
 
 🟡 — 라우트/모달/에디터/차트를 정적 import(코드 스플리팅 부재), 입력마다 무거운 렌더를 동기 실행(`useDeferredValue`/`useTransition` 미검토), 렌더 중 대형 정렬·정규식·`Intl` 인스턴스 반복 생성, 이미지 크기 미지정·lazy 미적용, Suspense 경계 과대·부재
+
+**지적 원칙**: 추정만으로 🔴을 주지 않는다. 측정 없이 `useMemo`/`useCallback`을 더 붙이라고 요구하지 않는다.
 
 ## 15. 알고리즘 복잡도
 
@@ -138,19 +148,29 @@
 
 ## 16. API 계약
 
-🔴 — 타입만 바꾸고 runtime parser/schema/generated client/mapper가 그대로 / 응답 shape 변경인데 소비 측 컴포넌트·훅 미갱신 / query key 변경인데 `invalidateQueries` 호출부 미갱신 / route·param·query default 의미 변경으로 기존 URL이 깨짐
+**적용 조건**: 변경 코드가 request/response shape, HTTP status, error body, route path/param, query default, pagination/sorting/filtering, auth surface, schema/DTO validation, serialization, IPC channel, event/webhook payload, SDK/public export, config/env key, cross-runtime adapter에 닿을 때만 적용한다. **같은 런타임 안에서만 쓰이는 private helper 시그니처는 contract가 아니다.**
 
-🟡 — (제공자일 때) field 제거·rename·required화, status/error body 의미 변경, IPC/event payload 변경, env·config·public export rename에 fallback 없음, breaking 변경에 versioning/migration 증거 없음
+🔴 (소비자 관점, 항상 적용) — 타입만 바꾸고 runtime parser/schema/generated client/mapper가 그대로 / 응답 shape 변경인데 소비 측 컴포넌트·훅 미갱신 / query key 변경인데 `invalidateQueries` 호출부 미갱신 / route·param·query default 의미 변경으로 기존 URL이 깨짐
+
+🔴 (제공자일 때만 적용) — field 제거·rename·required화, nullable→non-null 축소, enum 범위 축소 / status code·success 판정·error body shape·error code 의미 변경 / IPC channel·event name·payload schema 변경 / env·config·feature flag·public export·SDK 시그니처 rename에 fallback·alias·adapter 없음
+
+🟡 — breaking contract 변경에 versioning·adapter·staged rollout·compatibility layer·migration path 증거가 하나도 없음 (16-8)
 
 ## 17. 동시성 & 멱등성
 
-🔴 — save/delete/payment/mutation이 double click·rapid re-entry·네트워크 retry·중복 이벤트 전달로 두 번 실행 가능한데 방어 없음 / mutation이 effect·렌더 경로에 있어 재실행 때 함께 실행됨(핸들러로 이동) / 느린 이전 응답이 최신을 덮어씀 / 언마운트·route change 후에도 이전 async work가 결과를 publish
+**적용 조건**: 변경 코드가 shared state, async request ordering, retry/backoff, 외부 부작용, save/delete/payment/mutation, 반복 호출 경로, background job, webhook/event consumer, read-modify-write 흐름을 직접 건드릴 때만 적용한다. **read-only GET, 단순 조회, 순수 계산, 표시 전용 로컬 UI에는 적용하지 않는다.**
+
+🔴 (클라이언트) — save/delete/payment/mutation이 double click·rapid re-entry·네트워크 retry·중복 이벤트 전달로 두 번 실행 가능한데 방어 없음 / mutation이 effect·렌더 경로에 있어 재실행 때 함께 실행됨(핸들러로 이동) / 느린 이전 응답이 최신을 덮어씀 / 언마운트·route change 후에도 이전 async work가 결과를 publish
 
 **주의**: StrictMode는 click 등 사용자 이벤트를 두 번 dispatch하지 않는다. 사용자 경로 중복의 원인으로 적지 않는다.
 
-🟡 — optimistic update 실패 시 rollback 없음. (서버 측 코드일 때) 멱등성 키 부재, non-idempotent retry, read-modify-write에 트랜잭션·버전 가드 없음, replay-unsafe consumer
+🔴 (서버 측 코드일 때만 적용) — 반복 요청이 외부 관측 가능한 side effect를 만드는데 안정적인 멱등성 키·operation ID·dedup 경계 없음 / non-idempotent operation을 그대로 재호출하는 retry / read-modify-write에 lock·트랜잭션·CAS·버전 가드 없음 / replay-unsafe job·queue·webhook consumer
+
+🟡 — optimistic update 실패·out-of-order·server canonical 응답 불일치 시 rollback·reconciliation 없음 (17-4) / 위험 흐름을 건드렸는데 안전 증거가 하나도 없음 (17-8)
 
 ## 18. 위험 변경
+
+**적용 조건**: 변경 라인이 인증·인가·권한·세션·토큰, 결제·주문·정산·크레딧 소비, 저장·삭제·덮어쓰기·마이그레이션·스키마 변경, 파일 쓰기·OS API·Electron main의 시스템 접근, 배포 산출물 동작을 바꾸는 config/env/feature flag 기본값, 개인정보·민감정보의 저장·전송·로깅 경로에 닿을 때만 적용한다. **읽기 전용 조회, 표시 전용 UI, 순수 계산에는 적용하지 않는다.**
 
 🔴 — 클라이언트 gating만 바꾸고 서버·main 권한 검사 그대로 / 삭제·덮어쓰기·마이그레이션에 확인·롤백·복구 경로 없음 / 금액·수량 계산 변경에 검증 없음 / 토큰·개인정보가 로그·URL·클라이언트 번들에 노출
 
