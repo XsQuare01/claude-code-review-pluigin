@@ -43,9 +43,9 @@ git diff $MERGE_BASE..HEAD
 
 변경 파일 중 예외 처리, 에러 전파, fallback, 복구, 검증 로직이 바뀐 파일만 리뷰 대상으로 좁힌다. 관련 변경이 없으면 `SKIPPED`로 종료한다. repo-wide fallback 스캔은 하지 않는다.
 
-### Step 2: Lint 자동 수정 (선택)
+### Step 2: Lint 확인 (read-only, 선택)
 
-lint가 설정돼 있으면 자동 수정 가능한 문제를 먼저 정리한다. 단, exception 리뷰는 lint와 별도 축이므로 lint가 없어도 그대로 진행 가능하다.
+`00-rule.md` 00-9 실행 안전 계약을 따른다. lint가 설정돼 있으면 **수정 옵션 없이** 실행하고, 자동 수정은 사용자가 명시적으로 요청했을 때만 한다. exception 리뷰는 lint와 별도 축이므로 lint가 없어도 그대로 진행 가능하다.
 
 ### Step 3: 단일 Sub-Agent Dispatch
 
@@ -113,7 +113,7 @@ sub-agent의 출력을 그대로 사용자에게 전달한다. 명백한 형식 
 
 ### Step 5: 문서 저장
 
-리포트는 기본적으로 `./review-reports/code-review-exception-{branch-name}-{date}.md`로 저장하고 경로를 보고한다. 문서 내용은 **이번 브랜치 diff 안에서 예외 처리/에러 전파가 바뀐 파일과 그 실패 흐름 이슈** 중심으로 쓴다. `workflow-name`은 `exception`이다.
+리포트는 기본적으로 `./review-reports/code-review-exception-{branch-name}-{date}.md`로 저장하고 경로를 보고한다. 단, 사용자가 read-only 리뷰, 파일 생성/수정 금지, 텍스트 응답만을 요청했으면 저장하지 않는다 (`00-rule.md` 00-9 우선). 문서 내용은 **이번 브랜치 diff 안에서 예외 처리/에러 전파가 바뀐 파일과 그 실패 흐름 이슈** 중심으로 쓴다. `workflow-name`은 `exception`이다.
 
 ## 사용법
 

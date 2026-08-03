@@ -16,6 +16,8 @@ This is not a general-purpose review system. Every rule module assumes the code 
 | `/code-review-math` | 3D transform / matrix logic (Three.js, R3F, WebGL) |
 | `/code-review-exception` | Exception handling, propagation, fallback, recovery |
 
+`/code-review` accepts `--module` to restrict the pass to specific rule modules. Tokens resolve against the module filenames at runtime — by number (`--module 01,02`), by slug (`--module fsd,type`), or by unambiguous slug prefix. An unknown or ambiguous token stops the review and lists the available modules rather than silently falling back to a full pass; modules that were filtered out are never reported as passing.
+
 ## Rule modules
 
 Numbered modules (`review-rules/[0-9]*.md`) are loaded by the general review passes. The numbering is contiguous and doubles as execution order — **rule IDs always match the file prefix**.
@@ -66,6 +68,12 @@ Every finding carries an ID that matches its source file, so a report can always
 ## Report output
 
 Reports are written to `./review-reports/code-review-{workflow-name}-{branch-name}-{date}.md`, where `workflow-name` is one of `default`, `full`, `fast`, `commit`, `props`, `math`, `exception`. An existing report never counts as a completed review — each run performs a fresh review and writes a new file.
+
+## Execution safety
+
+Every workflow is **read-only by default** (`review-rules/00-rule.md` 00-9). Reviews run lint, typecheck, and tests without mutating flags; auto-fix (`lint:fix`, `--fix`, `--write`) and code changes happen only when the user explicitly asks. Tool output is reported in its own section, separate from review findings, so what a tool caught is never confused with what the reviewer judged.
+
+If the user asks for a read-only review, says not to modify files, or wants a text-only answer, that request outranks every other rule — including report generation. No file is written and the result is returned in the response.
 
 ## Rule directory resolution
 
