@@ -23,9 +23,21 @@
 
 ## 17-1. 중복 제출 / 반복 실행 🔴
 
-- save/delete/payment/order/notification/mutation action이 double click, rapid re-entry, React StrictMode, retry, repeated event delivery로 두 번 실행될 수 있는데 방어가 없으면 위반 후보.
+중복 실행은 **경로가 다르면 방어책도 다르다.** 아래 두 갈래를 섞어서 지적하지 않는다.
+
+**(a) 사용자·네트워크 경로의 중복** — double click, rapid re-entry, 네트워크 retry, at-least-once event 재전달
+
+- save/delete/payment/order/notification/mutation action이 이 경로로 두 번 실행될 수 있는데 방어가 없으면 위반 후보.
 - 버튼 disabled, pending guard, mutation의 `isPending` 가드, once-only handler, 서버 dedupe 중 실제 흐름에 맞는 안전장치가 보여야 한다.
 - 클라이언트 disabled만으로 외부 부작용 전체가 안전하다고 보지 않는다. 네트워크 재시도나 중복 이벤트가 가능한 흐름이면 서버 또는 처리 경계의 중복 방지도 함께 확인한다.
+
+**(b) React 렌더·Effect 경로의 중복** — 렌더/Effect가 다시 실행되면서 mutation까지 같이 실행되는 경우
+
+- 개발 모드 StrictMode의 effect 이중 실행(mount → unmount → mount), 의존성 변경으로 인한 effect 재실행, 동시성 렌더의 렌더 폐기·재시도가 여기 해당한다.
+- 근본 원인은 **mutation이 effect나 렌더 경로에 있다는 것**이다. 사용자 액션의 결과는 이벤트 핸들러에서 실행돼야 한다 (`03-react-rules.md` 03-5). 핸들러로 옮기면 이 경로의 중복은 사라진다.
+- effect에 남아야 하는 외부 시스템 동기화라면 cleanup과 재실행 안전성을 확인한다 (`04-state.md` 04-1).
+
+**StrictMode는 click 같은 사용자 이벤트를 두 번 dispatch하지 않는다.** StrictMode를 (a)의 원인으로 적지 않는다. StrictMode에서 mutation이 두 번 실행됐다면 그것은 StrictMode의 문제가 아니라 **mutation이 effect/렌더 경로에 있다는 신호**이며, 지적할 대상은 그 배치다. 또한 StrictMode는 개발 모드 전용이므로, 프로덕션 중복 위험의 근거로 쓰지 않는다.
 
 ## 17-2. 경쟁 조건 / 순서 역전 🔴
 

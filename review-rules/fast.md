@@ -43,21 +43,27 @@
 
 ## 02. 타입 안전성
 
-🔴 — `any`, `@ts-ignore`, 근거 없는 `as`, `as unknown as T`, `[key: string]: any` Props / 인라인 Props 타입 / 인라인 타입 3필드 초과·유틸리티 타입 3단 중첩·무명 유니온 5멤버 초과
+🔴 — `any`가 exported 타입·public 시그니처·앱 내부로 전파, `@ts-ignore`, 근거 없는 `as`, `as unknown as T`, `[key: string]: any` Props
 
-🟡 — API nullable인데 Props non-optional, snake_case↔camelCase 변환 누락, null narrowing 없이 접근, exhaustive check 누락, 판별자 필드 혼용, 제네릭 `extends` 누락
+🟡 — 사유·제거 조건 없는 `@ts-expect-error`, exported 컴포넌트 Props가 인라인이라 참조할 이름 없음, contextual typing이 끊긴 자리(핸들러를 별도 선언)에 이벤트 타입 미명시, 인라인 타입·유틸리티 중첩·무명 유니온이 커져 의미를 못 읽음(3필드·3단·5멤버는 신호), 같은 인라인 타입 2곳+ 복제, API nullable인데 Props non-optional, snake_case↔camelCase 변환 누락, null narrowing 없이 접근, exhaustive check 누락, 판별자 필드 혼용, 제네릭이 입출력 관계를 보존하지 않거나 본문이 요구하는 capability가 제약에 없음
+
+**지적하지 않음** — 경계에 격리되고 검증된 타입으로 반환되는 `any`, 사유·제거 조건이 붙은 `@ts-expect-error`, 파일 내부 local 컴포넌트의 인라인 Props, JSX 인라인 핸들러의 이벤트 타입 생략, 관계만 보존하면 되는 제약 없는 `T`
 
 ## 03. React 규칙
 
-🔴 — 조건문·루프·early return 이후·일반 함수에서 hook 호출 / 렌더 중 `setState`·외부 변이·`Math.random()`·`Date.now()` / 렌더 중 생성한 값을 `key`로 사용 / props를 `useState`에 복사한 뒤 `useEffect`로 동기화
+🔴 — 조건문·루프·early return 이후·일반 함수에서 hook 호출 / 렌더 중 **다른 컴포넌트** setState·무조건 setState·외부 변이·`Math.random()`·`Date.now()` / 렌더 중 생성한 값을 `key`로 사용 / props가 계속 진실의 출처인데 `useState`에 복사한 뒤 `useEffect`로 동기화
 
-🟡 — 정렬·삭제가 있는 리스트에 index key, 외부 시스템 동기화가 아닌 effect(핸들러나 렌더 중 계산으로 옮겨야 함), ref/state 오용, 외부 스토어를 effect+state로 구독(`useSyncExternalStore` 필요), `useId` 없이 만든 DOM id
+🟡 — 정렬·삭제가 있는 리스트에 index key, 외부 시스템 동기화가 아닌 effect(핸들러나 렌더 중 계산으로 옮겨야 함), ref/state 오용, 외부 스토어를 effect+state로 구독(`useSyncExternalStore` 필요), `useId` 없이 만든 DOM id, prop 이름이 소유권 계약을 드러내지 않는데 동기화도 없음
+
+**지적하지 않음** — 조건부 `use(resource)` 호출(React 19+에서 허용), 자기 state를 이전 props와 비교해 조정하는 guarded render-phase adjustment(종료 조건 있고 부수효과 없음), `initialX`/`defaultX`로 받아 이후 동기화하지 않는 uncontrolled 패턴, 의도적 리셋을 위한 `key` 변경
 
 ## 04. 상태 & 사이드이펙트
 
-🔴 — effect 클린업 누락(구독/타이머/리스너/`AbortController`) / 의존성 배열 누락·오용·객체 참조 직접 삽입 / `exhaustive-deps` suppression에 근거 없음 / 로딩·에러·데이터 상태 미반영, 경쟁 조건, 미처리 rejection / 한 effect에 무관한 작업 혼합
+🔴 — effect 클린업 누락(구독/타이머/리스너) / 비동기 결과 반영에 stale-result 방어가 **하나도** 없음 / effect가 읽는 reactive value가 의존성에서 누락, 빈 `[]`인데 변하는 값을 읽음 / 로딩·에러·데이터 상태 미반영, 경쟁 조건, 미처리 rejection / 한 effect에 무관한 작업 혼합
 
-🟡 — 상태 라이브러리 혼용, 서버/클라이언트 상태 경계 불명확, Context value 매 렌더 새 객체, 하나의 Context에 값·액션·UI 상태 혼재, stale closure(`setCount(count+1)`), 직접 변이(`push`), 연관 state 분리로 인한 동기화 버그
+🟡 — `exhaustive-deps` suppression에 근거 없음, 매 렌더 새로 만들어지는 참조를 의존성에 넣어 실제로 재실행·재구독 유발, 상태 라이브러리 혼용, 서버/클라이언트 상태 경계 불명확, Context value가 매 렌더 새 객체이고 **그 때문에 실제 리렌더 비용이 발생**, 하나의 Context에 값·액션·UI 상태 혼재, stale closure(`setCount(count+1)`), 직접 변이(`push`), 연관 state 분리로 인한 동기화 버그
+
+**지적하지 않음** — stale-result 방어가 `AbortController`가 아니라 `ignore` 플래그·request token·쿼리 라이브러리 위임으로 되어 있는 경우, 취소가 불필요한 effect(구독·타이머)에 abort 부재, 참조가 이미 안정적인 객체 의존성, React Compiler가 켜진 프로젝트에 수동 memoization 추가 요구
 
 ## 05. 함수 & 컴포넌트 구조
 
@@ -137,7 +143,9 @@
 
 ## 17. 동시성 & 멱등성
 
-🔴 — save/delete/payment/mutation이 double click·StrictMode·retry로 두 번 실행 가능한데 방어 없음 / 느린 이전 응답이 최신을 덮어씀 / 언마운트·route change 후에도 이전 async work가 결과를 publish
+🔴 — save/delete/payment/mutation이 double click·rapid re-entry·네트워크 retry·중복 이벤트 전달로 두 번 실행 가능한데 방어 없음 / mutation이 effect·렌더 경로에 있어 재실행 때 함께 실행됨(핸들러로 이동) / 느린 이전 응답이 최신을 덮어씀 / 언마운트·route change 후에도 이전 async work가 결과를 publish
+
+**주의**: StrictMode는 click 등 사용자 이벤트를 두 번 dispatch하지 않는다. 사용자 경로 중복의 원인으로 적지 않는다.
 
 🟡 — optimistic update 실패 시 rollback 없음. (서버 측 코드일 때) 멱등성 키 부재, non-idempotent retry, read-modify-write에 트랜잭션·버전 가드 없음, replay-unsafe consumer
 
