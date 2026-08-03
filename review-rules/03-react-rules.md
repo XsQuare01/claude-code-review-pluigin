@@ -44,17 +44,52 @@ function Profile({ userId }: ProfileProps) {
 }
 ```
 
+**예외 — `use` (React 19+)**: `use(resource)`는 이 규칙의 대상이 아니다. 다른 Hook과 달리 조건문·반복문 안에서 호출할 수 있도록 설계됐다. 프로젝트의 React 버전이 19 미만이면 `use` 자체가 없으므로 이 예외를 적용할 일도 없다. 조건부 `use` 호출을 Hooks 규칙 위반으로 지적하지 않는다.
+
+```typescript
+// ✅ use는 조건부 호출이 허용된다 (React 19+)
+function Comments({ commentsPromise, show }: CommentsProps) {
+  if (!show) return null
+  const comments = use(commentsPromise)
+  return <List items={comments} />
+}
+```
+
 `eslint-plugin-react-hooks`의 `rules-of-hooks`를 suppression으로 끈 경우도 위반으로 본다. `exhaustive-deps` suppression은 `04-state.md`에서 다룬다.
 
 ## 03-2. 렌더 순수성 🔴
 
 컴포넌트 본문(return 이전)은 **같은 입력에 같은 출력**을 내는 순수 함수여야 한다. React 18+ StrictMode는 개발 모드에서 렌더를 두 번 호출하므로, 렌더 중 부수효과가 있으면 즉시 드러난다.
 
-- 렌더 중 `setState` 호출 (조건 없는 무한 루프, 또는 조건부라도 렌더-커밋 순환)
-- 렌더 중 props/외부 객체/모듈 스코프 변수 변이
-- 렌더 중 `ref.current` 쓰기 (초기화 1회 lazy init 패턴은 예외)
-- 렌더 중 DOM 직접 조작, 로깅 이상의 I/O, 구독 등록
-- 렌더 중 `Math.random()`, `Date.now()`, `new Date()`, `crypto.randomUUID()` 호출로 렌더 결과가 매번 달라짐
+- 🔴 렌더 중 **다른 컴포넌트**의 state를 갱신 (React가 명시적으로 금지. 렌더 순서에 따라 결과가 달라진다)
+- 🔴 렌더 중 무조건 `setState` 호출 → 무한 렌더 루프
+- 🔴 렌더 중 props/외부 객체/모듈 스코프 변수 변이
+- 🔴 렌더 중 DOM 직접 조작, 로깅 이상의 I/O, 구독 등록
+- 🔴 렌더 중 `Math.random()`, `Date.now()`, `new Date()`, `crypto.randomUUID()` 호출로 렌더 결과가 매번 달라짐
+- 🟡 렌더 중 `ref.current` 쓰기 (초기화 1회 lazy init 패턴은 예외)
+
+**예외 — guarded render-phase adjustment**: 이전 props와 비교해 **자기 자신의** state를 조건부로 조정하는 패턴은 React가 문서화한 정당한 기법이다. 조건이 언젠가 거짓이 되므로 루프가 끝나고, React는 커밋과 DOM 반영 전에 그 자리에서 다시 렌더하므로 낡은 값이 화면에 나가지 않는다. effect로 같은 일을 하는 것보다 낫다.
+
+지적 대상은 조건부 렌더 중 `setState` 자체가 아니라 **종료 조건이 없거나(무한 루프), 다른 컴포넌트를 건드리거나, 부수효과가 섞인 경우**다.
+
+```typescript
+// ✅ guarded adjustment — 자기 state, 종료 조건 있음, 부수효과 없음
+function List({ items }: ListProps) {
+  const [selection, setSelection] = useState(null)
+  const [prevItems, setPrevItems] = useState(items)
+  if (items !== prevItems) {          // 다음 렌더에서는 거짓이 된다
+    setPrevItems(items)
+    setSelection(null)
+  }
+  ...
+}
+
+// ❌ 종료 조건이 없다 — 매 렌더 재실행
+if (items.length > 0) setCount(count + 1)
+
+// ❌ 다른 컴포넌트의 state를 렌더 중에 건드린다
+if (isReady) parentContext.setOpen(true)
+```
 
 ```typescript
 // ❌ 렌더마다 값이 달라져 hydration/StrictMode에서 불일치
@@ -94,11 +129,15 @@ key는 **리스트 재정렬·삽입·삭제 사이에서 같은 항목을 같�
 
 ## 03-4. props를 state로 복사 🔴
 
-props나 서버 데이터를 `useState` 초기값으로 복사한 뒤 `useEffect`로 다시 동기화하는 구조는 React가 명시적으로 금지하는 안티패턴이다. 한 프레임 동안 낡은 값이 렌더되고, 두 출처가 어긋난다.
+판정 기준은 "props를 state 초기값으로 썼는가"가 아니라 **소유권 계약이 무엇인가**다. props를 초기값으로만 쓰고 이후 컴포넌트가 그 값을 소유하는 것은 정상적인 uncontrolled 패턴이다. 문제는 **props가 계속 진실의 출처인데도 복사본을 만들어 effect로 따라가게** 만든 경우다. 이때 한 프레임 동안 낡은 값이 렌더되고 두 출처가 어긋난다.
 
-- `useState(props.x)` + `useEffect(() => setX(props.x), [props.x])`
-- 서버 응답을 로컬 state에 복사해두고 캐시와 별도로 관리
-- 계산 가능한 값을 state로 두고 effect에서 갱신
+- 🔴 `useState(props.x)` + `useEffect(() => setX(props.x), [props.x])` — props가 여전히 출처인데 복사본을 동기화
+- 🔴 서버 응답을 로컬 state에 복사해두고 캐시와 별도로 관리
+- 🔴 계산 가능한 값을 state로 두고 effect에서 갱신
+- 🔵 prop 이름이 `initialX`/`defaultX`이고 이후 동기화가 없음 → 소유권이 자식으로 넘어간 것. 지적하지 않음
+- 🔵 사용자가 편집 중인 draft처럼 props와 의도적으로 갈라지는 값 → 지적하지 않음
+
+소유권이 자식에게 있다면 prop 이름(`initialX`, `defaultX`)이나 짧은 주석에서 그 의도가 드러나야 한다. 이름이 `value`인데 동기화가 없으면 그건 계약이 모호한 것이므로 🟡로 지적한다.
 
 ```typescript
 // ❌ props와 state 두 출처가 어긋남
@@ -110,9 +149,13 @@ const name = user.name
 
 // ✅ 정말 리셋이 필요하면 key로
 <NameEditor key={user.id} initialName={user.name} />
-```
 
-예외: 사용자가 편집 중인 draft 상태처럼 **props와 의도적으로 갈라져야 하는** 값. 이때는 왜 갈라지는지가 이름이나 주석에서 드러나야 한다.
+// ✅ 소유권이 자식에게 있다 — 이름이 계약을 드러내고 동기화 effect가 없다
+function NameEditor({ initialName }: NameEditorProps) {
+  const [name, setName] = useState(initialName)
+  ...
+}
+```
 
 ## 03-5. Effect가 아니어야 하는 Effect 🟡
 

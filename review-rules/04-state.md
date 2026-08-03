@@ -22,9 +22,21 @@
 ## 04-1. useEffect 클린업 🔴
 
 - 구독/타이머/이벤트 리스너 등록 후 클린업 누락
-- `fetch`에 `AbortController` 없이 언마운트 후 setState
+- 비동기 요청 결과를 반영하는데 **stale result가 최신 결과를 덮는 것을 막는 장치가 전혀 없음**
 - StrictMode의 mount → unmount → mount 재실행에서 구독·연결이 중복 등록됨
 - cleanup이 등록한 것과 다른 대상을 해제함 (핸들러 참조 불일치)
+
+**`AbortController`를 유일한 정답으로 요구하지 않는다.** 요구하는 것은 "이전 요청의 결과가 최신 상태를 덮지 않는다"는 증거이고, 그 증거는 여러 형태일 수 있다.
+
+| 방식 | 인정 여부 |
+|------|-----------|
+| `AbortController` + `signal` | ✅ 요청 자체를 취소. 네트워크 비용까지 절약 |
+| cleanup의 `ignore` 플래그로 stale result 무시 | ✅ React 공식 문서가 제시하는 대안 |
+| request token / sequence 비교 후 최신만 반영 | ✅ |
+| 쿼리 라이브러리(React Query 등)에 위임 | ✅ 라이브러리가 이미 처리한다. 중복 구현을 요구하지 않음 |
+| 아무 장치도 없음 | 🔴 위반 |
+
+취소 자체가 필요 없는 effect(구독, 타이머, 이벤트 리스너)에 `AbortController`를 요구하지 않는다. 반대로 취소하면 안 되는 요청(전송 완료가 목적인 mutation)에 abort를 붙이라고 요구하지도 않는다.
 
 ```typescript
 // ❌ 클린업 없음
@@ -32,21 +44,51 @@ useEffect(() => {
   const id = setInterval(() => setCount(c => c + 1), 1000)
 }, [])
 
-// ✅ GOOD
+// ✅ abort로 취소
 useEffect(() => {
   const controller = new AbortController()
-  fetch('/api/data', { signal: controller.signal })
+  fetch(`/api/data/${id}`, { signal: controller.signal })
     .then(r => r.json()).then(setData)
     .catch(err => { if (!controller.signal.aborted) setError(err) })
   return () => controller.abort()
-}, [])
+}, [id])
+
+// ✅ stale result 무시 — abort 없이도 경쟁 조건은 막힌다
+useEffect(() => {
+  let ignore = false
+  fetchData(id).then(result => { if (!ignore) setData(result) })
+  return () => { ignore = true }
+}, [id])
 ```
 
 ## 04-2. 의존성 배열 🔴
 
-- 의존성 배열 누락 (매 렌더 실행) 또는 빈 `[]` 오용
-- 의존성에 객체/배열/함수 참조를 직접 넣어 매 렌더 트리거
-- `// eslint-disable-next-line react-hooks/exhaustive-deps` 또는 동등한 suppression으로 의존성 검사를 우회함
+- 🔴 effect가 읽는 reactive value가 의존성에서 빠져 stale closure나 재실행 누락이 발생
+- 🔴 빈 `[]`인데 내부에서 변하는 props/state를 읽음
+- 🔴 의존성 배열 자체가 없어 매 렌더 실행되는데 그 재실행이 의도가 아님
+- 🟡 `// eslint-disable-next-line react-hooks/exhaustive-deps` 또는 동등한 suppression으로 의존성 검사를 우회함
+
+**객체/배열/함수를 의존성에 넣었다는 사실만으로 지적하지 않는다.** 판정 기준은 타입이 아니라 **그 참조가 실제로 매 렌더 새로 만들어지는가(identity churn)**다. 부모에서 안정적으로 유지되는 객체, 모듈 스코프 상수, `useMemo`/`useCallback`으로 고정된 값, 쿼리 라이브러리가 캐시로 돌려주는 객체는 의존성에 그대로 넣어도 문제가 없다.
+
+지적하려면 다음이 **함께** 성립해야 한다.
+
+1. 그 참조가 렌더마다 새로 생성된다 (컴포넌트 본문에서 리터럴로 만들어지거나 매번 새 객체를 반환)
+2. 그 결과로 effect가 불필요하게 재실행된다 (재구독, 재요청, 무한 루프)
+
+```typescript
+// 🔴 identity churn — options가 매 렌더 새 객체라 effect가 매 렌더 재실행
+function Chat({ roomId }: ChatProps) {
+  const options = { roomId, serverUrl: 'wss://...' }
+  useEffect(() => { connect(options) }, [options])
+}
+
+// ✅ 원시값으로 좁힌다
+useEffect(() => { connect({ roomId, serverUrl }) }, [roomId, serverUrl])
+
+// ✅ 객체 의존성이지만 참조가 안정적이다 — 지적하지 않음
+const config = useMemo(() => ({ roomId }), [roomId])
+useEffect(() => { connect(config) }, [config])
+```
 
 suppression 자체만으로 자동 허용/자동 금지하지 말고, 아래를 함께 본다:
 
@@ -93,15 +135,22 @@ Prop drilling 구조 자체는 `props.md`가 전담한다. 이 모듈에서는 *
 ## 04-6. 불필요한 리렌더링 🟡
 
 - `React.memo` 자식에 매 렌더 새 참조 props 전달
-- Context Provider value가 매 렌더 새 객체 (`useMemo` 필요)
+- Context Provider value가 매 렌더 새 객체이고, **그 때문에 실제로 비싼 리렌더가 발생**
 - 하나의 Context가 값·액션·UI 상태를 모두 담아 일부만 바뀌어도 전체 구독자가 리렌더 → Context 분할 또는 selector 검토
 - 파생 가능한 값을 별도 state로 관리
 
+**Context value에 `useMemo`를 무조건 요구하지 않는다.** 아래를 먼저 확인하고, 근거가 있을 때만 지적한다.
+
+- **소비자 영향**: Provider가 리렌더될 때 어차피 자식 트리도 리렌더되는 구조라면 `useMemo`는 아무것도 막지 못한다. 자식이 `memo`로 차단돼 있거나 구독자가 많을 때만 효과가 있다
+- **identity contract**: value 객체 참조가 effect 의존성이나 `memo` 비교에 쓰여 churn이 실제 문제를 만드는가
+- **Provider 갱신 빈도**: 앱 수명 동안 거의 안 바뀌는 Provider라면 지적 대상이 아니다
+- **React Compiler**: 프로젝트에 Compiler가 켜져 있으면 memoization이 자동 삽입된다. 수동 `useMemo` 추가를 요구하지 않는다
+
 ```typescript
-// ❌ Context value 매 렌더 새 객체
+// 🟡 지적 대상 — 구독자가 많고 자식이 memo로 차단돼 있는데 value가 매 렌더 새 객체
 <AuthContext.Provider value={{ user, setUser }}>
 
-// ✅ GOOD
+// ✅ 참조 고정
 const value = useMemo(() => ({ user, setUser }), [user])
 <AuthContext.Provider value={value}>
 ```
