@@ -50,9 +50,11 @@
 
 ## 02. 타입 안전성
 
-🔴 — `any`가 exported 타입·public 시그니처·앱 내부로 전파, `@ts-ignore`, 근거 없는 `as`, `as unknown as T`, `[key: string]: any` Props
+**리뷰 전 확인**: `tsconfig.json`의 `strict`/`strictNullChecks`, `useUnknownInCatchVariables`, `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`, `strictFunctionTypes`, `verbatimModuleSyntax`와 TypeScript 버전. 설정에 없는 보장을 전제하거나, 이미 컴파일러가 막는 것을 중복 지적하지 않는다. 새 버전 문법을 이전 버전 프로젝트에 요구하지 않는다.
 
-🟡 — 사유·제거 조건 없는 `@ts-expect-error`, exported 컴포넌트 Props가 인라인이라 참조할 이름 없음, contextual typing이 끊긴 자리(핸들러를 별도 선언)에 이벤트 타입 미명시, 인라인 타입·유틸리티 중첩·무명 유니온이 커져 의미를 못 읽음(3필드·3단·5멤버는 신호), 같은 인라인 타입 2곳+ 복제, API nullable인데 Props non-optional, snake_case↔camelCase 변환 누락, null narrowing 없이 접근, exhaustive check 누락, 판별자 필드 혼용, 제네릭이 입출력 관계를 보존하지 않거나 본문이 요구하는 capability가 제약에 없음
+🔴 — 신뢰 경계(네트워크 응답·storage·URL·env·파일·IPC)에서 받은 값에 검증 없이 타입 부여 후 사용(`res.json() as User`, `JSON.parse(raw) as Config`) / 근거 없는 non-null `!` / assertion function이 시그니처가 약속한 검사를 실제로 하지 않음 / `any`가 exported 타입·public 시그니처·앱 내부로 전파, `@ts-ignore`, 근거 없는 `as`, `as unknown as T`, `[key: string]: any` Props / `ref` 엘리먼트 타입이 부착 대상과 불일치
+
+🟡 — `satisfies`·타입 선언을 런타임 검증으로 오해, generated 타입과 런타임 스키마 정렬 근거 없음 / 사유·제거 조건 없는 `@ts-expect-error`, exported 컴포넌트 Props가 인라인이라 참조할 이름 없음, contextual typing이 끊긴 자리에 이벤트 타입 미명시, 인라인 타입·유틸리티 중첩·무명 유니온이 커져 의미를 못 읽음(3필드·3단·5멤버는 신호), 같은 인라인 타입 2곳+ 복제 / API nullable인데 Props non-optional, snake_case↔camelCase 변환 누락, null narrowing 없이 접근, exhaustive check 누락, 판별자 필드 혼용 / 제네릭이 입출력 관계를 보존하지 않거나 본문이 요구하는 capability가 제약에 없음 / 타입 전용 import에 `import type` 미사용 / 위임 상황에서 `currentTarget` 대신 `target` 사용 / strict 계열 옵션을 끄는 tsconfig 변경에 사유·복구 시점 없음
 
 **지적하지 않음** — 경계에 격리되고 검증된 타입으로 반환되는 `any`, 사유·제거 조건이 붙은 `@ts-expect-error`, 파일 내부 local 컴포넌트의 인라인 Props, JSX 인라인 핸들러의 이벤트 타입 생략, 관계만 보존하면 되는 제약 없는 `T`
 

@@ -40,7 +40,7 @@ Numbered modules (`review-rules/[0-9]*.md`) are loaded by the general review pas
 |---|--------|-------|
 | 00 | `00-rule.md` | Common rules — scope, rule-ID convention, report output |
 | 01 | `01-fsd.md` | FSD layers, public API, feature naming *(FSD only)* |
-| 02 | `02-type.md` | Type safety, props typing, narrowing |
+| 02 | `02-type.md` | Type safety, trust boundaries, assertions, tsconfig-aware judgment |
 | 03 | `03-react-rules.md` | Hooks rules, render purity, key stability, derived state |
 | 04 | `04-state.md` | Effects, cleanup, deps, async state, rerenders |
 | 05 | `05-structure.md` | Function/component size, separation of concerns |
