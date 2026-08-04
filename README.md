@@ -25,18 +25,31 @@ To develop against a local checkout instead, point the marketplace at the direct
 ### Update and remove
 
 ```
-/plugin marketplace update react-code-review                  # refresh the marketplace clone
-/plugin update react-code-review-plugin@react-code-review     # update the installed plugin
+/plugin marketplace update react-code-review
+/reload-plugins
+```
+
+Then confirm the version changed:
+
+```bash
+claude plugin list      # expect the new Version:
+```
+
+**A version bump is what makes an update take effect.** Refreshing the marketplace on an unchanged version does nothing to the install, and reports success anyway. See [Versioning](#versioning).
+
+To remove it:
+
+```
 /plugin uninstall react-code-review-plugin@react-code-review
 ```
 
-**Both update commands are needed, and they do different things.** The first re-fetches the marketplace source; the second replaces the installed copy. Running only the first leaves the install untouched while reporting success — the plugin still runs the old rules.
-
-`/plugin update` with no argument is not a shortcut for this. It operates across marketplaces and can install plugins you did not ask for. Always name the plugin.
+> **Avoid `/plugin update` for this plugin.** In our testing it installed an unrelated plugin instead of updating this one — twice, both with no argument and with `react-code-review-plugin@react-code-review` named explicitly. Both times the output was `✓ Installed code-review`, and Anthropic's official `code-review` plugin appeared in the plugin list. The marketplace-refresh path above is what actually moved the install from 2.0.0 to 2.1.0, reporting `Updated 1 marketplace (1 plugin bumped)`.
+>
+> The `claude plugin update <plugin>@<marketplace>` CLI form exists but we have not tested it. If you use it, verify with `claude plugin list` afterwards.
 
 ### Versioning
 
-The plugin sets an explicit `version` in `.claude-plugin/plugin.json`, and Claude Code uses that string as its **cache key**. An installed copy only updates when the version changes — pushing commits under the same version leaves every install stale while `/plugin update` reports it is already current. Nothing surfaces the mismatch.
+The plugin sets an explicit `version` in `.claude-plugin/plugin.json`, and Claude Code uses that string as its **cache key**. An installed copy only updates when the version changes — pushing commits under the same version leaves every install stale, and every surface reports health: `claude plugin list` shows the expected version, `claude plugin details` lists all seven skills, and a marketplace refresh says it succeeded. Nothing surfaces the mismatch.
 
 So the version must be bumped on every change that ships: MINOR for new rules or modules, PATCH for fixes and wording. `scripts/check-version-bump.mjs` enforces this in CI — a pull request that touches `review-rules/`, `skills/`, `agents/`, or `.claude-plugin/` without bumping the version fails.
 
