@@ -23,7 +23,7 @@ description: Use when the user invokes /code-review-full or asks for a full code
 |------|---------------|
 | `workflow-name` | `full` |
 | 모듈 집합 | 적용 대상 numbered non-00 + props + math + exception |
-| 분할 방식 | 모듈별 sub-agent, **in-flight 최대 2개의 sliding window** (배리어 없음) |
+| 분할 방식 | 모듈별 sub-agent, **in-flight 최대 4개의 sliding window** (배리어 없음) |
 | 완료 판정 | 적용 대상 모듈 전부 수집 성공. 하나라도 실패하면 `FAILED orchestration` |
 
 ## 오케스트레이션
@@ -64,7 +64,11 @@ Trigger 섹션이 있는 모듈(`12`, `14`, `16`, `17`, `18`, `21`)은 diff에 �
 ### 3b. 실행
 
 - 적용 대상 모듈마다 별도의 sub-agent 하나를 사용한다.
-- **in-flight sub-agent는 최대 2개**로 제한한다 (max concurrency 2). 큐 포화와 timeout을 피하기 위한 상한이며 올리지 않는다.
+- **in-flight sub-agent는 최대 4개**로 제한한다 (max concurrency 4). 큐 포화와 timeout을 피하기 위한 상한이며, 아래 근거 없이 올리지 않는다.
+
+  **왜 4인가** — 이 값은 실측으로 정한 것이지 임의로 고른 것이 아니다. 처음에는 2였고, 그때는 모듈 하나가 2~5분씩 걸려 동시에 많이 띄우면 timeout과 큐 포화 위험이 컸다. 디스패치 전 준비(3a)로 각 에이전트가 diff와 프로파일을 다시 조사하지 않게 된 뒤 모듈당 평균 약 71초로 내려갔고(20개 모듈 실측, 합 23분 33초), 개별 에이전트가 짧아진 만큼 동시에 띄워도 한 세션이 오래 붙잡히지 않는다.
+
+  **되돌리는 조건** — timeout, inactivity timeout, queue expiry가 한 실행에서 두 건 이상 나오면 4가 이 런타임에 과했다는 신호다. 2로 내리고, 어떤 실패 클래스가 몇 번 나왔는지 기록한다. 실패 없이 느리기만 한 것은 되돌릴 근거가 아니다.
 - **배리어를 두지 않는다.** 어느 한 모듈이 terminal 상태(`COMPLETED` 또는 `FAILED_ORCHESTRATION`)가 되면 **즉시** 다음 대기 모듈을 그 슬롯에 넣는다. 두 모듈이 모두 끝나기를 기다리지 않는다 — 기다리면 빨리 끝난 슬롯이 느린 모듈이 끝날 때까지 놀고, 그 유휴 시간이 모듈 수만큼 누적된다.
 - 대기열 순서는 모듈 번호 순으로 하되, 순서 자체가 정확성 요건은 아니다. 결과는 리포팅 시점에 모듈 번호로 정렬한다.
 
@@ -90,12 +94,12 @@ Trigger 섹션이 있는 모듈(`12`, `14`, `16`, `17`, `18`, `21`)은 diff에 �
 
 ### 일반 모듈 실행 및 liveness failover 정책
 - 일반 패스의 모든 적용 대상 모듈은 initial dispatch부터 `subagent_type=general`, `run_in_background=true`로 실행한다. 동기 실행으로 시작한 뒤 background로 전환하지 않는다.
-- 적용 대상 모듈마다 별도의 sub-agent 하나를 반드시 유지한다. in-flight 상한은 정확히 2이며, fast review, generic summary, 또는 다른 모듈이 누락된 숫자 모듈을 대체할 수 없다. 특히 `01-fsd.md`와 `20-deletion-regression.md`는 다른 architecture/deletion-regression 요약으로 대체하지 않는다.
+- 적용 대상 모듈마다 별도의 sub-agent 하나를 반드시 유지한다. in-flight 상한은 정확히 4이며, fast review, generic summary, 또는 다른 모듈이 누락된 숫자 모듈을 대체할 수 없다. 특히 `01-fsd.md`와 `20-deletion-regression.md`는 다른 architecture/deletion-regression 요약으로 대체하지 않는다.
 - 각 모듈 상태는 `PENDING → DISPATCHED → COMPLETED or fresh retry → FAILED_ORCHESTRATION` 순서로 기록한다.
 - no-start, timeout, inactivity timeout, queue expiry, empty/missing result, `Task not found for session` 또는 session loss가 발생하면 해당 모듈은 죽은 세션으로 간주하고, fresh `general` background task로 최대 1회만 retry한다. dead/no-event/lost session은 `session_id`로 resume하지 않으며, synchronous task를 background task로 변환하지 않는다.
 - 정상 완료된 응답이 clarification만 요구하는 경우에는 live session을 재사용할 수 있다. 단, no-start, timeout, inactivity timeout, queue expiry, empty/missing result, `Task not found for session`, session loss 클래스는 live session으로 보지 않으며 재사용하지 않는다.
 - 런타임이 first-event 또는 heartbeat 관측을 지원하면 bounded startup window 안에서 첫 이벤트를 확인한다. 현재 task API처럼 completion/error notification만 노출되는 런타임에서는 첫 timeout, expiry, error에 반응하고 같은 session에 두 번째 long wait를 쓰지 않는다.
-- 각 숫자 모듈마다 가능한 경우 task ID, session ID, attempt count, last observed event/result, failure class를 기록한다.
+- 각 숫자 모듈마다 가능한 경우 task ID, session ID, attempt count, last observed event/result, failure class를 기록한다. **failure class별 건수를 리포트에 남긴다** — in-flight 상한이 이 런타임에 맞는지 판단할 유일한 근거다.
 - 어느 모듈이든 terminal 상태가 되는 즉시 대기열의 다음 모듈을 그 슬롯에 투입한다. 다른 in-flight 모듈의 완료를 기다리지 않는다. retry도 슬롯 하나를 차지하며 같은 상한을 따른다.
 - retry까지 실패한 모듈은 정확한 모듈명을 `FAILED_ORCHESTRATION`으로 표시하고, 이미 완료된 다른 모듈의 partial result는 보존한다. 필수 숫자 모듈 실패는 전체 리뷰의 `FAILED orchestration` 상태를 유지한다.
 - `.claude/commands/review-pr.md`의 "skip errored/empty agent" 정책은 full review에 적용하지 않는다. full review는 빈 결과나 errored module을 건너뛰지 않고 실패한 필수 모듈로 보고한다.
