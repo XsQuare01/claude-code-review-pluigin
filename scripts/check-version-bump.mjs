@@ -1,10 +1,15 @@
 #!/usr/bin/env node
-// Fails when shipped content changed without bumping the plugin version.
+// Fails when anything changed without bumping the plugin version.
 //
 // Claude Code uses the version string in plugin.json as the cache key. Pushing new
 // commits under an unchanged version leaves every installed copy stale, and nothing
 // reports it — installs keep looking healthy while running old rules. This turns that
 // silent failure into a failed check.
+//
+// Every change bumps the version, including documentation. Deciding per-change whether
+// something "ships" is a judgment call, and a judgment call is where the exception that
+// breaks the rule gets made. A spare patch number costs nothing; a stale install costs
+// an hour of reviewing against the wrong rules.
 //
 // Usage: node scripts/check-version-bump.mjs <base-ref>
 //   e.g. node scripts/check-version-bump.mjs origin/main
@@ -16,9 +21,6 @@ import { fileURLToPath } from 'node:url'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 const MANIFEST = '.claude-plugin/plugin.json'
-
-/** Paths whose contents reach an installed plugin. Changing any of them must ship a new version. */
-const SHIPPED = ['review-rules/', 'skills/', 'agents/', '.claude-plugin/']
 
 const base = process.argv[2] ?? 'origin/main'
 
@@ -33,14 +35,20 @@ try {
 }
 
 const changed = git('diff', '--name-only', `${mergeBase}..HEAD`).split('\n').filter(Boolean)
-const shipped = changed.filter(f => SHIPPED.some(p => f.startsWith(p)))
 
-if (shipped.length === 0) {
-  console.log('OK — no shipped content changed, version bump not required')
+if (changed.length === 0) {
+  console.log('OK — nothing changed, version bump not required')
   process.exit(0)
 }
 
-const current = JSON.parse(readFileSync(join(ROOT, MANIFEST), 'utf8')).version
+let current
+try {
+  current = JSON.parse(readFileSync(join(ROOT, MANIFEST), 'utf8')).version
+} catch (err) {
+  console.error(`${MANIFEST} is missing or not valid JSON: ${err.message}`)
+  process.exit(2)
+}
+
 let previous
 try {
   previous = JSON.parse(git('show', `${mergeBase}:${MANIFEST}`)).version
@@ -50,17 +58,19 @@ try {
 }
 
 if (current === previous) {
-  console.error(`Shipped content changed but plugin.json version is still ${current}.`)
+  console.error(`${changed.length} file(s) changed but plugin.json version is still ${current}.`)
   console.error('')
   console.error('Claude Code keys its plugin cache on this string. Without a bump, installed')
   console.error('copies stay on the old content and report themselves as up to date.')
   console.error('')
-  console.error(`Changed under ${SHIPPED.join(', ')}:`)
-  for (const f of shipped.slice(0, 20)) console.error(`  - ${f}`)
-  if (shipped.length > 20) console.error(`  … and ${shipped.length - 20} more`)
+  for (const f of changed.slice(0, 20)) console.error(`  - ${f}`)
+  if (changed.length > 20) console.error(`  … and ${changed.length - 20} more`)
   console.error('')
-  console.error(`Bump the "version" field in ${MANIFEST} (PATCH for fixes, MINOR for new rules or modules).`)
+  console.error(`Bump the "version" field in ${MANIFEST}:`)
+  console.error('  PATCH (2.1.0 -> 2.1.1) for fixes, wording, and documentation')
+  console.error('  MINOR (2.1.1 -> 2.2.0) for new rules or modules')
+  console.error('  MAJOR for changes that invalidate existing rule IDs or reports')
   process.exit(1)
 }
 
-console.log(`OK — ${shipped.length} shipped file(s) changed, version ${previous} → ${current}`)
+console.log(`OK — ${changed.length} file(s) changed, version ${previous} → ${current}`)
