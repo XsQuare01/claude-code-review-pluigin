@@ -51,7 +51,17 @@ To remove it:
 
 The plugin sets an explicit `version` in `.claude-plugin/plugin.json`, and Claude Code uses that string as its **cache key**. An installed copy only updates when the version changes — pushing commits under the same version leaves every install stale, and every surface reports health: `claude plugin list` shows the expected version, `claude plugin details` lists all seven skills, and a marketplace refresh says it succeeded. Nothing surfaces the mismatch.
 
-So the version must be bumped on every change that ships: MINOR for new rules or modules, PATCH for fixes and wording. `scripts/check-version-bump.mjs` enforces this in CI — a pull request that touches `review-rules/`, `skills/`, `agents/`, or `.claude-plugin/` without bumping the version fails.
+So **every change bumps the version** — documentation included.
+
+| Part | When |
+|------|------|
+| PATCH (`2.1.0` → `2.1.1`) | fixes, wording, documentation |
+| MINOR (`2.1.1` → `2.2.0`) | new rules or modules |
+| MAJOR | changes that invalidate existing rule IDs or past reports |
+
+`scripts/check-version-bump.mjs` enforces this in CI: any pull request whose diff is non-empty must change the version, or the check fails.
+
+Deciding per-change whether something "really ships" is a judgment call, and a judgment call is where the exception that breaks the rule gets made. A spare patch number costs nothing; a stale install costs an hour of reviewing against the wrong rules.
 
 `version` lives in `plugin.json` only. The marketplace entry deliberately omits it: `plugin.json` wins when both are set, so a second copy can only drift.
 
