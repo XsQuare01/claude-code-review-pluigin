@@ -296,8 +296,12 @@ function conditionKeywords(qualifier) {
     const listed = (market.plugins ?? []).find(p => p.name === plugin.name)
     if (!listed) {
       fail('manifest', `marketplace.json: does not list plugin "${plugin.name}"`)
-    } else if (listed.version && listed.version !== plugin.version) {
-      fail('manifest', `marketplace.json lists version ${listed.version}, plugin.json says ${plugin.version}`)
+    } else if (listed.version !== undefined) {
+      // plugin.json wins when both are set, so a second copy can only drift out of sync.
+      fail('manifest', `marketplace.json: remove "version" from the plugin entry — plugin.json is the single source (currently ${listed.version} vs ${plugin.version})`)
+    }
+    if (!/^\d+\.\d+\.\d+$/.test(plugin.version ?? '')) {
+      fail('manifest', `plugin.json: version must be MAJOR.MINOR.PATCH, got "${plugin.version}"`)
     }
   }
 

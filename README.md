@@ -25,23 +25,55 @@ To develop against a local checkout instead, point the marketplace at the direct
 ### Update and remove
 
 ```
-/plugin marketplace update react-code-review    # pull the latest rules
+/plugin marketplace update react-code-review                  # refresh the marketplace clone
+/plugin update react-code-review-plugin@react-code-review     # update the installed plugin
 /plugin uninstall react-code-review-plugin@react-code-review
 ```
 
-An installed plugin is pinned to the commit it was installed from. Updating the marketplace is what brings in new rules — editing the source repository does nothing on its own.
+**Both update commands are needed, and they do different things.** The first re-fetches the marketplace source; the second replaces the installed copy. Running only the first leaves the install untouched while reporting success — the plugin still runs the old rules.
+
+`/plugin update` with no argument is not a shortcut for this. It operates across marketplaces and can install plugins you did not ask for. Always name the plugin.
+
+### Versioning
+
+The plugin sets an explicit `version` in `.claude-plugin/plugin.json`, and Claude Code uses that string as its **cache key**. An installed copy only updates when the version changes — pushing commits under the same version leaves every install stale while `/plugin update` reports it is already current. Nothing surfaces the mismatch.
+
+So the version must be bumped on every change that ships: MINOR for new rules or modules, PATCH for fixes and wording. `scripts/check-version-bump.mjs` enforces this in CI — a pull request that touches `review-rules/`, `skills/`, `agents/`, or `.claude-plugin/` without bumping the version fails.
+
+`version` lives in `plugin.json` only. The marketplace entry deliberately omits it: `plugin.json` wins when both are set, so a second copy can only drift.
 
 ### Verify the install
 
-```bash
-# which commit is installed
-cat ~/.claude/plugins/installed_plugins.json
+**Is it installed and enabled?**
 
-# rule consistency, run against the installed copy
+```bash
+claude plugin list
+```
+
+Look for `react-code-review-plugin@react-code-review` with `Scope: user` and `Status: ✔ enabled`.
+
+**Did every component load?**
+
+```bash
+claude plugin details react-code-review-plugin@react-code-review
+```
+
+Expect `Skills (7)` and `Agents (1)`. The command also prints the always-on token cost the plugin adds to each session.
+
+**Is the installed copy current?** The two commands above cannot tell you this — a stale install still lists cleanly with all seven skills. Compare the installed commit against the source:
+
+```bash
+grep -o '"gitCommitSha": "[a-f0-9]*"' ~/.claude/plugins/installed_plugins.json
+git -C /path/to/claude-code-review-pluigin rev-parse HEAD
+```
+
+**Are the rules self-consistent?**
+
+```bash
 node ~/.claude/plugins/cache/react-code-review/react-code-review-plugin/*/scripts/validate-rules.mjs
 ```
 
-Then run `/code-review` once and check the rules directory the report cites. It must be the plugin path.
+**Is a review actually using them?** Run `/code-review` once and check the rules directory the report cites (`workflow-contract.md` C-1). It must be the plugin path — `~/.claude/review-rules` means it fell through to the stale fallback.
 
 > **Do not copy `skills/` and `review-rules/` into `~/.claude/`.** That was the old way to use this repo and it drifts: the copy stops receiving rule updates while still looking installed, and reviews quietly run against stale rules. It is also the trap the third fallback below creates. If a copy already exists at `~/.claude/skills/code-review*`, remove it after installing the plugin.
 
