@@ -22,8 +22,11 @@ const fail = (check, message) => problems.push({ check, message })
 const read = p => readFileSync(p, 'utf8')
 const rulesFile = name => read(join(RULES, name))
 
-/** Rule-ID-shaped tokens, e.g. 03-1, 10-SSOT, 16-8. */
-const RULE_ID = /(?<![\w-])(\d{2})-([A-Za-z][A-Za-z0-9]*|\d+)(?![\w-])/g
+/**
+ * Rule-ID-shaped tokens, e.g. 03-1, 10-SSOT, 16-8.
+ * The lookbehind rejects `path.ts:20-46` and `src/20-46`, which are line ranges, not rule ids.
+ */
+const RULE_ID = /(?<![\w\-:/.])(\d{2})-([A-Za-z][A-Za-z0-9]*|\d+)(?![\w-])/g
 /** Numbered module filenames, e.g. 03-react-rules.md */
 const MODULE_FILE = /\b\d{2}-[a-z0-9-]+\.md\b/g
 /** Section headings that declare a rule, e.g. "## 03-1. ..." or "### 10-SSOT (…)". */
