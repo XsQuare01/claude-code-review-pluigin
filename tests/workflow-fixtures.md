@@ -31,6 +31,8 @@ Run these by hand after changing the contract or any skill document. Record the 
 | 21 | C-3 | Full run where the diff touches no auth, payment, delete, or secret path | `18-dangerous-change` may be skipped by trigger, and the reason states what was looked for and not found — never skipped silently |
 | 22 | C-8 | Full run, one of the in-flight modules finishes far sooner than the others | The freed slot takes the next queued module immediately; it does not wait for the slower ones, and no more than four run at once |
 | 23 | C-8 | Full run that hits two or more timeouts / queue expiries | Failure classes and counts appear in the report, so the in-flight cap can be judged against evidence rather than guessed |
+| 24 | C-7 | Full run saves its report | H1 is `# 전체 코드 리뷰 리포트` and matches the `full` in the filename — set when writing begins, not corrected afterwards |
+| 25 | C-7 | Any finding in any workflow | Position is a verified post-change line number with the line's code quoted; a finding whose line cannot be confirmed says `위치 미확인` instead of guessing (`00-rule.md` 00-10) |
 
 ## Default-workflow-only scenarios
 
@@ -38,7 +40,7 @@ Run these by hand after changing the contract or any skill document. Record the 
 
 | # | Scenario | Expected |
 |---|----------|----------|
-| 24 | `--module fsd,type` | Only `01` and `02` run; the report states the filter and lists no other module as passing |
-| 25 | `--module 01,02,17` | Same selection by number |
-| 26 | `--module nope` | Review stops, names the unresolved token, lists available modules — it does not fall back to a full pass |
-| 27 | `--module 00` | Explains that common rules always apply, and asks whether a common-rules-only pass was intended |
+| 26 | `--module fsd,type` | Only `01` and `02` run; the report states the filter and lists no other module as passing |
+| 27 | `--module 01,02,17` | Same selection by number |
+| 28 | `--module nope` | Review stops, names the unresolved token, lists available modules — it does not fall back to a full pass |
+| 29 | `--module 00` | Explains that common rules always apply, and asks whether a common-rules-only pass was intended |
