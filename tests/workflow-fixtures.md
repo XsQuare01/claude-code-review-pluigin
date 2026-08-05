@@ -33,6 +33,9 @@ Run these by hand after changing the contract or any skill document. Record the 
 | 23 | C-8 | Full run that hits two or more timeouts / queue expiries | Failure classes and counts appear in the report, so the in-flight cap can be judged against evidence rather than guessed |
 | 24 | C-7 | Full run saves its report | H1 is `# 전체 코드 리뷰 리포트` and matches the `full` in the filename — set when writing begins, not corrected afterwards |
 | 25 | C-7 | Any finding in any workflow | Position is a verified post-change line number with the line's code quoted; a finding whose line cannot be confirmed says `위치 미확인` instead of guessing (`00-rule.md` 00-10) |
+| 26 | C-7 | A project or user config names a document location (`CLAUDE.md` and similar) | The report is saved there rather than `./review-reports/`, and the path is reported — this is not a violation |
+| 27 | C-7 | Two reports for different branches sit in the same folder | Each H1 names its branch, so they are distinguishable without opening the filenames |
+| 28 | C-8 | Any finding that claims something is absent or possible | It states what was checked; where the check could not extend past the diff it says `확인 필요` instead of asserting (`00-rule.md` 00-11) |
 
 ## Default-workflow-only scenarios
 
@@ -40,7 +43,7 @@ Run these by hand after changing the contract or any skill document. Record the 
 
 | # | Scenario | Expected |
 |---|----------|----------|
-| 26 | `--module fsd,type` | Only `01` and `02` run; the report states the filter and lists no other module as passing |
-| 27 | `--module 01,02,17` | Same selection by number |
-| 28 | `--module nope` | Review stops, names the unresolved token, lists available modules — it does not fall back to a full pass |
-| 29 | `--module 00` | Explains that common rules always apply, and asks whether a common-rules-only pass was intended |
+| 29 | `--module fsd,type` | Only `01` and `02` run; the report states the filter and lists no other module as passing |
+| 30 | `--module 01,02,17` | Same selection by number |
+| 31 | `--module nope` | Review stops, names the unresolved token, lists available modules — it does not fall back to a full pass |
+| 32 | `--module 00` | Explains that common rules always apply, and asks whether a common-rules-only pass was intended |
