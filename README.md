@@ -55,9 +55,11 @@ So **every change bumps the version** — documentation included.
 
 | Part | When |
 |------|------|
-| PATCH (`2.1.0` → `2.1.1`) | fixes, wording, documentation |
-| MINOR (`2.1.1` → `2.2.0`) | new rules or modules |
+| PATCH (`2.2.0` → `2.2.1`) | **the default.** Fixes, wording, documentation, new or reworded rules inside an existing module, tuning an existing workflow |
+| MINOR (`2.2.1` → `2.3.0`) | a new rule module file, or a workflow gaining a capability it did not have — a new command, a new flag |
 | MAJOR | changes that invalidate existing rule IDs or past reports |
+
+When unsure, use PATCH. The version here is a cache key and a change signal, not a compatibility contract — nothing resolves it as a dependency range, so an over-large bump communicates something that did not happen, while an extra patch number costs nothing.
 
 `scripts/check-version-bump.mjs` enforces this in CI: any pull request whose diff is non-empty must change the version, or the check fails.
 

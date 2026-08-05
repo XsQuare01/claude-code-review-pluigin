@@ -67,9 +67,11 @@ if (current === previous) {
   if (changed.length > 20) console.error(`  … and ${changed.length - 20} more`)
   console.error('')
   console.error(`Bump the "version" field in ${MANIFEST}:`)
-  console.error('  PATCH (2.1.0 -> 2.1.1) for fixes, wording, and documentation')
-  console.error('  MINOR (2.1.1 -> 2.2.0) for new rules or modules')
+  console.error('  PATCH (2.2.0 -> 2.2.1) is the default — fixes, wording, docs,')
+  console.error('        new rules inside an existing module, workflow tuning')
+  console.error('  MINOR (2.2.1 -> 2.3.0) a new rule module file, or a new command or flag')
   console.error('  MAJOR for changes that invalidate existing rule IDs or reports')
+  console.error('  When unsure, use PATCH.')
   process.exit(1)
 }
 
