@@ -100,7 +100,56 @@ node ~/.claude/plugins/cache/react-code-review/react-code-review-plugin/*/script
 
 **Is a review actually using them?** Run `/code-review` once and check the rules directory the report cites (`workflow-contract.md` C-1). It must be the plugin path — `~/.claude/review-rules` means it fell through to the stale fallback.
 
-> **Do not copy `skills/` and `review-rules/` into `~/.claude/`.** That was the old way to use this repo and it drifts: the copy stops receiving rule updates while still looking installed, and reviews quietly run against stale rules. It is also the trap the third fallback below creates. If a copy already exists at `~/.claude/skills/code-review*`, remove it after installing the plugin.
+> **Do not copy `skills/` and `review-rules/` into `~/.claude/`.** That was the old way to use this repo and it drifts: the copy stops receiving rule updates while still looking installed, and reviews quietly run against stale rules. It is also the trap the third fallback below creates. If a copy already exists at `~/.claude/skills/code-review*`, remove it after installing the plugin — see [Troubleshooting](#troubleshooting).
+
+### Troubleshooting
+
+**Two sets of `/code-review` commands appear, or a report cites rule IDs this repo does not have.**
+
+An older manual copy under `~/.claude/` is installed alongside the plugin. Home skills load under their bare name while plugin skills are namespaced, so `/code-review` resolves to the copy and the plugin's commands sit behind the `react-code-review-plugin:` prefix — the copy wins the name you actually type. A copy predating the current inventory is worse than stale: under the old `00`–`12` numbering `03` meant state rules, where it now means React runtime rules, so its findings cannot be traced against current rule text at all.
+
+Detect it — any output means the copy is present:
+
+```bash
+ls -d ~/.claude/skills/code-review* ~/.claude/review-rules 2>/dev/null
+```
+
+The plugin needs neither path. Remove them and reload:
+
+```bash
+rm -rf ~/.claude/skills/code-review* ~/.claude/review-rules
+```
+
+```
+/reload-skills
+```
+
+Keep the copy only if it holds edits that were never pushed here — diff it against this repository before deleting.
+
+Removing the copy does **not** hand the bare `/code-review` name to this plugin. Claude Code ships its own `code-review` skill, so that name resolves to the built-in review while this plugin's default pass is `react-code-review-plugin:code-review`. The other six commands — `code-review-full`, `-fast`, `-commit`, `-props`, `-math`, `-exception` — are unique to this plugin and work unprefixed. When a report's rules directory or heading looks wrong, check which of the two you invoked before suspecting the install.
+
+**`EBUSY: resource busy or locked` when adding the marketplace.**
+
+```
+Error: Failed to finalize marketplace cache. Please manually delete the directory at
+C:\Users\<you>\.claude\plugins\marketplaces\react-code-review if it exists and try again.
+
+Technical details: EBUSY: resource busy or locked, rename
+'...\marketplaces\XsQuare01-claude-code-review-pluigin' -> '...\marketplaces\react-code-review'
+```
+
+The marketplace is named `react-code-review` while the repository is named `claude-code-review-pluigin`, so `marketplace add` clones into a directory named after the repo and then renames it to the marketplace name. On Windows that rename fails while anything still holds the destination — a previous partial add, an editor, a file watcher, or an indexer. Delete the directory the error names and add it again:
+
+```bash
+rm -rf ~/.claude/plugins/marketplaces/react-code-review
+```
+
+```
+/plugin marketplace add XsQuare01/claude-code-review-pluigin
+/plugin install react-code-review-plugin@react-code-review
+```
+
+The install itself is unaffected by the failed rename — a marketplace that never finalized simply is not there, so nothing partial is left behind to clean up beyond that directory.
 
 ## React version support
 
@@ -224,6 +273,7 @@ The third entry is a fallback for older setups, and it is the one that bites: if
 claude-code-review-plugin/
 ├── .claude-plugin/plugin.json
 ├── .github/workflows/validate.yml
+├── LICENSE
 ├── scripts/validate-rules.mjs
 ├── tests/workflow-fixtures.md
 ├── agents/correctness-reviewer.md
