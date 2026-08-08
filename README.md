@@ -229,6 +229,15 @@ The contract exists because the alternative had already failed: the same procedu
 
 A module whose profile does not hold is reported as `SKIPPED` with a reason. It is never silently dropped and never counted as passing — a rule that was not run and a rule that found nothing are different outcomes.
 
+Each profile carries the **signals that establish it** in `profiles[].detect`, so a skip rests on something found rather than on an impression about the stack. A signal is a dependency, a file glob, a string with a search scope, a set of directories with a minimum match count, or another profile that implies this one; signals combine under `any` / `all`. The matched signal is recorded in the report (`workflow-contract.md` C-3), which is what makes a skip auditable.
+
+Two properties of that list are load-bearing:
+
+- **A missed profile costs as much as a false positive.** A module skipped because its signal never matched reads exactly like a module that found nothing. Where a plausible-looking check would produce that outcome, the profile records it in `cautions` — `tailwind` exists because a `tailwind.config` check skips styling review on every Tailwind 4 project, which configures through CSS and ships no config file.
+- **What cannot be detected says so.** `contract-provider` sets `detect: "declared"`: whether anything outside this repository consumes a contract is a fact about the outside world. It comes from the user or project config, never from inference, and its `hints` justify asking rather than concluding.
+
+`scripts/validate-rules.mjs` enforces the shape — a profile with no `detect`, a mistyped signal key, a `content` signal with no search scope, a `dirs` signal with no threshold, a reference to an undefined profile, a reference cycle, or a profile no module requires all fail the `catalog` check.
+
 ## Rule IDs
 
 Every finding carries an ID that matches its source file, so a report can always be traced back to the rule text.
@@ -317,7 +326,7 @@ It checks the properties this repo promises but cannot hold by hand:
 | `skill` | a skill that does not defer to the contract, declares an unregistered `workflow-name`, or points at a missing rule document |
 | `fast-sync` | a missing digest section, a conditional rule whose severity or applicability was lost in compression, a stale module range |
 | `hardcoded-path` | `~/.claude/review-rules` re-introduced into a skill instead of using the resolution order |
-| `catalog` | a module with no catalog entry, an entry pointing at a missing file, an undefined profile |
+| `catalog` | a module with no catalog entry, an entry pointing at a missing file, an undefined profile, a profile with no detection signal, a mistyped or incomplete signal, a profile reference cycle, a profile no module requires |
 | `manifest` | missing manifest fields, plugin/marketplace disagreement, skill frontmatter without name or description |
 | `fixtures` | a contract clause with no scenario in `tests/workflow-fixtures.md` |
 

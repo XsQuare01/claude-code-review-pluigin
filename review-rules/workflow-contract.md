@@ -37,8 +37,12 @@ ls "$RULES_DIR"/[0-9]*.md
 
 - 각 모듈 문서 상단의 전제(FSD, Electron, Tailwind, RSC, SSR, React/TypeScript 버전 등)를 먼저 확인한다
 - `$RULES_DIR/catalog.json`에 모듈별 적용 조건이 기계 판독 가능한 형태로 정리돼 있다. 조건 판정에는 이 파일을 우선 참조하고, 판정 근거의 정본은 각 모듈 문서 본문이다
+- **profile 성립 여부는 `profiles[].detect`의 신호로 판정한다.** 신호는 `dependency`(package.json 의존성), `file`(글롭), `content`(문자열 — `in`이 탐색 범위), `dirs`(`min`개 이상 존재), `profile`(다른 profile이 함의함)이며 `any`/`all`로 결합된다. 프레임워크 이름에 대한 인상이 아니라 찾은 것에 근거한다
+- **매칭된 신호를 리포트에 한 줄로 남긴다** — 예: `tailwind: dependency tailwindcss 매칭`. 어떤 신호도 매칭되지 않았으면 그것을 `SKIPPED` 사유로 적는다. 무엇을 찾아봤는지 없는 SKIP은 검증할 수 없다
+- `detect`가 `"declared"`인 profile은 **추론하지 않는다.** 사용자 요청이나 프로젝트 설정에 선언이 없으면 성립하지 않는 것으로 본다. `hints`는 사용자에게 물어볼 근거일 뿐 판정 근거가 아니다
 - 전제가 성립하지 않는 모듈은 지적을 만들지 말고 `SKIPPED`와 사유를 리포트에 남긴다. **조용히 빼지 않는다** — 빠진 사실이 보이지 않으면 검토된 것으로 오인된다
 - 전제를 확인할 수 없으면(설정 파일 부재 등) 그 모듈은 적용하지 않고 `UNKNOWN`으로 기록한다
+- **누락 판정은 오탐과 같은 비용이다.** profile을 놓쳐 SKIP된 모듈은 리포트에서 "지적 없음"과 구분되지 않는다. `catalog.json`의 `cautions`는 실제로 관측된 오판정을 기록한 것이므로 해당 profile을 판정할 때 함께 읽는다
 
 ## C-4. 리뷰 범위 결정
 

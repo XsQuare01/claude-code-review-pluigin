@@ -38,6 +38,11 @@ Run these by hand after changing the contract or any skill document. Record the 
 | 28 | C-8 | Any finding that claims something is absent or possible | It states what was checked; where the check could not extend past the diff it says `확인 필요` instead of asserting (`00-rule.md` 00-11) |
 | 29 | C-7 | Three full runs on different branches | All three have the same section names, order, and heading levels — the skeleton does not vary per run |
 | 30 | C-7 | A module sub-agent returns its own `##` headings | The orchestrator normalises them into the skeleton; finding count, wording, severity, rule IDs and source labels are unchanged |
+| 31 | C-3 | Tailwind 4 project — configured in CSS, no `tailwind.config` file | `11-styling.md` **applies**; the report names the signal that matched (`dependency tailwindcss`, or the `@import "tailwindcss"` entry point). A `SKIPPED` here is the false negative `cautions` warns about |
+| 32 | C-3 | `'use server'` Server Functions present, no `'use client'` and no RSC framework | `server-code` holds (`17-5`–`17-7` apply); `rsc` does not (`21-rsc.md` is `SKIPPED`) — the directive is not read as RSC evidence |
+| 33 | C-3 | Nothing declares that another codebase consumes this repository's contract | `contract-provider` does not hold, `16-5`–`16-7` produce no findings, and the reason states the profile was never declared — it is not inferred from `exports` or a checked-in schema |
+| 34 | C-3 | `src/` contains only `shared/` and `features/` | `fsd` does not hold — two layer-shaped directories are below the `min` of 3, so `01-fsd.md` is `SKIPPED` rather than applying layering rules to a non-FSD tree |
+| 35 | C-3 | Any profile decision, applied or skipped | The matched signal (or the fact that none matched) appears in the report, so the decision can be checked against `catalog.json` without re-running the review |
 | 31 | C-7 | A report has two findings under the same rule ID | They read `17-3 (1/2)` and `17-3 (2/2)`, so a follow-up question about `17-3` is answerable (`00-rule.md` 00-2) |
 
 ## Default-workflow-only scenarios

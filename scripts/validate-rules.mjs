@@ -257,6 +257,122 @@ function conditionKeywords(qualifier) {
   const entries = catalog.modules ?? []
   const byPath = new Map(entries.map(e => [e.path, e]))
 
+  // 8a. every profile says how it is detected, so a skip rests on a signal rather than an impression
+  const LEAF = ['dependency', 'file', 'content', 'dirs', 'profile']
+  const LEAF_EXTRA = ['in', 'under', 'min', 'notes']
+  const PROFILE_KEYS = ['description', 'detect', 'cautions', 'declaredBy', 'hints', 'hintsNote', 'implicit']
+
+  const checkSignal = (node, where) => {
+    if (!node || typeof node !== 'object' || Array.isArray(node)) {
+      fail('catalog', `${where}: detect signal must be an object`)
+      return
+    }
+    const keys = Object.keys(node)
+    const combinator = keys.find(k => k === 'any' || k === 'all')
+    if (combinator) {
+      if (keys.length !== 1) {
+        fail('catalog', `${where}: "${combinator}" must be the only key, found ${keys.join(', ')}`)
+      }
+      if (!Array.isArray(node[combinator]) || node[combinator].length === 0) {
+        fail('catalog', `${where}: "${combinator}" must be a non-empty array`)
+        return
+      }
+      node[combinator].forEach((branch, i) => checkSignal(branch, `${where}.${combinator}[${i}]`))
+      return
+    }
+    const found = keys.filter(k => LEAF.includes(k))
+    if (found.length !== 1) {
+      fail('catalog', `${where}: a leaf signal needs exactly one of ${LEAF.join('|')}, found ${keys.join(', ') || 'nothing'}`)
+      return
+    }
+    for (const k of keys) {
+      if (!LEAF.includes(k) && !LEAF_EXTRA.includes(k)) {
+        fail('catalog', `${where}: unknown key "${k}" — a typo here silently never matches`)
+      }
+    }
+    if (found[0] === 'content' && !node.in) {
+      fail('catalog', `${where}: a "content" signal must say where to look with "in"`)
+    }
+    if (found[0] === 'dirs') {
+      if (!Array.isArray(node.dirs) || node.dirs.length === 0) {
+        fail('catalog', `${where}: "dirs" must be a non-empty array`)
+      } else if (!Number.isInteger(node.min) || node.min < 1 || node.min > node.dirs.length) {
+        fail('catalog', `${where}: "dirs" needs an integer "min" between 1 and ${node.dirs.length}, got ${node.min}`)
+      }
+    }
+    if (found[0] === 'profile' && !profiles.has(node.profile)) {
+      fail('catalog', `${where}: references undefined profile "${node.profile}"`)
+    }
+  }
+
+  const referencedProfiles = (node, out = []) => {
+    if (!node || typeof node !== 'object') return out
+    if (Array.isArray(node)) {
+      for (const n of node) referencedProfiles(n, out)
+      return out
+    }
+    if (typeof node.profile === 'string') out.push(node.profile)
+    referencedProfiles(node.any, out)
+    referencedProfiles(node.all, out)
+    return out
+  }
+
+  for (const [name, profile] of Object.entries(catalog.profiles ?? {})) {
+    const where = `catalog.json: profile "${name}"`
+    if (typeof profile !== 'object' || profile === null || Array.isArray(profile)) {
+      fail('catalog', `${where}: must be an object with "description" and "detect"`)
+      continue
+    }
+    for (const k of Object.keys(profile)) {
+      if (!PROFILE_KEYS.includes(k)) fail('catalog', `${where}: unknown key "${k}"`)
+    }
+    if (!profile.description) fail('catalog', `${where}: missing "description"`)
+    if (profile.detect === undefined) {
+      fail('catalog', `${where}: missing "detect" — a profile with no signal is judged by impression`)
+    } else if (profile.detect === 'declared') {
+      if (!profile.declaredBy) {
+        fail('catalog', `${where}: detect "declared" must say who declares it in "declaredBy"`)
+      }
+    } else if (typeof profile.detect === 'string') {
+      fail('catalog', `${where}: "detect" must be a signal object, or the string "declared"`)
+    } else {
+      checkSignal(profile.detect, `${where}.detect`)
+    }
+  }
+
+  // a profile reference cycle would make detection non-terminating
+  for (const name of profiles) {
+    const seen = new Set()
+    const walk = (current, trail) => {
+      for (const ref of referencedProfiles(catalog.profiles[current]?.detect)) {
+        if (ref === name) {
+          fail('catalog', `catalog.json: profile reference cycle ${[...trail, ref].join(' -> ')}`)
+          return
+        }
+        if (seen.has(ref)) continue
+        seen.add(ref)
+        walk(ref, [...trail, ref])
+      }
+    }
+    walk(name, [name])
+  }
+
+  // a profile no module requires is dead weight that drifts out of step with the modules
+  {
+    const required = new Set()
+    for (const entry of entries) {
+      for (const p of entry.requires ?? []) required.add(p)
+      for (const part of entry.partial ?? []) for (const p of part.requires ?? []) required.add(p)
+    }
+    for (const [name, profile] of Object.entries(catalog.profiles ?? {})) {
+      const impliedBy = [...profiles].some(other =>
+        other !== name && referencedProfiles(catalog.profiles[other]?.detect).includes(name))
+      if (!required.has(name) && !profile?.implicit && !impliedBy) {
+        fail('catalog', `catalog.json: profile "${name}" is required by no module — remove it or mark it "implicit": true`)
+      }
+    }
+  }
+
   for (const entry of entries) {
     if (!existsSync(join(RULES, entry.path))) {
       fail('catalog', `catalog.json: entry "${entry.id}" points at missing file ${entry.path}`)
