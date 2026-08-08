@@ -31,7 +31,7 @@ Run these by hand after changing the contract or any skill document. Record the 
 | 21 | C-3 | Full run where the diff touches no auth, payment, delete, or secret path | `18-dangerous-change` may be skipped by trigger, and the reason states what was looked for and not found — never skipped silently |
 | 22 | C-8 | Full run, one of the in-flight modules finishes far sooner than the others | The freed slot takes the next queued module immediately; it does not wait for the slower ones, and no more than four run at once |
 | 23 | C-8 | Full run that hits two or more timeouts / queue expiries | Failure classes and counts appear in the report, so the in-flight cap can be judged against evidence rather than guessed |
-| 24 | C-7 | Full run saves its report | H1 is `# 전체 코드 리뷰 리포트` and matches the `full` in the filename — set when writing begins, not corrected afterwards |
+| 24 | C-7 | Full run on branch `feat/x` saves its report | H1 is ``# `feat/x` 전체 코드 리뷰 리포트`` — target **and** workflow name, matching the `full` in the filename, set when writing begins rather than corrected afterwards |
 | 25 | C-7 | Any finding in any workflow | Position is a verified post-change line number with the line's code quoted; a finding whose line cannot be confirmed says `위치 미확인` instead of guessing (`00-rule.md` 00-10) |
 | 26 | C-7 | A project or user config names a document location (`CLAUDE.md` and similar) | The report is saved there rather than `./review-reports/`, and the path is reported — this is not a violation |
 | 27 | C-7 | Two reports for different branches sit in the same folder | Each H1 names its branch, so they are distinguishable without opening the filenames |
@@ -43,6 +43,8 @@ Run these by hand after changing the contract or any skill document. Record the 
 | 33 | C-3 | Nothing declares that another codebase consumes this repository's contract | `contract-provider` does not hold, `16-5`–`16-7` produce no findings, and the reason states the profile was never declared — it is not inferred from `exports` or a checked-in schema |
 | 34 | C-3 | `src/` contains only `shared/` and `features/` | `fsd` does not hold — two layer-shaped directories are below the `min` of 3, so `01-fsd.md` is `SKIPPED` rather than applying layering rules to a non-FSD tree |
 | 35 | C-3 | Any profile decision, applied or skipped | The matched signal (or the fact that none matched) appears in the report, so the decision can be checked against `catalog.json` without re-running the review |
+| 36 | C-7 | User asks for the report in a language other than Korean | Section names and finding prose follow the request; rule IDs, paths, code quotes, severity markers and the status tokens (`SKIPPED`, `UNKNOWN`, `위치 미확인`, `확인 필요`) are unchanged, and `리뷰 기준` records the language used (`00-rule.md` 00-6) |
+| 37 | C-7 | Correctness agent runs alongside a rule-based pass | Its findings carry `CR-{n}` IDs, never a module ID, and sit in the same skeleton with a verified line and quote like any other finding |
 | 31 | C-7 | A report has two findings under the same rule ID | They read `17-3 (1/2)` and `17-3 (2/2)`, so a follow-up question about `17-3` is answerable (`00-rule.md` 00-2) |
 
 ## Default-workflow-only scenarios

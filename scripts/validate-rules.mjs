@@ -419,19 +419,73 @@ function conditionKeywords(qualifier) {
       // plugin.json wins when both are set, so a second copy can only drift out of sync.
       fail('manifest', `marketplace.json: remove "version" from the plugin entry — plugin.json is the single source (currently ${listed.version} vs ${plugin.version})`)
     }
+    // the same reasoning applies to every other version string in this file: nothing
+    // reads them, nothing bumps them, and a stale one contradicts the documented rule
+    for (const [where, value] of [['top-level', market.version], ['"metadata"', market.metadata?.version]]) {
+      if (value !== undefined) {
+        fail('manifest', `marketplace.json: remove the ${where} "version" (${value}) — plugin.json is the single source and this copy only goes stale`)
+      }
+    }
     if (!/^\d+\.\d+\.\d+$/.test(plugin.version ?? '')) {
       fail('manifest', `plugin.json: version must be MAJOR.MINOR.PATCH, got "${plugin.version}"`)
     }
   }
 
   // package smoke check: the pieces a working install needs
-  for (const required of ['review-rules', 'skills', '.claude-plugin/plugin.json', 'README.md']) {
+  for (const required of ['review-rules', 'skills', 'agents', 'LICENSE', '.claude-plugin/plugin.json', 'README.md']) {
     if (!existsSync(join(ROOT, required))) fail('manifest', `packaged plugin is missing ${required}`)
   }
   for (const dir of skillDirs) {
     const front = read(join(SKILLS, dir, 'SKILL.md')).split('---')[1] ?? ''
     if (!/^\s*name:\s*\S+/m.test(front)) fail('manifest', `skills/${dir}/SKILL.md: frontmatter has no name`)
     if (!/^\s*description:\s*\S+/m.test(front)) fail('manifest', `skills/${dir}/SKILL.md: frontmatter has no description`)
+  }
+}
+
+// ------------------------------------------------------------------ agents
+
+// An agent produces findings that land in the same report as a module's, so it is
+// held to the same contract. The one that shipped outside it referenced no clause,
+// no ID convention, and no read-only rule — nothing in the tree said it should.
+const AGENTS = join(ROOT, 'agents')
+const agentFiles = existsSync(AGENTS) ? readdirSync(AGENTS).filter(f => f.endsWith('.md')).sort() : []
+
+{
+  if (agentFiles.length === 0) fail('agent', 'agents/ contains no agent document')
+
+  const commonRules = rulesFile('00-rule.md')
+  const readmeText = read(join(ROOT, 'README.md'))
+
+  for (const file of agentFiles) {
+    const text = read(join(AGENTS, file))
+    const where = `agents/${file}`
+
+    const front = text.split('---')[1] ?? ''
+    if (!/^\s*name:\s*\S+/m.test(front)) fail('agent', `${where}: frontmatter has no name`)
+    if (!/^\s*description:\s*\S+/m.test(front)) fail('agent', `${where}: frontmatter has no description`)
+
+    if (!text.includes('workflow-contract.md')) {
+      fail('agent', `${where}: does not defer to workflow-contract.md`)
+    }
+    for (const clause of ['00-9', '00-10', '00-11']) {
+      if (!text.includes(clause)) {
+        fail('agent', `${where}: does not say how it follows ${clause} — findings from it reach the same report`)
+      }
+    }
+
+    // a finding ID has to be traceable back to something; an unregistered prefix is not
+    const prefixes = [...new Set([...text.matchAll(/\b([A-Z]{2,3})-\{/g)].map(m => m[1]))]
+    if (prefixes.length === 0) {
+      fail('agent', `${where}: declares no finding ID prefix`)
+    }
+    for (const prefix of prefixes) {
+      if (!commonRules.includes(`${prefix}-{`)) {
+        fail('agent', `${where}: ID prefix ${prefix}- is not registered in 00-rule.md 00-2`)
+      }
+      if (!readmeText.includes(`${prefix}-{n}`)) {
+        fail('agent', `${where}: ID prefix ${prefix}- is missing from the README rule-ID table`)
+      }
+    }
   }
 }
 
@@ -467,7 +521,7 @@ for (const p of problems) {
 }
 
 if (problems.length === 0) {
-  console.log(`OK — ${moduleFiles.length} numbered modules, ${ruleMeta.size} rules, ${skillDirs.length} skills`)
+  console.log(`OK — ${moduleFiles.length} numbered modules, ${ruleMeta.size} rules, ${skillDirs.length} skills, ${agentFiles.length} agent(s)`)
   process.exit(0)
 }
 

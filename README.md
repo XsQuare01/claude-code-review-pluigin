@@ -249,6 +249,9 @@ Every finding carries an ID that matches its source file, so a report can always
 | Exception | `EX-{n}` | `EX-3` |
 | Props | `P-{n}` | `P-5` |
 | Math | `A-{n}` / `C-{n}` | `A-2`, `C-5` |
+| Correctness agent | `CR-{n}` | `CR-2` |
+
+`CR-` is a separate namespace on purpose. The correctness pass argues from the PR's stated intent rather than from a rule document, so borrowing a module's ID would send the reader to rule text that says nothing about the finding.
 
 ## Report output
 
@@ -276,6 +279,8 @@ The third entry is a fallback for older setups, and it is the one that bites: if
 
 `agents/correctness-reviewer.md` is an optional evidence-first correctness reviewer (does the implementation match the PR's stated intent across all branches?). It is not part of the default workflows — invoke it explicitly when you want a correctness pass alongside the rule-based review.
 
+It answers a question the rule modules do not: a module asks whether the code breaks a rule, this pass asks whether the code does what the PR says it does. Because its findings land in the same report, it is bound by the same contract — read-only execution (`00-9`), verified line numbers with a quoted line (`00-10`), and stated search scope behind any absence claim (`00-11`) — and its findings carry `CR-{n}` IDs. The `agent` check in `scripts/validate-rules.mjs` enforces that: an agent document that cites no contract clause, or uses an ID prefix registered nowhere, fails the build. Being outside the workflows is a scoping decision; being outside the contract was an oversight.
+
 ## Directory structure
 
 ```text
@@ -285,6 +290,7 @@ claude-code-review-plugin/
 ├── LICENSE
 ├── scripts/validate-rules.mjs
 ├── tests/workflow-fixtures.md
+├── docs/                          # design records, not current state
 ├── agents/correctness-reviewer.md
 ├── skills/
 │   ├── code-review/SKILL.md
@@ -327,7 +333,8 @@ It checks the properties this repo promises but cannot hold by hand:
 | `fast-sync` | a missing digest section, a conditional rule whose severity or applicability was lost in compression, a stale module range |
 | `hardcoded-path` | `~/.claude/review-rules` re-introduced into a skill instead of using the resolution order |
 | `catalog` | a module with no catalog entry, an entry pointing at a missing file, an undefined profile, a profile with no detection signal, a mistyped or incomplete signal, a profile reference cycle, a profile no module requires |
-| `manifest` | missing manifest fields, plugin/marketplace disagreement, skill frontmatter without name or description |
+| `manifest` | missing manifest fields, plugin/marketplace disagreement, a second `version` string anywhere in `marketplace.json`, a packaged directory that is absent, skill frontmatter without name or description |
+| `agent` | an agent document that cites no contract clause, states no read-only/position/absence handling, or uses a finding ID prefix registered in neither `00-rule.md` nor this README |
 | `fixtures` | a contract clause with no scenario in `tests/workflow-fixtures.md` |
 
 **What it does not check.** Whether a workflow actually behaves as the contract says. A review workflow is prose executed by a language model, so its behaviour can only be observed by running a review. `tests/workflow-fixtures.md` lists those scenarios with expected outcomes for manual runs; the validator keeps that checklist in step with the contract but cannot execute it.
