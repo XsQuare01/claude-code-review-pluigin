@@ -332,7 +332,7 @@ It checks the properties this repo promises but cannot hold by hand:
 | `skill` | a skill that does not defer to the contract, declares an unregistered `workflow-name`, or points at a missing rule document |
 | `fast-sync` | a missing digest section, a conditional rule whose severity or applicability was lost in compression, a stale module range |
 | `hardcoded-path` | `~/.claude/review-rules` re-introduced into a skill instead of using the resolution order |
-| `catalog` | a module with no catalog entry, an entry pointing at a missing file, an undefined profile, a profile with no detection signal, a mistyped or incomplete signal, a profile reference cycle, a profile no module requires |
+| `catalog` | a module with no catalog entry, an entry pointing at a missing file, an undefined profile, a profile with no detection signal, a mistyped or incomplete signal, a profile reference cycle, a profile no module requires, workflow membership that disagrees with the module set a skill declares it loads |
 | `manifest` | missing manifest fields, plugin/marketplace disagreement, a second `version` string anywhere in `marketplace.json`, a packaged directory that is absent, skill frontmatter without name or description |
 | `agent` | an agent document that cites no contract clause, states no read-only/position/absence handling, or uses a finding ID prefix registered in neither `00-rule.md` nor this README |
 | `fixtures` | a contract clause with no scenario in `tests/workflow-fixtures.md` |

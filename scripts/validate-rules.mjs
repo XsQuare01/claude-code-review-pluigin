@@ -395,6 +395,57 @@ function conditionKeywords(qualifier) {
   for (const file of allFiles.filter(f => f.endsWith('.md') && f !== 'workflow-contract.md')) {
     if (!byPath.has(file)) fail('catalog', `catalog.json: no entry for ${file}`)
   }
+
+  // 8b. workflow membership must match what each skill says it loads.
+  // Nothing tied the two together, so both drifted — in opposite directions, which is
+  // why neither showed up as an obviously wrong total: `commit` was missing from every
+  // numbered module it loads, and `fast` was present on all 21 it never loads.
+  {
+    const numbered = entries.filter(e => /^\d\d$/.test(e.id) && e.id !== '00')
+    const loads = (entry, wf) => (entry?.workflows ?? []).includes(wf)
+    const sample = list => list.slice(0, 4).join(', ') + (list.length > 4 ? `, … (${list.length} total)` : '')
+
+    for (const dir of skillDirs) {
+      const text = read(join(SKILLS, dir, 'SKILL.md'))
+      const where = `skills/${dir}/SKILL.md`
+      const wf = (/`workflow-name`(?:은|는)?\s*\|?\s*`([a-z]+)`/.exec(text) ?? [])[1]
+      if (!wf) continue // 6b already reported the missing declaration
+
+      const declared = (/^\|\s*모듈 집합\s*\|\s*(.+?)\s*\|\s*$/m.exec(text) ?? [])[1]
+      if (!declared) {
+        fail('catalog', `${where}: no 모듈 집합 row, so catalog membership for "${wf}" cannot be checked`)
+        continue
+      }
+
+      const everyModule = declared.includes('numbered non-00')
+      const singleDoc = /`\$?\{?RULES_DIR\}?\/([A-Za-z0-9._-]+\.md)`\s*단일 문서/.exec(declared)
+
+      if (everyModule) {
+        const missing = numbered.filter(e => !loads(e, wf)).map(e => e.path)
+        if (missing.length) {
+          fail('catalog', `catalog.json: ${where} loads every numbered non-00 module, but these entries omit "${wf}": ${sample(missing)}`)
+        }
+      } else if (singleDoc) {
+        const stray = numbered.filter(e => loads(e, wf)).map(e => e.path)
+        if (stray.length) {
+          fail('catalog', `catalog.json: ${where} loads only ${singleDoc[1]}, but these numbered entries claim "${wf}": ${sample(stray)}`)
+        }
+        if (!loads(byPath.get(singleDoc[1]), wf)) {
+          fail('catalog', `catalog.json: ${singleDoc[1]} omits "${wf}", which ${where} declares as its only rule document`)
+        }
+      } else {
+        // An unrecognized phrasing cannot be checked, and an unchecked declaration is how
+        // this drifted. Keep the vocabulary small rather than widening the regex.
+        fail('catalog', `${where}: 모듈 집합 "${declared}" is not a recognized form — phrase it as "numbered non-00 …" or "\`$RULES_DIR/x.md\` 단일 문서 …", or teach validate-rules.mjs the new form`)
+      }
+
+      for (const specialist of ['props', 'math', 'exception']) {
+        if (new RegExp(`\\+\\s*${specialist}\\b`).test(declared) && !loads(byPath.get(`${specialist}.md`), wf)) {
+          fail('catalog', `catalog.json: ${specialist}.md omits "${wf}", which ${where} adds to its module set`)
+        }
+      }
+    }
+  }
 }
 
 // --------------------------------------------------------------- manifests
