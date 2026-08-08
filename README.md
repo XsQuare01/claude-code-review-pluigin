@@ -289,6 +289,7 @@ claude-code-review-plugin/
 ├── .github/workflows/validate.yml
 ├── LICENSE
 ├── scripts/validate-rules.mjs
+├── scripts/token-report.mjs
 ├── tests/workflow-fixtures.md
 ├── docs/                          # design records, not current state
 ├── agents/correctness-reviewer.md
@@ -338,6 +339,58 @@ It checks the properties this repo promises but cannot hold by hand:
 | `fixtures` | a contract clause with no scenario in `tests/workflow-fixtures.md` |
 
 **What it does not check.** Whether a workflow actually behaves as the contract says. A review workflow is prose executed by a language model, so its behaviour can only be observed by running a review. `tests/workflow-fixtures.md` lists those scenarios with expected outcomes for manual runs; the validator keeps that checklist in step with the contract but cannot execute it.
+
+## Token report
+
+```bash
+node scripts/token-report.mjs --check      # is the committed report still current?
+node scripts/token-report.mjs --dry-run    # resolve the composition, make no API call
+node scripts/token-report.mjs --write      # measure against the API and write the report
+```
+
+`docs/token-report.md` records what a review actually costs — tokens per rule file, and the composed payload per workflow. It exists because every cost decision here was being made on byte counts, and bytes are a poor stand-in for tokens and worst of all for non-English text.
+
+The composition is **derived**, not listed: which files a workflow loads comes from `catalog.json`, and whether it dispatches one consolidated pass or one sub-agent per module comes from each skill's `분할 방식` row. Hardcoding either would drift, which is the failure the `catalog` check exists to prevent. An unrecognized `분할 방식` phrasing fails rather than being guessed at — a wrong fan-out multiplier is a wrong headline number.
+
+### Running `--write`
+
+**`--write` is the only mode that needs a credential.** It resolves one of these, in order:
+
+| Credential | How |
+|---|---|
+| `ANTHROPIC_API_KEY` | export it |
+| `ANTHROPIC_AUTH_TOKEN` | export it |
+| An `ant` CLI profile | `ant auth login`, then `ant auth status` to confirm which profile is active |
+
+```bash
+node scripts/token-report.mjs --write                          # claude-opus-5
+node scripts/token-report.mjs --write --model claude-haiku-4-5  # a sub-agent tier
+node scripts/token-report.mjs --write --out /tmp/somewhere      # leave docs/ alone
+```
+
+It makes about 60 `count_tokens` calls — that endpoint is free — and commits nothing. Read `docs/token-report.md`, then commit it yourself.
+
+**Token counts are per model.** The same text tokenizes differently across models, so the report records which model produced it; a table with no model named is unusable a release later. Re-measure after changing the model a review runs on.
+
+### Wiring it into CI — not done yet
+
+> **`--check` is not running in CI.** The step below still has to be added to `.github/workflows/validate.yml`, by someone whose GitHub token carries the `workflow` scope. Until it lands, nothing checks that the report is current.
+
+```yaml
+      - name: Check the token report is current
+        run: node scripts/token-report.mjs --check
+```
+
+It needs no credential and no secret, so it works on fork pull requests too. Once it is in place, `--check` behaves like this:
+
+| Change | CI |
+|---|---|
+| A module added or removed, or a workflow's composition changed | **fails** — the numbers are structurally wrong, not merely stale |
+| An existing rule file edited | reports that the counts are now approximate, and passes |
+| `docs/token-report.md` present with no baseline beside it | **fails** — the baseline is what makes the report checkable |
+| A baseline holding `--dry-run` stub numbers | **fails** |
+
+Editing rule wording deliberately does not block a pull request behind a credentialled re-measurement: rule wording is the most common change in this repo, and a gate that fires on all of it would be turned off within a week. Refresh with `--write` when convenient.
 
 ## Maintenance notes
 
