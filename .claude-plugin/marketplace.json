@@ -1,11 +1,9 @@
 {
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
   "name": "react-code-review",
+  "description": "React code review workflows for Claude Code",
   "owner": {
     "name": "bhmun"
-  },
-  "metadata": {
-    "description": "React code review workflows for Claude Code",
-    "version": "1.0.0"
   },
   "plugins": [
     {

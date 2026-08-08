@@ -257,6 +257,122 @@ function conditionKeywords(qualifier) {
   const entries = catalog.modules ?? []
   const byPath = new Map(entries.map(e => [e.path, e]))
 
+  // 8a. every profile says how it is detected, so a skip rests on a signal rather than an impression
+  const LEAF = ['dependency', 'file', 'content', 'dirs', 'profile']
+  const LEAF_EXTRA = ['in', 'under', 'min', 'notes']
+  const PROFILE_KEYS = ['description', 'detect', 'cautions', 'declaredBy', 'hints', 'hintsNote', 'implicit']
+
+  const checkSignal = (node, where) => {
+    if (!node || typeof node !== 'object' || Array.isArray(node)) {
+      fail('catalog', `${where}: detect signal must be an object`)
+      return
+    }
+    const keys = Object.keys(node)
+    const combinator = keys.find(k => k === 'any' || k === 'all')
+    if (combinator) {
+      if (keys.length !== 1) {
+        fail('catalog', `${where}: "${combinator}" must be the only key, found ${keys.join(', ')}`)
+      }
+      if (!Array.isArray(node[combinator]) || node[combinator].length === 0) {
+        fail('catalog', `${where}: "${combinator}" must be a non-empty array`)
+        return
+      }
+      node[combinator].forEach((branch, i) => checkSignal(branch, `${where}.${combinator}[${i}]`))
+      return
+    }
+    const found = keys.filter(k => LEAF.includes(k))
+    if (found.length !== 1) {
+      fail('catalog', `${where}: a leaf signal needs exactly one of ${LEAF.join('|')}, found ${keys.join(', ') || 'nothing'}`)
+      return
+    }
+    for (const k of keys) {
+      if (!LEAF.includes(k) && !LEAF_EXTRA.includes(k)) {
+        fail('catalog', `${where}: unknown key "${k}" — a typo here silently never matches`)
+      }
+    }
+    if (found[0] === 'content' && !node.in) {
+      fail('catalog', `${where}: a "content" signal must say where to look with "in"`)
+    }
+    if (found[0] === 'dirs') {
+      if (!Array.isArray(node.dirs) || node.dirs.length === 0) {
+        fail('catalog', `${where}: "dirs" must be a non-empty array`)
+      } else if (!Number.isInteger(node.min) || node.min < 1 || node.min > node.dirs.length) {
+        fail('catalog', `${where}: "dirs" needs an integer "min" between 1 and ${node.dirs.length}, got ${node.min}`)
+      }
+    }
+    if (found[0] === 'profile' && !profiles.has(node.profile)) {
+      fail('catalog', `${where}: references undefined profile "${node.profile}"`)
+    }
+  }
+
+  const referencedProfiles = (node, out = []) => {
+    if (!node || typeof node !== 'object') return out
+    if (Array.isArray(node)) {
+      for (const n of node) referencedProfiles(n, out)
+      return out
+    }
+    if (typeof node.profile === 'string') out.push(node.profile)
+    referencedProfiles(node.any, out)
+    referencedProfiles(node.all, out)
+    return out
+  }
+
+  for (const [name, profile] of Object.entries(catalog.profiles ?? {})) {
+    const where = `catalog.json: profile "${name}"`
+    if (typeof profile !== 'object' || profile === null || Array.isArray(profile)) {
+      fail('catalog', `${where}: must be an object with "description" and "detect"`)
+      continue
+    }
+    for (const k of Object.keys(profile)) {
+      if (!PROFILE_KEYS.includes(k)) fail('catalog', `${where}: unknown key "${k}"`)
+    }
+    if (!profile.description) fail('catalog', `${where}: missing "description"`)
+    if (profile.detect === undefined) {
+      fail('catalog', `${where}: missing "detect" — a profile with no signal is judged by impression`)
+    } else if (profile.detect === 'declared') {
+      if (!profile.declaredBy) {
+        fail('catalog', `${where}: detect "declared" must say who declares it in "declaredBy"`)
+      }
+    } else if (typeof profile.detect === 'string') {
+      fail('catalog', `${where}: "detect" must be a signal object, or the string "declared"`)
+    } else {
+      checkSignal(profile.detect, `${where}.detect`)
+    }
+  }
+
+  // a profile reference cycle would make detection non-terminating
+  for (const name of profiles) {
+    const seen = new Set()
+    const walk = (current, trail) => {
+      for (const ref of referencedProfiles(catalog.profiles[current]?.detect)) {
+        if (ref === name) {
+          fail('catalog', `catalog.json: profile reference cycle ${[...trail, ref].join(' -> ')}`)
+          return
+        }
+        if (seen.has(ref)) continue
+        seen.add(ref)
+        walk(ref, [...trail, ref])
+      }
+    }
+    walk(name, [name])
+  }
+
+  // a profile no module requires is dead weight that drifts out of step with the modules
+  {
+    const required = new Set()
+    for (const entry of entries) {
+      for (const p of entry.requires ?? []) required.add(p)
+      for (const part of entry.partial ?? []) for (const p of part.requires ?? []) required.add(p)
+    }
+    for (const [name, profile] of Object.entries(catalog.profiles ?? {})) {
+      const impliedBy = [...profiles].some(other =>
+        other !== name && referencedProfiles(catalog.profiles[other]?.detect).includes(name))
+      if (!required.has(name) && !profile?.implicit && !impliedBy) {
+        fail('catalog', `catalog.json: profile "${name}" is required by no module — remove it or mark it "implicit": true`)
+      }
+    }
+  }
+
   for (const entry of entries) {
     if (!existsSync(join(RULES, entry.path))) {
       fail('catalog', `catalog.json: entry "${entry.id}" points at missing file ${entry.path}`)
@@ -303,19 +419,73 @@ function conditionKeywords(qualifier) {
       // plugin.json wins when both are set, so a second copy can only drift out of sync.
       fail('manifest', `marketplace.json: remove "version" from the plugin entry — plugin.json is the single source (currently ${listed.version} vs ${plugin.version})`)
     }
+    // the same reasoning applies to every other version string in this file: nothing
+    // reads them, nothing bumps them, and a stale one contradicts the documented rule
+    for (const [where, value] of [['top-level', market.version], ['"metadata"', market.metadata?.version]]) {
+      if (value !== undefined) {
+        fail('manifest', `marketplace.json: remove the ${where} "version" (${value}) — plugin.json is the single source and this copy only goes stale`)
+      }
+    }
     if (!/^\d+\.\d+\.\d+$/.test(plugin.version ?? '')) {
       fail('manifest', `plugin.json: version must be MAJOR.MINOR.PATCH, got "${plugin.version}"`)
     }
   }
 
   // package smoke check: the pieces a working install needs
-  for (const required of ['review-rules', 'skills', '.claude-plugin/plugin.json', 'README.md']) {
+  for (const required of ['review-rules', 'skills', 'agents', 'LICENSE', '.claude-plugin/plugin.json', 'README.md']) {
     if (!existsSync(join(ROOT, required))) fail('manifest', `packaged plugin is missing ${required}`)
   }
   for (const dir of skillDirs) {
     const front = read(join(SKILLS, dir, 'SKILL.md')).split('---')[1] ?? ''
     if (!/^\s*name:\s*\S+/m.test(front)) fail('manifest', `skills/${dir}/SKILL.md: frontmatter has no name`)
     if (!/^\s*description:\s*\S+/m.test(front)) fail('manifest', `skills/${dir}/SKILL.md: frontmatter has no description`)
+  }
+}
+
+// ------------------------------------------------------------------ agents
+
+// An agent produces findings that land in the same report as a module's, so it is
+// held to the same contract. The one that shipped outside it referenced no clause,
+// no ID convention, and no read-only rule — nothing in the tree said it should.
+const AGENTS = join(ROOT, 'agents')
+const agentFiles = existsSync(AGENTS) ? readdirSync(AGENTS).filter(f => f.endsWith('.md')).sort() : []
+
+{
+  if (agentFiles.length === 0) fail('agent', 'agents/ contains no agent document')
+
+  const commonRules = rulesFile('00-rule.md')
+  const readmeText = read(join(ROOT, 'README.md'))
+
+  for (const file of agentFiles) {
+    const text = read(join(AGENTS, file))
+    const where = `agents/${file}`
+
+    const front = text.split('---')[1] ?? ''
+    if (!/^\s*name:\s*\S+/m.test(front)) fail('agent', `${where}: frontmatter has no name`)
+    if (!/^\s*description:\s*\S+/m.test(front)) fail('agent', `${where}: frontmatter has no description`)
+
+    if (!text.includes('workflow-contract.md')) {
+      fail('agent', `${where}: does not defer to workflow-contract.md`)
+    }
+    for (const clause of ['00-9', '00-10', '00-11']) {
+      if (!text.includes(clause)) {
+        fail('agent', `${where}: does not say how it follows ${clause} — findings from it reach the same report`)
+      }
+    }
+
+    // a finding ID has to be traceable back to something; an unregistered prefix is not
+    const prefixes = [...new Set([...text.matchAll(/\b([A-Z]{2,3})-\{/g)].map(m => m[1]))]
+    if (prefixes.length === 0) {
+      fail('agent', `${where}: declares no finding ID prefix`)
+    }
+    for (const prefix of prefixes) {
+      if (!commonRules.includes(`${prefix}-{`)) {
+        fail('agent', `${where}: ID prefix ${prefix}- is not registered in 00-rule.md 00-2`)
+      }
+      if (!readmeText.includes(`${prefix}-{n}`)) {
+        fail('agent', `${where}: ID prefix ${prefix}- is missing from the README rule-ID table`)
+      }
+    }
   }
 }
 
@@ -351,7 +521,7 @@ for (const p of problems) {
 }
 
 if (problems.length === 0) {
-  console.log(`OK — ${moduleFiles.length} numbered modules, ${ruleMeta.size} rules, ${skillDirs.length} skills`)
+  console.log(`OK — ${moduleFiles.length} numbered modules, ${ruleMeta.size} rules, ${skillDirs.length} skills, ${agentFiles.length} agent(s)`)
   process.exit(0)
 }
 

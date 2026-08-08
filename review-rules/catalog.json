@@ -6,18 +6,124 @@
     "Workflows consult this to decide skip/apply; the reasoning behind a finding always cites the module text.",
     "Keep in sync with the module headers — review-rules/workflow-contract.md C-3."
   ],
-  "version": 1,
+  "version": 2,
+  "$profileComment": [
+    "Each profile carries the signals that establish it, so a skip decision rests on something found",
+    "rather than on an impression. A leaf signal is one of: dependency (package.json dependencies or",
+    "devDependencies, any workspace), file (glob), content (string, with 'in' naming where to look),",
+    "dirs (with an integer 'min' — how many of them must exist), profile (this profile is implied by",
+    "another). Leaves combine under 'any' or 'all'.",
+    "detect: \"declared\" means the profile cannot be read off the tree and must come from the user or",
+    "project config. Its 'hints' justify asking — they never establish the profile.",
+    "A false negative costs as much as a false positive: a module skipped because its profile went",
+    "undetected reads as a module with no findings."
+  ],
   "profiles": {
-    "react": "Always true for this plugin — every module assumes a React codebase.",
-    "fsd": "Feature-Sliced Design layout (app/pages/widgets/features/entities/shared directories).",
-    "electron": "Electron project with main/preload/renderer processes.",
-    "tailwind": "Tailwind CSS configured.",
-    "rsc": "React Server Components: 'use client'/'use server' directives present, or an RSC-capable framework configured.",
-    "ssr": "Server-side rendering or static generation in use (includes RSC).",
-    "three": "Three.js / React Three Fiber / WebGL in the codebase.",
-    "tanstack-query": "TanStack Query (React Query) used for server state.",
-    "server-code": "Server-side code reviewed in this repository (Electron main, BFF, route handlers).",
-    "contract-provider": "This repository provides a contract consumed by others (API, IPC, published package)."
+    "react": {
+      "description": "Always true for this plugin — every module assumes a React codebase.",
+      "implicit": true,
+      "detect": { "any": [{ "dependency": "react" }] }
+    },
+    "fsd": {
+      "description": "Feature-Sliced Design layout (app/pages/widgets/features/entities/shared directories).",
+      "detect": {
+        "dirs": ["app", "pages", "widgets", "features", "entities", "shared"],
+        "under": ["src", "."],
+        "min": 3
+      },
+      "cautions": "Requiring all six layers false-negatives real FSD projects — widgets and pages are commonly absent. Two matches are not evidence either: any project can have shared/ and features/ without the layering the module checks."
+    },
+    "electron": {
+      "description": "Electron project with main/preload/renderer processes.",
+      "detect": {
+        "any": [
+          { "dependency": "electron" },
+          { "file": "forge.config.{js,cjs,mjs,ts}" },
+          { "file": "electron-builder.{yml,yaml,json,js}" }
+        ]
+      }
+    },
+    "tailwind": {
+      "description": "Tailwind CSS configured.",
+      "detect": {
+        "any": [
+          { "dependency": "tailwindcss" },
+          { "file": "tailwind.config.{js,cjs,mjs,ts}" },
+          { "content": "@import \"tailwindcss\"", "in": "**/*.css" },
+          { "content": "@tailwind ", "in": "**/*.css" }
+        ]
+      },
+      "cautions": "Tailwind 4 moves configuration into CSS and ships no tailwind.config file, so a config-file-only check skips 11-styling.md on every v4 project. The dependency and the CSS entry point are the signals that survive both versions."
+    },
+    "rsc": {
+      "description": "React Server Components: 'use client' boundaries inside an RSC-capable framework.",
+      "detect": {
+        "any": [
+          { "content": "use client", "in": "**/*.{ts,tsx,js,jsx}", "notes": "top-of-file directive, single or double quoted" },
+          { "all": [{ "dependency": "next" }, { "dirs": ["app"], "under": ["src", "."], "min": 1 }] }
+        ]
+      },
+      "cautions": "'use server' alone marks a Server Function, not an RSC render tree — it is server-code evidence, not rsc evidence. Next.js with only pages/ is not RSC either."
+    },
+    "ssr": {
+      "description": "Server-side rendering or static generation in use (includes RSC).",
+      "detect": {
+        "any": [
+          { "profile": "rsc" },
+          { "dependency": "next" },
+          { "dependency": "@remix-run/react" },
+          { "dependency": "@tanstack/react-start" },
+          { "content": "renderToPipeableStream", "in": "**/*.{ts,tsx,js,jsx}" },
+          { "content": "renderToString", "in": "**/*.{ts,tsx,js,jsx}" },
+          { "content": "hydrateRoot", "in": "**/*.{ts,tsx,js,jsx}" }
+        ]
+      },
+      "cautions": "hydrateRoot is the client half of SSR — a project calling createRoot only is not server-rendered no matter what framework is installed."
+    },
+    "three": {
+      "description": "Three.js / React Three Fiber / WebGL in the codebase.",
+      "detect": {
+        "any": [
+          { "dependency": "three" },
+          { "dependency": "@react-three/fiber" },
+          { "dependency": "@react-three/drei" },
+          { "content": "getContext('webgl", "in": "**/*.{ts,tsx,js,jsx}" }
+        ]
+      }
+    },
+    "tanstack-query": {
+      "description": "TanStack Query (React Query) used for server state.",
+      "detect": {
+        "any": [{ "dependency": "@tanstack/react-query" }, { "dependency": "react-query" }]
+      },
+      "cautions": "react-query is the pre-v4 package name; a project still on it has the same query keys and invalidation to review."
+    },
+    "server-code": {
+      "description": "Server-side code reviewed in this repository (Electron main, BFF, route handlers, Server Functions).",
+      "detect": {
+        "any": [
+          { "content": "use server", "in": "**/*.{ts,tsx,js,jsx}" },
+          { "file": "**/app/**/route.{ts,js}" },
+          { "file": "**/pages/api/**/*.{ts,js}" },
+          { "all": [{ "profile": "electron" }, { "dirs": ["electron", "src/main", "main"], "under": ["."], "min": 1 }] },
+          { "dependency": "express" },
+          { "dependency": "fastify" },
+          { "dependency": "hono" }
+        ]
+      },
+      "cautions": "The question is whether server code is reviewed *in this repository*, not whether the app talks to a server. A frontend calling someone else's API does not hold this profile."
+    },
+    "contract-provider": {
+      "description": "This repository provides a contract consumed by others (API, IPC, published package).",
+      "detect": "declared",
+      "declaredBy": "The user, or project configuration. Whether anything outside this repository consumes the contract is a fact about the outside world and cannot be read off the tree — infer it and 16-5..16-7 fire on a type that is private to this repo.",
+      "hints": [
+        "package.json without \"private\": true, carrying exports or bin",
+        "openapi.{yaml,json} or *.proto checked in",
+        "ipcMain.handle channels consumed by a separately released renderer"
+      ],
+      "hintsNote": "Hints justify asking the user. They never establish the profile on their own."
+    }
   },
   "modules": [
     {

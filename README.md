@@ -100,7 +100,56 @@ node ~/.claude/plugins/cache/react-code-review/react-code-review-plugin/*/script
 
 **Is a review actually using them?** Run `/code-review` once and check the rules directory the report cites (`workflow-contract.md` C-1). It must be the plugin path — `~/.claude/review-rules` means it fell through to the stale fallback.
 
-> **Do not copy `skills/` and `review-rules/` into `~/.claude/`.** That was the old way to use this repo and it drifts: the copy stops receiving rule updates while still looking installed, and reviews quietly run against stale rules. It is also the trap the third fallback below creates. If a copy already exists at `~/.claude/skills/code-review*`, remove it after installing the plugin.
+> **Do not copy `skills/` and `review-rules/` into `~/.claude/`.** That was the old way to use this repo and it drifts: the copy stops receiving rule updates while still looking installed, and reviews quietly run against stale rules. It is also the trap the third fallback below creates. If a copy already exists at `~/.claude/skills/code-review*`, remove it after installing the plugin — see [Troubleshooting](#troubleshooting).
+
+### Troubleshooting
+
+**Two sets of `/code-review` commands appear, or a report cites rule IDs this repo does not have.**
+
+An older manual copy under `~/.claude/` is installed alongside the plugin. Home skills load under their bare name while plugin skills are namespaced, so `/code-review` resolves to the copy and the plugin's commands sit behind the `react-code-review-plugin:` prefix — the copy wins the name you actually type. A copy predating the current inventory is worse than stale: under the old `00`–`12` numbering `03` meant state rules, where it now means React runtime rules, so its findings cannot be traced against current rule text at all.
+
+Detect it — any output means the copy is present:
+
+```bash
+ls -d ~/.claude/skills/code-review* ~/.claude/review-rules 2>/dev/null
+```
+
+The plugin needs neither path. Remove them and reload:
+
+```bash
+rm -rf ~/.claude/skills/code-review* ~/.claude/review-rules
+```
+
+```
+/reload-skills
+```
+
+Keep the copy only if it holds edits that were never pushed here — diff it against this repository before deleting.
+
+Removing the copy does **not** hand the bare `/code-review` name to this plugin. Claude Code ships its own `code-review` skill, so that name resolves to the built-in review while this plugin's default pass is `react-code-review-plugin:code-review`. The other six commands — `code-review-full`, `-fast`, `-commit`, `-props`, `-math`, `-exception` — are unique to this plugin and work unprefixed. When a report's rules directory or heading looks wrong, check which of the two you invoked before suspecting the install.
+
+**`EBUSY: resource busy or locked` when adding the marketplace.**
+
+```
+Error: Failed to finalize marketplace cache. Please manually delete the directory at
+C:\Users\<you>\.claude\plugins\marketplaces\react-code-review if it exists and try again.
+
+Technical details: EBUSY: resource busy or locked, rename
+'...\marketplaces\XsQuare01-claude-code-review-pluigin' -> '...\marketplaces\react-code-review'
+```
+
+The marketplace is named `react-code-review` while the repository is named `claude-code-review-pluigin`, so `marketplace add` clones into a directory named after the repo and then renames it to the marketplace name. On Windows that rename fails while anything still holds the destination — a previous partial add, an editor, a file watcher, or an indexer. Delete the directory the error names and add it again:
+
+```bash
+rm -rf ~/.claude/plugins/marketplaces/react-code-review
+```
+
+```
+/plugin marketplace add XsQuare01/claude-code-review-pluigin
+/plugin install react-code-review-plugin@react-code-review
+```
+
+The install itself is unaffected by the failed rename — a marketplace that never finalized simply is not there, so nothing partial is left behind to clean up beyond that directory.
 
 ## React version support
 
@@ -180,6 +229,15 @@ The contract exists because the alternative had already failed: the same procedu
 
 A module whose profile does not hold is reported as `SKIPPED` with a reason. It is never silently dropped and never counted as passing — a rule that was not run and a rule that found nothing are different outcomes.
 
+Each profile carries the **signals that establish it** in `profiles[].detect`, so a skip rests on something found rather than on an impression about the stack. A signal is a dependency, a file glob, a string with a search scope, a set of directories with a minimum match count, or another profile that implies this one; signals combine under `any` / `all`. The matched signal is recorded in the report (`workflow-contract.md` C-3), which is what makes a skip auditable.
+
+Two properties of that list are load-bearing:
+
+- **A missed profile costs as much as a false positive.** A module skipped because its signal never matched reads exactly like a module that found nothing. Where a plausible-looking check would produce that outcome, the profile records it in `cautions` — `tailwind` exists because a `tailwind.config` check skips styling review on every Tailwind 4 project, which configures through CSS and ships no config file.
+- **What cannot be detected says so.** `contract-provider` sets `detect: "declared"`: whether anything outside this repository consumes a contract is a fact about the outside world. It comes from the user or project config, never from inference, and its `hints` justify asking rather than concluding.
+
+`scripts/validate-rules.mjs` enforces the shape — a profile with no `detect`, a mistyped signal key, a `content` signal with no search scope, a `dirs` signal with no threshold, a reference to an undefined profile, a reference cycle, or a profile no module requires all fail the `catalog` check.
+
 ## Rule IDs
 
 Every finding carries an ID that matches its source file, so a report can always be traced back to the rule text.
@@ -191,6 +249,9 @@ Every finding carries an ID that matches its source file, so a report can always
 | Exception | `EX-{n}` | `EX-3` |
 | Props | `P-{n}` | `P-5` |
 | Math | `A-{n}` / `C-{n}` | `A-2`, `C-5` |
+| Correctness agent | `CR-{n}` | `CR-2` |
+
+`CR-` is a separate namespace on purpose. The correctness pass argues from the PR's stated intent rather than from a rule document, so borrowing a module's ID would send the reader to rule text that says nothing about the finding.
 
 ## Report output
 
@@ -218,14 +279,18 @@ The third entry is a fallback for older setups, and it is the one that bites: if
 
 `agents/correctness-reviewer.md` is an optional evidence-first correctness reviewer (does the implementation match the PR's stated intent across all branches?). It is not part of the default workflows — invoke it explicitly when you want a correctness pass alongside the rule-based review.
 
+It answers a question the rule modules do not: a module asks whether the code breaks a rule, this pass asks whether the code does what the PR says it does. Because its findings land in the same report, it is bound by the same contract — read-only execution (`00-9`), verified line numbers with a quoted line (`00-10`), and stated search scope behind any absence claim (`00-11`) — and its findings carry `CR-{n}` IDs. The `agent` check in `scripts/validate-rules.mjs` enforces that: an agent document that cites no contract clause, or uses an ID prefix registered nowhere, fails the build. Being outside the workflows is a scoping decision; being outside the contract was an oversight.
+
 ## Directory structure
 
 ```text
 claude-code-review-plugin/
 ├── .claude-plugin/plugin.json
 ├── .github/workflows/validate.yml
+├── LICENSE
 ├── scripts/validate-rules.mjs
 ├── tests/workflow-fixtures.md
+├── docs/                          # design records, not current state
 ├── agents/correctness-reviewer.md
 ├── skills/
 │   ├── code-review/SKILL.md
@@ -267,8 +332,9 @@ It checks the properties this repo promises but cannot hold by hand:
 | `skill` | a skill that does not defer to the contract, declares an unregistered `workflow-name`, or points at a missing rule document |
 | `fast-sync` | a missing digest section, a conditional rule whose severity or applicability was lost in compression, a stale module range |
 | `hardcoded-path` | `~/.claude/review-rules` re-introduced into a skill instead of using the resolution order |
-| `catalog` | a module with no catalog entry, an entry pointing at a missing file, an undefined profile |
-| `manifest` | missing manifest fields, plugin/marketplace disagreement, skill frontmatter without name or description |
+| `catalog` | a module with no catalog entry, an entry pointing at a missing file, an undefined profile, a profile with no detection signal, a mistyped or incomplete signal, a profile reference cycle, a profile no module requires |
+| `manifest` | missing manifest fields, plugin/marketplace disagreement, a second `version` string anywhere in `marketplace.json`, a packaged directory that is absent, skill frontmatter without name or description |
+| `agent` | an agent document that cites no contract clause, states no read-only/position/absence handling, or uses a finding ID prefix registered in neither `00-rule.md` nor this README |
 | `fixtures` | a contract clause with no scenario in `tests/workflow-fixtures.md` |
 
 **What it does not check.** Whether a workflow actually behaves as the contract says. A review workflow is prose executed by a language model, so its behaviour can only be observed by running a review. `tests/workflow-fixtures.md` lists those scenarios with expected outcomes for manual runs; the validator keeps that checklist in step with the contract but cannot execute it.
