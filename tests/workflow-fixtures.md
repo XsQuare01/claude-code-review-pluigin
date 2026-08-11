@@ -46,6 +46,10 @@ Run these by hand after changing the contract or any skill document. Record the 
 | 36 | C-7 | User asks for the report in a language other than Korean | Section names and finding prose follow the request; rule IDs, paths, code quotes, severity markers and the status tokens (`SKIPPED`, `UNKNOWN`, `위치 미확인`, `확인 필요`) are unchanged, and `리뷰 기준` records the language used (`00-rule.md` 00-6) |
 | 37 | C-7 | Correctness agent runs alongside a rule-based pass | Its findings carry `CR-{n}` IDs, never a module ID, and sit in the same skeleton with a verified line and quote like any other finding |
 | 31 | C-7 | A report has two findings under the same rule ID | They read `17-3 (1/2)` and `17-3 (2/2)`, so a follow-up question about `17-3` is answerable (`00-rule.md` 00-2) |
+| 38 | C-7 | Any finding in any workflow | The line under the heading reads `영향: {높음\|낮음} · 확신: {높음\|낮음}`, and the severity marker matches the derivation in `00-rule.md` — 🔴 only when both are 높음 |
+| 39 | C-7 | A finding that is true but has no user-visible effect — style, consistency, a theoretical inefficiency | It is 🟡 with `영향: 낮음`, never 🔴; it is still reported rather than dropped |
+| 40 | C-7 | A finding claims `영향: 높음` | It names which of the four categories applies (사용자 오동작 / 데이터 손상 / 보안 노출 / 빌드·타입체크·테스트 실패); a 높음 with no named category is not a valid finding |
+| 41 | C-7 | Any report | `리뷰 기준` records the plugin version next to `RULES_DIR`, so which severity calibration produced the report is readable without re-running it |
 
 ## Default-workflow-only scenarios
 
