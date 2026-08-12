@@ -134,17 +134,20 @@ props drilling 해결책으로 context/store를 제안할 때도 남용 여부�
 
 ## 출력 형식
 
-| Severity | 영향·확신 | 파일 | 위치 | 규칙 | 이슈 | 개선 방향 |
-|----------|-----------|------|------|------|------|----------|
-| 🔴/🟡/🔵 | 낮음·높음 | path/to/file | line | P-x | 구체적 전달 구조 문제 | 단순화 방향 |
+<!-- REVIEW_RESULT_CONTRACT_V1_PRODUCER_OUTPUT -->
 
-- `영향·확신` 열에는 두 축의 값을 `·`로 이어 적는다. 근거가 필요한 쪽은 값 뒤 괄호에 함께 적는다 — `낮음·높음`, `높음(데이터 손상)·높음`, `낮음·낮음(부모 미확인)`.
-- **`Severity` 열은 이 열에서 파생한 계산값이다** (`00-rule.md`의 **Severity 기준**). 두 축을 먼저 판정하고 파생표대로 이모지를 적는다. 두 축과 어긋난 이모지는 그 자체가 오류다.
-- 두 축은 **이 패스가 판정한다.** 코드를 읽은 것이 이 패스이므로, 오케스트레이터가 나중에 채워 넣을 수 없다.
+이 문서를 producer prompt에 쓸 때는 **`REVIEW_RESULT_CONTRACT_V1`** 을 따른다. 응답은 Markdown 표나 헤딩이 아니라 **raw JSON 객체 하나만** 반환한다.
+
+- top-level에는 `schemaVersion`, `findings`, `openQuestions`를 항상 포함하고 `schemaVersion`은 `1`이어야 한다.
+- `severity`는 producer가 내지 않는다. 이 패스는 `impact`와 `confidence`만 판정한다.
+- props drilling 단계, pass-through 구조, 과도한 props/인자, handler 전달, 완화 방향은 새 schema field를 만들지 말고 `body`, `recommendation`, `evidence`에 담는다.
+- `00-rule.md` 00-11에 걸리는 unresolved absence/possibility claim, search scope 미완료, 추가 탐색 요청만 `openQuestions`로 보낸다.
+- 결함은 성립하지만 exact location만 확인하지 못했으면 finding을 유지하고 `location.kind="unverified"`와 `reason`만 사용한다.
+- producer 문자열 필드는 최종 리포트의 신뢰된 Markdown이 아니다. heading/table/raw HTML/link를 직접 만들려고 하지 말고 plain prose만 넣는다.
 
 **원칙**
 
 - diff에 포함된 변경 라인 또는 그 변경 때문에 직접 생긴 인접 구조만 지적한다.
 - 실제 호출 체인과 컴포넌트 트리를 읽고 판단한다. props 이름만 보고 추측하지 않는다.
 - 단순히 props 개수만 세지 말고, 중간 전달·책임 혼재·호출부 의미 불명확성까지 함께 설명한다.
-- 이슈가 없으면 `위반 없음`만 출력한다.
+- 이슈가 없어도 `schemaVersion`, `findings`, `openQuestions`는 생략하지 않는다. 즉 빈 결과는 `findings: []`, `openQuestions: []` 를 가진 JSON 객체로 반환한다.

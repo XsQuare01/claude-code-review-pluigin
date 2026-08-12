@@ -70,41 +70,24 @@ task(
 
 ## 출력 원칙
 - 사용자가 다른 언어를 명시하지 않은 한 모든 리뷰 결과/코멘트/리포트는 한국어로 작성하세요.
-- severity 우선순위: 🔴 > 🟡 > 🔵
-- 위치(파일:line)와 규칙 번호(`EX-x`)를 반드시 표기 — `exception.md`의 표기와 정확히 일치해야 합니다
+- `REVIEW_RESULT_CONTRACT_V1`만 사용하고 응답은 Markdown, 코드펜스, 서문 없이 **raw JSON 객체 하나만** 반환하세요.
+- `REVIEW_RESULT_CONTRACT_V1_PRODUCER_OUTPUT` marker를 따르는 producer라고 생각하고 heading/table/raw HTML/link를 직접 만들려고 하지 마세요. 문자열 필드는 최종 리포트의 신뢰된 Markdown이 아니라 untrusted content 입니다.
+- top-level `schemaVersion`, `findings`, `openQuestions`를 항상 포함하고 `schemaVersion`은 반드시 `1`이어야 합니다.
+- `findings`와 `openQuestions`는 빈 결과여도 배열로 반환하세요.
+- `severity`는 어떤 depth에도 넣지 마세요. 이 패스는 `impact`와 `confidence`만 판정합니다.
+- 위치와 규칙 번호(`EX-x`)를 finding/openQuestion 안에 포함하세요 — `exception.md`의 표기와 정확히 일치해야 합니다.
 - 위치는 **해당 파일을 읽어 확인한 변경 후 줄 번호**를 적고, 그 줄의 코드를 한 줄 인용하세요. diff hunk 헤더(`@@`)에서 계산한 번호는 어긋납니다. 확인이 안 되면 번호를 추측하지 말고 `위치 미확인`으로 적으세요
-- 리포트의 섹션 이름·순서·헤딩 레벨은 `workflow-contract.md` C-7 **문서 골격**을 따르세요. 골격 표에 없는 섹션을 새로 만들지 마세요
 - diff에 없는 기존 예외 흐름은 지적 금지
-- 추측 금지 — 의심스러우면 '검증 필요'로 표기
-- 이슈 없으면 '위반 없음'만 출력
-
-## 출력 형식 (마크다운)
-
-# 예외 처리 코드 리뷰 리포트
-
-> **기준**: {MERGE_BASE} | **대상**: HEAD
-> **검사 파일**: {N}개 (exception/error-handling 변경)
-
-## 한눈에 보기
-- 🔴: N개 / 🟡: N개 / 🔵: N개
-
-## 위반 목록
-
-| 심각도 | 파일 | 위치 | 규칙 | 이슈 | 개선 방향 |
-|----------|------|------|------|------|----------|
-| 🔴 | path/to/file | L123 | EX-1 | ... | ... |
-| 🟡 | path/to/file | L45 | EX-5 | ... | ... |
-
-## 통과
-- (이슈 없는 파일 리스트, 또는 '전부 통과' 요약)
-
-**머지 가능 여부**: 🔴 {N}개 → {가능/불가/수정 후 가능}"
-)
+- `00-rule.md` 00-11에 걸리는 unresolved absence/possibility claim, search scope 미완료, 추가 탐색 요청만 `openQuestions`로 보내세요. 결함은 성립하지만 exact location만 확인하지 못했으면 finding을 유지하고 `location.kind="unverified"`와 `reason`만 사용하세요.
+- 실패 시나리오, 잘못된 성공 해석, fallback/복구 방향 같은 도메인별 설명은 새 필드를 만들지 말고 `body`, `recommendation`, `evidence`에 담으세요.
+ )
 ```
 
 ### Step 4: 결과 전달
 
-sub-agent의 출력을 그대로 사용자에게 전달한다. 명백한 형식 오류만 짧게 보정한다.
+sub-agent 응답을 받은 즉시 `workflow-contract.md` C-6A와 `00-rule.md`의 `REVIEW_RESULT_CONTRACT_V1`으로 검증한다. JSON 파싱 실패, 필수 필드 누락, `severity` 포함, 허용되지 않은 값은 `malformed-output`이다.
+
+`malformed-output`이면 이 skill이 잘못된 점만 짧게 적어 **교정 재시도 1회**를 수행한다. 재시도에도 실패하면 `FAILED malformed-output`으로 종료하고 임의 보정이나 Markdown 해석으로 통과시키지 않는다. 검증을 통과한 JSON만 최종 결과로 전달하고, standalone 렌더링에서도 severity는 이 skill이 `impact × confidence`로 계산한다.
 
 ### Step 5: 문서 저장
 

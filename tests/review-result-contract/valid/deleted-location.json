@@ -1,0 +1,25 @@
+{
+  "name": "deleted-location",
+  "expected": "valid",
+  "input": {
+    "schemaVersion": 1,
+    "findings": [
+      {
+        "ruleId": "20-4",
+        "title": "cleanup 반환문이 삭제됐습니다",
+        "body": "삭제된 cleanup 때문에 구독 해제 경로가 사라졌습니다.",
+        "impact": "high",
+        "category": "user-malfunction",
+        "evidence": "삭제 전 cleanup return이 있었고 대체 정리 경로가 diff 안에 보이지 않습니다.",
+        "confidence": "high",
+        "location": {
+          "kind": "deleted",
+          "path": "src/features/chat/use-room.ts",
+          "lineBefore": 54,
+          "quote": "return () => subscription.unsubscribe()"
+        }
+      }
+    ],
+    "openQuestions": []
+  }
+}

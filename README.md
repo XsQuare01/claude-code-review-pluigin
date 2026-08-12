@@ -223,6 +223,16 @@ Non-numbered files are excluded from the automatic scan:
 
 The contract exists because the alternative had already failed: the same procedure copied into seven skill documents drifted apart, and workflows started behaving differently for the same request.
 
+### Structured producer results, phase 1
+
+`REVIEW_RESULT_CONTRACT_V1` separates producer output from the public report. Producers return one raw JSON object with `findings` and `openQuestions`; they do not return Markdown or `severity`. A finding records `impact`, `confidence`, and a `verified`, `deleted`, or `unverified` location. An `unverified` location carries a reason instead of a made-up path or line, and it remains a finding when the defect is established but the exact anchor cannot yet be verified. `openQuestions` is for unresolved claim truth or search scope instead — especially incomplete absence/possibility claims under `00-11`, or explicit follow-up investigation. High-impact findings must name one of five closed categories: user malfunction, data loss, security exposure, verification failure, or external breakage. Low-impact findings may carry `evidence`, but do not require it.
+
+The orchestrator validates those results, aggregates only valid JSON, derives severity from `impact × confidence`, and renders the final Markdown report. Deduplication is owned by the shared workflow contract: only findings with the same rule ID, the same verified/deleted normalized location, the same core claim / root cause / breaking condition, the same impact/category, and the same confidence may merge. `unverified` findings and `openQuestions` never auto-merge; source labels are preserved when valid merges do happen. JSON conformance is prompt-only, not a native model-output schema. Malformed output gets one corrective retry; a second malformed response ends that pass as `FAILED malformed-output` rather than being partially parsed or repaired.
+
+Phase 1 covers every numbered non-00 producer that `/code-review-full` dispatches, props/math/exception producers in both full and standalone workflows, and the correctness reviewer. `/code-review`, `/code-review-commit`, and `/code-review-fast` keep their legacy producer formats for now.
+
+Producer strings are treated as untrusted report content. The renderer places fields by slot rather than trusting producer-authored Markdown, escapes control/block Markdown in prose fields so they cannot create headings, fences, tables, raw HTML, or links that look orchestrator-authored, renders `location.quote` in a safe code form with delimiter escaping, renders paths as code, and leaves any URLs as plain text. The static validator checks that the contract and prompts stay synchronized on those rules; it does not claim to execute or prove the renderer.
+
 ## Applicability metadata
 
 `review-rules/catalog.json` records **when** a module applies — required profile (FSD, Tailwind, RSC, Electron, TanStack Query, server code, contract provider), minimum React version, which workflows load it, and which individual rules carry a narrower gate than their module. The Markdown modules stay canonical for **what** a rule says; the catalog never generates documentation and never restates rule text.
@@ -335,9 +345,13 @@ It checks the properties this repo promises but cannot hold by hand:
 | `catalog` | a module with no catalog entry, an entry pointing at a missing file, an undefined profile, a profile with no detection signal, a mistyped or incomplete signal, a profile reference cycle, a profile no module requires, workflow membership that disagrees with the module set a skill declares it loads |
 | `manifest` | missing manifest fields, plugin/marketplace disagreement, a second `version` string anywhere in `marketplace.json`, a packaged directory that is absent, skill frontmatter without name or description |
 | `agent` | an agent document that cites no contract clause, states no read-only/position/absence handling, or uses a finding ID prefix registered in neither `00-rule.md` nor this README |
+| `structured-contract` | drift in the canonical `REVIEW_RESULT_CONTRACT_V1` manifest, required fields, enums, location variants, low-impact evidence policy, rendering-safety tokens, or closed high-impact categories |
+| `structured-producer` | an in-scope producer missing the V1 marker/sentinel, still requesting legacy Markdown, or instructing the producer to emit severity or route all unverified locations into openQuestions |
 | `fixtures` | a contract clause with no scenario in `tests/workflow-fixtures.md` |
 
-**What it does not check.** Whether a workflow actually behaves as the contract says. A review workflow is prose executed by a language model, so its behaviour can only be observed by running a review. `tests/workflow-fixtures.md` lists those scenarios with expected outcomes for manual runs; the validator keeps that checklist in step with the contract but cannot execute it.
+The validator also runs JSON fixtures through the static V1 shape checks, including required arrays, forbidden severity, conditional impact/confidence fields, closed categories, and verified/deleted/unverified location rules.
+
+**What it does not check.** Whether a workflow actually behaves as the contract says. It does not execute the model, the one-retry failure path, aggregation, or Markdown rendering. `tests/workflow-fixtures.md` lists runtime scenarios for manual runs. Semantic preservation also remains manual: compare representative legacy Markdown and V1-rendered reports for the same findings, specialist details, unverified locations, and open questions. Markdown escaping is documented and synchronized statically, but not runtime-proven here. The validator does not claim or prove semantic equivalence.
 
 ## Maintenance notes
 

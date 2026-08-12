@@ -1,0 +1,29 @@
+{
+  "name": "finding-unknown-key",
+  "expected": "invalid",
+  "expectedErrorCodes": [
+    "E_FINDING_UNKNOWN_KEY"
+  ],
+  "input": {
+    "schemaVersion": 1,
+    "findings": [
+      {
+        "ruleId": "03-2",
+        "title": "렌더 순수성 위반",
+        "body": "렌더 중 random 값을 생성합니다.",
+        "impact": "high",
+        "category": "user-malfunction",
+        "evidence": "crypto.randomUUID()가 render path 안에 있습니다.",
+        "confidence": "high",
+        "location": {
+          "kind": "verified",
+          "path": "src/components/Row.tsx",
+          "line": 22,
+          "quote": "const rowId = crypto.randomUUID()"
+        },
+        "extraField": true
+      }
+    ],
+    "openQuestions": []
+  }
+}

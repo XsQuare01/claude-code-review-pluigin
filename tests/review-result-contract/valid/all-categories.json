@@ -1,0 +1,99 @@
+{
+  "name": "all-categories",
+  "expected": "valid",
+  "input": {
+    "schemaVersion": 1,
+    "findings": [
+      {
+        "ruleId": "12-2",
+        "title": "키보드 경로가 막혀 있습니다",
+        "body": "이 변경은 div 클릭으로만 메뉴를 열어 키보드 사용자가 같은 작업을 완료할 수 없습니다.",
+        "impact": "high",
+        "category": "user-malfunction",
+        "evidence": "Enter/Space 처리와 native button semantics가 모두 없습니다.",
+        "confidence": "high",
+        "location": {
+          "kind": "verified",
+          "path": "src/components/MenuToggle.tsx",
+          "line": 42,
+          "quote": "<div onClick={openMenu}>"
+        },
+        "recommendation": "button 요소 또는 keyboard activation을 추가하세요."
+      },
+      {
+        "ruleId": "18-2",
+        "title": "복구 경로 없는 삭제가 추가됐습니다",
+        "body": "영구 삭제 요청이 확인 절차나 rollback 없이 바로 실행됩니다.",
+        "impact": "high",
+        "category": "data-loss",
+        "evidence": "삭제 전 확인 modal과 soft-delete 대체 경로가 없습니다.",
+        "confidence": "high",
+        "location": {
+          "kind": "deleted",
+          "path": "src/features/account/delete-account.ts",
+          "lineBefore": 88,
+          "quote": "await permanentlyDeleteAccount(accountId)"
+        }
+      },
+      {
+        "ruleId": "18-4",
+        "title": "민감한 토큰이 로그에 남습니다",
+        "body": "에러 로깅 경로가 access token 전체를 그대로 기록합니다.",
+        "impact": "high",
+        "category": "security-exposure",
+        "evidence": "logger.error 호출에 raw token payload가 포함됩니다.",
+        "confidence": "high",
+        "location": {
+          "kind": "verified",
+          "path": "src/lib/auth/report-auth-error.ts",
+          "line": 17,
+          "quote": "logger.error({ token, error })"
+        }
+      },
+      {
+        "ruleId": "16-6",
+        "title": "실패 응답이 성공처럼 보일 수 있습니다",
+        "body": "status code 변경이 기존 caller의 실패 판정을 깨뜨릴 수 있습니다.",
+        "impact": "high",
+        "category": "external-breakage",
+        "evidence": "기존 422 경로가 200 + error body로 바뀌었지만 caller adapter 변경 증거가 없습니다.",
+        "confidence": "low",
+        "reason": "이 저장소 밖 consumer 전체는 정적으로 확인할 수 없었습니다.",
+        "location": {
+          "kind": "verified",
+          "path": "src/server/routes/profile.ts",
+          "line": 63,
+          "quote": "return res.status(200).json({ error: 'invalid-profile' })"
+        }
+      },
+      {
+        "ruleId": "18-5",
+        "title": "기본 설정 변경이 배포 검증 경로를 깨뜨릴 수 있습니다",
+        "body": "기본 env key가 바뀌었지만 기존 검증 스크립트와의 호환성 증거가 없습니다.",
+        "impact": "high",
+        "category": "verification-failure",
+        "evidence": "CI가 읽는 기존 env key fallback이나 migration 안내가 보이지 않습니다.",
+        "confidence": "high",
+        "location": {
+          "kind": "verified",
+          "path": "src/config/runtime.ts",
+          "line": 11,
+          "quote": "const apiBase = process.env.APP_API_BASE_URL"
+        }
+      }
+    ],
+    "openQuestions": [
+      {
+        "ruleId": "17-3",
+        "title": "취소 경로가 실제로 정리되는지 추가 확인이 필요합니다",
+        "body": "diff 밖 상위 hook이나 router cleanup에서 abort를 처리하는지 확인이 필요합니다.",
+        "reason": "현재 diff와 직접 인접한 코드만으로는 unmount 이후 cleanup 유무를 확정할 수 없었습니다.",
+        "location": {
+          "kind": "unverified",
+          "reason": "추가 탐색이 필요하지만 가짜 경로/줄 번호를 만들 수 없습니다."
+        },
+        "recommendation": "상위 cleanup 또는 abort token 정리 경로를 확인하세요."
+      }
+    ]
+  }
+}

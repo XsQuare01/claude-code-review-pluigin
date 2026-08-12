@@ -1,0 +1,11 @@
+{
+  "name": "missing-open-questions",
+  "expected": "invalid",
+  "expectedErrorCodes": [
+    "E_TOPLEVEL_MISSING_OPEN_QUESTIONS"
+  ],
+  "input": {
+    "schemaVersion": 1,
+    "findings": []
+  }
+}

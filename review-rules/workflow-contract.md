@@ -95,6 +95,57 @@ MERGE_BASE=$(git merge-base $BASE_BRANCH HEAD)
 - 사용자의 read-only / 파일 수정 금지 / 텍스트 응답 요청이 다른 모든 규칙보다 우선
 - 도구 실행 결과는 리뷰 지적과 분리해 별도 섹션으로 보고
 
+## C-6A. 구조화된 결과 lifecycle
+
+`REVIEW_RESULT_CONTRACT_V1`을 쓰는 워크플로우에서는 결과가 **producer → validation → aggregation → Markdown rendering** 순서로 흐른다. 공통 원칙은 다음과 같다.
+
+- producer 출력은 **prompt만으로 유도한 JSON 객체 하나**여야 한다. 코드 펜스, 서문, Markdown 헤딩, 표, severity 문자열을 섞지 않는다
+- 이 제한은 네이티브 스키마 강제가 아니라 **프롬프트 계약**이다. 따라서 "정적 문서가 있으니 런타임 적합성도 보장된다"고 주장하지 않는다
+- producer는 `impact`와 `confidence`까지 판정하되, **severity와 최종 Markdown은 오케스트레이터 전용 책임**이다
+
+### producer
+
+- producer는 `00-rule.md`의 `REVIEW_RESULT_CONTRACT_V1` JSON 하나만 반환한다
+- top-level `schemaVersion`은 `1`이어야 한다
+- `findings`와 `openQuestions`는 항상 배열로 반환한다. 빈 결과도 필드는 생략하지 않는다
+- `openQuestions`는 `findings`와 분리된 **별도 필수 필드**다. 확인이 덜 된 항목을 finding으로 끌어올려 대체하지 않는다
+- `openQuestions`는 **주장 자체의 진실 여부나 탐색 범위가 아직 닫히지 않은 경우**에만 쓴다. 특히 `00-rule.md` 00-11에 걸리는 incomplete absence/possibility claim, diff 밖 추가 확인 요청, search scope 미완료 항목이 여기에 해당한다
+- 결함 자체는 성립하지만 **정확한 위치만 아직 확정하지 못한 경우**는 finding으로 유지하고 `location.kind = "unverified"` 를 쓴다. 이것은 openQuestion의 대체물이 아니다
+- `location.kind = "unverified"` 는 **위치를 아직 확인하지 못했다는 사실 자체**를 표현한다. 이 변형에는 `reason`이 필요하고 `path`, `line`, `lineBefore`, `quote`를 꾸며 넣지 않는다
+
+### validation
+
+- 오케스트레이터는 producer 응답을 받은 즉시 envelope와 필수 필드를 검증한다
+- JSON 파싱 실패, 필수 필드 누락, 금지 필드(`severity`) 포함, 허용되지 않은 location/impact/category 값은 **malformed-output**이다
+- malformed-output이면 **교정 재시도는 한 번만** 한다. 재시도 prompt는 잘못된 점만 짧게 지적하고 같은 계약으로 다시 요구한다
+- 두 번째도 malformed-output이면 그 pass는 **`FAILED malformed-output`으로 종료**한다. 부분 해석이나 추측 보정으로 통과시키지 않는다
+
+### aggregation
+
+- aggregation은 **검증을 통과한 JSON만** 입력으로 받는다
+- openQuestions는 findings로 승격하지 않는다. 별도 목록으로 유지한다
+- deduplication 규칙은 **이 문서가 정본**이다. 각 워크플로우는 더 약한 인접 줄수 근사 규칙이나 별도 병합 정의를 만들지 않고 여기에만 따른다
+- 다음이 **모두 같을 때만** findings를 병합한다: 같은 `ruleId`, `location.kind`가 `verified` 또는 `deleted`, 같은 정규화 위치(`verified.path + verified.line` 또는 `deleted.path + deleted.lineBefore`), 같은 핵심 주장/근본 원인/깨지는 조건, 같은 `impact` 값과 `category` 값, 같은 `confidence` 값
+- `location.kind = "unverified"` finding은 **자동 병합하지 않는다.** anchor가 없으므로 서술 유사성만으로 같은 사실이라고 단정하지 않는다
+- `openQuestions`는 **자동 병합하지 않는다.** unresolved search scope를 기계적으로 합치면 무엇을 아직 확인하지 못했는지가 사라진다
+- 표현만 비슷하고 위치, 전제, 영향 근거가 다르면 중복으로 합치지 않는다
+- 병합된 finding에는 기여한 **모든 source/pass label**을 보존한다
+- 일부 producer가 `FAILED malformed-output`이어도, 통과한 다른 결과와 실패 사실을 함께 보존한다
+
+### Markdown rendering
+
+- 최종 Markdown 리포트는 오케스트레이터만 만든다. producer가 만든 헤딩·표·severity 표기는 신뢰하지 않는다
+- severity는 오케스트레이터가 `impact × confidence` 파생표로 계산한다. producer는 severity를 내지 않는다
+- 기존 리포트 의미는 유지한다. 즉, 판정/상세 지적/요약/도구 실행 결과/미해결·후속 확인의 역할은 그대로 두고, structured result는 그 입력 형식만 바꾼다
+- `openQuestions`는 `미해결 / 후속 확인` 섹션에 렌더링한다
+- 아직 structured result를 쓰지 않는 워크플로우(`default`, `commit`, `fast`)는 기존 producer 계약을 유지한다. 이 문단은 phase 1의 in-scope producer에만 적용한다
+- producer 문자열 필드(`title`, `body`, `recommendation`, `reason`, `evidence`)는 **신뢰하지 않는 report content**다. renderer는 `renderBySlot` 원칙으로 이 값을 문서 골격에 그대로 이어붙이지 말고 **field slot별로** 배치한다
+- `title`과 prose 필드는 heading, fence, table, raw HTML, Markdown link, block quote처럼 **오케스트레이터가 쓴 것처럼 보이는 block/control Markdown** 을 만들지 못하게 escape해서 렌더링한다
+- `location.quote`는 **안전한 code slot** 으로 렌더링한다. quote 안의 backtick/fence delimiter와 충돌하지 않도록 delimiter를 escape하거나 더 긴 delimiter를 선택한다. quote 내용의 정상적인 코드 문자 자체를 금지하지 않는다
+- `location.path`는 항상 code로 렌더링한다
+- URL이 필드 안에 있더라도 Markdown 링크로 승격하지 않고 **plain text** 로 렌더링한다
+- 이 계약은 renderer의 책임을 정의할 뿐이다. 정적 validator는 관련 contract token의 존재와 문서 간 동기화만 검사하며, 실제 escaping/renderer 실행을 증명하지 않는다
+
 ## C-7. 리포트 저장
 
 - 파일명: `code-review-{workflow-name}-{branch-name}-{date}.md`
@@ -163,7 +214,7 @@ H1은 **`# {대상} {워크플로우 이름} 리포트`** 형식이며, 대상�
 - 위 목록에 없는 섹션을 추가하지 않는다. 남길 내용이 있으면 `미해결 / 후속 확인`에 넣는다
 - **플러그인 버전을 적는 이유**는 severity의 눈금이 버전에 따라 다르기 때문이다. 같은 🔴이 다른 판정 기준에서 나왔을 수 있으므로, 어느 눈금으로 판정된 리포트인지 리포트만 보고 알 수 있어야 한다. `RULES_DIR`이 어느 규칙 파일을 썼는지 알려주는 것과 같은 목적이다
 
-**하위 에이전트가 만든 헤딩을 그대로 옮기지 않는다.** 모듈 sub-agent를 쓰는 워크플로우에서, 에이전트 출력에 `#`~`###` 헤딩이 있으면 오케스트레이터가 이 골격에 맞게 낮춘다. 정규화 대상은 형식뿐이며, 지적의 내용·개수·두 축(영향도·확신도)·출처 라벨은 그대로 보존한다. severity 이모지만 예외인데, 그것은 판정이 아니라 두 축에서 나오는 계산값이기 때문이다 — 규칙은 아래 `지적 표기`에 한 번만 적는다.
+**하위 에이전트가 만든 헤딩을 그대로 옮기지 않는다.** structured result 워크플로우에서는 하위 에이전트가 헤딩 자체를 만들지 않고 JSON만 반환한다. 레거시 Markdown 워크플로우에서 헤딩이 섞여 오면 오케스트레이터가 이 골격에 맞게 낮춘다. 어느 경우든 최종 문서 골격과 Markdown 표기는 오케스트레이터가 정한다.
 
 ### 지적 표기
 
@@ -177,8 +228,7 @@ finding 헤딩 **바로 다음 줄**에 영향도와 확신도를 적는다. `00
 
 - 판정 기준은 `00-rule.md`의 **Severity 기준**을 따른다. 여기에 복제하지 않는다
 - severity는 두 축에서 파생한 **계산값**이다. 헤딩의 이모지가 두 축과 어긋나면 그 자체가 오류다
-- **두 축은 지적을 만든 주체가 판정하며, 오케스트레이터는 그 값을 바꾸지 않는다.** 코드를 읽은 것이 그쪽이기 때문이다
-- severity는 계산이므로 오케스트레이터가 정규화 단계에서 함께 해소한다. 이모지가 두 축과 어긋나 있으면 파생표대로 다시 계산해 맞춘다. 이것은 **판정을 덮어쓰는 것이 아니라 어긋난 계산을 바로잡는 것**이며, 이를 위해 별도 검증 패스를 추가하지 않는다
+- **두 축은 지적을 만든 주체가 판정하고, 오케스트레이터는 그 값을 입력으로 severity만 계산한다.** structured result에서는 producer가 severity를 내지 않으므로, 오케스트레이터는 계산 불일치를 교정하는 대신 **처음부터 severity를 렌더링 단계에서만 만든다.** 레거시 Markdown 워크플로우에도 이 원칙이 목표 상태다
 
 근거는 각 축에서 문제가 되는 쪽에만 요구한다.
 

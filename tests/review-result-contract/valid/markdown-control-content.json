@@ -1,0 +1,24 @@
+{
+  "name": "markdown-control-content",
+  "expected": "valid",
+  "input": {
+    "schemaVersion": 1,
+    "findings": [
+      {
+        "ruleId": "19-2",
+        "title": "# heading처럼 보이는 문자열도 단순 title content다",
+        "body": "```danger\n| fake | table |\n```\n<a href=\"https://example.com\">raw html</a> 같은 문자가 있어도 schema 수준에서는 허용된다.",
+        "impact": "low",
+        "confidence": "high",
+        "location": {
+          "kind": "verified",
+          "path": "src/app/report.ts",
+          "line": 12,
+          "quote": "const title = `## not-a-heading | ${value}`"
+        },
+        "evidence": "https://example.com should remain plain text at render time."
+      }
+    ],
+    "openQuestions": []
+  }
+}

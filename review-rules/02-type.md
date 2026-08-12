@@ -293,3 +293,16 @@ function assertUser(v: unknown): asserts v is User {
 // ✅ 핸들러를 붙인 엘리먼트
 <button onClick={e => { e.currentTarget.disabled = true }} />
 ```
+
+## 02-OUTPUT. 출력 형식
+
+<!-- REVIEW_RESULT_CONTRACT_V1_PRODUCER_OUTPUT -->
+
+이 문서를 producer prompt에 쓸 때는 **`REVIEW_RESULT_CONTRACT_V1`** 을 따른다. 응답은 Markdown 표나 헤딩이 아니라 **raw JSON 객체 하나만** 반환한다.
+
+- top-level에는 `schemaVersion`, `findings`, `openQuestions`를 항상 포함하고 `schemaVersion`은 `1`이어야 한다.
+- `severity`는 producer가 내지 않는다. 이 모듈은 `impact`와 `confidence`만 판정한다.
+- 타입 우회 범위, trust boundary, tsconfig 의존성, variance, React typing 같은 도메인별 설명은 새 schema field를 만들지 말고 `body`, `recommendation`, `evidence`에 담는다.
+- `00-rule.md` 00-11에 걸리는 unresolved absence/possibility claim, search scope 미완료, 추가 탐색 요청만 `openQuestions`로 보낸다.
+- 결함은 성립하지만 exact location만 확인하지 못했으면 finding을 유지하고 `location.kind="unverified"`와 `reason`만 사용한다.
+- producer 문자열 필드는 최종 리포트의 신뢰된 Markdown이 아니다. heading/table/raw HTML/link를 직접 만들려고 하지 말고 plain prose만 넣는다.

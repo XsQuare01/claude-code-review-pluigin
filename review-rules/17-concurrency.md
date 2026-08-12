@@ -94,9 +94,16 @@
 
 ## 17-OUTPUT. 출력 형식
 
-| Severity | Rule | 위치 | 반복/경쟁 시나리오 | 현재 위험 | 필요한 안전장치 |
-|----------|------|------|-------------------|-----------|----------------|
-| 🔴/🟡/🔵 | 17-x | 파일:라인 | 구체적 재실행·순서 역전·동시 쓰기 | 왜 중복/덮어쓰기/데이터 손상이 가능한지 | key/lock/transaction/abort/rollback 등 |
+<!-- REVIEW_RESULT_CONTRACT_V1_PRODUCER_OUTPUT -->
+
+이 문서를 producer prompt에 쓸 때는 **`REVIEW_RESULT_CONTRACT_V1`** 을 따른다. 응답은 Markdown 표나 헤딩이 아니라 **raw JSON 객체 하나만** 반환한다.
+
+- top-level에는 `schemaVersion`, `findings`, `openQuestions`를 항상 포함하고 `schemaVersion`은 `1`이어야 한다.
+- `severity`는 producer가 내지 않는다. 이 모듈은 `impact`와 `confidence`만 판정한다.
+- 반복/경쟁 시나리오, 현재 위험, 필요한 안전장치와 반례 탐색 범위는 새 schema field를 만들지 말고 `body`, `recommendation`, `evidence`에 담는다.
+- `00-rule.md` 00-11에 걸리는 unresolved absence/possibility claim, search scope 미완료, 추가 탐색 요청만 `openQuestions`로 보낸다.
+- 결함은 성립하지만 exact location만 확인하지 못했으면 finding을 유지하고 `location.kind="unverified"`와 `reason`만 사용한다.
+- producer 문자열 필드는 최종 리포트의 신뢰된 Markdown이 아니다. heading/table/raw HTML/link를 직접 만들려고 하지 말고 plain prose만 넣는다.
 
 **원칙**
 - 단순히 "동시성 위험"이라고 쓰지 말고, 어떤 이벤트가 몇 번 들어와 어떤 상태나 부작용이 잘못 적용되는지 설명한다.

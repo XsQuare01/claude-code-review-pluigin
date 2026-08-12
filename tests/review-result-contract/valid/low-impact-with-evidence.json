@@ -1,0 +1,24 @@
+{
+  "name": "low-impact-with-evidence",
+  "expected": "valid",
+  "input": {
+    "schemaVersion": 1,
+    "findings": [
+      {
+        "ruleId": "19-6",
+        "title": "선택 이유를 더 적으면 좋습니다",
+        "body": "이 최적화의 장기 유지 비용은 낮지만, 근거가 한 줄 더 있으면 다음 변경자가 이해하기 쉽습니다.",
+        "impact": "low",
+        "evidence": "현재 diff에는 왜 이 우회가 필요한지에 대한 짧은 설명이 없습니다.",
+        "confidence": "high",
+        "location": {
+          "kind": "verified",
+          "path": "src/features/search/cache-key.ts",
+          "line": 18,
+          "quote": "const cacheKey = `${scope}:${query}:${page}`"
+        }
+      }
+    ],
+    "openQuestions": []
+  }
+}

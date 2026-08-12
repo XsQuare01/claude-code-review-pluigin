@@ -1,0 +1,31 @@
+{
+  "name": "unverified-open-question",
+  "expected": "valid",
+  "input": {
+    "schemaVersion": 1,
+    "findings": [
+      {
+        "ruleId": "17-2",
+        "title": "중복 submit 방어가 빠진 것으로 보입니다",
+        "body": "중복 실행 방어가 없다는 결함 자체는 성립하지만, 현재 수집된 diff만으로는 실제 anchor 줄을 정확히 못 박지 못했습니다.",
+        "impact": "low",
+        "confidence": "high",
+        "location": {
+          "kind": "unverified",
+          "reason": "여러 handler 사이의 책임 분기 중 어느 줄을 대표 anchor로 잡아야 하는지 추가 확인이 필요합니다. path/line/quote를 꾸며 넣지 않습니다."
+        }
+      }
+    ],
+    "openQuestions": [
+      {
+        "title": "상위 cleanup 경로 확인 필요",
+        "body": "현재 diff만으로는 컴포넌트 바깥 abort 정리 경로를 확인할 수 없습니다.",
+        "reason": "위치를 확정할 근거가 아직 없어 unverified 위치로 남깁니다.",
+        "location": {
+          "kind": "unverified",
+          "reason": "추가 탐색 전에는 path/line/quote를 사실처럼 적을 수 없습니다."
+        }
+      }
+    ]
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "name": "low-impact-low-confidence",
+  "expected": "valid",
+  "input": {
+    "schemaVersion": 1,
+    "findings": [
+      {
+        "ruleId": "19-4",
+        "title": "더 단순한 대안 대비 근거가 부족합니다",
+        "body": "사용처 하나인 로직에 전역 store 계층을 추가했지만 현재 diff만으로는 그 이득이 드러나지 않습니다.",
+        "impact": "low",
+        "confidence": "low",
+        "reason": "향후 확장 요구사항이 이미 합의됐는지는 현재 변경만으로 확정할 수 없었습니다.",
+        "location": {
+          "kind": "verified",
+          "path": "src/features/search/use-search-store.ts",
+          "line": 9,
+          "quote": "export const useSearchStore = create<SearchState>(() => ({ ... }))"
+        },
+        "recommendation": "현재 요구가 단일 사용처라면 local state나 custom hook으로 충분한지 다시 확인하세요."
+      }
+    ],
+    "openQuestions": []
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "name": "high-missing-evidence",
+  "expected": "invalid",
+  "expectedErrorCodes": [
+    "E_FINDING_HIGH_REQUIRES_EVIDENCE"
+  ],
+  "input": {
+    "schemaVersion": 1,
+    "findings": [
+      {
+        "ruleId": "17-1",
+        "title": "중복 결제 가능성",
+        "body": "중복 submit 방어가 없습니다.",
+        "impact": "high",
+        "category": "data-loss",
+        "confidence": "high",
+        "location": {
+          "kind": "verified",
+          "path": "src/features/payments/submit-payment.ts",
+          "line": 38,
+          "quote": "await charge(card)"
+        }
+      }
+    ],
+    "openQuestions": []
+  }
+}

@@ -131,13 +131,16 @@ Three.js 객체는 대부분 **가변**이다. React에서 특히 위험하다.
 
 ## 출력 형식
 
-| Severity | 영향·확신 | 파일 | 위치 | 분류 | 이슈 | 개선 방향 |
-|----------|-----------|------|------|------|------|----------|
-| 🔴/🟡/🔵 | 낮음·높음 | path/to/file | line | A-x / C-x | 수식/코드의 구체적 위반 | 올바른 식·API 제시 |
+<!-- REVIEW_RESULT_CONTRACT_V1_PRODUCER_OUTPUT -->
 
-- `영향·확신` 열에는 두 축의 값을 `·`로 이어 적는다. 근거가 필요한 쪽은 값 뒤 괄호에 함께 적는다 — `낮음·높음`, `높음(데이터 손상)·높음`, `낮음·낮음(부모 미확인)`.
-- **`Severity` 열은 이 열에서 파생한 계산값이다** (`00-rule.md`의 **Severity 기준**). 두 축을 먼저 판정하고 파생표대로 이모지를 적는다. 두 축과 어긋난 이모지는 그 자체가 오류다.
-- 두 축은 **이 패스가 판정한다.** 코드를 읽은 것이 이 패스이므로, 오케스트레이터가 나중에 채워 넣을 수 없다.
+이 문서를 producer prompt에 쓸 때는 **`REVIEW_RESULT_CONTRACT_V1`** 을 따른다. 응답은 Markdown 표나 헤딩이 아니라 **raw JSON 객체 하나만** 반환한다.
+
+- top-level에는 `schemaVersion`, `findings`, `openQuestions`를 항상 포함하고 `schemaVersion`은 `1`이어야 한다.
+- `severity`는 producer가 내지 않는다. 이 패스는 `impact`와 `confidence`만 판정한다.
+- shape/차원 추적, storage order, transpose/inverse 규칙, projection 조건, 수학적 전제와 수정 방향은 새 schema field를 만들지 말고 `body`, `recommendation`, `evidence`에 담는다.
+- `00-rule.md` 00-11에 걸리는 unresolved absence/possibility claim, search scope 미완료, 추가 탐색 요청만 `openQuestions`로 보낸다.
+- 결함은 성립하지만 exact location만 확인하지 못했으면 finding을 유지하고 `location.kind="unverified"`와 `reason`만 사용한다.
+- producer 문자열 필드는 최종 리포트의 신뢰된 Markdown이 아니다. heading/table/raw HTML/link를 직접 만들려고 하지 말고 plain prose만 넣는다.
 
 **원칙**
 

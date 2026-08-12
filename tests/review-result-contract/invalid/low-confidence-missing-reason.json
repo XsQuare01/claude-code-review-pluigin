@@ -1,0 +1,26 @@
+{
+  "name": "low-confidence-missing-reason",
+  "expected": "invalid",
+  "expectedErrorCodes": [
+    "E_FINDING_LOW_CONFIDENCE_REQUIRES_REASON"
+  ],
+  "input": {
+    "schemaVersion": 1,
+    "findings": [
+      {
+        "ruleId": "19-3",
+        "title": "의도가 충분히 드러나지 않습니다",
+        "body": "코드만으로는 왜 이 구조가 필요한지 확정하기 어렵습니다.",
+        "impact": "low",
+        "confidence": "low",
+        "location": {
+          "kind": "verified",
+          "path": "src/features/search/index.ts",
+          "line": 7,
+          "quote": "export * from './search-runtime'"
+        }
+      }
+    ],
+    "openQuestions": []
+  }
+}

@@ -57,6 +57,144 @@
 
 하위 모듈은 각자 더 구체적인 Severity 정의를 가질 수 있으며, 세부 판단은 **해당 모듈의 Severity 기준**을 우선 따른다.
 
+## REVIEW_RESULT_CONTRACT_V1
+
+구조화된 리뷰 결과를 쓰는 producer는 **Markdown이나 severity 없이** 아래 계약의 **JSON 객체 하나만** 반환한다. 이 계약은 prompt 안의 지시로만 강제되며, LLM 출력은 네이티브 스키마로 봉인돼 있지 않다. 따라서 런타임 적합성은 오케스트레이터의 검증과 실패-폐쇄 처리로 확보한다.
+
+- 최상위 필수 필드: `schemaVersion`, `findings`, `openQuestions`
+- `schemaVersion`은 반드시 `1`
+- producer는 `severity`를 어떤 depth에도 넣지 않는다. severity는 오케스트레이터가 `영향도 × 확신도`로만 파생한다
+- `findings`의 각 항목은 `impact`, `confidence`, `location`을 가진다
+- `location.kind`는 `verified` / `deleted` / `unverified`만 허용한다
+- `impact=high`면 `category`와 `evidence`가 둘 다 필요하다
+- `impact=low`면 `category`를 쓰지 않는다. `evidence`는 **있어도 되고 없어도 된다**
+- `confidence=low`면 `reason`이 필요하다
+- 높음 영향도의 `category`는 아래 닫힌 ID만 허용한다: `user-malfunction`, `data-loss`, `security-exposure`, `verification-failure`, `external-breakage`
+- 확인되지 않은 부재 주장이나 추가 탐색이 필요한 항목은 지적을 억지로 만들지 말고 `openQuestions`로 보낸다
+- 결함은 성립하지만 정확한 위치만 못 박지 못한 finding은 `location.kind = "unverified"` 로 유지한다. `unverified` location과 `openQuestions`는 같은 개념이 아니다
+- `unverified` 위치는 **가짜 경로·줄번호를 만들지 않고도 표현 가능해야 한다.** `reason`은 필수이고 `path`, `line`, `lineBefore`, `quote`는 금지한다
+
+<!-- REVIEW_RESULT_CONTRACT_V1:BEGIN -->
+```json
+{
+  "contractName": "REVIEW_RESULT_CONTRACT_V1",
+  "schemaVersion": 1,
+  "topLevel": {
+    "required": [
+      "schemaVersion",
+      "findings",
+      "openQuestions"
+    ],
+    "forbidden": [
+      "severity"
+    ]
+  },
+  "impact": {
+    "enum": [
+      "high",
+      "low"
+    ],
+    "highRequires": [
+      "category",
+      "evidence"
+    ],
+    "lowForbids": [
+      "category"
+    ],
+    "lowAllowsOptional": [
+      "evidence"
+    ],
+    "categoryEnum": [
+      "user-malfunction",
+      "data-loss",
+      "security-exposure",
+      "verification-failure",
+      "external-breakage"
+    ]
+  },
+  "confidence": {
+    "enum": [
+      "high",
+      "low"
+    ],
+    "lowRequires": [
+      "reason"
+    ]
+  },
+  "location": {
+    "kindField": "kind",
+    "variants": {
+      "verified": {
+        "required": [
+          "path",
+          "line",
+          "quote"
+        ]
+      },
+      "deleted": {
+        "required": [
+          "path",
+          "lineBefore",
+          "quote"
+        ]
+      },
+      "unverified": {
+        "required": [
+          "reason"
+        ],
+        "forbidden": [
+          "path",
+          "line",
+          "lineBefore",
+          "quote"
+        ]
+      }
+    }
+  },
+  "findingsItem": {
+    "required": [
+      "ruleId",
+      "title",
+      "body",
+      "impact",
+      "confidence",
+      "location"
+    ],
+    "forbidden": [
+      "severity"
+    ]
+  },
+  "openQuestionsItem": {
+    "required": [
+      "title",
+      "body",
+      "location",
+      "reason"
+    ]
+  },
+  "renderingSafety": {
+    "untrustedFields": [
+      "title",
+      "body",
+      "recommendation",
+      "reason",
+      "evidence",
+      "location.path",
+      "location.quote"
+    ],
+    "renderBySlot": true,
+    "escapeMarkdownControlInProseFields": true,
+    "codeFields": [
+      "location.path",
+      "location.quote"
+    ],
+    "urlsRenderAs": "plain-text",
+    "staticValidatorScope": "doc-sync-only"
+  }
+}
+```
+<!-- REVIEW_RESULT_CONTRACT_V1:END -->
+
 ### 규칙 문서의 이모지
 
 규칙 헤딩의 이모지(`## 03-1. Hooks 규칙 🔴`)는 그 규칙 위반이 **대체로** 어느 영향도에 해당하는지의 참고 표시다. 지적의 severity는 위 파생으로만 정해지며, **규칙 표기가 파생을 덮어쓰지 않는다.**

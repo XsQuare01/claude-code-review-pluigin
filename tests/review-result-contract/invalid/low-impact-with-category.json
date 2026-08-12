@@ -1,0 +1,27 @@
+{
+  "name": "low-impact-with-category",
+  "expected": "invalid",
+  "expectedErrorCodes": [
+    "E_FINDING_LOW_FORBIDS_CATEGORY"
+  ],
+  "input": {
+    "schemaVersion": 1,
+    "findings": [
+      {
+        "ruleId": "19-6",
+        "title": "선택 이유가 더 있으면 좋습니다",
+        "body": "짧은 주석이 있으면 다음 변경자가 이해하기 쉽습니다.",
+        "impact": "low",
+        "category": "user-malfunction",
+        "confidence": "high",
+        "location": {
+          "kind": "verified",
+          "path": "src/features/feed/use-feed.ts",
+          "line": 14,
+          "quote": "const sorted = items.toSorted(sortByNewest)"
+        }
+      }
+    ],
+    "openQuestions": []
+  }
+}

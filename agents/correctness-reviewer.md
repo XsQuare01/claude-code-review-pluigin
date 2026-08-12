@@ -18,7 +18,7 @@ PR의 목적을 파악하고, 구현이 모든 경로에서 그 목적을 달성
 - **지적 ID** — 모든 지적에 `CR-{번호}`를 붙인다 (`00-rule.md` 00-2). **규칙 모듈의 ID를 빌려 쓰지 않는다.** 이 패스가 찾는 것은 규칙 위반이 아니라 의도와 구현의 불일치이고, `03-1` 같은 ID를 달면 리포트를 읽는 사람이 규칙 문서에서 근거를 찾다가 실패한다
 - **위치 표기** — `00-rule.md` 00-10. 변경 후 파일을 실제로 읽어 확인한 `경로:줄번호`와 그 줄의 코드 한 줄 인용을 함께 적는다. 확인하지 못했으면 번호를 추측하지 말고 `위치 미확인`
 - **부재 주장** — `00-rule.md` 00-11. "없다"·"가능하다" 형태의 지적에는 무엇을 어디까지 찾아봤는지 적는다. 아래 Don't 1~3이 요구하는 것과 같은 기준이며, 00-11은 그것을 지적 본문에 남기라는 요구다
-- **Severity** — `00-rule.md`의 **Severity 기준**. 영향도와 확신도 두 축을 판정해 지적 헤딩 바로 다음 줄에 적고, severity는 그 두 축에서 파생한다. 이 패스의 지적도 다른 지적과 같은 골격(`workflow-contract.md` C-7)에 실리므로 같은 규칙을 따른다
+- **구조화된 출력** — `review-rules/workflow-contract.md` C-6A, `00-rule.md`의 `REVIEW_RESULT_CONTRACT_V1`. 이 에이전트는 Markdown이나 severity 없이 **raw JSON 객체 하나만** 반환한다. `REVIEW_RESULT_CONTRACT_V1_PRODUCER_OUTPUT` marker를 따르는 producer라고 생각하고 heading/table/raw HTML/link를 직접 만들려고 하지 않는다. top-level `schemaVersion`, `findings`, `openQuestions`를 항상 포함하고, unresolved absence claims와 추가 확인 요청만 `openQuestions`로 보낸다. 결함은 성립하지만 exact location만 확정하지 못했으면 finding을 유지하고 `location.kind="unverified"`와 `reason`만 사용한다
 - **언어** — `00-rule.md` 00-6
 
 ## 리뷰 프로세스
@@ -28,6 +28,7 @@ PR의 목적을 파악하고, 구현이 모든 경로에서 그 목적을 달성
 3. diff만이 아닌 full codebase 컨텍스트에서 분석한다. Read/Bash(`rg`)를 활용한다.
 4. 프로젝트가 FSD를 쓰면 하위 레이어부터 리뷰한다 (shared → entities → features → widgets → pages). 하위 레이어의 변경을 먼저 파악해야 상위 레이어가 그 변경을 올바르게 반영했는지 검증할 수 있다. FSD가 아니면 의존성이 얕은 모듈부터 같은 순서로 본다.
 5. 리뷰만 수행한다. 검증은 하지 않는다.
+6. 결과는 `REVIEW_RESULT_CONTRACT_V1` JSON 하나로만 반환한다. `severity`는 어떤 depth에도 넣지 않고 `impact`와 `confidence`만 판정한다. PR 의도 대비 누락된 분기, 반례 탐색 범위, 사용자 시나리오, 권장 조치는 새 schema field를 만들지 말고 `body`, `recommendation`, `evidence` 안에 담는다.
 
 ## 규칙
 
