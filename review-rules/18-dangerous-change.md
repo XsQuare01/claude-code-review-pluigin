@@ -2,7 +2,7 @@
 
 이 모듈은 **틀렸을 때 되돌리기 어렵거나 피해가 큰 변경**을 본다. 코드 품질이 아니라 운영 위험이 기준이다.
 
-`16-api-contract.md`와 `17-concurrency.md`가 severity 상향 근거로 이 모듈을 참조한다.
+`16-api-contract.md`와 `17-concurrency.md`는 이 모듈이 다루는 운영 위험과 겹칠 수 있다. 그 경우 severity를 복사하지 말고, **별도 finding으로 두 축을 독립 판정**한다.
 
 ## Trigger / 적용 조건
 
@@ -17,13 +17,14 @@
 
 읽기 전용 조회, 표시 전용 UI, 순수 계산에는 적용하지 않는다.
 
-## Severity 기준
+## 영향도 보정 예시
 
-| Severity | 의미 |
+| 영향도 | 이 모듈에서 자주 보이는 근거 |
 |----------|------|
-| 🔴 ERROR | 데이터 손실, 권한 우회, 잘못된 과금, 롤백 불가, 배포 즉시 장애 가능 |
-| 🟡 WARNING | 위험 흐름을 건드렸는데 안전 증거(검증·가드·복구 경로)가 부족함 |
-| 🔵 INFO | 위험도는 낮으나 의도·복구 절차를 남기면 좋은 변경 |
+| 높음 | 데이터 손실, 권한 우회, 잘못된 과금, 복구 경로 상실, 배포 즉시 장애 같은 닫힌 높은 영향 범주를 현재 변경에서 직접 지목할 수 있는 경우 |
+| 낮음 | 위험 흐름은 건드렸지만, 안전 증거 부족이 곧바로 닫힌 높은 영향 범주로 이어진다고 아직 닫지 못한 경우 |
+
+위험한 영역을 건드렸다는 사실만으로 자동 높은 영향이 되지 않는다. 하지만 실제로 권한·데이터·과금·복구 불가가 닫히면 이 모듈은 그 근거를 가장 직접적으로 갖는다.
 
 ---
 
@@ -76,22 +77,15 @@ UI에서 버튼을 숨기는 것은 권한 통제가 아니다. **실제 판정 
 
 ---
 
-## 18-OUTPUT. 출력 형식
+## 18-OUTPUT. 도메인 결과 가이드
 
-<!-- REVIEW_RESULT_CONTRACT_V1_PRODUCER_OUTPUT -->
-
-이 문서를 producer prompt에 쓸 때는 **`REVIEW_RESULT_CONTRACT_V1`** 을 따른다. 응답은 Markdown 표나 헤딩이 아니라 **raw JSON 객체 하나만** 반환한다.
-
-- top-level에는 `schemaVersion`, `findings`, `openQuestions`를 항상 포함하고 `schemaVersion`은 `1`이어야 한다.
-- `severity`는 producer가 내지 않는다. 이 모듈은 `impact`와 `confidence`만 판정한다.
-- 위험 시나리오, 현재 방어, 추가로 필요한 증거와 복구/롤백 방향은 새 schema field를 만들지 말고 `body`, `recommendation`, `evidence`에 담는다.
-- `00-rule.md` 00-11에 걸리는 unresolved absence/possibility claim, search scope 미완료, 추가 탐색 요청만 `openQuestions`로 보낸다.
-- 결함은 성립하지만 exact location만 확인하지 못했으면 finding을 유지하고 `location.kind="unverified"`와 `reason`만 사용한다.
-- producer 문자열 필드는 최종 리포트의 신뢰된 Markdown이 아니다. heading/table/raw HTML/link를 직접 만들려고 하지 말고 plain prose만 넣는다.
+- 위험 변경 지적은 **어떤 운영 사고가 어떻게 발생하는지**를 적는다. 권한 우회, 과금 중복, 삭제 후 복구 불가처럼 닫힌 시나리오가 보여야 한다.
+- 현재 방어와 빠진 증거를 구분해 적고, rollback·soft delete·recheck·feature flag 같은 복구 방향이 있다면 함께 남긴다.
+- 다른 모듈과 겹쳐도 이 모듈은 운영 위험 자체를 설명하는 역할을 맡는다. 다른 모듈의 등급을 그대로 끌어오지 않는다.
 
 ## 18-SCOPE. 중복 방지
 
-- contract의 shape/semantics 호환성 자체는 `16-api-contract.md`가 우선한다. 이 모듈은 그 변경이 권한·데이터·과금 위험으로 이어질 때만 severity를 올린다.
+- contract의 shape/semantics 호환성 자체는 `16-api-contract.md`가 우선한다. 이 모듈은 그 변경이 권한·데이터·과금 위험으로 이어질 때만 **별도 위험 finding**을 검토한다.
 - 중복 실행·순서 역전·lost update의 구체적 방어책은 `17-concurrency.md`가 우선한다.
 - 실패 전파·fallback·사용자 안내 자체는 `exception.md`가 우선한다.
 - 단순 삭제 회귀는 `20-deletion-regression.md`가 우선한다.
