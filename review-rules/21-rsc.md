@@ -21,13 +21,14 @@ Vite + SPA, CRA, Electron renderer 전용처럼 서버 컴포넌트 개념이 �
 - 권한 검사 누락의 운영 위험 등급 → `18-dangerous-change.md`
 - 요청 shape·payload 호환성 → `16-api-contract.md`
 
-## Severity 기준
+## 영향도 보정 예시
 
-| Severity | 의미 |
+| 영향도 | 이 모듈에서 자주 보이는 근거 |
 |----------|------|
-| 🔴 ERROR | 서버 비밀 유출, 권한 우회, 빌드/런타임 실패, 직렬화 크래시 |
-| 🟡 WARNING | 클라이언트 번들 비대화, 경계 오배치, 검증 부족으로 회귀 가능 |
-| 🔵 INFO | 경계 의도를 더 분명히 표현할 수 있는 경우 |
+| 높음 | 서버 비밀 유출, 권한 우회, 빌드/런타임 실패, 직렬화 크래시처럼 닫힌 높은 영향 범주를 직접 지목할 수 있는 경우 |
+| 낮음 | 클라이언트 번들 비대화, 경계 오배치, 과도한 payload, guard 부족처럼 회귀 위험은 있지만 아직 닫힌 높은 영향 범주를 직접 닫지 못한 경우 |
+
+RSC 경계 문제라도 단순 bundle size, structure, clarity 문제만으로는 영향 높음이 아니다. 실제 비밀 유출·권한 우회·직렬화 실패가 닫힐 때만 높음으로 둔다.
 
 ---
 
@@ -114,18 +115,11 @@ Server Function은 클라이언트가 임의의 인자로 호출할 수 있는 �
 4. 새 Server Function마다 "인증 검사 있는가 / 입력을 검증하는가 / 이 인자를 조작하면 남의 데이터에 닿는가"를 묻는다.
 5. env·비밀·서버 SDK가 클라이언트 경계 아래에서 import되는 경로가 있는지 확인한다.
 
-## 21-OUTPUT. 출력 형식
+## 21-OUTPUT. 도메인 결과 가이드
 
-<!-- REVIEW_RESULT_CONTRACT_V1_PRODUCER_OUTPUT -->
-
-이 문서를 producer prompt에 쓸 때는 **`REVIEW_RESULT_CONTRACT_V1`** 을 따른다. 응답은 Markdown 표나 헤딩이 아니라 **raw JSON 객체 하나만** 반환한다.
-
-- top-level에는 `schemaVersion`, `findings`, `openQuestions`를 항상 포함하고 `schemaVersion`은 `1`이어야 한다.
-- `severity`는 producer가 내지 않는다. 이 모듈은 `impact`와 `confidence`만 판정한다.
-- 경계, 무엇이 새는가/깨지는가, 권한·번들 영향, 수정 방향은 새 schema field를 만들지 말고 `body`, `recommendation`, `evidence`에 담는다.
-- `00-rule.md` 00-11에 걸리는 unresolved absence/possibility claim, search scope 미완료, 추가 탐색 요청만 `openQuestions`로 보낸다.
-- 결함은 성립하지만 exact location만 확인하지 못했으면 finding을 유지하고 `location.kind="unverified"`와 `reason`만 사용한다.
-- producer 문자열 필드는 최종 리포트의 신뢰된 Markdown이 아니다. heading/table/raw HTML/link를 직접 만들려고 하지 말고 plain prose만 넣는다.
+- "경계 위반"이라고만 쓰지 말고 **어느 값이 어느 방향으로 넘어가 무엇이 되는지**를 적는다.
+- 비밀 유출, 공개 endpoint화, 직렬화 실패처럼 결과가 크면 어떤 import chain이나 props 전달이 그 결과를 만드는지 남긴다.
+- bundle 비대화나 guard 부족처럼 낮은 영향 쪽 지적은 왜 아직 닫힌 높은 영향 범주를 증명하지 못했는지도 분명히 한다.
 
 **원칙**
 - "경계 위반"이라고만 쓰지 말고 **어느 값이 어느 방향으로 넘어가 무엇이 되는지** 적는다
