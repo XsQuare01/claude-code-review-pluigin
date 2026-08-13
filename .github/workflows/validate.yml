@@ -15,6 +15,8 @@ jobs:
           node-version: '20'
       - name: Run effective common-context regression tests
         run: node --test tests/effective-common-context-validator.test.mjs
+      - name: Run deterministic structured runtime tests
+        run: node --test tests/structured-runtime.test.mjs
       - name: Validate rule consistency
         run: node scripts/validate-rules.mjs
 

@@ -250,6 +250,8 @@ The orchestrator validates those results, aggregates only valid JSON, derives se
 
 Producer strings are treated as untrusted report content. The renderer places fields by slot rather than trusting producer-authored Markdown, escapes control/block Markdown in prose fields so they cannot create headings, fences, tables, raw HTML, or links that look orchestrator-authored, renders `location.quote` in a safe code form with delimiter escaping, renders paths as code, and leaves any URLs as plain text. The static validator checks that the contract and prompts stay synchronized on those rules; it does not claim to execute or prove the renderer.
 
+This repository now includes a **deterministic reference simulation** of that contract in `scripts/lib/review-result-contract.mjs`, `scripts/lib/structured-runtime.mjs`, and `tests/structured-runtime.test.mjs`. That reference suite covers manifest extraction, strict parse/validation, one-retry malformed-output handling, conservative aggregation, severity derivation, and safe structured section rendering without calling Claude, another model API, a scheduler, or the filesystem at runtime. It is a contract kernel and reference runtime, not a claim that production prompt-driven execution in Claude will always behave identically.
+
 ## Applicability metadata
 
 `review-rules/catalog.json` records **when** a module applies — required profile (FSD, Tailwind, RSC, Electron, TanStack Query, server code, contract provider), minimum React version, which workflows load it, and which individual rules carry a narrower gate than their module. The Markdown modules stay canonical for **what** a rule says; the catalog never generates documentation and never restates rule text.
@@ -315,9 +317,13 @@ claude-code-review-plugin/
 ├── .claude-plugin/plugin.json
 ├── .github/workflows/validate.yml
 ├── LICENSE
+├── scripts/lib/
+│   ├── review-result-contract.mjs
+│   └── structured-runtime.mjs
 ├── scripts/validate-rules.mjs
 ├── tests/
 │   ├── effective-common-context-validator.test.mjs
+│   ├── structured-runtime.test.mjs
 │   └── workflow-fixtures.md
 ├── docs/                          # design records, not current state
 ├── agents/correctness-reviewer.md
@@ -346,6 +352,7 @@ claude-code-review-plugin/
 
 ```bash
 node --test tests/effective-common-context-validator.test.mjs
+node --test tests/structured-runtime.test.mjs
 node scripts/validate-rules.mjs
 ```
 
@@ -369,9 +376,9 @@ It checks the properties this repo promises but cannot hold by hand:
 | `structured-producer` | a structured owner missing the V1 marker/sentinel, a legacy workflow claiming structured ownership, or a workflow-neutral rule module leaking schema/raw-output/render instructions |
 | `fixtures` | a contract clause with no scenario in `tests/workflow-fixtures.md` or missing owner-specific structured/legacy cases |
 
-The validator also runs JSON fixtures through the static V1 shape checks, including required arrays, forbidden severity, conditional impact/confidence fields, closed categories, and verified/deleted/unverified location rules.
+The validator also runs JSON fixtures through the static V1 shape checks, including required arrays, forbidden severity, conditional impact/confidence fields, closed categories, and verified/deleted/unverified location rules. The deterministic reference test suite separately executes the pure contract/runtime kernel for malformed-output retry, aggregation, severity, and rendering invariants.
 
-**What it does not check.** Whether a workflow actually behaves as the contract says. It does not execute the model, the one-retry failure path, aggregation, or Markdown rendering. `tests/workflow-fixtures.md` lists runtime scenarios for manual runs. Semantic preservation also remains manual: compare representative legacy Markdown and V1-rendered reports for the same findings, specialist details, unverified locations, and open questions. Markdown escaping is documented and synchronized statically, but not runtime-proven here. The validator does not use prose regex as the primary contract; stable owner markers and inverse rule-module neutrality checks are the primary guardrails. It still does not claim or prove semantic equivalence.
+**What it does not check.** Whether a live Claude-driven workflow actually behaves as the contract says. The deterministic reference suite proves only the local pure implementation here; it does not prove Claude compliance, prompt adherence, scheduler behavior, or semantic equivalence in production runs. `tests/workflow-fixtures.md` keeps the remaining manual scenarios explicit: M-1 and M-2 now have deterministic reference coverage but still do not prove live-model compliance, and M-3 remains a manual semantic-comparison check. The validator does not use prose regex as the primary contract; stable owner markers and inverse rule-module neutrality checks are the primary guardrails.
 
 ## Maintenance notes
 
