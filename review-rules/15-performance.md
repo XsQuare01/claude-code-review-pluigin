@@ -11,13 +11,14 @@
 
 여기는 순수하게 **"같은 일을 더 낮은 Big-O로 할 수 있는데 높은 복잡도로 짰는가"** 를 본다. 파일 I/O·DB 항목은 Electron main 프로세스나 BFF 코드를 함께 다룰 때만 적용한다.
 
-## Severity 기준
+## 영향도 보정 예시
 
-| Severity | 의미 |
+| 영향도 | 이 모듈에서 자주 보이는 근거 |
 |----------|------|
-| 🔴 ERROR | 큰 데이터에서 실질 성능 문제, 명백히 불필요한 O(N²) 이상 |
-| 🟡 WARNING | 중소 데이터에서도 개선 여지, 자료구조 선택 부적절 |
-| 🔵 INFO | 가독성·문서화 개선, 알고리즘 선택 근거 명시 권장 |
+| 높음 | 현재 데이터 규모나 호출 빈도에서 이미 검증 실패, 사용자 오동작, 처리 불가, 심각한 성능 저하로 이어져 제품 동작을 사실상 막는 경우 |
+| 낮음 | 더 나은 자료구조·복잡도 선택이 가능하지만 현재 변경만으로 닫힌 높은 영향 범주를 아직 증명하지 못한 경우 |
+
+"느릴 수 있다"거나 유지보수성이 떨어진다는 이유만으로 영향 높음이 되지 않는다. 실제 규모·hot path·사용자 영향이 닫히지 않으면 낮음으로 둔다.
 
 ---
 
@@ -141,21 +142,14 @@ const results = await Promise.all(ids.map(fetchUser))
 
 ---
 
-## 15-OUTPUT. 출력 형식
+## 15-OUTPUT. 도메인 결과 가이드
 
-<!-- REVIEW_RESULT_CONTRACT_V1_PRODUCER_OUTPUT -->
-
-이 문서를 producer prompt에 쓸 때는 **`REVIEW_RESULT_CONTRACT_V1`** 을 따른다. 응답은 Markdown 표나 헤딩이 아니라 **raw JSON 객체 하나만** 반환한다.
-
-- top-level에는 `schemaVersion`, `findings`, `openQuestions`를 항상 포함하고 `schemaVersion`은 `1`이어야 한다.
-- `severity`는 producer가 내지 않는다. 이 모듈은 `impact`와 `confidence`만 판정한다.
-- 현재 복잡도, 개선 복잡도, 병목 설명, 자료구조/알고리즘 대안은 새 schema field를 만들지 말고 `body`, `recommendation`, `evidence`에 담는다.
-- `00-rule.md` 00-11에 걸리는 unresolved absence/possibility claim, search scope 미완료, 추가 탐색 요청만 `openQuestions`로 보낸다.
-- 결함은 성립하지만 exact location만 확인하지 못했으면 finding을 유지하고 `location.kind="unverified"`와 `reason`만 사용한다.
-- producer 문자열 필드는 최종 리포트의 신뢰된 Markdown이 아니다. heading/table/raw HTML/link를 직접 만들려고 하지 말고 plain prose만 넣는다.
+- 현재 복잡도와 더 나은 복잡도를 함께 적고, **왜 지금 규모에서 의미 있는지**를 설명한다.
+- N+1 I/O, 중첩 탐색, 누적 spread는 어느 입력 크기나 호출 경로에서 병목이 되는지까지 남긴다.
+- 자료구조 대안은 Map/Set, batch, `Promise.all`, partial sort처럼 **실제로 바꿀 수 있는 선택지**로 제안한다.
 
 **원칙**
 - 실제 데이터 규모를 고려해서 지적한다 (10건짜리 배열에 O(N²)는 대부분 문제 아님)
-- "이론적으로는 느리지만 현재 규모에선 상관없다" 싶으면 🔵로 낮추거나 생략한다
+- "이론적으로는 느리지만 현재 규모에선 상관없다" 싶으면 영향 낮음 근거로 남기거나 생략한다
 - 복잡도 개선을 제시할 때 자료구조명·알고리즘명을 명확히 한다
 - diff에 없는 기존 코드는 지적하지 않는다

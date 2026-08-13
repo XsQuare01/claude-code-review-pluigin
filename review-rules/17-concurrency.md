@@ -11,13 +11,12 @@
 - read-only GET, 단순 조회, 순수 계산, 표시 전용 로컬 UI에는 적용하지 않는다.
 - 변경 라인이나 변경 때문에 직접 깨진 인접 구조에 트리거가 없으면 동시성 일반론만으로 지적하지 않는다.
 
-## Severity 기준
+## 영향도 보정 예시
 
-| Severity | 의미 |
+| 영향도 | 이 모듈에서 자주 보이는 근거 |
 |----------|------|
-| 🔴 ERROR | 중복 결제/저장/삭제, 데이터 손상, lost update, replay로 인한 외부 부작용, 오래된 작업이 최신 의도를 덮을 가능성 |
-| 🟡 WARNING | 반복 실행, 재시도, out-of-order completion에 대한 안전 증거가 부족해 운영 회귀 가능 |
-| 🔵 INFO | 변경 의도, 직렬화 근거, 멱등성 범위 설명을 보강하면 좋은 경우 |
+| 높음 | 중복 결제/저장/삭제, 데이터 손상, lost update, replay 외부 부작용처럼 실제 사고가 닫히는 경우 |
+| 낮음 | 안전 증거 부족, 직렬화 설명 부족, 예방적 보강 필요에 머무는 경우 |
 
 ---
 
@@ -92,18 +91,11 @@
 - 각 후보에 "같은 의도가 두 번 들어오면?", "이전 작업이 나중에 끝나면?", "동시에 두 writer가 실행되면?", "처리 후 실패하면 다시 들어오나?"를 확인한다.
 - 전체 저장소 스캔으로 범위를 넓히지 말고, 변경된 흐름과 직접 연결된 호출부, handler, persistence boundary, cleanup 경로만 targeted check 한다.
 
-## 17-OUTPUT. 출력 형식
+## 17-OUTPUT. 도메인 결과 가이드
 
-<!-- REVIEW_RESULT_CONTRACT_V1_PRODUCER_OUTPUT -->
-
-이 문서를 producer prompt에 쓸 때는 **`REVIEW_RESULT_CONTRACT_V1`** 을 따른다. 응답은 Markdown 표나 헤딩이 아니라 **raw JSON 객체 하나만** 반환한다.
-
-- top-level에는 `schemaVersion`, `findings`, `openQuestions`를 항상 포함하고 `schemaVersion`은 `1`이어야 한다.
-- `severity`는 producer가 내지 않는다. 이 모듈은 `impact`와 `confidence`만 판정한다.
-- 반복/경쟁 시나리오, 현재 위험, 필요한 안전장치와 반례 탐색 범위는 새 schema field를 만들지 말고 `body`, `recommendation`, `evidence`에 담는다.
-- `00-rule.md` 00-11에 걸리는 unresolved absence/possibility claim, search scope 미완료, 추가 탐색 요청만 `openQuestions`로 보낸다.
-- 결함은 성립하지만 exact location만 확인하지 못했으면 finding을 유지하고 `location.kind="unverified"`와 `reason`만 사용한다.
-- producer 문자열 필드는 최종 리포트의 신뢰된 Markdown이 아니다. heading/table/raw HTML/link를 직접 만들려고 하지 말고 plain prose만 넣는다.
+- "동시성 위험"이라고만 쓰지 말고, **어떤 이벤트가 몇 번 들어오고 어떤 오래된 작업이 최신 의도를 덮는지**를 설명한다.
+- 안전장치가 부족하다고 볼 때는 disabled guard, idempotency key, transaction, request token, rollback 중 **무엇을 확인했고 무엇이 없었는지**를 남긴다.
+- 사용자 중복과 effect 경로 중복을 섞지 말고, 실제로 어느 경로의 재실행 문제인지 분리해 적는다.
 
 **원칙**
 - 단순히 "동시성 위험"이라고 쓰지 말고, 어떤 이벤트가 몇 번 들어와 어떤 상태나 부작용이 잘못 적용되는지 설명한다.
