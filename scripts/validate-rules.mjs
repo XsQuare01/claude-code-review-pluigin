@@ -81,6 +81,12 @@ const STRUCTURED_OWNER_CONSUMERS = {
   'skills/code-review-math/SKILL.md': ['validation', 'rendering'],
   'skills/code-review-exception/SKILL.md': ['validation', 'rendering'],
 }
+const STRUCTURED_OWNER_COMMON_CONTEXTS = {
+  'skills/code-review-full/SKILL.md': ['review-rules/00-rule.md'],
+  'skills/code-review-props/SKILL.md': ['review-rules/00-rule.md'],
+  'skills/code-review-math/SKILL.md': ['review-rules/00-rule.md'],
+  'skills/code-review-exception/SKILL.md': ['review-rules/00-rule.md'],
+}
 const LEGACY_WORKFLOW_FILES = [
   'skills/code-review/SKILL.md',
   'skills/code-review-commit/SKILL.md',
@@ -887,6 +893,21 @@ function validateStructuredProducerDocs() {
     ...Object.keys(manifest.renderingSafety.slots ?? {}),
   ] : []
 
+  for (const [owner, contextPaths] of Object.entries(STRUCTURED_OWNER_COMMON_CONTEXTS)) {
+    for (const contextPath of contextPaths) {
+      const context = read(join(ROOT, contextPath))
+      const hasStructuredLocationLifecycle = /Structured producer에서는[^\n]*location\.kind\s*=\s*["']?unverified["']?[^\n]*reason/.test(context)
+      const hasPublicLocationLifecycle = /(?:최종 공개 Markdown|legacy 직접 출력)[^\n]*`위치 미확인`/.test(context)
+      if (!hasStructuredLocationLifecycle || !hasPublicLocationLifecycle) {
+        failCode(
+          'structured-producer',
+          'E_STRUCTURED_EFFECTIVE_CONTEXT_PUBLIC_LOCATION_LITERAL',
+          `${contextPath}, injected by ${owner}, must scope unverified locations to raw location.kind="unverified" + reason for structured producers and 위치 미확인 for public/legacy output`,
+        )
+      }
+    }
+  }
+
   for (const relativePath of STRUCTURED_PRODUCER_FILES) {
     const text = read(join(ROOT, relativePath))
     validateMarkdownBlocks(relativePath, text, 'structured-producer')
@@ -1295,6 +1316,19 @@ function validateContractManifestAndFixtures() {
       }
       if (!/not V1 until an orchestrator consumer exists|direct-only until a consumer exists/i.test(`${correctnessDirectCase.scenario ?? ''} ${correctnessDirectCase.expected ?? ''}`)) {
         failCode('fixtures', 'E_WORKFLOW_CORRECTNESS_DIRECT_CASE_WORDING', 'workflow-fixtures.md case 54 must assert that correctness is not structured-v1 until an orchestrator consumer exists')
+      }
+    }
+    const structuredLocationLifecycleCase = (payload?.contractCases ?? []).find(entry => entry?.id === 55)
+    if (!structuredLocationLifecycleCase) {
+      failCode('fixtures', 'E_WORKFLOW_STRUCTURED_LOCATION_LIFECYCLE_CASE_MISSING', 'workflow-fixtures.md must include contract case 55 for raw structured versus public/legacy unverified-location output')
+    } else {
+      const expectedClauses = ['C-6A', 'C-7']
+      if (!sameMembers(structuredLocationLifecycleCase.clauses ?? [], expectedClauses)) {
+        failCode('fixtures', 'E_WORKFLOW_STRUCTURED_LOCATION_LIFECYCLE_CASE_CLAUSES', `workflow-fixtures.md case 55 must cite exactly ${expectedClauses.join(', ')}`)
+      }
+      const lifecycleText = `${structuredLocationLifecycleCase.scenario ?? ''} ${structuredLocationLifecycleCase.expected ?? ''}`
+      if (!/structured raw.*location\.kind=unverified.*public.*legacy\/direct.*위치 미확인/i.test(lifecycleText)) {
+        failCode('fixtures', 'E_WORKFLOW_STRUCTURED_LOCATION_LIFECYCLE_CASE_WORDING', 'workflow-fixtures.md case 55 must distinguish raw structured location.kind=unverified from public and legacy/direct 위치 미확인 output')
       }
     }
   }

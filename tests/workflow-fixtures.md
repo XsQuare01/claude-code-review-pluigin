@@ -129,6 +129,12 @@ These scenarios pin the behaviour that `review-rules/workflow-contract.md` promi
       "expected": "It is not V1 until an orchestrator consumer exists; static validation fails if correctness declares structured-v1 ownership before a validation/render consumer is registered"
     },
     {
+      "id": 55,
+      "clauses": ["C-6A", "C-7"],
+      "scenario": "Injected common context positively tells a structured producer to emit the public 위치 미확인 literal",
+      "expected": "Static validation fails unless structured raw output uses location.kind=unverified plus reason while public renderers and legacy/direct output remain allowed to emit 위치 미확인"
+    },
+    {
       "id": 50,
       "clauses": ["C-6A"],
       "scenario": "A structured producer establishes a defect but cannot verify the exact line",
@@ -162,7 +168,7 @@ These scenarios pin the behaviour that `review-rules/workflow-contract.md` promi
       "id": 21,
       "clauses": ["C-7"],
       "scenario": "Any finding in any workflow",
-      "expected": "Position is a verified post-change line number or range with the line's code quoted; an unconfirmed line is represented as location.kind=unverified and later renders the public 위치 미확인 status instead of guessing"
+      "expected": "Position is a verified post-change line number or range with the line's code quoted; a structured raw producer represents an unconfirmed line as location.kind=unverified plus reason, its renderer later emits 위치 미확인 사유, and legacy/direct public output keeps 위치 미확인 instead of guessing"
     },
     {
       "id": 22,
