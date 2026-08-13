@@ -11,6 +11,7 @@
 import { readFileSync, readdirSync, existsSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { validateEffectiveCommonContext } from './lib/effective-common-context-validator.mjs'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 const RULES = join(ROOT, 'review-rules')
@@ -80,6 +81,12 @@ const STRUCTURED_OWNER_CONSUMERS = {
   'skills/code-review-props/SKILL.md': ['validation', 'rendering'],
   'skills/code-review-math/SKILL.md': ['validation', 'rendering'],
   'skills/code-review-exception/SKILL.md': ['validation', 'rendering'],
+}
+const STRUCTURED_OWNER_POLICY_BEARING_COMMON_CONTEXTS = {
+  'skills/code-review-full/SKILL.md': ['review-rules/00-rule.md'],
+  'skills/code-review-props/SKILL.md': ['review-rules/00-rule.md'],
+  'skills/code-review-math/SKILL.md': ['review-rules/00-rule.md'],
+  'skills/code-review-exception/SKILL.md': ['review-rules/00-rule.md'],
 }
 const LEGACY_WORKFLOW_FILES = [
   'skills/code-review/SKILL.md',
@@ -887,6 +894,16 @@ function validateStructuredProducerDocs() {
     ...Object.keys(manifest.renderingSafety.slots ?? {}),
   ] : []
 
+for (const [owner, contextPaths] of Object.entries(STRUCTURED_OWNER_POLICY_BEARING_COMMON_CONTEXTS)) {
+    for (const contextPath of contextPaths) {
+      const context = read(join(ROOT, contextPath))
+      const errors = validateEffectiveCommonContext(context, contextPath)
+      for (const error of errors) {
+        failCode('structured-producer', error.code, `${error.message}; injected by ${owner}`)
+      }
+    }
+  }
+
   for (const relativePath of STRUCTURED_PRODUCER_FILES) {
     const text = read(join(ROOT, relativePath))
     validateMarkdownBlocks(relativePath, text, 'structured-producer')
@@ -1295,6 +1312,19 @@ function validateContractManifestAndFixtures() {
       }
       if (!/not V1 until an orchestrator consumer exists|direct-only until a consumer exists/i.test(`${correctnessDirectCase.scenario ?? ''} ${correctnessDirectCase.expected ?? ''}`)) {
         failCode('fixtures', 'E_WORKFLOW_CORRECTNESS_DIRECT_CASE_WORDING', 'workflow-fixtures.md case 54 must assert that correctness is not structured-v1 until an orchestrator consumer exists')
+      }
+    }
+    const structuredLocationLifecycleCase = (payload?.contractCases ?? []).find(entry => entry?.id === 55)
+    if (!structuredLocationLifecycleCase) {
+      failCode('fixtures', 'E_WORKFLOW_STRUCTURED_LOCATION_LIFECYCLE_CASE_MISSING', 'workflow-fixtures.md must include contract case 55 for raw structured versus public/legacy unverified-location output')
+    } else {
+      const expectedClauses = ['C-6A', 'C-7']
+      if (!sameMembers(structuredLocationLifecycleCase.clauses ?? [], expectedClauses)) {
+        failCode('fixtures', 'E_WORKFLOW_STRUCTURED_LOCATION_LIFECYCLE_CASE_CLAUSES', `workflow-fixtures.md case 55 must cite exactly ${expectedClauses.join(', ')}`)
+      }
+      const lifecycleText = `${structuredLocationLifecycleCase.scenario ?? ''} ${structuredLocationLifecycleCase.expected ?? ''}`
+      if (!/marker|machine token|absence guard|allow block/i.test(lifecycleText) || !/location\.kind=unverified/i.test(lifecycleText) || !/위치 미확인/.test(lifecycleText)) {
+        failCode('fixtures', 'E_WORKFLOW_STRUCTURED_LOCATION_LIFECYCLE_CASE_WORDING', 'workflow-fixtures.md case 55 must describe the marker-driven absence guard, location.kind=unverified raw output, and the explicit 위치 미확인 allow block')
       }
     }
   }
