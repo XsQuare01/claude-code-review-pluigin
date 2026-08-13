@@ -131,8 +131,8 @@ These scenarios pin the behaviour that `review-rules/workflow-contract.md` promi
     {
       "id": 55,
       "clauses": ["C-6A", "C-7"],
-      "scenario": "Injected common context positively tells a structured producer to emit the public 위치 미확인 literal",
-      "expected": "Static validation fails unless structured raw output uses location.kind=unverified plus reason while public renderers and legacy/direct output remain allowed to emit 위치 미확인"
+      "scenario": "Injected common context must carry machine markers saying workflow-contract.md owns representation and that 위치 미확인 is forbidden except inside one explicit public-output allow block",
+      "expected": "Static validation fails unless the marker-driven absence guard keeps structured raw output on location.kind=unverified plus reason and allows 위치 미확인 only inside the marked public/legacy allow block"
     },
     {
       "id": 50,

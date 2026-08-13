@@ -11,6 +11,7 @@
 import { readFileSync, readdirSync, existsSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { validateEffectiveCommonContext } from './lib/effective-common-context-validator.mjs'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 const RULES = join(ROOT, 'review-rules')
@@ -896,14 +897,9 @@ function validateStructuredProducerDocs() {
   for (const [owner, contextPaths] of Object.entries(STRUCTURED_OWNER_COMMON_CONTEXTS)) {
     for (const contextPath of contextPaths) {
       const context = read(join(ROOT, contextPath))
-      const hasStructuredLocationLifecycle = /Structured producer에서는[^\n]*location\.kind\s*=\s*["']?unverified["']?[^\n]*reason/.test(context)
-      const hasPublicLocationLifecycle = /(?:최종 공개 Markdown|legacy 직접 출력)[^\n]*`위치 미확인`/.test(context)
-      if (!hasStructuredLocationLifecycle || !hasPublicLocationLifecycle) {
-        failCode(
-          'structured-producer',
-          'E_STRUCTURED_EFFECTIVE_CONTEXT_PUBLIC_LOCATION_LITERAL',
-          `${contextPath}, injected by ${owner}, must scope unverified locations to raw location.kind="unverified" + reason for structured producers and 위치 미확인 for public/legacy output`,
-        )
+      const errors = validateEffectiveCommonContext(context, contextPath)
+      for (const error of errors) {
+        failCode('structured-producer', error.code, `${error.message}; injected by ${owner}`)
       }
     }
   }
@@ -1327,8 +1323,8 @@ function validateContractManifestAndFixtures() {
         failCode('fixtures', 'E_WORKFLOW_STRUCTURED_LOCATION_LIFECYCLE_CASE_CLAUSES', `workflow-fixtures.md case 55 must cite exactly ${expectedClauses.join(', ')}`)
       }
       const lifecycleText = `${structuredLocationLifecycleCase.scenario ?? ''} ${structuredLocationLifecycleCase.expected ?? ''}`
-      if (!/structured raw.*location\.kind=unverified.*public.*legacy\/direct.*위치 미확인/i.test(lifecycleText)) {
-        failCode('fixtures', 'E_WORKFLOW_STRUCTURED_LOCATION_LIFECYCLE_CASE_WORDING', 'workflow-fixtures.md case 55 must distinguish raw structured location.kind=unverified from public and legacy/direct 위치 미확인 output')
+      if (!/marker|machine token|absence guard|allow block/i.test(lifecycleText) || !/location\.kind=unverified/i.test(lifecycleText) || !/위치 미확인/.test(lifecycleText)) {
+        failCode('fixtures', 'E_WORKFLOW_STRUCTURED_LOCATION_LIFECYCLE_CASE_WORDING', 'workflow-fixtures.md case 55 must describe the marker-driven absence guard, location.kind=unverified raw output, and the explicit 위치 미확인 allow block')
       }
     }
   }

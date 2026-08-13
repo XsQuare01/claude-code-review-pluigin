@@ -146,6 +146,20 @@ correctness 패스는 규칙 문서가 아니라 PR 의도를 근거로 지적�
 - 리뷰 코멘트는 가능하면 **문제 → 의도/현재 선택 → 왜 부족한지 → 개선 방향** 순서로 적는다
 - 문서는 저장소 전체 일반론보다 **이번 브랜치에서 실제로 바뀐 파일, 흐름, 영향 범위** 중심으로 쓴다
 
+<!-- EFFECTIVE_COMMON_CONTEXT_POLICY:BEGIN -->
+```json
+{
+  "representationOwner": "workflow-contract.md",
+  "structuredProducerUnverifiedLocation": "location.kind=unverified",
+  "structuredProducerReasonField": "reason",
+  "publicLiteralForbiddenInCommonContext": "위치 미확인",
+  "publicLiteralAllowBlock": "PUBLIC_OUTPUT_LOCATION_LITERAL_ALLOW"
+}
+```
+<!-- EFFECTIVE_COMMON_CONTEXT_POLICY:END -->
+
+- 공통 생산자 문맥의 불변식은 **경로/줄번호/코드 인용을 추측하지 않는다**는 점이다. 위치·렌더링의 표현 형식은 `workflow-contract.md`가 소유하고, 이 문서는 workflow-neutral 판단 규칙만 제공한다
+
 ### 다른 언어를 요청받았을 때
 
 리포트 골격은 한국어 섹션 이름으로 고정돼 있다(`workflow-contract.md` C-7). 사용자가 다른 언어를 요청하면 골격이 바뀌므로, 무엇이 바뀌고 무엇이 남는지 미리 정해 둔다.
@@ -153,7 +167,9 @@ correctness 패스는 규칙 문서가 아니라 PR 의도를 근거로 지적�
 | | 대상 |
 |---|---|
 | **번역한다** | 섹션 이름, 지적 본문, 판정·요약, `SKIPPED`·`UNKNOWN` 사유 서술 |
+<!-- PUBLIC_OUTPUT_LOCATION_LITERAL_ALLOW:BEGIN -->
 | **번역하지 않는다** | 규칙 ID(`03-1`, `CR-2`), 파일 경로, 코드 인용, Severity 표기, 두 축 표기(`영향`·`확신`과 그 값 `높음`·`낮음`), 상태 토큰(`SKIPPED`, `UNKNOWN`, `위치 미확인`, `확인 필요`, `버전 미확인`) |
+<!-- PUBLIC_OUTPUT_LOCATION_LITERAL_ALLOW:END -->
 
 - 상태 토큰을 번역하면 두 리포트를 기계적으로 비교할 수 없다. 골격을 고정한 이유가 그것이고(C-7), 언어가 바뀌어도 그 이유는 그대로다
 - 리포트의 `리뷰 기준` 섹션에 **사용한 언어를 적는다.** 같은 워크플로우의 두 리포트가 서로 다른 섹션 이름을 갖게 되는데, 그것이 골격 위반이 아니라 요청 결과임을 리포트만 보고 알 수 있어야 한다
@@ -227,7 +243,7 @@ lint/typecheck/test를 실행했으면 그 결과는 **리뷰 지적과 섞지 �
 
 - 줄번호는 **변경 후 파일**(diff의 `+` 쪽) 기준이다
 - **diff hunk 헤더(`@@ -a,b +c,d @@`)에서 계산하지 않는다.** 해당 파일을 실제로 읽어 확인한 번호를 적는다. 계산으로 낸 번호는 hunk가 여러 개일 때, 컨텍스트 줄이 섞일 때, 같은 파일에 삭제와 추가가 함께 있을 때 어긋난다
-- 위치를 확인할 수 없으면 번호를 추측하지 않는다. Structured producer에서는 `location.kind = "unverified"`와 `reason`으로 표현하고 `path`, `line`, `lineBefore`, `quote`를 꾸며 넣지 않는다. 최종 공개 Markdown 또는 legacy 직접 출력에서는 이를 `위치 미확인`과 사유로 표시한다. **추측한 번호는 확인되지 않은 지적보다 나쁘다** — 확인되지 않았다는 사실이 감춰지기 때문이다
+- 위치를 확인할 수 없으면 번호를 추측하지 않는다. Structured producer는 `location.kind = "unverified"`와 `reason`만 사용하고 `path`, `line`, `lineBefore`, `quote`를 꾸며 넣지 않는다. 공개 렌더링 표현과 legacy/direct 출력 토큰은 `workflow-contract.md`가 소유한다. **추측한 번호는 확인되지 않은 지적보다 나쁘다** — 확인되지 않았다는 사실이 감춰지기 때문이다
 
 ### 인용을 함께 붙인다
 
