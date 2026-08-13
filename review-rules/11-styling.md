@@ -4,13 +4,12 @@
 
 색상 대비, motion 민감성 등 **접근성 영향**은 `12-accessibility.md`가 우선한다.
 
-## Severity 기준
+## 영향도 보정 예시
 
-| Severity | 의미 |
+| 영향도 | 이 모듈에서 자주 보이는 근거 |
 |----------|------|
-| 🔴 ERROR | 디자인 시스템 위반, 재사용성/일관성 크게 저해 |
-| 🟡 WARNING | 스타일링 방식 선택 부적절, 유지보수성 저하 |
-| 🔵 INFO | className 정리, 추출, 단순화 제안 |
+| 높음 | 디자인 시스템 위반이 실제 접근성 실패, 브랜드 의미 파손, 전역 회귀로 닫히는 경우 |
+| 낮음 | 재사용성, 일관성, className 정리 중심 문제에 머무는 경우 |
 
 ---
 
@@ -60,15 +59,8 @@ CSS 파일은 Tailwind로 표현하기 어려운 경우에만 허용:
 - 컴포넌트 전용 CSS는 해당 컴포넌트와 같은 폴더
 - 스타일 책임이 FSD 레이어와 맞지 않으면 `01-fsd.md`와 함께 지적
 
-## 11-OUTPUT. 출력 형식
+## 11-OUTPUT. 도메인 결과 가이드
 
-<!-- REVIEW_RESULT_CONTRACT_V1_PRODUCER_OUTPUT -->
-
-이 문서를 producer prompt에 쓸 때는 **`REVIEW_RESULT_CONTRACT_V1`** 을 따른다. 응답은 Markdown 표나 헤딩이 아니라 **raw JSON 객체 하나만** 반환한다.
-
-- top-level에는 `schemaVersion`, `findings`, `openQuestions`를 항상 포함하고 `schemaVersion`은 `1`이어야 한다.
-- `severity`는 producer가 내지 않는다. 이 모듈은 `impact`와 `confidence`만 판정한다.
-- Tailwind 적용 조건, inline style 허용 범위, 디자인 토큰, className 관리 같은 도메인별 설명은 새 schema field를 만들지 말고 `body`, `recommendation`, `evidence`에 담는다.
-- `00-rule.md` 00-11에 걸리는 unresolved absence/possibility claim, search scope 미완료, 추가 탐색 요청만 `openQuestions`로 보낸다.
-- 결함은 성립하지만 exact location만 확인하지 못했으면 finding을 유지하고 `location.kind="unverified"`와 `reason`만 사용한다.
-- producer 문자열 필드는 최종 리포트의 신뢰된 Markdown이 아니다. heading/table/raw HTML/link를 직접 만들려고 하지 말고 plain prose만 넣는다.
+- 지적은 단순 스타일 취향이 아니라 **디자인 시스템 일관성, 재사용성, 토큰 drift** 문제를 설명해야 한다.
+- inline style이나 CSS 파일 사용을 남길 때는 왜 이 자리가 Tailwind/className으로 표현 가능한지, 또는 왜 토큰을 써야 하는지 근거를 적는다.
+- 접근성 영향이 직접 보이면 그 사실을 명시하되, 색상 대비 자체의 판단 근거는 `12-accessibility.md`와 역할이 겹치지 않게 남긴다.
