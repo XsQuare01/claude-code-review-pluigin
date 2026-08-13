@@ -111,7 +111,15 @@ export function aggregatePasses(passes) {
     if (pass.status === 'pending' || pass.status === 'retrying') {
       throw new Error('E_PASS_NONTERMINAL: aggregatePasses requires terminal pass states')
     }
-    if (pass.status === 'accepted' && pass.result) {
+    const accepted = pass.status === 'accepted' && pass.result && typeof pass.result === 'object' && !Array.isArray(pass.result)
+    const failed = pass.status === 'failed'
+      && typeof pass.failureKind === 'string'
+      && pass.failureKind.trim() !== ''
+      && pass.result == null
+    if (!accepted && !failed) {
+      throw new Error('E_PASS_INVALID_STATE: aggregatePasses received an invalid terminal pass state')
+    }
+    if (accepted) {
       acceptedPasses.push(freezeClone({ sourceLabel: pass.sourceLabel, status: pass.status }))
       for (const finding of pass.result.findings ?? []) {
         const key = findingMergeKey(finding)
@@ -131,7 +139,7 @@ export function aggregatePasses(passes) {
       for (const item of pass.result.openQuestions ?? []) openQuestions.push(createFrozenOpenQuestion(item, pass.sourceLabel))
       continue
     }
-    if (pass.status === 'failed') failedPasses.push(freezeClone({ sourceLabel: pass.sourceLabel, status: pass.status, failureKind: pass.failureKind ?? 'malformed-output' }))
+    failedPasses.push(freezeClone({ sourceLabel: pass.sourceLabel, status: pass.status, failureKind: pass.failureKind }))
   }
 
   return freezeClone({ findings: mergedFindings, openQuestions, failedPasses, acceptedPasses })

@@ -254,6 +254,23 @@ test('aggregation rejects pending and retrying passes with a stable nonterminal 
   }
 })
 
+test('aggregation rejects unknown and inconsistent terminal pass states', () => {
+  const invalidPasses = [
+    { status: 'accepted', sourceLabel: 'accepted-without-result', result: null },
+    { status: 'failed', sourceLabel: 'failed-without-kind', failureKind: null, result: null },
+    { status: 'failed', sourceLabel: 'failed-with-result', failureKind: 'malformed-output', result: { findings: [], openQuestions: [] } },
+    { status: 'unknown', sourceLabel: 'unknown-status', result: null },
+  ]
+
+  for (const pass of invalidPasses) {
+    assert.throws(
+      () => aggregatePasses([pass]),
+      error => error?.message === 'E_PASS_INVALID_STATE: aggregatePasses received an invalid terminal pass state',
+      pass.sourceLabel,
+    )
+  }
+})
+
 test('aggregation does not merge verified or deleted findings when only endLine or quote differs', async () => {
   const manifest = await loadManifest()
   const verifiedBase = {
