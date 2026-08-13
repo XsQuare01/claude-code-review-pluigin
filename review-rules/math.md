@@ -6,13 +6,14 @@ React 앱에서 실제로 등장하는 **행렬·변환 계산** 전용 리뷰 �
 
 적용 조건: 변경 파일에 `Matrix3`/`Matrix4`, `Quaternion`, `Euler`, GLSL 셰이더, projection/view 변환, 좌표 변환 계산이 있을 때만. 행렬 연산이 없는 UI 파일은 대상 아님.
 
-## Severity
+## 영향도 보정 예시
 
-| Severity | 의미 |
+| 영향도 | 이 문서에서 자주 보이는 근거 |
 |----------|------|
-| 🔴 ERROR | 수식/코드가 수학적으로 틀림, 잘못된 화면 결과 또는 런타임 에러 |
-| 🟡 WARNING | 가정 누락, 수치 안정성 저하, 관례 위반 |
-| 🔵 INFO | 효율성·가독성 개선 제안 |
+| 높음 | 수식/코드 오류가 잘못된 화면 결과, 잘못된 좌표 변환, 런타임 실패 같은 닫힌 높은 영향 범주를 직접 만든 경우 |
+| 낮음 | 가정 누락, 수치 안정성, 관례 위반, 표현 개선처럼 실제 파손 범주를 아직 닫지 못한 경우 |
+
+수학적 아름다움이나 표현 차이만으로는 영향 높음이 아니다. 현재 변경에서 실제 변환 오류나 런타임 실패가 닫혀야 높음으로 둔다.
 
 ---
 
@@ -129,18 +130,11 @@ Three.js 객체는 대부분 **가변**이다. React에서 특히 위험하다.
 
 ---
 
-## 출력 형식
+## 출력 가이드
 
-<!-- REVIEW_RESULT_CONTRACT_V1_PRODUCER_OUTPUT -->
-
-이 문서를 producer prompt에 쓸 때는 **`REVIEW_RESULT_CONTRACT_V1`** 을 따른다. 응답은 Markdown 표나 헤딩이 아니라 **raw JSON 객체 하나만** 반환한다.
-
-- top-level에는 `schemaVersion`, `findings`, `openQuestions`를 항상 포함하고 `schemaVersion`은 `1`이어야 한다.
-- `severity`는 producer가 내지 않는다. 이 패스는 `impact`와 `confidence`만 판정한다.
-- shape/차원 추적, storage order, transpose/inverse 규칙, projection 조건, 수학적 전제와 수정 방향은 새 schema field를 만들지 말고 `body`, `recommendation`, `evidence`에 담는다.
-- `00-rule.md` 00-11에 걸리는 unresolved absence/possibility claim, search scope 미완료, 추가 탐색 요청만 `openQuestions`로 보낸다.
-- 결함은 성립하지만 exact location만 확인하지 못했으면 finding을 유지하고 `location.kind="unverified"`와 `reason`만 사용한다.
-- producer 문자열 필드는 최종 리포트의 신뢰된 Markdown이 아니다. heading/table/raw HTML/link를 직접 만들려고 하지 말고 plain prose만 넣는다.
+- 실제 수식·코드를 읽고, **차원과 좌표 공간을 어떻게 추적했는지**를 설명한다.
+- storage order, transpose/inverse, projection 전제는 어느 라이브러리 계약과 충돌하는지까지 남긴다.
+- 수정 방향은 epsilon 비교, 역전치 사용, homogeneous matrix 전환처럼 바로 적용 가능한 수학적 교정으로 적는다.
 
 **원칙**
 

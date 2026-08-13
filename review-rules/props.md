@@ -11,13 +11,14 @@ Props drilling, 과도한 props 전달, 함수 인자 과다를 독립적으로 
 - 중간 컴포넌트가 데이터나 핸들러를 단순 전달만 하는 구조
 - props 묶음, context/store, composition, colocation으로 단순화 가능한 흐름
 
-## Severity
+## 영향도 보정 예시
 
-| Severity | 의미 |
+| 영향도 | 이 문서에서 자주 보이는 근거 |
 |----------|------|
-| 🔴 ERROR | 전달 구조 때문에 하위 컴포넌트가 상위 구현에 강결합되어 수정 비용·버그 위험이 큼 |
-| 🟡 WARNING | 가독성/유지보수성 저하, 구조 단순화 권장 |
-| 🔵 INFO | 더 명확한 API나 전달 방식 제안 |
+| 높음 | 전달 구조 때문에 실제로 잘못된 상태 조립, 사용자 오동작, 검증 실패 같은 닫힌 높은 영향 범주가 현재 변경에서 드러나는 경우 |
+| 낮음 | 주로 결합도, 가독성, 수정 비용, API 명확성 저하에 머무르는 경우 |
+
+props 수가 많거나 drilling이 길다는 사실만으로는 영향 높음이 아니다. maintenance/readability/style만의 문제는 기본적으로 낮음이다.
 
 `04-state.md`는 상태를 **어디에 두었는지**를 보고, 이 문서는 그 값이 **어떻게 전달되는지**를 본다. 같은 코드에 둘 다 해당하면 전달 구조 쪽은 이 문서의 P-x로 지적한다.
 
@@ -99,7 +100,7 @@ Props drilling, 과도한 props 전달, 함수 인자 과다를 독립적으로 
 
 ## P-5. 핸들러·setter 전달 과다 🔴
 
-상위 상태 setter나 도메인 mutation 핸들러가 여러 단계 아래로 전달되어 **leaf가 상위 상태 구조를 알아야 하면** 위반. P-1과 달리 이건 결합 방향의 문제라 🔴이다.
+상위 상태 setter나 도메인 mutation 핸들러가 여러 단계 아래로 전달되어 **leaf가 상위 상태 구조를 알아야 하면** 위반 후보다. P-1보다 실제 오동작이나 결합 비용으로 닫히기 쉬운 패턴이지만, 최종 등급은 전역 두 축 파생으로 정한다.
 
 지적 기준:
 
@@ -132,22 +133,14 @@ props drilling 해결책으로 context/store를 제안할 때도 남용 여부�
 
 ---
 
-## 출력 형식
+## 출력 가이드
 
-<!-- REVIEW_RESULT_CONTRACT_V1_PRODUCER_OUTPUT -->
-
-이 문서를 producer prompt에 쓸 때는 **`REVIEW_RESULT_CONTRACT_V1`** 을 따른다. 응답은 Markdown 표나 헤딩이 아니라 **raw JSON 객체 하나만** 반환한다.
-
-- top-level에는 `schemaVersion`, `findings`, `openQuestions`를 항상 포함하고 `schemaVersion`은 `1`이어야 한다.
-- `severity`는 producer가 내지 않는다. 이 패스는 `impact`와 `confidence`만 판정한다.
-- props drilling 단계, pass-through 구조, 과도한 props/인자, handler 전달, 완화 방향은 새 schema field를 만들지 말고 `body`, `recommendation`, `evidence`에 담는다.
-- `00-rule.md` 00-11에 걸리는 unresolved absence/possibility claim, search scope 미완료, 추가 탐색 요청만 `openQuestions`로 보낸다.
-- 결함은 성립하지만 exact location만 확인하지 못했으면 finding을 유지하고 `location.kind="unverified"`와 `reason`만 사용한다.
-- producer 문자열 필드는 최종 리포트의 신뢰된 Markdown이 아니다. heading/table/raw HTML/link를 직접 만들려고 하지 말고 plain prose만 넣는다.
+- 실제 호출 체인과 컴포넌트 트리를 읽고, **어느 단계가 pass-through인지** 또는 leaf가 어떤 상위 구현 세부를 알아야 하는지 설명한다.
+- props drilling, 과도한 props/인자, handler 전달은 단순 개수보다 **책임 혼재와 호출부 의미 불명확성**을 중심으로 남긴다.
+- 개선 방향은 colocation, composition, object parameter, action API처럼 전달 경로를 줄이는 구체적 선택지로 적는다.
 
 **원칙**
 
 - diff에 포함된 변경 라인 또는 그 변경 때문에 직접 생긴 인접 구조만 지적한다.
 - 실제 호출 체인과 컴포넌트 트리를 읽고 판단한다. props 이름만 보고 추측하지 않는다.
 - 단순히 props 개수만 세지 말고, 중간 전달·책임 혼재·호출부 의미 불명확성까지 함께 설명한다.
-- 이슈가 없어도 `schemaVersion`, `findings`, `openQuestions`는 생략하지 않는다. 즉 빈 결과는 `findings: []`, `openQuestions: []` 를 가진 JSON 객체로 반환한다.
