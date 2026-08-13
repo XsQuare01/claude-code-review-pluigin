@@ -25,6 +25,8 @@ description: Use when the user wants a faster, shorter code review that highligh
 | 분할 방식 | 단일 sub-agent |
 | 출력 밀도 | 파일당 최대 1개 |
 
+이 워크플로우는 **legacy producer workflow**다. `workflow-contract.md`의 ownership matrix에서 legacy로 유지되며, C-6A의 structured lifecycle은 여기 적용하지 않는다. 기존 producer 계약을 유지한다.
+
 `fast.md` 안의 섹션별 적용 조건(RSC·Tailwind·SSR·React 19·서버 코드·contract 제공자 등)은 계약 C-3과 같은 기준으로 판정한다. 조건이 성립하지 않는 섹션은 적용하지 않는다.
 
 상세/포괄적 리뷰가 필요하면 `/code-review-full`을 쓴다.
