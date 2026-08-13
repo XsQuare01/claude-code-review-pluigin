@@ -6,8 +6,11 @@ export const EFFECTIVE_COMMON_CONTEXT_CODES = {
   POLICY_JSON: 'E_EFFECTIVE_COMMON_CONTEXT_POLICY_JSON',
   POLICY_SHAPE: 'E_EFFECTIVE_COMMON_CONTEXT_POLICY_SHAPE',
   ALLOW_BLOCK_COUNT: 'E_EFFECTIVE_COMMON_CONTEXT_PUBLIC_LITERAL_ALLOW_BLOCK_COUNT',
+  ALLOW_BLOCK_SHAPE: 'E_EFFECTIVE_COMMON_CONTEXT_PUBLIC_LITERAL_ALLOW_BLOCK_SHAPE',
   PUBLIC_LITERAL_OUTSIDE_ALLOW_BLOCK: 'E_EFFECTIVE_COMMON_CONTEXT_PUBLIC_LITERAL_OUTSIDE_ALLOW_BLOCK',
 }
+
+const EXPECTED_PUBLIC_LITERAL_ALLOW_BLOCK = '| **번역하지 않는다** | 규칙 ID(`03-1`, `CR-2`), 파일 경로, 코드 인용, Severity 표기, 두 축 표기(`영향`·`확신`과 그 값 `높음`·`낮음`), 상태 토큰(`SKIPPED`, `UNKNOWN`, `위치 미확인`, `확인 필요`, `버전 미확인`) |'
 
 function extractMarkedBlock(text, label) {
   const begin = `<!-- ${label}:BEGIN -->`
@@ -104,6 +107,12 @@ export function validateEffectiveCommonContext(text, contextPath = 'effective co
 
   const allowResult = extractMarkedBlock(text, PUBLIC_OUTPUT_LOCATION_LITERAL_ALLOW_MARKER)
   if (allowResult.error) return [{ ...allowResult.error, message: `${contextPath}: ${allowResult.error.message}` }]
+  if (allowResult.block !== EXPECTED_PUBLIC_LITERAL_ALLOW_BLOCK) {
+    return [{
+      code: EFFECTIVE_COMMON_CONTEXT_CODES.ALLOW_BLOCK_SHAPE,
+      message: `${contextPath}: ${PUBLIC_OUTPUT_LOCATION_LITERAL_ALLOW_MARKER} block must contain exactly the canonical untranslated-token row`,
+    }]
+  }
 
   const parsedPolicy = parsePolicyJson(policyResult.block)
   if (parsedPolicy.error) return [{ ...parsedPolicy.error, message: `${contextPath}: ${parsedPolicy.error.message}` }]

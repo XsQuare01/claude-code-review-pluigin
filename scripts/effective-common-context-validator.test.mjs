@@ -24,7 +24,7 @@ const VALID_BASELINE = [
   '<!-- EFFECTIVE_COMMON_CONTEXT_POLICY:END -->',
   '',
   '<!-- PUBLIC_OUTPUT_LOCATION_LITERAL_ALLOW:BEGIN -->',
-  '| **번역하지 않는다** | 상태 토큰(`SKIPPED`, `UNKNOWN`, `위치 미확인`, `확인 필요`, `버전 미확인`) |',
+  '| **번역하지 않는다** | 규칙 ID(`03-1`, `CR-2`), 파일 경로, 코드 인용, Severity 표기, 두 축 표기(`영향`·`확신`과 그 값 `높음`·`낮음`), 상태 토큰(`SKIPPED`, `UNKNOWN`, `위치 미확인`, `확인 필요`, `버전 미확인`) |',
   '<!-- PUBLIC_OUTPUT_LOCATION_LITERAL_ALLOW:END -->',
   '',
   '## 00-10. 위치 표기 🔴',
@@ -46,6 +46,17 @@ test('fails with a stable code when a contradictory positive 위치 미확인 li
 
   assert.equal(result.length, 1)
   assert.equal(result[0].code, EFFECTIVE_COMMON_CONTEXT_CODES.PUBLIC_LITERAL_OUTSIDE_ALLOW_BLOCK)
+})
+
+test('fails when contradictory prose is hidden inside the public literal allow block', () => {
+  const text = VALID_BASELINE.replace(
+    '<!-- PUBLIC_OUTPUT_LOCATION_LITERAL_ALLOW:END -->',
+    '- structured producer도 위치 미확인 을 바로 출력한다\n<!-- PUBLIC_OUTPUT_LOCATION_LITERAL_ALLOW:END -->',
+  )
+  const result = validateEffectiveCommonContext(text, 'review-rules/00-rule.md')
+
+  assert.equal(result.length, 1)
+  assert.equal(result[0].code, EFFECTIVE_COMMON_CONTEXT_CODES.ALLOW_BLOCK_SHAPE)
 })
 
 test('passes when human prose is paraphrased or reformatted but the machine markers stay intact', () => {
