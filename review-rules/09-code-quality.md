@@ -9,13 +9,12 @@
 - 실패 흐름의 안전성 → `exception.md` (에러 처리 *방식의 통일*만 여기서 본다)
 - 테스트/목 전용 파일 → 리뷰 대상에서 제외 (`00-rule.md`, `20-deletion-regression.md`)
 
-## Severity 기준
+## 영향도 보정 예시
 
-| Severity | 의미 |
+| 영향도 | 이 모듈에서 자주 보이는 근거 |
 |----------|------|
-| 🔴 ERROR | 유지보수 심각 장애, 패턴 불일치로 인한 버그 |
-| 🟡 WARNING | 가독성 저해, 컨벤션 불일치 |
-| 🔵 INFO | 스타일 개선 |
+| 높음 | dead code, suppression 우회, 패턴 불일치가 실제 버그나 검증 실패로 닫히는 경우 |
+| 낮음 | 컨벤션, 가독성, 스타일 개선 중심 문제에 머무는 경우 |
 
 ---
 
@@ -139,15 +138,8 @@ const hasEditAccess = isAdmin || isMarketingEditor || user.isSuperUser
 if (hasEditAccess) { ... }
 ```
 
-## 09-OUTPUT. 출력 형식
+## 09-OUTPUT. 도메인 결과 가이드
 
-<!-- REVIEW_RESULT_CONTRACT_V1_PRODUCER_OUTPUT -->
-
-이 문서를 producer prompt에 쓸 때는 **`REVIEW_RESULT_CONTRACT_V1`** 을 따른다. 응답은 Markdown 표나 헤딩이 아니라 **raw JSON 객체 하나만** 반환한다.
-
-- top-level에는 `schemaVersion`, `findings`, `openQuestions`를 항상 포함하고 `schemaVersion`은 `1`이어야 한다.
-- `severity`는 producer가 내지 않는다. 이 모듈은 `impact`와 `confidence`만 판정한다.
-- import 정리, dead code, 패턴 일관성, Fast Refresh 우회, 복잡한 논리 표현식 같은 도메인별 설명은 새 schema field를 만들지 말고 `body`, `recommendation`, `evidence`에 담는다.
-- `00-rule.md` 00-11에 걸리는 unresolved absence/possibility claim, search scope 미완료, 추가 탐색 요청만 `openQuestions`로 보낸다.
-- 결함은 성립하지만 exact location만 확인하지 못했으면 finding을 유지하고 `location.kind="unverified"`와 `reason`만 사용한다.
-- producer 문자열 필드는 최종 리포트의 신뢰된 Markdown이 아니다. heading/table/raw HTML/link를 직접 만들려고 하지 말고 plain prose만 넣는다.
+- dead code, 우회 suppression, 패턴 불일치를 지적할 때는 **어떤 유지보수 비용이나 잘못된 사용 경로**를 남기는지 적는다.
+- 단순 formatter가 고칠 수 있는 문제와 실제 의미 혼란을 만드는 문제를 구분해, 리뷰어 판단이 필요한 쪽을 우선 설명한다.
+- 복잡한 논리식이나 export 구조는 더 짧게 쓰는 취향이 아니라 **읽는 사람이 잘못 이해하거나 놓치게 되는 지점**을 중심으로 남긴다.

@@ -2,13 +2,12 @@
 
 이 모듈은 **이름과 주석이 의도를 정확히 전달하는지**를 본다. 상수 추출과 상수 위치는 `08-constants.md`가 다룬다.
 
-## Severity 기준
+## 영향도 보정 예시
 
-| Severity | 의미 |
+| 영향도 | 이 모듈에서 자주 보이는 근거 |
 |----------|------|
-| 🔴 ERROR | 의도 파악 불가, 유지보수 심각한 장애 |
-| 🟡 WARNING | 가독성 저해, 컨벤션 불일치 |
-| 🔵 INFO | 더 명확한 대안 가능 |
+| 높음 | 이름 혼란이 실제 잘못된 사용, 잘못된 분기, 검증 실패로 이어지는 경우 |
+| 낮음 | 가독성, 컨벤션, 설명 명확성 중심 문제에 머무는 경우 |
 
 ---
 
@@ -95,15 +94,8 @@ const containerStyle = { overflow: 'auto' }
 - 의도적 비표준 패턴
 - 의도적으로 React 기본 동작에서 벗어난 처리 (예: 리셋 목적의 `key`, 의도적 `exhaustive-deps` suppression)
 
-## 07-OUTPUT. 출력 형식
+## 07-OUTPUT. 도메인 결과 가이드
 
-<!-- REVIEW_RESULT_CONTRACT_V1_PRODUCER_OUTPUT -->
-
-이 문서를 producer prompt에 쓸 때는 **`REVIEW_RESULT_CONTRACT_V1`** 을 따른다. 응답은 Markdown 표나 헤딩이 아니라 **raw JSON 객체 하나만** 반환한다.
-
-- top-level에는 `schemaVersion`, `findings`, `openQuestions`를 항상 포함하고 `schemaVersion`은 `1`이어야 한다.
-- `severity`는 producer가 내지 않는다. 이 모듈은 `impact`와 `confidence`만 판정한다.
-- 네이밍 충돌, 개념 일관성, 주석 품질, 필수 주석 부재 같은 도메인별 설명은 새 schema field를 만들지 말고 `body`, `recommendation`, `evidence`에 담는다.
-- `00-rule.md` 00-11에 걸리는 unresolved absence/possibility claim, search scope 미완료, 추가 탐색 요청만 `openQuestions`로 보낸다.
-- 결함은 성립하지만 exact location만 확인하지 못했으면 finding을 유지하고 `location.kind="unverified"`와 `reason`만 사용한다.
-- producer 문자열 필드는 최종 리포트의 신뢰된 Markdown이 아니다. heading/table/raw HTML/link를 직접 만들려고 하지 말고 plain prose만 넣는다.
+- 네이밍 지적은 **무엇을 오해하게 만드는지**를 적는다. 단순히 마음에 안 드는 이름이 아니라, 호출부나 후속 변경에서 어떤 혼동을 부르는지가 보여야 한다.
+- 같은 개념의 이름이 갈라졌다면 어느 이름을 표준으로 삼을지 제안해, 수정 방향이 즉시 보이게 한다.
+- 주석은 "있다/없다"보다 **왜 설명이 필요한 자리인지, 지금 주석이 왜 거짓이거나 불충분한지**를 남긴다.

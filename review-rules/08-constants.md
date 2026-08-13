@@ -2,13 +2,12 @@
 
 이 모듈은 **의미 없는 리터럴과 흩어진 상수**를 본다.
 
-## Severity 기준
+## 영향도 보정 예시
 
-| Severity | 의미 |
+| 영향도 | 이 모듈에서 자주 보이는 근거 |
 |----------|------|
-| 🔴 ERROR | 값이 여러 곳에 흩어져 한쪽만 바뀌면 버그가 나는 구조 |
-| 🟡 WARNING | 의미 불명확, 지역화·타입 안전성 저해 |
-| 🔵 INFO | 더 명확한 표현 가능 |
+| 높음 | 값이 여러 곳에 흩어져 한쪽만 바뀌면 실제 버그나 외부 파손이 닫히는 경우 |
+| 낮음 | 의미 불명확, i18n/타입 안전성/표현 정리 중심 문제에 머무는 경우 |
 
 ---
 
@@ -92,15 +91,8 @@ FSD를 쓰지 않는 프로젝트라면 프로젝트가 이미 쓰고 있는 위
 - 상태값 유니온을 문자열 리터럴로만 관리해 오타가 컴파일에서 안 잡힘
 - 단위가 이름에 없어 오해 가능 (`TIMEOUT` → `TIMEOUT_MS`)
 
-## 08-OUTPUT. 출력 형식
+## 08-OUTPUT. 도메인 결과 가이드
 
-<!-- REVIEW_RESULT_CONTRACT_V1_PRODUCER_OUTPUT -->
-
-이 문서를 producer prompt에 쓸 때는 **`REVIEW_RESULT_CONTRACT_V1`** 을 따른다. 응답은 Markdown 표나 헤딩이 아니라 **raw JSON 객체 하나만** 반환한다.
-
-- top-level에는 `schemaVersion`, `findings`, `openQuestions`를 항상 포함하고 `schemaVersion`은 `1`이어야 한다.
-- `severity`는 producer가 내지 않는다. 이 모듈은 `impact`와 `confidence`만 판정한다.
-- 매직값, 상수 중복, 단일 출처, 상수 위치, 상수 표현 같은 도메인별 설명은 새 schema field를 만들지 말고 `body`, `recommendation`, `evidence`에 담는다.
-- `00-rule.md` 00-11에 걸리는 unresolved absence/possibility claim, search scope 미완료, 추가 탐색 요청만 `openQuestions`로 보낸다.
-- 결함은 성립하지만 exact location만 확인하지 못했으면 finding을 유지하고 `location.kind="unverified"`와 `reason`만 사용한다.
-- producer 문자열 필드는 최종 리포트의 신뢰된 Markdown이 아니다. heading/table/raw HTML/link를 직접 만들려고 하지 말고 plain prose만 넣는다.
+- 매직값은 **그 값이 무엇을 의미하는지**와, 왜 이름 없는 리터럴 상태로 두면 바뀔 때 버그가 나는지를 적는다.
+- 상수 중복은 어느 값이 어디에 복제되어 있고, 어느 파일 또는 모듈을 **단일 출처**로 삼아야 하는지까지 설명한다.
+- 사용자 노출 문자열이면 단순 상수 추출보다 i18n 적용이 더 적절한지 같이 판단해 남긴다.
