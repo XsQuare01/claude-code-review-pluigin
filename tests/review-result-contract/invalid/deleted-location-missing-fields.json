@@ -1,0 +1,27 @@
+{
+  "name": "deleted-location-missing-fields",
+  "expected": "invalid",
+  "expectedErrorCodes": [
+    "E_LOCATION_DELETED_REQUIRES_LINE_BEFORE",
+    "E_LOCATION_DELETED_REQUIRES_PATH",
+    "E_LOCATION_DELETED_REQUIRES_QUOTE"
+  ],
+  "input": {
+    "schemaVersion": 1,
+    "findings": [
+      {
+        "ruleId": "20-1",
+        "title": "삭제된 production 코드 확인 필요",
+        "body": "삭제 경로의 실제 영향이 검증되지 않았습니다.",
+        "impact": "high",
+        "category": "external-breakage",
+        "evidence": "삭제 전 export와 호출부 정합성 증거가 없습니다.",
+        "confidence": "high",
+        "location": {
+          "kind": "deleted"
+        }
+      }
+    ],
+    "openQuestions": []
+  }
+}

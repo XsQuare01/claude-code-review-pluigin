@@ -1,0 +1,9 @@
+{
+  "name": "empty-result",
+  "expected": "valid",
+  "input": {
+    "schemaVersion": 1,
+    "findings": [],
+    "openQuestions": []
+  }
+}

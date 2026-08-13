@@ -1,0 +1,23 @@
+{
+  "name": "open-question-unknown-key",
+  "expected": "invalid",
+  "expectedErrorCodes": [
+    "E_OPEN_QUESTION_UNKNOWN_KEY"
+  ],
+  "input": {
+    "schemaVersion": 1,
+    "findings": [],
+    "openQuestions": [
+      {
+        "title": "호출부 추가 확인 필요",
+        "body": "diff 밖 consumer가 더 있는지 확인해야 합니다.",
+        "reason": "현재 범위만으로는 외부 consumer 전부를 확인할 수 없습니다.",
+        "location": {
+          "kind": "unverified",
+          "reason": "정확한 위치를 아직 특정하지 못했습니다."
+        },
+        "extraField": "unexpected"
+      }
+    ]
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "name": "deleted-range-with-optional-fields",
+  "expected": "valid",
+  "input": {
+    "schemaVersion": 1,
+    "findings": [
+      {
+        "ruleId": "20-4",
+        "title": "cleanup 블록이 통째로 삭제됐습니다",
+        "body": "삭제된 cleanup 범위 때문에 타이머 정리 경로가 사라졌습니다.",
+        "impact": "high",
+        "category": "verification-failure",
+        "evidence": "삭제 전 effect return block이 있었고 대체 정리 경로가 보이지 않습니다.",
+        "confidence": "high",
+        "recommendation": "삭제 전 cleanup 역할을 대체하는 정리 경로를 복원하세요.",
+        "location": {
+          "kind": "deleted",
+          "path": "src/features/chat/use-room.ts",
+          "lineBefore": 54,
+          "endLine": 57,
+          "quote": "return () => { clearTimeout(timer); subscription.unsubscribe() }"
+        }
+      }
+    ],
+    "openQuestions": []
+  }
+}

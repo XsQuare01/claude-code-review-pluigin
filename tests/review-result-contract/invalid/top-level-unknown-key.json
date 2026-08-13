@@ -1,0 +1,13 @@
+{
+  "name": "top-level-unknown-key",
+  "expected": "invalid",
+  "expectedErrorCodes": [
+    "E_TOPLEVEL_UNKNOWN_KEY"
+  ],
+  "input": {
+    "schemaVersion": 1,
+    "findings": [],
+    "openQuestions": [],
+    "summary": "unexpected"
+  }
+}

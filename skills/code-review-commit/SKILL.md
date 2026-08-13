@@ -18,6 +18,10 @@ description: Use when the user wants to review a single commit, invokes /code-re
 | 모듈 집합 | numbered non-00 전체 |
 | 분할 방식 | 단일 통합 pass |
 
+이 워크플로우는 **legacy producer workflow**다. `workflow-contract.md`의 ownership matrix에서 legacy로 유지되며, C-6A의 structured lifecycle은 여기 적용하지 않는다. 기존 producer 계약을 유지한다.
+
+리뷰를 시작할 때 `workflow-contract.md`에서 이 워크플로우에 필요한 orchestration/public report skeleton만 확인한다. legacy workflow이므로 effective reviewer prompt에는 structured manifest나 structured producer instruction을 주입하지 않는다.
+
 ## 실행 절차
 
 ### Step 1: 대상 커밋 결정 및 유효성 확인
@@ -136,45 +140,45 @@ task(
 bounded 단일 통합 pass 완료 후:
 
 1. 단일 통합 pass 결과를 확인한다
-2. 결과를 severity 순서로 병합: 🔴 ERROR → 🟡 WARNING → 🔵 INFO
+2. 결과를 derived severity 순서로 병합: 🔴 → 🟡 → 🔵
 3. 같은 severity 내에서는 모듈 순서대로 정렬
 4. 위반 없는 모듈은 최하단에 "✅ 통과" 로 요약
 
 ### Step 7: 최종 리포트 출력
 
 ```markdown
-# 커밋 코드 리뷰 리포트
+# `{대상}` 커밋 코드 리뷰 리포트
+
+## 리뷰 기준
 
 > **커밋**: {TARGET_COMMIT} | **리뷰 시각**: {TIMESTAMP}
 > **변경 파일**: {N}개 | **리뷰 모듈**: {M}개
 
-## 🔴 ERROR (커밋 수정 필수)
+## 판정
 
-| 모듈 | 규칙 | 위치 | 이슈 | 개선 제안 |
+머지/체리픽 관점의 결론과 차단 사유를 한두 줄로 요약한다.
+
+## 실행 계획
+
+커밋 patch 기준, bounded pass 성공/실패 상태, `SKIPPED`/`UNKNOWN` 사유를 적는다.
+
+## 상세 지적
+
+### {모듈명}
+
+| 심각도 | 규칙 | 위치 | 이슈 | 개선 제안 |
 |--------|------|------|------|----------|
-| ... | ... | ... | ... | ... |
+| 🔴/🟡/🔵 | 규칙번호 | 파일:라인(또는 범위/삭제 전 범위) | 구체적 위반 | 수정 방향 |
 
-## 🟡 WARNING (수정 권장)
+## 도구 실행 결과
 
-| 모듈 | 규칙 | 위치 | 이슈 | 개선 제안 |
-|--------|------|------|------|----------|
-| ... | ... | ... | ... | ... |
+| 명령 | 결과 | 비고 |
+|------|------|------|
+| ... | ... | HEAD가 아닐 때는 lint 생략 사유를 적는다 |
 
-## 🔵 INFO (개선 제안)
+## 미해결 / 후속 확인
 
-| 모듈 | 규칙 | 위치 | 이슈 | 개선 제안 |
-|--------|------|------|------|----------|
-| ... | ... | ... | ... | ... |
-
-## 요약
-
-| 모듈 | 🔴 | 🟡 | 🔵 | 결과 |
-|------|-----|-----|-----|------|
-| FSD 아키텍처 | 0 | 1 | 0 | ⚠️ |
-| 타입 안전성 | 0 | 0 | 0 | ✅ |
-| ... | ... | ... | ... | ... |
-
-**권장 액션**: 🔴 {N}개 → {가능/불가/수정 후 가능}
+추가 확인이 필요한 absence claim, 범위 제한, unresolved follow-up을 적는다.
 ```
 
 리포트 저장은 `workflow-contract.md` C-7을 따른다 (`workflow-name`은 `commit`). 문서 내용은 **해당 커밋 patch 안에서 실제로 바뀐 내용** 중심으로 쓰고, 다른 커밋/브랜치의 일반론은 넣지 않는다.

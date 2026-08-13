@@ -1,0 +1,27 @@
+{
+  "name": "high-missing-category",
+  "expected": "invalid",
+  "expectedErrorCodes": [
+    "E_FINDING_HIGH_REQUIRES_CATEGORY"
+  ],
+  "input": {
+    "schemaVersion": 1,
+    "findings": [
+      {
+        "ruleId": "12-4",
+        "title": "라벨이 없습니다",
+        "body": "icon-only button에 accessible name이 없습니다.",
+        "impact": "high",
+        "evidence": "aria-label, visible text, aria-labelledby가 모두 없습니다.",
+        "confidence": "high",
+        "location": {
+          "kind": "verified",
+          "path": "src/components/IconButton.tsx",
+          "line": 12,
+          "quote": "<button><Icon /></button>"
+        }
+      }
+    ],
+    "openQuestions": []
+  }
+}

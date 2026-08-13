@@ -1,0 +1,29 @@
+{
+  "name": "deleted-range-invalid",
+  "expected": "invalid",
+  "expectedErrorCodes": [
+    "E_LOCATION_DELETED_INVALID_END_LINE"
+  ],
+  "input": {
+    "schemaVersion": 1,
+    "findings": [
+      {
+        "ruleId": "20-4",
+        "title": "deleted endLine이 0입니다",
+        "body": "삭제 전 range가 유효하지 않습니다.",
+        "impact": "high",
+        "category": "user-malfunction",
+        "evidence": "삭제 범위를 0으로 표기할 수 없습니다.",
+        "confidence": "high",
+        "location": {
+          "kind": "deleted",
+          "path": "src/features/chat/use-room.ts",
+          "lineBefore": 54,
+          "endLine": 0,
+          "quote": "return () => subscription.unsubscribe()"
+        }
+      }
+    ],
+    "openQuestions": []
+  }
+}

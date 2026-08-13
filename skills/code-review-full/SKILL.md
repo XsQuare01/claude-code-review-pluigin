@@ -84,14 +84,46 @@ Trigger 섹션이 있는 모듈(`12`, `14`, `16`, `17`, `18`, `21`)은 diff에 �
 
 에이전트에게는 **diff로 판단이 서지 않을 때만** 해당 파일을 추가로 읽으라고 지시한다. 모든 에이전트가 습관적으로 변경 파일 전체를 다시 읽으면 3a(3)에서 없앤 중복이 그대로 돌아온다.
 
-**출력 형식 지시 — 각 모듈 sub-agent prompt에 반드시 포함한다.**
+**출력 형식 지시 — 각 모듈/특수 패스 producer prompt에 반드시 포함한다.**
 
-> 문서 레벨 헤딩(`#`, `##`, `###`)을 만들지 마세요. 문서 제목과 모듈 제목은 오케스트레이터가 붙입니다.
-> finding 하나마다 `#### {severity} \`{규칙 ID}\` {한 줄 제목}` 으로 시작하고, 그 아래에 위치·인용·설명을 씁니다.
-> 지적이 없으면 헤딩 없이 `상태: PASS`와 무엇을 확인했는지 한 문단으로만 답하세요.
-> 섹션 이름은 한국어로 씁니다.
+> `REVIEW_RESULT_CONTRACT_V1_MANIFEST`는 `workflow-contract.md`의 manifest sentinel JSON block 전문을 그대로 주입한 런타임 placeholder입니다. partial token 목록이나 요약본으로 대체하지 말고, 이 manifest 전체를 계약으로 사용하세요.
+>
+> `{REVIEW_RESULT_CONTRACT_V1_MANIFEST}`
+>
+> `REVIEW_RESULT_CONTRACT_V1_PRODUCER_OUTPUT` marker를 따르는 producer라고 생각하고, 응답은 Markdown/코드펜스/서문 없이 `REVIEW_RESULT_CONTRACT_V1` raw JSON 객체 하나만 반환하세요.
+> report heading/table/raw HTML/link를 직접 만들려고 하지 마세요. `title`, `body`, `recommendation`, `reason`, `evidence`는 최종 리포트의 신뢰된 Markdown이 아니라 untrusted content 입니다.
+> top-level에는 `schemaVersion`, `findings`, `openQuestions`를 **항상** 포함하고, `schemaVersion`은 반드시 `1`이어야 합니다. `findings`와 `openQuestions`는 빈 결과여도 생략하지 말고 배열로 반환하세요.
+> `severity`는 어떤 depth에도 넣지 마세요. producer는 `impact`와 `confidence`만 판정하고 severity와 Markdown은 오케스트레이터가 만듭니다.
+> `00-rule.md` 00-11에 걸리는 unresolved absence/possibility claim, search scope 미완료, 추가 탐색 요청만 `openQuestions`로 보내세요. 결함은 성립하지만 exact location만 확인하지 못했으면 finding을 유지하고 `location.kind="unverified"`와 `reason`만 사용하세요. producer가 공개 문자열 토큰 `위치 미확인`을 직접 출력하지는 않습니다.
+> 규칙이 요구하던 도메인별 정보(실패 시나리오, 규모/시나리오, contract 표면, 복구 방향 등)는 새 schema field를 만들지 말고 `body`, `recommendation`, `evidence`, `reason` 안에 녹여 쓰세요.
 
-에이전트가 자기 문서 구조를 만들어 반환하면 오케스트레이터가 그것을 이어붙일 때 **헤딩 레벨이 깨지고**(모듈 래퍼보다 상위 레벨이 안쪽에 들어옴), 모듈마다 다른 하위 구조와 언어가 섞인다. 실제 리포트 세 건에서 같은 워크플로우·같은 규칙 버전인데 골격이 전부 다르게 나온 원인이 이것이었다. **에이전트가 애초에 상위 헤딩을 만들지 않으면 이어붙여도 깨지지 않는다.**
+위 지시는 이 skill이 structured-v1 owner로서 보유한다. numbered rule modules와 specialist rule docs는 workflow-neutral domain judgment docs일 뿐이며, producer schema나 lifecycle을 직접 소유하지 않는다. shared manifest와 retry/fail-closed 정책의 정본은 `workflow-contract.md` C-6A와 `REVIEW_RESULT_CONTRACT_V1`이다.
+
+#### Numbered module review producer prompt template
+
+- 입력: `{REVIEW_RESULT_CONTRACT_V1_MANIFEST}` + `00-rule.md` 전문 + 담당 numbered module 전문 + diff/context/profile 정보
+- 출력: 위 structured producer instruction을 따르는 `REVIEW_RESULT_CONTRACT_V1` JSON 하나
+- 목적: numbered module 하나의 domain judgment를 structured finding/openQuestion으로 반환
+
+#### Props & Arguments Code Review producer prompt template
+
+- 입력: `{REVIEW_RESULT_CONTRACT_V1_MANIFEST}` + `00-rule.md` 공통 규칙 + `props.md` 전문 + diff/context
+- 출력: 위 structured producer instruction을 따르는 `REVIEW_RESULT_CONTRACT_V1` JSON 하나
+- 목적: props drilling, pass-through, argument 구조 이슈를 standalone/full specialist pass 모두 같은 contract로 반환
+
+#### Math Code Review (linear algebra) producer prompt template
+
+- 입력: `{REVIEW_RESULT_CONTRACT_V1_MANIFEST}` + `00-rule.md` 공통 규칙 + `math.md` 전문 + diff/context
+- 출력: 위 structured producer instruction을 따르는 `REVIEW_RESULT_CONTRACT_V1` JSON 하나
+- 목적: shape/차원, storage order, 수학 전제 위반을 standalone/full specialist pass 모두 같은 contract로 반환
+
+#### Exception Handling Code Review producer prompt template
+
+- 입력: `{REVIEW_RESULT_CONTRACT_V1_MANIFEST}` + `00-rule.md` 공통 규칙 + `exception.md` 전문 + diff/context
+- 출력: 위 structured producer instruction을 따르는 `REVIEW_RESULT_CONTRACT_V1` JSON 하나
+- 목적: 예외 전파, fallback, recovery 이슈를 standalone/full specialist pass 모두 같은 contract로 반환
+
+에이전트가 자기 문서 구조를 만들어 반환하면 오케스트레이터가 그것을 이어붙일 때 **헤딩 레벨이 깨지고**(모듈 래퍼보다 상위 레벨이 안쪽에 들어옴), 모듈마다 다른 하위 구조와 언어가 섞인다. structured result로 고정하면 하위 에이전트는 판단 결과만 반환하고, 최종 골격과 severity 표기는 오케스트레이터가 일관되게 만든다.
 
 **단 하나의 예외: 위치 확인.** 지적을 만들 때는 그 줄을 실제로 읽어 번호를 확인하고 코드를 인용한다 (`00-rule.md` 00-10). 이건 diff만으로 대체할 수 없다 — hunk 헤더로 계산한 번호는 어긋나고, 어긋난 번호는 결과를 받은 뒤 정정하는 왕복을 만든다. 지적 한 건을 확인하는 비용이 리포트를 다시 고치는 비용보다 훨씬 싸다.
 - `00-rule.md`, `props.md`, `math.md`, `exception.md`, `fast.md`, 그리고 숫자 prefix가 없는 모든 파일은 일반 패스의 **독립 모듈 대상에서 제외**한다. (`00-rule.md`는 제외되지만 공통 규칙으로는 모든 모듈에 전달된다.)
@@ -137,16 +169,22 @@ Trigger 섹션이 있는 모듈(`12`, `14`, `16`, `17`, `18`, `21`)은 diff에 �
 ## 리포팅
 - 문서 골격(섹션 이름·순서·헤딩 레벨)은 `workflow-contract.md` C-7의 **문서 골격** 표를 따른다. 매 실행마다 다른 골격을 만들지 않는다.
 - 네 패스의 결과를 각각 구분해 출력한다: 일반, Props, 수학, 예외.
-- **"그대로 유지"의 대상은 내용이다.** 지적의 개수, 문구, 규칙 ID, 위치, 출처 패스 라벨, 그리고 두 축(영향도·확신도)은 그대로 보존한다. severity 이모지는 `workflow-contract.md` § 지적 표기의 파생 규칙에서 계산한 값으로, 두 축과 어긋나면 오케스트레이터가 재계산해 정정한다. 반면 **헤딩 레벨과 섹션 이름은 골격에 맞게 정규화한다** — 하위 에이전트가 만든 `#`~`###` 헤딩을 그대로 옮기면 문서 구조가 깨진다.
+- producer가 반환한 원본은 Markdown이 아니라 parsed JSON이다. 오케스트레이터는 producer heading/section/severity를 보존·정규화하는 대신, **검증을 통과한 구조화 필드만** 수집 대상으로 삼는다: finding/openQuestion의 내용, `impact`/`confidence`, `category`, `location`, 규칙 ID, 출처 패스 라벨.
 - 일반 패스 리포트는 `RULES_DIR`의 `[0-9]*.md`에서 발견한 numbered non-00 모듈명을 모두 나열하고, 모듈별 sub-agent 결과를 각각 표시한다. `00-rule.md`는 공통 규칙이므로 모듈 목록에 넣지 않는다.
 - numbered non-00 모듈 중 실행 또는 수집이 누락된 항목이 있으면 `FAILED orchestration`으로 표시하고, 완료된 리뷰처럼 요약하지 않는다.
 - lint/typecheck/test를 실행했으면 `도구 실행 결과` 섹션으로 분리해 보고하고, 리뷰 지적과 섞지 않는다 (`00-rule.md` 00-9).
-- 개별 패스 리포트를 출력 전에 압축하거나 합치거나 지우지 않는다. 형식 정규화는 여기에 해당하지 않는다.
+- 개별 패스의 구조화 결과는 출력 전에 임의 축약하거나 버리지 않는다. aggregation은 parsed field를 유지한 채 병합·정렬만 하고, 최종 헤딩/섹션/표현은 renderer가 새로 만든다.
 - 같은 규칙 ID로 finding이 둘 이상이면 C-7에 따라 `17-3 (1/2)` 형태로 순번을 붙인다.
 - 패스에 적용 범위가 없으면 패스 이름, 사유, 그리고 `SKIPPED`가 비차단임을 명시해 `SKIPPED`로 출력한다.
 - 모든 패스가 끝난 뒤에는 사용자가 다른 언어를 명시하지 않은 한 한국어로 전체 요약 리포트를 출력한다.
 - 요약 저장은 `workflow-contract.md` C-7을 따른다 (`workflow-name`은 `full`).
 - 프로젝트가 이미 다른 문서 저장 관례를 따르고 있으면 절대 경로를 강제하지 않는다.
+- 일반/Props/수학/예외 producer 결과는 수집 직후 `workflow-contract.md` C-6A validation 규칙으로 검사한다. JSON 파싱 실패, 필수 필드 누락, 금지 필드 `severity`, 허용되지 않은 enum/location 값은 `malformed-output`이다.
+- `malformed-output`이면 **같은 producer에 교정 재시도는 한 번만** 한다. 재시도 prompt에는 잘못된 점만 짧게 적고 다시 `REVIEW_RESULT_CONTRACT_V1` raw JSON 하나만 요구한다.
+- 두 번째도 `malformed-output`이면 그 패스는 `FAILED malformed-output`으로 기록하고, 부분 보정이나 Markdown 해석으로 통과시키지 않는다. dispatch/result handling과 실패 기록은 이 skill이 책임진다.
+- aggregation은 **검증을 통과한 JSON만** 입력으로 받는다. 이 단계에서는 parsed finding/openQuestion을 패스 라벨과 함께 정렬·중복 제거·그룹화할 뿐, Markdown 헤딩이나 severity 문자열을 읽거나 재사용하지 않는다.
+- renderer가 구조화 필드에서 최종 문서를 생성한다. `####` 헤딩, 섹션 이름, 상태 표, `미해결 / 후속 확인` 항목, severity 이모지는 모두 renderer가 만든다.
+- severity는 renderer output 단계에서만 `impact × confidence`로 파생한다. producer나 aggregation 단계에는 severity source field가 없다.
 
 ### 상세 지적 작성 규칙
 - 사용자가 다른 언어를 명시하지 않은 한 모든 패스의 상세 지적과 최종 저장 문서는 한국어로 작성한다.
@@ -166,8 +204,9 @@ Trigger 섹션이 있는 모듈(`12`, `14`, `16`, `17`, `18`, `21`)은 diff에 �
 - 특수 패스의 세부사항을 요약 안에 유지하고, 일반/Props/수학/예외 관찰을 하나의 일반 노트로 뭉개지 않는다.
 
 ### 중복 제거 규칙
-- 다음이 **모두** 같을 때만 지적을 병합한다: 같은 파일, 같은/가까운 라인, 같은 근본 원인, 그리고 **두 축(영향도·확신도)이 모두 일치**.
-- **두 축 중 하나라도 다르면 나머지 조건을 전부 만족해도 병합하지 않는다.** 각 지적을 자기 출처 패스 라벨과 함께 분리해 남긴다. 같은 🟡이라도 한쪽은 `영향: 높음 · 확신: 낮음`이고 다른 쪽은 `영향: 낮음 · 확신: 높음`일 수 있어 의미가 정반대이며, 병합하면 코드를 읽은 한쪽 패스의 판정이 소리 없이 버려진다.
+- 이 워크플로우의 dedup 기준은 **`workflow-contract.md` C-6A aggregation** 이 정본이다. 여기서 더 약한 nearby-line 규칙을 만들지 않는다.
+- 즉, 같은 `ruleId`, 같은 verified/deleted 정규화 위치, 같은 핵심 주장/근본 원인/깨지는 조건, 같은 `impact`/`category`, 같은 `confidence`일 때만 병합한다.
+- `location.kind=unverified` finding과 `openQuestions`는 자동 병합하지 않는다. 각 항목을 자기 출처 패스 라벨과 함께 남긴다.
 - 병합된 지적에는 모든 출처 패스 라벨을 유지한다.
 - **병합이 성립한 지적은 두 축이 정의상 같으므로 severity도 그 두 축에서 그대로 파생한다** (`00-rule.md`의 **Severity 기준**). 심각도를 따로 고르거나 더 높은 쪽을 취하지 않는다 — severity는 독립 값이 아니라 계산값이다.
 - 관련된 일반 지적이 이미 있다는 이유로 특수 세부사항을 버리지 않는다.

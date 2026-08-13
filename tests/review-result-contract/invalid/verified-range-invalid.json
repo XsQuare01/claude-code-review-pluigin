@@ -1,0 +1,27 @@
+{
+  "name": "verified-range-invalid",
+  "expected": "invalid",
+  "expectedErrorCodes": [
+    "E_LOCATION_VERIFIED_INVALID_END_LINE"
+  ],
+  "input": {
+    "schemaVersion": 1,
+    "findings": [
+      {
+        "ruleId": "16-2",
+        "title": "endLine이 line보다 작습니다",
+        "body": "range가 뒤집혀 있습니다.",
+        "impact": "low",
+        "confidence": "high",
+        "location": {
+          "kind": "verified",
+          "path": "src/api/profile/mapper.ts",
+          "line": 18,
+          "endLine": 17,
+          "quote": "const email = response.user.email"
+        }
+      }
+    ],
+    "openQuestions": []
+  }
+}

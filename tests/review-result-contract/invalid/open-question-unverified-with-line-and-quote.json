@@ -1,0 +1,25 @@
+{
+  "name": "open-question-unverified-with-line-and-quote",
+  "expected": "invalid",
+  "expectedErrorCodes": [
+    "E_LOCATION_UNVERIFIED_FORBIDS_LINE",
+    "E_LOCATION_UNVERIFIED_FORBIDS_QUOTE"
+  ],
+  "input": {
+    "schemaVersion": 1,
+    "findings": [],
+    "openQuestions": [
+      {
+        "title": "추가 탐색 필요",
+        "body": "위치 확정 전인데 줄 번호와 인용이 섞였습니다.",
+        "reason": "아직 실제 위치를 검증하지 못했습니다.",
+        "location": {
+          "kind": "unverified",
+          "reason": "추가 탐색이 필요합니다.",
+          "line": 44,
+          "quote": "useEffect(() => connect(roomId), [])"
+        }
+      }
+    ]
+  }
+}

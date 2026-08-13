@@ -1,0 +1,28 @@
+{
+  "name": "verified-range-with-optional-fields",
+  "expected": "valid",
+  "input": {
+    "schemaVersion": 1,
+    "findings": [
+      {
+        "ruleId": "16-2",
+        "title": "응답 필드 범위가 mapper와 어긋납니다",
+        "body": "range 전체에서 mapper가 제거된 필드를 계속 읽고 있습니다.",
+        "impact": "high",
+        "category": "external-breakage",
+        "evidence": "응답 구조와 mapper 접근 필드가 같은 변경 범위에서 어긋납니다.",
+        "confidence": "low",
+        "reason": "외부 consumer 전체는 이 저장소 안에서 닫히지 않았습니다.",
+        "recommendation": "adapter 또는 compatibility layer를 추가하세요.",
+        "location": {
+          "kind": "verified",
+          "path": "src/api/profile/mapper.ts",
+          "line": 14,
+          "endLine": 18,
+          "quote": "const email = response.user.email"
+        }
+      }
+    ],
+    "openQuestions": []
+  }
+}

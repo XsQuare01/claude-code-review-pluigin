@@ -9,13 +9,12 @@
 - 상태를 어느 FSD 레이어가 소유해야 하는지 → `01-fsd.md` 01-7
 - props 전달 구조 자체 → `props.md` (`/code-review-props`)
 
-## Severity 기준
+## 영향도 보정 예시
 
-| Severity | 의미 |
+| 영향도 | 이 모듈에서 자주 보이는 근거 |
 |----------|------|
-| 🔴 ERROR | 메모리 누수, 런타임 에러, 경쟁 조건 |
-| 🟡 WARNING | 리렌더링, 동기화 버그, 패턴 불일치 |
-| 🔵 INFO | 캐싱 전략, 최적화 기회 |
+| 높음 | 메모리 누수, 런타임 에러, stale result 오염, 경쟁 조건처럼 실제 실패가 닫히는 경우 |
+| 낮음 | 리렌더링, 동기화 비용, 패턴 불일치, 최적화 여지에 머무는 경우 |
 
 ---
 
@@ -194,3 +193,9 @@ const fullName = `${firstName} ${lastName}`.trim()
 - 캐싱 전략 (staleTime, gcTime)
 - 동일 데이터 중복 요청
 - Optimistic update 적절 사용 여부 — 실패 시 rollback 경로는 `17-concurrency.md` 17-4
+
+## 04-OUTPUT. 도메인 결과 가이드
+
+- cleanup, stale result 방어, dependency 누락을 지적할 때는 **어떤 비동기 흐름이 어떻게 남거나 뒤집히는지**를 적는다. 단순히 "cleanup 없음"만으로 끝내지 않는다.
+- 상태 구조 문제는 어디서 두 출처가 어긋나는지, 어떤 리렌더나 stale closure가 생기는지 등 **실제 실패 경로**를 함께 설명한다.
+- 개선 방향은 abort, ignore flag, request token, state 병합, 파생 계산 복귀처럼 **현재 흐름에 맞는 방어 방식**을 선택해 제안한다.

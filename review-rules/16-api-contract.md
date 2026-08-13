@@ -12,13 +12,14 @@ private local helper 시그니처처럼 같은 런타임 내부에서만 쓰이�
 
 검토 범위는 `00-rule.md`를 따른다. 전체 호출자 탐색으로 넓히지 말고, diff 라인과 그 변경 때문에 직접 영향을 받는 contract 정의, adapter, mapper, validator, caller만 targeted check 한다.
 
-## Severity 기준
+## 영향도 보정 예시
 
-| Severity | 의미 |
+| 영향도 | 이 모듈에서 자주 보이는 근거 |
 |----------|------|
-| 🔴 ERROR | 기존 클라이언트, consumer, 배포 순서, 권한 흐름을 즉시 깨는 breaking contract 변경 |
-| 🟡 WARNING | 호환성 증거, adapter, migration, validation alignment가 부족해 회귀 가능성이 큰 변경 |
-| 🔵 INFO | 계약 의도, deprecation note, 타입/문서 표현을 더 명확히 하면 좋은 변경 |
+| 높음 | 기존 caller/consumer가 실제로 깨지거나, 검증 실패, external-breakage, 권한 흐름 오해 같은 닫힌 높은 영향 범주를 현재 변경에서 직접 지목할 수 있는 경우 |
+| 낮음 | 호환성 증거, migration, adapter, validation alignment가 부족하지만 아직 깨진 caller/consumer나 배포 구간 파손을 닫지 못한 경우 |
+
+호환성 불안은 자동으로 높은 영향이 아니다. 깨지는 contract 표면이나 실제 소비 경로가 닫혀야 높은 영향으로 본다.
 
 ---
 
@@ -93,18 +94,15 @@ query key 상수의 단일 출처 문제는 `08-constants.md` 08-3을 함께 본
 - contract 정의와 직접 연결된 adapter, mapper, caller, validation 경로만 targeted check 한다.
 - breaking 여부는 이름 변경뿐 아니라 wire shape, source compatibility, semantic compatibility를 함께 본다.
 
-## 16-OUTPUT. 출력 형식
+## 16-OUTPUT. 도메인 결과 가이드
 
-각 지적은 다음을 포함한다.
-
-- 변경된 contract 표면
-- 깨질 수 있는 기존 caller/consumer 또는 배포 구간
-- 현재 diff에 부족한 호환성 증거
-- 권장 조치: adapter, fallback, versioning, staged rollout, migration note, schema/mapper alignment
+- 어떤 contract 표면이 바뀌었는지, **어떤 caller/consumer 또는 배포 구간이 왜 깨지는지**를 설명한다.
+- migration, adapter, fallback, versioning이 부족하다고 볼 때는 무엇을 확인했고 어떤 호환성 증거가 없었는지 남긴다.
+- 계약 shape 문제와 운영 위험은 구분한다. 운영 위험이 크더라도 이 모듈에서는 먼저 **깨지는 contract 사실**을 분명히 적는다.
 
 ## 16-SCOPE. 중복 방지
 
-- 권한, 데이터 손상, 결제, 배포 불가 같은 운영 위험은 `18-dangerous-change.md`가 넓게 본다. auth contract 변경의 위험도가 크면 그쪽 severity로 올린다.
+- 권한, 데이터 손상, 결제, 배포 불가 같은 운영 위험은 `18-dangerous-change.md`가 넓게 본다. auth contract 변경이 그런 위험에 닿으면 **별도 18계열 finding을 추가로 검토**하고, 두 축은 각 finding에서 독립적으로 판정한다.
 - `01-fsd.md`는 경계의 *위치*를, 이 모듈은 그 경계를 통과하는 *호환성*을 본다.
 - `02-type.md`는 타입 안전성 자체를, 이 모듈은 타입 변경이 serialized contract를 깨뜨릴 때만 지적한다.
 - 실패 흐름 자체는 `exception.md`를 우선한다.

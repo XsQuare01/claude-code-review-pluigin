@@ -1,0 +1,28 @@
+{
+  "name": "high-unknown-category",
+  "expected": "invalid",
+  "expectedErrorCodes": [
+    "E_FINDING_INVALID_CATEGORY"
+  ],
+  "input": {
+    "schemaVersion": 1,
+    "findings": [
+      {
+        "ruleId": "18-4",
+        "title": "민감정보 노출",
+        "body": "로그에 토큰이 남습니다.",
+        "impact": "high",
+        "category": "privacy-risk",
+        "evidence": "logger.error 호출에 raw token이 포함됩니다.",
+        "confidence": "high",
+        "location": {
+          "kind": "verified",
+          "path": "src/lib/logger.ts",
+          "line": 21,
+          "quote": "logger.error({ token })"
+        }
+      }
+    ],
+    "openQuestions": []
+  }
+}

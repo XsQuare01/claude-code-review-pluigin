@@ -1,0 +1,27 @@
+{
+  "name": "recursive-severity",
+  "expected": "invalid",
+  "expectedErrorCodes": [
+    "E_FORBIDDEN_SEVERITY"
+  ],
+  "input": {
+    "schemaVersion": 1,
+    "findings": [
+      {
+        "ruleId": "15-1",
+        "title": "중첩 선형 탐색",
+        "body": "교집합 계산이 O(N^2)입니다.",
+        "impact": "low",
+        "confidence": "high",
+        "location": {
+          "kind": "verified",
+          "path": "src/features/list/match-items.ts",
+          "line": 31,
+          "quote": "items.filter(item => ids.includes(item.id))",
+          "severity": "warning"
+        }
+      }
+    ],
+    "openQuestions": []
+  }
+}

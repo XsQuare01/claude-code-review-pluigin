@@ -1,0 +1,27 @@
+{
+  "name": "verified-location-missing-fields",
+  "expected": "invalid",
+  "expectedErrorCodes": [
+    "E_LOCATION_VERIFIED_REQUIRES_PATH",
+    "E_LOCATION_VERIFIED_REQUIRES_LINE",
+    "E_LOCATION_VERIFIED_REQUIRES_QUOTE"
+  ],
+  "input": {
+    "schemaVersion": 1,
+    "findings": [
+      {
+        "ruleId": "03-3",
+        "title": "불안정한 key",
+        "body": "렌더마다 새로운 key가 생성됩니다.",
+        "impact": "high",
+        "category": "user-malfunction",
+        "evidence": "Math.random() 결과를 key로 사용합니다.",
+        "confidence": "high",
+        "location": {
+          "kind": "verified"
+        }
+      }
+    ],
+    "openQuestions": []
+  }
+}
