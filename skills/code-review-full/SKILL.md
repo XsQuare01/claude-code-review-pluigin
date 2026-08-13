@@ -84,15 +84,44 @@ Trigger 섹션이 있는 모듈(`12`, `14`, `16`, `17`, `18`, `21`)은 diff에 �
 
 에이전트에게는 **diff로 판단이 서지 않을 때만** 해당 파일을 추가로 읽으라고 지시한다. 모든 에이전트가 습관적으로 변경 파일 전체를 다시 읽으면 3a(3)에서 없앤 중복이 그대로 돌아온다.
 
-**출력 형식 지시 — 각 모듈 sub-agent prompt에 반드시 포함한다.**
+**출력 형식 지시 — 각 모듈/특수 패스 producer prompt에 반드시 포함한다.**
 
-> `REVIEW_RESULT_CONTRACT_V1`만 사용하세요. 응답은 Markdown, 코드펜스, 서문 없이 **raw JSON 객체 하나만** 반환하세요.
-> `REVIEW_RESULT_CONTRACT_V1_PRODUCER_OUTPUT` marker를 따르는 producer라고 생각하고, report heading/table/raw HTML/link를 직접 만들려고 하지 마세요. 문자열 필드는 최종 리포트의 신뢰된 Markdown이 아니라 untrusted content 입니다.
-> top-level에는 `schemaVersion`, `findings`, `openQuestions`를 **항상** 포함하고, `schemaVersion`은 반드시 `1`이어야 합니다.
-> `findings`와 `openQuestions`는 빈 결과여도 생략하지 말고 배열로 반환하세요.
+> `REVIEW_RESULT_CONTRACT_V1_MANIFEST`는 `workflow-contract.md`의 manifest sentinel JSON block 전문을 그대로 주입한 런타임 placeholder입니다. partial token 목록이나 요약본으로 대체하지 말고, 이 manifest 전체를 계약으로 사용하세요.
+>
+> `{REVIEW_RESULT_CONTRACT_V1_MANIFEST}`
+>
+> `REVIEW_RESULT_CONTRACT_V1_PRODUCER_OUTPUT` marker를 따르는 producer라고 생각하고, 응답은 Markdown/코드펜스/서문 없이 `REVIEW_RESULT_CONTRACT_V1` raw JSON 객체 하나만 반환하세요.
+> report heading/table/raw HTML/link를 직접 만들려고 하지 마세요. `title`, `body`, `recommendation`, `reason`, `evidence`는 최종 리포트의 신뢰된 Markdown이 아니라 untrusted content 입니다.
+> top-level에는 `schemaVersion`, `findings`, `openQuestions`를 **항상** 포함하고, `schemaVersion`은 반드시 `1`이어야 합니다. `findings`와 `openQuestions`는 빈 결과여도 생략하지 말고 배열로 반환하세요.
 > `severity`는 어떤 depth에도 넣지 마세요. producer는 `impact`와 `confidence`만 판정하고 severity와 Markdown은 오케스트레이터가 만듭니다.
-> `00-rule.md` 00-11에 걸리는 unresolved absence/possibility claim, search scope 미완료, 추가 탐색 요청만 `openQuestions`로 보내세요. 결함은 성립하지만 exact location만 확인하지 못했으면 finding을 유지하고 `location.kind="unverified"`와 `reason`만 사용하세요.
-> 규칙이 요구하던 도메인별 정보(실패 시나리오, 규모/시나리오, contract 표면, 복구 방향 등)는 새 schema field를 만들지 말고 `body`, `recommendation`, `evidence` 안에 녹여 쓰세요.
+> `00-rule.md` 00-11에 걸리는 unresolved absence/possibility claim, search scope 미완료, 추가 탐색 요청만 `openQuestions`로 보내세요. 결함은 성립하지만 exact location만 확인하지 못했으면 finding을 유지하고 `location.kind="unverified"`와 `reason`만 사용하세요. producer가 공개 문자열 토큰 `위치 미확인`을 직접 출력하지는 않습니다.
+> 규칙이 요구하던 도메인별 정보(실패 시나리오, 규모/시나리오, contract 표면, 복구 방향 등)는 새 schema field를 만들지 말고 `body`, `recommendation`, `evidence`, `reason` 안에 녹여 쓰세요.
+
+위 지시는 이 skill이 structured-v1 owner로서 보유한다. numbered rule modules와 specialist rule docs는 workflow-neutral domain judgment docs일 뿐이며, producer schema나 lifecycle을 직접 소유하지 않는다. shared manifest와 retry/fail-closed 정책의 정본은 `workflow-contract.md` C-6A와 `REVIEW_RESULT_CONTRACT_V1`이다.
+
+#### Numbered module review producer prompt template
+
+- 입력: `{REVIEW_RESULT_CONTRACT_V1_MANIFEST}` + `00-rule.md` 전문 + 담당 numbered module 전문 + diff/context/profile 정보
+- 출력: 위 structured producer instruction을 따르는 `REVIEW_RESULT_CONTRACT_V1` JSON 하나
+- 목적: numbered module 하나의 domain judgment를 structured finding/openQuestion으로 반환
+
+#### Props & Arguments Code Review producer prompt template
+
+- 입력: `{REVIEW_RESULT_CONTRACT_V1_MANIFEST}` + `00-rule.md` 공통 규칙 + `props.md` 전문 + diff/context
+- 출력: 위 structured producer instruction을 따르는 `REVIEW_RESULT_CONTRACT_V1` JSON 하나
+- 목적: props drilling, pass-through, argument 구조 이슈를 standalone/full specialist pass 모두 같은 contract로 반환
+
+#### Math Code Review (linear algebra) producer prompt template
+
+- 입력: `{REVIEW_RESULT_CONTRACT_V1_MANIFEST}` + `00-rule.md` 공통 규칙 + `math.md` 전문 + diff/context
+- 출력: 위 structured producer instruction을 따르는 `REVIEW_RESULT_CONTRACT_V1` JSON 하나
+- 목적: shape/차원, storage order, 수학 전제 위반을 standalone/full specialist pass 모두 같은 contract로 반환
+
+#### Exception Handling Code Review producer prompt template
+
+- 입력: `{REVIEW_RESULT_CONTRACT_V1_MANIFEST}` + `00-rule.md` 공통 규칙 + `exception.md` 전문 + diff/context
+- 출력: 위 structured producer instruction을 따르는 `REVIEW_RESULT_CONTRACT_V1` JSON 하나
+- 목적: 예외 전파, fallback, recovery 이슈를 standalone/full specialist pass 모두 같은 contract로 반환
 
 에이전트가 자기 문서 구조를 만들어 반환하면 오케스트레이터가 그것을 이어붙일 때 **헤딩 레벨이 깨지고**(모듈 래퍼보다 상위 레벨이 안쪽에 들어옴), 모듈마다 다른 하위 구조와 언어가 섞인다. structured result로 고정하면 하위 에이전트는 판단 결과만 반환하고, 최종 골격과 severity 표기는 오케스트레이터가 일관되게 만든다.
 
