@@ -108,6 +108,9 @@ export function aggregatePasses(passes) {
   const acceptedPasses = []
 
   for (const pass of passes) {
+    if (pass.status === 'pending' || pass.status === 'retrying') {
+      throw new Error('E_PASS_NONTERMINAL: aggregatePasses requires terminal pass states')
+    }
     if (pass.status === 'accepted' && pass.result) {
       acceptedPasses.push(freezeClone({ sourceLabel: pass.sourceLabel, status: pass.status }))
       for (const finding of pass.result.findings ?? []) {
@@ -134,7 +137,12 @@ export function aggregatePasses(passes) {
   return freezeClone({ findings: mergedFindings, openQuestions, failedPasses, acceptedPasses })
 }
 
-export function deriveSeverity({ impact, confidence }) {
+export function deriveSeverity(axes) {
+  const impact = axes?.impact
+  const confidence = axes?.confidence
+  if (!impact || !confidence || !['high', 'low'].includes(impact) || !['high', 'low'].includes(confidence)) {
+    throw new Error('E_INVALID_SEVERITY_AXES: deriveSeverity requires impact/confidence high|low axes')
+  }
   if (impact === 'high' && confidence === 'high') return '🔴'
   if (impact === 'low' && confidence === 'low') return '🔵'
   return '🟡'
@@ -146,11 +154,14 @@ function escapeProse(value) {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/\bhttps?:\/\//g, match => match.replace(':', '&#58;'))
+    .replace(/\bwww\./g, 'www&#46;')
+    .replace(/\b([A-Za-z0-9._%+-]+)@([A-Za-z0-9.-]+\.[A-Za-z]{2,})\b/g, '$1&#64;$2')
     .replace(/\[/g, '\\[')
     .replace(/\]/g, '\\]')
     .replace(/\(/g, '\\(')
     .replace(/\)/g, '\\)')
-    .replace(/^( {0,3})([#>|-])/gm, '$1\\$2')
+    .replace(/^( {0,3})([#>|*+-])/gm, '$1\\$2')
+    .replace(/^( {0,3})(\d{1,9}[.)])/gm, '$1\\$2')
     .replace(/^( {0,3})(```|~~~)/gm, '$1\\$2')
     .replace(/^( {0,3})\|/gm, '$1\\|')
     .replace(/^( {0,3})(=+|-+)$/gm, '$1\\$2')
