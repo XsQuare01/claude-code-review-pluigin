@@ -122,6 +122,17 @@ test('contract validation rejects invisible control and bidi characters in produ
   }
 })
 
+test('contract validation preserves legitimate ZWNJ and ZWJ content', async () => {
+  const manifest = await loadManifest()
+  const valid = structuredClone((await readJson(manifestFixturePath)).input)
+  valid.findings[0].title = 'Persian می‌روم'
+  valid.findings[0].body = 'Family emoji 👨‍👩‍👧 remains readable'
+  valid.findings[0].location.path = 'src/می‌روم.ts'
+  valid.findings[0].location.quote = 'const family = "👨‍👩‍👧"'
+
+  assert.deepEqual(parseStructuredProducerResponse(JSON.stringify(valid), manifest), valid)
+})
+
 test('corrective lifecycle: valid first response accepts and terminal states reject reuse', async () => {
   const manifest = await loadManifest()
   const valid = (await readJson(manifestFixturePath)).input
