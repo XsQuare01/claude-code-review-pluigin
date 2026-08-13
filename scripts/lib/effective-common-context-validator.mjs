@@ -110,7 +110,7 @@ export function validateEffectiveCommonContext(text, contextPath = 'effective co
   if (allowResult.block !== EXPECTED_PUBLIC_LITERAL_ALLOW_BLOCK) {
     return [{
       code: EFFECTIVE_COMMON_CONTEXT_CODES.ALLOW_BLOCK_SHAPE,
-      message: `${contextPath}: ${PUBLIC_OUTPUT_LOCATION_LITERAL_ALLOW_MARKER} block must contain exactly the canonical untranslated-token row`,
+      message: `${contextPath}: ${PUBLIC_OUTPUT_LOCATION_LITERAL_ALLOW_MARKER} block mismatch; expected: ${JSON.stringify(EXPECTED_PUBLIC_LITERAL_ALLOW_BLOCK)}; actual: ${JSON.stringify(allowResult.block)}`,
     }]
   }
 

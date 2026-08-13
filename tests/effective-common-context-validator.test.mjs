@@ -57,6 +57,9 @@ test('fails when contradictory prose is hidden inside the public literal allow b
 
   assert.equal(result.length, 1)
   assert.equal(result[0].code, EFFECTIVE_COMMON_CONTEXT_CODES.ALLOW_BLOCK_SHAPE)
+  assert.match(result[0].message, /expected:/)
+  assert.match(result[0].message, /actual:/)
+  assert.match(result[0].message, /structured producer도 위치 미확인 을 바로 출력한다/)
 })
 
 test('passes when human prose is paraphrased or reformatted but the machine markers stay intact', () => {
