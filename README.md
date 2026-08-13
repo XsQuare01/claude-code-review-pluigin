@@ -56,12 +56,12 @@ So **every change bumps the version** — documentation included.
 | Part | When |
 |------|------|
 | PATCH (`2.2.0` → `2.2.1`) | **the default.** Fixes, wording, documentation, new or reworded rules inside an existing module, tuning an existing workflow |
-| MINOR (`2.2.1` → `2.3.0`) | a new rule module file, or a workflow gaining a capability it did not have — a new command, a new flag |
+| MINOR (`2.2.1` → `2.3.0`) | a new rule module file, a workflow gaining a substantial validated capability it did not have, **or an intentionally accepted internal producer→orchestrator interface change for registered structured owners when that change adds a substantial validated structured-output capability while public Markdown remains compatible** |
 | MAJOR | changes that invalidate existing rule IDs or past reports |
 
 When unsure, use PATCH. The version here is a cache key and a change signal, not a compatibility contract — nothing resolves it as a dependency range, so an over-large bump communicates something that did not happen, while an extra patch number costs nothing.
 
-`scripts/check-version-bump.mjs` enforces this in CI: any pull request whose diff is non-empty must change the version, or the check fails.
+`scripts/check-version-bump.mjs` enforces this in CI: any pull request whose diff is non-empty must change the version, or the check fails. The script guidance mirrors the same policy: an internal protocol change alone is not automatically MINOR, but the registered structured-owner upgrade in `2.4.0` counts because it added a substantial validated structured-output capability without breaking the public Markdown contract.
 
 Deciding per-change whether something "really ships" is a judgment call, and a judgment call is where the exception that breaks the rule gets made. A spare patch number costs nothing; a stale install costs an hour of reviewing against the wrong rules.
 
@@ -223,13 +223,30 @@ Non-numbered files are excluded from the automatic scan:
 
 The contract exists because the alternative had already failed: the same procedure copied into seven skill documents drifted apart, and workflows started behaving differently for the same request.
 
-### Structured producer results, phase 1
+### Structured producer results, accepted internal interface in 2.4.0
 
-`REVIEW_RESULT_CONTRACT_V1` separates producer output from the public report. Producers return one raw JSON object with `findings` and `openQuestions`; they do not return Markdown or `severity`. A finding records `impact`, `confidence`, and a `verified`, `deleted`, or `unverified` location. An `unverified` location carries a reason instead of a made-up path or line, and it remains a finding when the defect is established but the exact anchor cannot yet be verified. `openQuestions` is for unresolved claim truth or search scope instead — especially incomplete absence/possibility claims under `00-11`, or explicit follow-up investigation. High-impact findings must name one of five closed categories: user malfunction, data loss, security exposure, verification failure, or external breakage. Low-impact findings may carry `evidence`, but do not require it.
+`REVIEW_RESULT_CONTRACT_V1` is an intentionally accepted **internal producer→orchestrator interface change**. It ships in `2.4.0` as a **MINOR** change because the public Markdown report stays stable while a registered set of producers moves to a structured envelope.
 
-The orchestrator validates those results, aggregates only valid JSON, derives severity from `impact × confidence`, and renders the final Markdown report. Deduplication is owned by the shared workflow contract: only findings with the same rule ID, the same verified/deleted normalized location, the same core claim / root cause / breaking condition, the same impact/category, and the same confidence may merge. `unverified` findings and `openQuestions` never auto-merge; source labels are preserved when valid merges do happen. JSON conformance is prompt-only, not a native model-output schema. Malformed output gets one corrective retry; a second malformed response ends that pass as `FAILED malformed-output` rather than being partially parsed or repaired.
+Structured-v1 owners are:
 
-Phase 1 covers every numbered non-00 producer that `/code-review-full` dispatches, props/math/exception producers in both full and standalone workflows, and the correctness reviewer. `/code-review`, `/code-review-commit`, and `/code-review-fast` keep their legacy producer formats for now.
+- `/code-review-full` for numbered modules plus its full specialist dispatch
+- `/code-review-props`
+- `/code-review-math`
+- `/code-review-exception`
+
+Legacy owners remain unchanged:
+
+- `/code-review`
+- `/code-review-commit`
+- `/code-review-fast`
+
+`agents/correctness-reviewer.md` is **not** a phase-1 structured-v1 owner. It stays an optional direct/evidence-first agent until a built-in orchestrator consumer exists that validates and renders its output.
+
+Numbered rule modules and specialist rule docs are **workflow-neutral domain judgment docs**. They explain what facts a useful finding should cover, but they do not own schema fields, retry policy, renderer behavior, or raw-output instructions.
+
+For structured owners, producers return one raw JSON object with `findings` and `openQuestions`; they do not return Markdown or `severity`. A finding records `impact`, `confidence`, and a `verified`, `deleted`, or `unverified` location. An `unverified` location carries a reason instead of a made-up path or line, and it remains a finding when the defect is established but the exact anchor cannot yet be verified. `openQuestions` is for unresolved claim truth or search scope instead — especially incomplete absence/possibility claims under `00-11`, or explicit follow-up investigation. High-impact findings must name one of five closed categories: user malfunction, data loss, security exposure, verification failure, or external breakage. Low-impact findings may carry `evidence`, but do not require it. Correctness keeps the same `CR-{n}` namespace and location semantics, but because no built-in workflow currently validates/renders its output, it remains direct-only rather than pretending to be a consumer-backed V1 producer.
+
+The orchestrator validates those results, aggregates only valid JSON, derives severity from `impact × confidence`, and renders the final Markdown report. Deduplication is owned by the shared workflow contract: only findings with the same rule ID, the same verified/deleted normalized location, the same core claim / root cause / breaking condition, the same impact/category, and the same confidence may merge. `unverified` findings and `openQuestions` never auto-merge; source labels are preserved when valid merges do happen. JSON conformance is prompt-only, not a native model-output schema. Malformed structured output **or legacy/prose output from a structured owner** gets one corrective retry; a second malformed response ends that pass as `FAILED malformed-output` rather than being partially parsed or repaired. There is **no compatibility parser** for legacy/prose output in structured-v1 owners.
 
 Producer strings are treated as untrusted report content. The renderer places fields by slot rather than trusting producer-authored Markdown, escapes control/block Markdown in prose fields so they cannot create headings, fences, tables, raw HTML, or links that look orchestrator-authored, renders `location.quote` in a safe code form with delimiter escaping, renders paths as code, and leaves any URLs as plain text. The static validator checks that the contract and prompts stay synchronized on those rules; it does not claim to execute or prove the renderer.
 
@@ -287,7 +304,7 @@ The third entry is a fallback for older setups, and it is the one that bites: if
 
 ## Included agent
 
-`agents/correctness-reviewer.md` is an optional evidence-first correctness reviewer (does the implementation match the PR's stated intent across all branches?). It is not part of the default workflows — invoke it explicitly when you want a correctness pass alongside the rule-based review.
+`agents/correctness-reviewer.md` is an optional evidence-first correctness reviewer (does the implementation match the PR's stated intent across all branches?). It is not part of the default workflows and not part of phase-1 structured-v1 ownership — invoke it explicitly when you want a correctness pass alongside the rule-based review.
 
 It answers a question the rule modules do not: a module asks whether the code breaks a rule, this pass asks whether the code does what the PR says it does. Because its findings land in the same report, it is bound by the same contract — read-only execution (`00-9`), verified line numbers with a quoted line (`00-10`), and stated search scope behind any absence claim (`00-11`) — and its findings carry `CR-{n}` IDs. The `agent` check in `scripts/validate-rules.mjs` enforces that: an agent document that cites no contract clause, or uses an ID prefix registered nowhere, fails the build. Being outside the workflows is a scoping decision; being outside the contract was an oversight.
 
@@ -340,21 +357,21 @@ It checks the properties this repo promises but cannot hold by hand:
 | `cross-ref` | a reference to a module file or rule ID that does not exist |
 | `readme` | README inventory out of step with the actual files |
 | `skill` | a skill that does not defer to the contract, declares an unregistered `workflow-name`, or points at a missing rule document |
-| `fast-sync` | a missing digest section, a conditional rule whose severity or applicability was lost in compression, a stale module range |
+| `fast-sync` | a missing digest section, a conditional rule whose applicability, exception, or typical impact calibration was lost in compression, a stale module range |
 | `hardcoded-path` | `~/.claude/review-rules` re-introduced into a skill instead of using the resolution order |
 | `catalog` | a module with no catalog entry, an entry pointing at a missing file, an undefined profile, a profile with no detection signal, a mistyped or incomplete signal, a profile reference cycle, a profile no module requires, workflow membership that disagrees with the module set a skill declares it loads |
 | `manifest` | missing manifest fields, plugin/marketplace disagreement, a second `version` string anywhere in `marketplace.json`, a packaged directory that is absent, skill frontmatter without name or description |
 | `agent` | an agent document that cites no contract clause, states no read-only/position/absence handling, or uses a finding ID prefix registered in neither `00-rule.md` nor this README |
-| `structured-contract` | drift in the canonical `REVIEW_RESULT_CONTRACT_V1` manifest, required fields, enums, location variants, low-impact evidence policy, rendering-safety tokens, or closed high-impact categories |
-| `structured-producer` | an in-scope producer missing the V1 marker/sentinel, still requesting legacy Markdown, or instructing the producer to emit severity or route all unverified locations into openQuestions |
-| `fixtures` | a contract clause with no scenario in `tests/workflow-fixtures.md` |
+| `structured-contract` | drift in the canonical `REVIEW_RESULT_CONTRACT_V1` manifest in `workflow-contract.md`, required fields, enums, location variants, low-impact evidence policy, rendering-safety tokens, ownership matrix sync, or closed high-impact categories |
+| `structured-producer` | a structured owner missing the V1 marker/sentinel, a legacy workflow claiming structured ownership, or a workflow-neutral rule module leaking schema/raw-output/render instructions |
+| `fixtures` | a contract clause with no scenario in `tests/workflow-fixtures.md` or missing owner-specific structured/legacy cases |
 
 The validator also runs JSON fixtures through the static V1 shape checks, including required arrays, forbidden severity, conditional impact/confidence fields, closed categories, and verified/deleted/unverified location rules.
 
-**What it does not check.** Whether a workflow actually behaves as the contract says. It does not execute the model, the one-retry failure path, aggregation, or Markdown rendering. `tests/workflow-fixtures.md` lists runtime scenarios for manual runs. Semantic preservation also remains manual: compare representative legacy Markdown and V1-rendered reports for the same findings, specialist details, unverified locations, and open questions. Markdown escaping is documented and synchronized statically, but not runtime-proven here. The validator does not claim or prove semantic equivalence.
+**What it does not check.** Whether a workflow actually behaves as the contract says. It does not execute the model, the one-retry failure path, aggregation, or Markdown rendering. `tests/workflow-fixtures.md` lists runtime scenarios for manual runs. Semantic preservation also remains manual: compare representative legacy Markdown and V1-rendered reports for the same findings, specialist details, unverified locations, and open questions. Markdown escaping is documented and synchronized statically, but not runtime-proven here. The validator does not use prose regex as the primary contract; stable owner markers and inverse rule-module neutrality checks are the primary guardrails. It still does not claim or prove semantic equivalence.
 
 ## Maintenance notes
 
 - Adding a numbered module: **append the next free number — never renumber existing modules.** Rule IDs are quoted in review reports and in this repo's own cross-references, so renumbering silently invalidates every past report and breaks traceability, which is the one property the ID convention exists to provide. Grouping by topic is a readability preference; stable IDs are a correctness property, and the latter wins. Add the module to the README inventory and to the matching section of `fast.md` in the same change.
-- `fast.md` is a hand-maintained compression of the numbered modules. Three things must match the source exactly: **severity**, **applicability conditions**, and **exception clauses**. Lowering a severity changes the verdict, dropping a trigger widens the scope, and dropping an exception turns a rule into a false positive.
+- `fast.md` is a hand-maintained compression of the numbered modules. Three things must match the source exactly: **applicability conditions**, **exception clauses**, and **typical impact calibration**. Final finding severity still comes from the global two-axis derivation, but if the digest loses applicability, exceptions, or source calibration cues, fast review stops being a faithful compression.
 - Project-specific assumptions belong in each module's header, not in this README.

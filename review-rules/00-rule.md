@@ -6,19 +6,19 @@
 
 ## Severity 기준
 
-지적의 severity는 **영향도**와 **확신도** 두 축에서 파생한다.
+지적의 severity는 **영향도 × 확신도** 두 축에서 파생한다. 영어로는 `impact × confidence` 파생이다.
 
 규칙마다 등급을 고정하면 그 규칙을 위반한 인스턴스는 아무리 사소해도 같은 등급으로 나온다. 사실이지만 고칠 필요가 없는 지적이 🔴을 차지하고, 그런 리포트는 읽는 사람이 등급을 믿지 않게 만든다. 등급은 규칙이 아니라 **지적**이 갖는다.
 
 ### 영향도 — 고치지 않고 머지하면 무엇이 일어나는가
 
-**높음** — 다음 중 하나를 지목할 수 있을 때만 해당한다.
+**높음** — 다음 중 하나를 지목할 수 있을 때만 해당한다. 이 닫힌 목록의 다섯째 항목은 `external-breakage`다.
 
-- 사용자에게 보이는 오동작, 또는 화면은 멀쩡해 보여도 사용자가 기능을 조작할 수 없게 되는 것 — 키보드 트랩, 레이블 없는 컨트롤처럼 `12-accessibility.md`가 막는 접근성 차단이 여기 해당한다
-- 데이터 손상·유실
-- 보안 노출
-- 빌드·타입체크·테스트 실패
-- 이 빌드 밖으로 나가는 파손 — 다른 코드베이스가 소비하는 계약을 깨거나(`16-api-contract.md` 16-5~16-7: 응답 필드 제거, 상태 코드 변경, IPC 채널명·환경 변수 키 변경), 롤백·복구 경로를 잃는 것(`18-dangerous-change.md` 18-2)
+- 사용자에게 보이는 오동작 또는 사용 불가 (`사용자에게 보이는 오동작 또는 사용 불가`) — 화면은 멀쩡해 보여도 사용자가 기능을 조작할 수 없게 되는 경우까지 포함한다. 키보드 트랩, 레이블 없는 컨트롤처럼 `12-accessibility.md`가 막는 접근성 차단이 여기 해당한다
+- 데이터 손상·유실 (`데이터 손상·유실`)
+- 보안 노출 (`보안 노출`)
+- 빌드·타입체크·테스트 실패 (`빌드·타입체크·테스트 실패`)
+- 빌드 밖 계약/복구 경로 파손 (`빌드 밖 계약/복구 경로 파손`) — 다른 코드베이스가 소비하는 계약을 깨거나(`16-api-contract.md` 16-5~16-7: 응답 필드 제거, 상태 코드 변경, IPC 채널명·환경 변수 키 변경), 롤백·복구 경로를 잃는 것(`18-dangerous-change.md` 18-2)
 
 **낮음** — 위 어느 것도 지목할 수 없을 때. 스타일, 일관성, 이론적 비효율, 취향은 전부 낮음이다.
 
@@ -55,145 +55,9 @@
 
 **두 축을 적을 자리가 없는 출력 형식도 예외가 아니다.** 그 경우 두 축은 리포트에 **표시되지 않을 뿐, 어떤 등급을 고를지는 그대로 지배한다.** 표시 여부가 달라지면 리포트만 보고 등급을 검증할 수 있는지가 달라질 뿐이고, 등급 자체가 규칙 고정값으로 돌아가지는 않는다. 어느 형식이 두 축을 표시하는지는 `workflow-contract.md`의 **지적 표기**가 정한다.
 
-하위 모듈은 각자 더 구체적인 Severity 정의를 가질 수 있으며, 세부 판단은 **해당 모듈의 Severity 기준**을 우선 따른다.
+하위 모듈은 자기 도메인에서 **어떤 사실이 영향 높음 근거가 되는지** 더 구체적으로 적을 수 있다. 하지만 최종 severity는 언제나 이 문서의 **영향도 × 확신도 파생**으로만 정한다. 모듈 문서는 영향 판정의 증거를 보정할 수 있을 뿐, 등급 자체를 올리거나 덮어쓰지 않는다.
 
-## REVIEW_RESULT_CONTRACT_V1
-
-구조화된 리뷰 결과를 쓰는 producer는 **Markdown이나 severity 없이** 아래 계약의 **JSON 객체 하나만** 반환한다. 이 계약은 prompt 안의 지시로만 강제되며, LLM 출력은 네이티브 스키마로 봉인돼 있지 않다. 따라서 런타임 적합성은 오케스트레이터의 검증과 실패-폐쇄 처리로 확보한다.
-
-- 최상위 필수 필드: `schemaVersion`, `findings`, `openQuestions`
-- `schemaVersion`은 반드시 `1`
-- producer는 `severity`를 어떤 depth에도 넣지 않는다. severity는 오케스트레이터가 `영향도 × 확신도`로만 파생한다
-- `findings`의 각 항목은 `impact`, `confidence`, `location`을 가진다
-- `location.kind`는 `verified` / `deleted` / `unverified`만 허용한다
-- `impact=high`면 `category`와 `evidence`가 둘 다 필요하다
-- `impact=low`면 `category`를 쓰지 않는다. `evidence`는 **있어도 되고 없어도 된다**
-- `confidence=low`면 `reason`이 필요하다
-- 높음 영향도의 `category`는 아래 닫힌 ID만 허용한다: `user-malfunction`, `data-loss`, `security-exposure`, `verification-failure`, `external-breakage`
-- 확인되지 않은 부재 주장이나 추가 탐색이 필요한 항목은 지적을 억지로 만들지 말고 `openQuestions`로 보낸다
-- 결함은 성립하지만 정확한 위치만 못 박지 못한 finding은 `location.kind = "unverified"` 로 유지한다. `unverified` location과 `openQuestions`는 같은 개념이 아니다
-- `unverified` 위치는 **가짜 경로·줄번호를 만들지 않고도 표현 가능해야 한다.** `reason`은 필수이고 `path`, `line`, `lineBefore`, `quote`는 금지한다
-
-<!-- REVIEW_RESULT_CONTRACT_V1:BEGIN -->
-```json
-{
-  "contractName": "REVIEW_RESULT_CONTRACT_V1",
-  "schemaVersion": 1,
-  "topLevel": {
-    "required": [
-      "schemaVersion",
-      "findings",
-      "openQuestions"
-    ],
-    "forbidden": [
-      "severity"
-    ]
-  },
-  "impact": {
-    "enum": [
-      "high",
-      "low"
-    ],
-    "highRequires": [
-      "category",
-      "evidence"
-    ],
-    "lowForbids": [
-      "category"
-    ],
-    "lowAllowsOptional": [
-      "evidence"
-    ],
-    "categoryEnum": [
-      "user-malfunction",
-      "data-loss",
-      "security-exposure",
-      "verification-failure",
-      "external-breakage"
-    ]
-  },
-  "confidence": {
-    "enum": [
-      "high",
-      "low"
-    ],
-    "lowRequires": [
-      "reason"
-    ]
-  },
-  "location": {
-    "kindField": "kind",
-    "variants": {
-      "verified": {
-        "required": [
-          "path",
-          "line",
-          "quote"
-        ]
-      },
-      "deleted": {
-        "required": [
-          "path",
-          "lineBefore",
-          "quote"
-        ]
-      },
-      "unverified": {
-        "required": [
-          "reason"
-        ],
-        "forbidden": [
-          "path",
-          "line",
-          "lineBefore",
-          "quote"
-        ]
-      }
-    }
-  },
-  "findingsItem": {
-    "required": [
-      "ruleId",
-      "title",
-      "body",
-      "impact",
-      "confidence",
-      "location"
-    ],
-    "forbidden": [
-      "severity"
-    ]
-  },
-  "openQuestionsItem": {
-    "required": [
-      "title",
-      "body",
-      "location",
-      "reason"
-    ]
-  },
-  "renderingSafety": {
-    "untrustedFields": [
-      "title",
-      "body",
-      "recommendation",
-      "reason",
-      "evidence",
-      "location.path",
-      "location.quote"
-    ],
-    "renderBySlot": true,
-    "escapeMarkdownControlInProseFields": true,
-    "codeFields": [
-      "location.path",
-      "location.quote"
-    ],
-    "urlsRenderAs": "plain-text",
-    "staticValidatorScope": "doc-sync-only"
-  }
-}
-```
-<!-- REVIEW_RESULT_CONTRACT_V1:END -->
+구조화된 V1 manifest, producer ownership, validation lifecycle은 `workflow-contract.md`가 정본이다. 이 문서는 severity의 **전역 판정 규칙**만 정의한다.
 
 ### 규칙 문서의 이모지
 

@@ -95,9 +95,28 @@ MERGE_BASE=$(git merge-base $BASE_BRANCH HEAD)
 - 사용자의 read-only / 파일 수정 금지 / 텍스트 응답 요청이 다른 모든 규칙보다 우선
 - 도구 실행 결과는 리뷰 지적과 분리해 별도 섹션으로 보고
 
-## C-6A. 구조화된 결과 lifecycle
+## C-6A. 구조화된 결과 ownership 및 lifecycle
 
-`REVIEW_RESULT_CONTRACT_V1`을 쓰는 워크플로우에서는 결과가 **producer → validation → aggregation → Markdown rendering** 순서로 흐른다. 공통 원칙은 다음과 같다.
+`REVIEW_RESULT_CONTRACT_V1`은 **producer → orchestrator 내부 인터페이스**다. 최종 Markdown 공개 형식은 유지하고, 이 내부 인터페이스만 구조화한다. 이 변경은 **의도적으로 수용한 내부 계약 변경**이며 `.claude-plugin/plugin.json` `2.4.0`에서 **MINOR**로 취급한다. 기본 이유는 producer 출력과 최종 리포트 렌더링을 분리해, shared contract·validation·dedupe를 한 곳에서 고정하기 위해서다.
+
+### ownership matrix
+
+| owner | mode | contract ownership |
+|------|------|--------------------|
+| `skills/code-review-full/SKILL.md` | `full` 일반 numbered + full specialist dispatch | structured-v1 producer 지시 보유 |
+| `skills/code-review-props/SKILL.md` | `props` standalone specialist | structured-v1 producer 지시 보유 |
+| `skills/code-review-math/SKILL.md` | `math` standalone specialist | structured-v1 producer 지시 보유 |
+| `skills/code-review-exception/SKILL.md` | `exception` standalone specialist | structured-v1 producer 지시 보유 |
+| `agents/correctness-reviewer.md` | correctness pass | direct agent only (`not structured-v1 until orchestrated consumer exists`) |
+| `skills/code-review/SKILL.md` | `default` | legacy producer 유지 |
+| `skills/code-review-commit/SKILL.md` | `commit` | legacy producer 유지 |
+| `skills/code-review-fast/SKILL.md` | `fast` | legacy producer 유지 |
+
+- numbered rule modules `01`~`21`과 specialist rule docs `props.md` / `math.md` / `exception.md`는 **workflow-neutral domain judgment docs**다. producer schema, raw JSON, malformed-output, renderer, legacy/structured ownership을 직접 소유하지 않는다.
+- correctness agent는 `CR-{n}` namespace와 `00-9`/`00-10`/`00-11` evidence discipline을 그대로 따르지만, **phase-1 structured-v1 owner는 아니다.** 지금은 built-in validation/render consumer가 없으므로 direct-agent evidence-first 결과만 낸다.
+- 아래 lifecycle은 **structured-v1 owner에만 적용**한다. legacy owner(`default`, `commit`, `fast`)는 기존 producer 계약을 유지한다.
+
+`REVIEW_RESULT_CONTRACT_V1`을 쓰는 owner에서는 결과가 **producer → validation → aggregation → Markdown rendering** 순서로 흐른다. 공통 원칙은 다음과 같다.
 
 - producer 출력은 **prompt만으로 유도한 JSON 객체 하나**여야 한다. 코드 펜스, 서문, Markdown 헤딩, 표, severity 문자열을 섞지 않는다
 - 이 제한은 네이티브 스키마 강제가 아니라 **프롬프트 계약**이다. 따라서 "정적 문서가 있으니 런타임 적합성도 보장된다"고 주장하지 않는다
@@ -105,19 +124,21 @@ MERGE_BASE=$(git merge-base $BASE_BRANCH HEAD)
 
 ### producer
 
-- producer는 `00-rule.md`의 `REVIEW_RESULT_CONTRACT_V1` JSON 하나만 반환한다
+- producer instruction owner는 아래 manifest를 **그대로 주입한 런타임 placeholder** `REVIEW_RESULT_CONTRACT_V1_MANIFEST`를 prompt에 포함해 `REVIEW_RESULT_CONTRACT_V1` JSON 하나만 반환하게 만든다
+- `REVIEW_RESULT_CONTRACT_V1_MANIFEST`의 source는 이 문서의 **manifest sentinel JSON block 전문 그대로**다. owner 문서가 schema token을 부분 복제해 substitute context를 만들지 않는다
 - top-level `schemaVersion`은 `1`이어야 한다
 - `findings`와 `openQuestions`는 항상 배열로 반환한다. 빈 결과도 필드는 생략하지 않는다
 - `openQuestions`는 `findings`와 분리된 **별도 필수 필드**다. 확인이 덜 된 항목을 finding으로 끌어올려 대체하지 않는다
 - `openQuestions`는 **주장 자체의 진실 여부나 탐색 범위가 아직 닫히지 않은 경우**에만 쓴다. 특히 `00-rule.md` 00-11에 걸리는 incomplete absence/possibility claim, diff 밖 추가 확인 요청, search scope 미완료 항목이 여기에 해당한다
 - 결함 자체는 성립하지만 **정확한 위치만 아직 확정하지 못한 경우**는 finding으로 유지하고 `location.kind = "unverified"` 를 쓴다. 이것은 openQuestion의 대체물이 아니다
 - `location.kind = "unverified"` 는 **위치를 아직 확인하지 못했다는 사실 자체**를 표현한다. 이 변형에는 `reason`이 필요하고 `path`, `line`, `lineBefore`, `quote`를 꾸며 넣지 않는다
+- structured prompt는 producer에게 공개 Markdown 상태 토큰 **`위치 미확인` 문자열을 literal로 쓰라고 지시하지 않는다.** producer는 오직 `location.kind = "unverified"` 와 `reason`으로 표현하고, 공개 Korean 상태 토큰 렌더링은 최종 renderer 책임이다
 
 ### validation
 
 - 오케스트레이터는 producer 응답을 받은 즉시 envelope와 필수 필드를 검증한다
 - JSON 파싱 실패, 필수 필드 누락, 금지 필드(`severity`) 포함, 허용되지 않은 location/impact/category 값은 **malformed-output**이다
-- malformed-output이면 **교정 재시도는 한 번만** 한다. 재시도 prompt는 잘못된 점만 짧게 지적하고 같은 계약으로 다시 요구한다
+- malformed-output이든 legacy/prose 출력이든 **교정 재시도는 한 번만** 한다. 재시도 prompt는 잘못된 점만 짧게 지적하고 같은 계약으로 다시 요구한다
 - 두 번째도 malformed-output이면 그 pass는 **`FAILED malformed-output`으로 종료**한다. 부분 해석이나 추측 보정으로 통과시키지 않는다
 
 ### aggregation
@@ -138,13 +159,260 @@ MERGE_BASE=$(git merge-base $BASE_BRANCH HEAD)
 - severity는 오케스트레이터가 `impact × confidence` 파생표로 계산한다. producer는 severity를 내지 않는다
 - 기존 리포트 의미는 유지한다. 즉, 판정/상세 지적/요약/도구 실행 결과/미해결·후속 확인의 역할은 그대로 두고, structured result는 그 입력 형식만 바꾼다
 - `openQuestions`는 `미해결 / 후속 확인` 섹션에 렌더링한다
-- 아직 structured result를 쓰지 않는 워크플로우(`default`, `commit`, `fast`)는 기존 producer 계약을 유지한다. 이 문단은 phase 1의 in-scope producer에만 적용한다
+- 아직 structured result를 쓰지 않는 워크플로우(`default`, `commit`, `fast`)는 기존 producer 계약을 유지한다. 이 문단은 structured owner에만 적용한다
+- direct-only correctness agent는 이 structured lifecycle의 outside다. consumerless producer를 phase-1 owner로 등록하지 않고, 실제 validation/render consumer가 생긴 뒤에만 structured-v1로 승격한다
 - producer 문자열 필드(`title`, `body`, `recommendation`, `reason`, `evidence`)는 **신뢰하지 않는 report content**다. renderer는 `renderBySlot` 원칙으로 이 값을 문서 골격에 그대로 이어붙이지 말고 **field slot별로** 배치한다
 - `title`과 prose 필드는 heading, fence, table, raw HTML, Markdown link, block quote처럼 **오케스트레이터가 쓴 것처럼 보이는 block/control Markdown** 을 만들지 못하게 escape해서 렌더링한다
 - `location.quote`는 **안전한 code slot** 으로 렌더링한다. quote 안의 backtick/fence delimiter와 충돌하지 않도록 delimiter를 escape하거나 더 긴 delimiter를 선택한다. quote 내용의 정상적인 코드 문자 자체를 금지하지 않는다
 - `location.path`는 항상 code로 렌더링한다
 - URL이 필드 안에 있더라도 Markdown 링크로 승격하지 않고 **plain text** 로 렌더링한다
+- slot별 렌더링은 canonical order `body → evidence → recommendation → findingConfidenceReason → locationUnverifiedReason → openQuestionReason`만 사용하고, 값이 없는 slot은 생략한다. 한 field를 여러 slot에 중복 렌더링하지 않는다
+- `findingConfidenceReason`은 finding의 `confidence = low` 때문에 필요한 `reason`이고, `locationUnverifiedReason`은 `location.kind = "unverified"` 에 붙는 location reason이며, `openQuestionReason`은 open question 자체가 아직 닫히지 않은 이유다. 셋은 서로 다른 의미를 가지므로 합치거나 서로 대체하지 않는다
 - 이 계약은 renderer의 책임을 정의할 뿐이다. 정적 validator는 관련 contract token의 존재와 문서 간 동기화만 검사하며, 실제 escaping/renderer 실행을 증명하지 않는다
+
+## REVIEW_RESULT_CONTRACT_V1
+
+아래 manifest가 structured-v1 owner가 참조하는 shared schema 정본이다.
+
+<!-- REVIEW_RESULT_CONTRACT_V1:BEGIN -->
+```json
+{
+  "contractName": "REVIEW_RESULT_CONTRACT_V1",
+  "schemaVersion": 1,
+  "topLevel": {
+    "required": [
+      "schemaVersion",
+      "findings",
+      "openQuestions"
+    ],
+    "allowed": [
+      "schemaVersion",
+      "findings",
+      "openQuestions"
+    ],
+    "forbidden": [
+      "severity"
+    ]
+  },
+  "impact": {
+    "enum": [
+      "high",
+      "low"
+    ],
+    "highRequires": [
+      "category",
+      "evidence"
+    ],
+    "lowForbids": [
+      "category"
+    ],
+    "lowAllowsOptional": [
+      "evidence"
+    ],
+    "categoryEnum": [
+      "user-malfunction",
+      "data-loss",
+      "security-exposure",
+      "verification-failure",
+      "external-breakage"
+    ],
+    "categoryLabels": {
+      "user-malfunction": "사용자에게 보이는 오동작 또는 사용 불가",
+      "data-loss": "데이터 손상·유실",
+      "security-exposure": "보안 노출",
+      "verification-failure": "빌드·타입체크·테스트 실패",
+      "external-breakage": "빌드 밖 계약/복구 경로 파손"
+    }
+  },
+  "confidence": {
+    "enum": [
+      "high",
+      "low"
+    ],
+    "lowRequires": [
+      "reason"
+    ]
+  },
+  "location": {
+    "kindField": "kind",
+    "variants": {
+      "verified": {
+        "allowed": [
+          "kind",
+          "path",
+          "line",
+          "endLine",
+          "quote"
+        ],
+        "required": [
+          "path",
+          "line",
+          "quote"
+        ],
+        "optional": [
+          "endLine"
+        ],
+        "constraints": {
+          "endLine": "positive-and-gte-line"
+        }
+      },
+      "deleted": {
+        "allowed": [
+          "kind",
+          "path",
+          "lineBefore",
+          "endLine",
+          "quote"
+        ],
+        "required": [
+          "path",
+          "lineBefore",
+          "quote"
+        ],
+        "optional": [
+          "endLine"
+        ],
+        "constraints": {
+          "endLine": "positive-and-gte-lineBefore"
+        }
+      },
+      "unverified": {
+        "allowed": [
+          "kind",
+          "reason"
+        ],
+        "required": [
+          "reason"
+        ],
+        "forbidden": [
+          "path",
+          "line",
+          "lineBefore",
+          "quote"
+        ]
+      }
+    }
+  },
+  "findingsItem": {
+    "required": [
+      "ruleId",
+      "title",
+      "body",
+      "impact",
+      "confidence",
+      "location"
+    ],
+    "allowed": [
+      "ruleId",
+      "title",
+      "body",
+      "impact",
+      "confidence",
+      "location",
+      "category",
+      "evidence",
+      "reason",
+      "recommendation"
+    ],
+    "forbidden": [
+      "severity"
+    ]
+  },
+  "openQuestionsItem": {
+    "required": [
+      "title",
+      "body",
+      "location",
+      "reason"
+    ],
+    "allowed": [
+      "ruleId",
+      "title",
+      "body",
+      "location",
+      "reason",
+      "recommendation"
+    ]
+  },
+  "renderingSafety": {
+    "untrustedFields": [
+      "title",
+      "body",
+      "recommendation",
+      "reason",
+      "evidence",
+      "location.path",
+      "location.quote"
+    ],
+    "renderBySlot": true,
+    "escapeMarkdownControlInProseFields": true,
+    "codeFields": [
+      "location.path",
+      "location.quote"
+    ],
+    "slots": {
+      "body": {
+        "sourceFields": [
+          "body"
+        ],
+        "omitWhenMissing": true
+      },
+      "evidence": {
+        "sourceFields": [
+          "evidence"
+        ],
+        "omitWhenMissing": true
+      },
+      "recommendation": {
+        "sourceFields": [
+          "recommendation"
+        ],
+        "omitWhenMissing": true
+      },
+      "findingConfidenceReason": {
+        "sourceFields": [
+          "reason"
+        ],
+        "appliesWhen": "finding.confidence=low",
+        "omitWhenMissing": true
+      },
+      "locationUnverifiedReason": {
+        "sourceFields": [
+          "location.reason"
+        ],
+        "appliesWhen": "location.kind=unverified",
+        "omitWhenMissing": true
+      },
+      "openQuestionReason": {
+        "sourceFields": [
+          "reason"
+        ],
+        "appliesWhen": "openQuestion",
+        "omitWhenMissing": true
+      }
+    },
+    "slotOrder": [
+      "body",
+      "evidence",
+      "recommendation",
+      "findingConfidenceReason",
+      "locationUnverifiedReason",
+      "openQuestionReason"
+    ],
+    "slotLabels": {
+      "body": "본문",
+      "evidence": "근거",
+      "recommendation": "개선 제안",
+      "findingConfidenceReason": "확신 근거",
+      "locationUnverifiedReason": "위치 미확인 사유",
+      "openQuestionReason": "추가 확인 이유"
+    },
+    "urlsRenderAs": "plain-text",
+    "staticValidatorScope": "doc-sync-only"
+  }
+}
+```
+<!-- REVIEW_RESULT_CONTRACT_V1:END -->
 
 ## C-7. 리포트 저장
 
@@ -218,13 +486,18 @@ H1은 **`# {대상} {워크플로우 이름} 리포트`** 형식이며, 대상�
 
 ### 지적 표기
 
-finding 헤딩 **바로 다음 줄**에 영향도와 확신도를 적는다. `00-rule.md` 00-10이 요구하는 위치·인용 줄은 그 아래에 이어진다.
+finding 헤딩 **바로 다음 줄**에 영향도와 확신도를 적는다. `00-rule.md` 00-10이 요구하는 위치·인용 줄 또는 slot label 줄은 그 아래에 이어진다.
 
 ```
 #### 🟡 `14-3` 렌더마다 새 배열이 생성돼 자식이 리렌더된다
 영향: 낮음 · 확신: 높음
-`src/components/List.tsx:42` — `const items = data.filter(...)`
+`src/components/List.tsx:42-45` — `const items = data.filter(...)`
+본문: 리스트 파생값이 매 렌더 새 배열로 만들어져 memoized 자식이 계속 다시 그려집니다.
+근거: diff 안에서 동일 입력에 대해 참조를 고정하는 경로가 없습니다.
+개선 제안: 계산을 상위에서 memoize하거나 필요 시 데이터 shape를 안정화하세요.
 ```
+
+`location.kind = "unverified"` 인 finding은 같은 자리에서 위치 줄 대신 `위치 미확인 사유: …`를 렌더링한다. `openQuestions`는 `미해결 / 후속 확인` 섹션에서 `추가 확인 이유: …` label을 쓴다. 둘 다 `reason` field를 사용하지만 slot 의미는 다르다.
 
 - 판정 기준은 `00-rule.md`의 **Severity 기준**을 따른다. 여기에 복제하지 않는다
 - severity는 두 축에서 파생한 **계산값**이다. 헤딩의 이모지가 두 축과 어긋나면 그 자체가 오류다
