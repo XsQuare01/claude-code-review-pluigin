@@ -101,14 +101,32 @@ These scenarios pin the behaviour that `review-rules/workflow-contract.md` promi
     {
       "id": 16,
       "clauses": ["C-6A"],
-      "scenario": "Structured producer returns valid JSON with findings and openQuestions arrays",
+      "scenario": "A registered structured owner returns valid JSON with findings and openQuestions arrays",
       "expected": "Validation passes and aggregation receives the parsed object unchanged"
     },
     {
       "id": 17,
       "clauses": ["C-6A"],
-      "scenario": "Structured producer returns malformed JSON or forbidden severity field",
+      "scenario": "A registered structured owner returns malformed JSON, forbidden severity field, or legacy/prose output",
       "expected": "The pass is treated as malformed-output and only the corrective retry path is allowed"
+    },
+    {
+      "id": 52,
+      "clauses": ["C-6A"],
+      "scenario": "A numbered module or specialist rule doc contains V1 markers, schema fields, render instructions, or malformed-output prose",
+      "expected": "Static validation fails because rule docs must stay workflow-neutral domain judgment docs"
+    },
+    {
+      "id": 53,
+      "clauses": ["C-6A"],
+      "scenario": "default, commit, or fast claims structured-v1 ownership",
+      "expected": "Static validation fails because those workflows are explicitly legacy owners in the ownership matrix"
+    },
+    {
+      "id": 54,
+      "clauses": ["C-6A", "C-7"],
+      "scenario": "correctness remains a direct-only evidence-first agent with CR namespace and shared location discipline",
+      "expected": "It is not V1 until an orchestrator consumer exists; static validation fails if correctness declares structured-v1 ownership before a validation/render consumer is registered"
     },
     {
       "id": 50,
@@ -144,7 +162,7 @@ These scenarios pin the behaviour that `review-rules/workflow-contract.md` promi
       "id": 21,
       "clauses": ["C-7"],
       "scenario": "Any finding in any workflow",
-      "expected": "Position is a verified post-change line number with the line's code quoted; an unconfirmed line says 위치 미확인 instead of guessing"
+      "expected": "Position is a verified post-change line number or range with the line's code quoted; an unconfirmed line is represented as location.kind=unverified and later renders the public 위치 미확인 status instead of guessing"
     },
     {
       "id": 22,
@@ -312,6 +330,56 @@ These scenarios pin the behaviour that `review-rules/workflow-contract.md` promi
       "scenario": "--module 00",
       "expected": "Explains that common rules always apply, and asks whether a common-rules-only pass was intended"
     }
+  ],
+  "semanticPreservationCases": [
+    {
+      "id": "S-1",
+      "workflow": "default",
+      "scenario": "Legacy default review keeps the historical public Markdown contract while preserving prior semantics for the same findings",
+      "preserves": {
+        "findingCount": ["finding cardinality does not change when the renderer/skeleton changes"],
+        "wordingBody": ["issue wording and explanatory body survive without collapsing into a summary-only note"],
+        "axes": ["derived severity remains traceable to the same impact/confidence judgment even if the axes are not visibly printed"],
+        "ids": ["numbered rule IDs remain identical and distinguish repeated IDs with ordinal suffixes when needed"],
+        "sourceLabels": ["legacy general-pass findings still identify their producing module/report section consistently"],
+        "categoryMeanings": ["high-impact category meaning stays aligned with the five closed public labels"],
+        "recommendationEvidenceReason": ["recommendation/evidence/reason content is preserved instead of dropped or moved into raw JSON"],
+        "locations": ["verified/deleted/unverified location meaning and quoted anchor semantics stay intact"],
+        "openQuestions": ["unresolved search-scope items remain in the follow-up/open-question surface rather than becoming findings or disappearing"]
+      }
+    },
+    {
+      "id": "S-2",
+      "workflow": "full",
+      "scenario": "Structured full review rendering preserves historical public report semantics across numbered and specialist passes",
+      "preserves": {
+        "findingCount": ["deduped rendered finding count matches the accepted producer findings count after valid aggregation only"],
+        "wordingBody": ["rendered findings keep module/specialist-specific body detail instead of flattening to headings or terse summaries"],
+        "axes": ["normalization preserves count/body/axes/IDs/source labels and impact/confidence survive into the rendered severity line without manual severity copy/raise"],
+        "ids": ["numbered, P-x, A/C-x, EX-x, and CR-x IDs remain stable and sortable in the final report"],
+        "sourceLabels": ["merged findings preserve every contributing source/pass label"],
+        "categoryMeanings": ["high-impact case enumerates exact category mappings: 사용자 오동작, 데이터 손상, 보안 노출, 검증 실패, 외부 계약 파손"],
+        "recommendationEvidenceReason": ["body/evidence/recommendation/confidence-reason/location-unverified-reason/open-question-reason fields render in their intended public slots exactly once"],
+        "locations": ["verified, deleted, and unverified locations render with the same semantic distinction as before, including verified/deleted ranges via endLine"],
+        "openQuestions": ["open questions remain a dedicated follow-up section and do not auto-merge with findings"]
+      }
+    },
+    {
+      "id": "S-3",
+      "workflow": "props/math/exception",
+      "scenario": "Standalone specialist workflows validate producer JSON internally but still render their historical user-facing Markdown verdict/summary sections",
+      "preserves": {
+        "findingCount": ["standalone specialist reports preserve finding totals when switching internal validation format"],
+        "wordingBody": ["specialist-specific explanatory wording remains visible in Markdown rather than raw JSON output"],
+        "axes": ["impact/confidence semantics stay identical to prior standalone reports"],
+        "ids": ["P-x, A/C-x, and EX-x identifiers stay unchanged in public output"],
+        "sourceLabels": ["standalone reports preserve their pass identity and do not masquerade as generic JSON dumps"],
+        "categoryMeanings": ["high-impact category labels keep the same Korean public wording across specialist reports"],
+        "recommendationEvidenceReason": ["recommendation, evidence, and low-confidence or unverified reasons render into Markdown sections/rows"],
+        "locations": ["specialist reports preserve verified/deleted/unverified location semantics and quoting discipline"],
+        "openQuestions": ["follow-up investigation items remain in the public follow-up surface, not raw structured payloads"]
+      }
+    }
   ]
 }
 ```
@@ -325,4 +393,4 @@ These remain manual because they depend on runtime LLM behaviour and report sema
 |---|---|---|---|
 | M-1 | corrective retry then failure | A structured producer returns malformed output, receives one corrective retry, and still returns malformed output | Static validation can confirm the documented policy, but not that the runtime will always follow the retry loop exactly once |
 | M-2 | Markdown rendering safety | A valid structured producer result contains Markdown heading, fence, table, raw HTML, link syntax, code backticks inside `location.quote`, and a path/URL in prose | The validator can inspect contract tokens and fixtures, but it does not execute the orchestrator renderer or prove escaping |
-| M-3 | semantic comparison limitation | Compare a representative old Markdown review against the new structured-result rendering for one general finding, one specialist finding, one unverified finding location, and one open question | The repository can document this limitation, but static checks cannot prove semantic equivalence between old and new review runs |
+| M-3 | semantic comparison limitation | Compare a representative old Markdown review against the new structured-result rendering for one general finding, one specialist finding, one unverified finding location, and one open question. Pass criteria: recommendation/evidence/reason fields all remain visible in their intended slots, verified/deleted ranges render with endLine semantics, openQuestions stay separated from findings, and public Markdown keeps verdict/summary/tool-result/follow-up meaning. | The repository can document this limitation, but static checks cannot prove semantic equivalence between old and new review runs |
