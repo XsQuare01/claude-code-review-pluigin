@@ -161,6 +161,7 @@ function escapeProse(value) {
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
+    .replace(/^ {4,}/gm, spaces => `&#32;${spaces.slice(1)}`)
     .replace(/\bhttps?:\/\//g, match => match.replace(':', '&#58;'))
     .replace(/\bwww\./g, 'www&#46;')
     .replace(/\b([A-Za-z0-9._%+-]+)@([A-Za-z0-9.-]+\.[A-Za-z]{2,})\b/g, '$1&#64;$2')

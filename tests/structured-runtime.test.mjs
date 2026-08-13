@@ -710,6 +710,37 @@ test('renderer neutralizes 0-3 space indented list and task markers while keepin
   }
 })
 
+test('renderer neutralizes four-space indented code blocks while preserving readable indentation', async () => {
+  const manifest = await loadManifest()
+  const rendered = renderStructuredSections({
+    findings: [{
+      ruleId: '19-9',
+      title: 'four-space block controls',
+      body: [
+        '    * four-space bullet',
+        '    1. four-space ordered',
+        '    - [ ] four-space task',
+        '        nested eight-space text',
+      ].join('\n'),
+      impact: 'low',
+      confidence: 'high',
+      location: { kind: 'verified', path: 'src/escape.ts', line: 6, quote: 'const blocks = input' },
+      sourceLabels: ['module:19-intent'],
+    }],
+    openQuestions: [],
+  }, manifest)
+
+  for (const readableLine of [
+    '&#32;   * four-space bullet',
+    '&#32;   1. four-space ordered',
+    '&#32;   - \\[ \\] four-space task',
+    '&#32;       nested eight-space text',
+  ]) {
+    assert.ok(rendered.findings.includes(readableLine))
+  }
+  assert.doesNotMatch(rendered.findings, /^ {4}/m)
+})
+
 test('runtime interfaces expose no legacy ownership registry surface', async () => {
   const manifest = await loadManifest()
   const state = createPassState({ sourceLabel: 'module:09-code-quality', manifest })
