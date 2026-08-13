@@ -9,13 +9,12 @@
 - 상태를 어느 FSD 레이어가 소유해야 하는지 → `01-fsd.md` 01-7
 - props 전달 구조 자체 → `props.md` (`/code-review-props`)
 
-## Severity 기준
+## 영향도 보정 예시
 
-| Severity | 의미 |
+| 영향도 | 이 모듈에서 자주 보이는 근거 |
 |----------|------|
-| 🔴 ERROR | 메모리 누수, 런타임 에러, 경쟁 조건 |
-| 🟡 WARNING | 리렌더링, 동기화 버그, 패턴 불일치 |
-| 🔵 INFO | 캐싱 전략, 최적화 기회 |
+| 높음 | 메모리 누수, 런타임 에러, stale result 오염, 경쟁 조건처럼 실제 실패가 닫히는 경우 |
+| 낮음 | 리렌더링, 동기화 비용, 패턴 불일치, 최적화 여지에 머무는 경우 |
 
 ---
 
@@ -195,15 +194,8 @@ const fullName = `${firstName} ${lastName}`.trim()
 - 동일 데이터 중복 요청
 - Optimistic update 적절 사용 여부 — 실패 시 rollback 경로는 `17-concurrency.md` 17-4
 
-## 04-OUTPUT. 출력 형식
+## 04-OUTPUT. 도메인 결과 가이드
 
-<!-- REVIEW_RESULT_CONTRACT_V1_PRODUCER_OUTPUT -->
-
-이 문서를 producer prompt에 쓸 때는 **`REVIEW_RESULT_CONTRACT_V1`** 을 따른다. 응답은 Markdown 표나 헤딩이 아니라 **raw JSON 객체 하나만** 반환한다.
-
-- top-level에는 `schemaVersion`, `findings`, `openQuestions`를 항상 포함하고 `schemaVersion`은 `1`이어야 한다.
-- `severity`는 producer가 내지 않는다. 이 모듈은 `impact`와 `confidence`만 판정한다.
-- cleanup, 의존성 배열, 비동기 상태, stale closure, 불변성, 데이터 페칭 전략 같은 도메인별 설명은 새 schema field를 만들지 말고 `body`, `recommendation`, `evidence`에 담는다.
-- `00-rule.md` 00-11에 걸리는 unresolved absence/possibility claim, search scope 미완료, 추가 탐색 요청만 `openQuestions`로 보낸다.
-- 결함은 성립하지만 exact location만 확인하지 못했으면 finding을 유지하고 `location.kind="unverified"`와 `reason`만 사용한다.
-- producer 문자열 필드는 최종 리포트의 신뢰된 Markdown이 아니다. heading/table/raw HTML/link를 직접 만들려고 하지 말고 plain prose만 넣는다.
+- cleanup, stale result 방어, dependency 누락을 지적할 때는 **어떤 비동기 흐름이 어떻게 남거나 뒤집히는지**를 적는다. 단순히 "cleanup 없음"만으로 끝내지 않는다.
+- 상태 구조 문제는 어디서 두 출처가 어긋나는지, 어떤 리렌더나 stale closure가 생기는지 등 **실제 실패 경로**를 함께 설명한다.
+- 개선 방향은 abort, ignore flag, request token, state 병합, 파생 계산 복귀처럼 **현재 흐름에 맞는 방어 방식**을 선택해 제안한다.

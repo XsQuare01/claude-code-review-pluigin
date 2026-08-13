@@ -9,13 +9,12 @@
 - 매직 넘버·문자열, 상수 위치 → `08-constants.md`
 - barrel export, path alias, import 정리 → `09-code-quality.md`
 
-## Severity 기준
+## 영향도 보정 예시
 
-| Severity | 의미 |
+| 영향도 | 이 모듈에서 자주 보이는 근거 |
 |----------|------|
-| 🔴 ERROR | 관심사가 뒤엉켜 읽기·수정 비용이 극단적으로 큼 |
-| 🟡 WARNING | 가독성 저해, 분리 필요 |
-| 🔵 INFO | 더 나은 구조 가능 |
+| 높음 | 구조 혼재가 실제 검증 실패, 오동작, 반복 회귀 경로를 만들어 현재 변경에서 닫히는 경우 |
+| 낮음 | 주로 읽기 비용, 분리 필요, 구조 단순화 여지에 머무는 경우 |
 
 ---
 
@@ -115,15 +114,8 @@ return submitOrder(order)
 
 핸들러 **네이밍**(`handle`/`on` 접두어)은 `07-naming.md`가 다룬다.
 
-## 05-OUTPUT. 출력 형식
+## 05-OUTPUT. 도메인 결과 가이드
 
-<!-- REVIEW_RESULT_CONTRACT_V1_PRODUCER_OUTPUT -->
-
-이 문서를 producer prompt에 쓸 때는 **`REVIEW_RESULT_CONTRACT_V1`** 을 따른다. 응답은 Markdown 표나 헤딩이 아니라 **raw JSON 객체 하나만** 반환한다.
-
-- top-level에는 `schemaVersion`, `findings`, `openQuestions`를 항상 포함하고 `schemaVersion`은 `1`이어야 한다.
-- `severity`는 producer가 내지 않는다. 이 모듈은 `impact`와 `confidence`만 판정한다.
-- 함수 길이, 컴포넌트 크기, 관심사 분리, 중복, 이벤트 핸들러 구조 같은 도메인별 설명은 새 schema field를 만들지 말고 `body`, `recommendation`, `evidence`에 담는다.
-- `00-rule.md` 00-11에 걸리는 unresolved absence/possibility claim, search scope 미완료, 추가 탐색 요청만 `openQuestions`로 보낸다.
-- 결함은 성립하지만 exact location만 확인하지 못했으면 finding을 유지하고 `location.kind="unverified"`와 `reason`만 사용한다.
-- producer 문자열 필드는 최종 리포트의 신뢰된 Markdown이 아니다. heading/table/raw HTML/link를 직접 만들려고 하지 말고 plain prose만 넣는다.
+- 길이·중첩·혼재를 지적할 때는 **무엇이 한 단위에 몇 가지 책임으로 섞였는지**를 적는다. 단순 줄 수 자체가 아니라 읽기·수정 비용의 근거가 보여야 한다.
+- 중복은 "같다"로 끝내지 말고, 어느 구현을 단일 출처로 남기고 어떤 복사본을 지워야 하는지까지 제안한다.
+- 구조 분리는 추상화 추가가 목적이 아니라 **관심사 분리와 변경 비용 축소**가 목적이라는 점이 드러나야 한다.

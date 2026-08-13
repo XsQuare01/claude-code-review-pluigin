@@ -9,13 +9,12 @@
 - className 정리, 디자인 토큰 → `11-styling.md`
 - 접근성(semantic element, label, ARIA) → `12-accessibility.md`
 
-## Severity 기준
+## 영향도 보정 예시
 
-| Severity | 의미 |
+| 영향도 | 이 모듈에서 자주 보이는 근거 |
 |----------|------|
-| 🔴 ERROR | 의도하지 않은 렌더 결과가 실제로 나옴 |
-| 🟡 WARNING | 가독성 저해, 분리 필요 |
-| 🔵 INFO | 더 단순한 표현 가능 |
+| 높음 | 의도하지 않은 렌더 결과가 실제로 화면에 나오거나 동작을 바꾸는 경우 |
+| 낮음 | 주로 가독성, 분기 복잡도, 표현 단순화 문제에 머무는 경우 |
 
 ---
 
@@ -72,15 +71,8 @@ key 선택 규칙은 `03-react-rules.md` 03-3을 따른다.
 - render prop과 children이 혼용되어 사용법이 불명확
 - 빈 Fragment(`<></>`)를 반환하는 분기가 `null` 반환과 섞여 일관성이 없음
 
-## 06-OUTPUT. 출력 형식
+## 06-OUTPUT. 도메인 결과 가이드
 
-<!-- REVIEW_RESULT_CONTRACT_V1_PRODUCER_OUTPUT -->
-
-이 문서를 producer prompt에 쓸 때는 **`REVIEW_RESULT_CONTRACT_V1`** 을 따른다. 응답은 Markdown 표나 헤딩이 아니라 **raw JSON 객체 하나만** 반환한다.
-
-- top-level에는 `schemaVersion`, `findings`, `openQuestions`를 항상 포함하고 `schemaVersion`은 `1`이어야 한다.
-- `severity`는 producer가 내지 않는다. 이 모듈은 `impact`와 `confidence`만 판정한다.
-- falsy 렌더링, 조건부 분기, 리스트 렌더링, JSX 가독성, props spreading 같은 도메인별 설명은 새 schema field를 만들지 말고 `body`, `recommendation`, `evidence`에 담는다.
-- `00-rule.md` 00-11에 걸리는 unresolved absence/possibility claim, search scope 미완료, 추가 탐색 요청만 `openQuestions`로 보낸다.
-- 결함은 성립하지만 exact location만 확인하지 못했으면 finding을 유지하고 `location.kind="unverified"`와 `reason`만 사용한다.
-- producer 문자열 필드는 최종 리포트의 신뢰된 Markdown이 아니다. heading/table/raw HTML/link를 직접 만들려고 하지 말고 plain prose만 넣는다.
+- JSX 지적은 **화면에 실제로 무엇이 잘못 보이거나 읽기 어려워지는지**를 적는다. 예: `0`이 그대로 렌더된다, 분기 구조가 흩어져 결과를 추적하기 어렵다.
+- 리스트 렌더링은 key 규칙과 혼동하지 말고, 이 문서가 다루는 경우에는 **표현 복잡도와 호출 위치 문제**를 중심으로 설명한다.
+- 개선 방향은 early return, 별도 컴포넌트 추출, 명시적 boolean 조건, props 명시화처럼 JSX 표면에서 바로 적용 가능한 형태로 제안한다.
