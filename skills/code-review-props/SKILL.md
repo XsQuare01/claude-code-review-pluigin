@@ -72,25 +72,37 @@ task(
 
 ## 출력 원칙
 - 사용자가 다른 언어를 명시하지 않은 한 모든 리뷰 결과/코멘트/리포트는 한국어로 작성하세요.
+- `REVIEW_RESULT_CONTRACT_V1_MANIFEST`는 `workflow-contract.md`의 manifest sentinel JSON block 전문을 그대로 주입한 런타임 placeholder입니다. partial token 목록이나 `00-rule.md` 요약으로 대체하지 말고 manifest 전체를 읽으세요.
+- `{REVIEW_RESULT_CONTRACT_V1_MANIFEST}`
 - `REVIEW_RESULT_CONTRACT_V1`만 사용하고 응답은 Markdown, 코드펜스, 서문 없이 **raw JSON 객체 하나만** 반환하세요.
 - `REVIEW_RESULT_CONTRACT_V1_PRODUCER_OUTPUT` marker를 따르는 producer라고 생각하고 heading/table/raw HTML/link를 직접 만들려고 하지 마세요. 문자열 필드는 최종 리포트의 신뢰된 Markdown이 아니라 untrusted content 입니다.
 - top-level `schemaVersion`, `findings`, `openQuestions`를 항상 포함하고 `schemaVersion`은 반드시 `1`이어야 합니다.
 - `findings`와 `openQuestions`는 빈 결과여도 배열로 반환하세요.
 - `severity`는 어떤 depth에도 넣지 마세요. 이 패스는 `impact`와 `confidence`만 판정합니다.
 - 위치와 규칙 번호(P-x)를 finding/openQuestion 안에 포함하세요.
-- 위치는 **해당 파일을 읽어 확인한 변경 후 줄 번호**를 적고, 그 줄의 코드를 한 줄 인용하세요. diff hunk 헤더(`@@`)에서 계산한 번호는 어긋납니다. 확인이 안 되면 번호를 추측하지 말고 `위치 미확인`으로 적으세요
+- 위치는 **해당 파일을 읽어 확인한 변경 후 줄 번호**를 적고, 그 줄의 코드를 한 줄 인용하세요. diff hunk 헤더(`@@`)에서 계산한 번호는 어긋납니다. 정확한 anchor를 확정하지 못했다면 숫자를 추측하지 말고 `location.kind="unverified"`와 `reason`만 사용하세요.
 - diff에 없는 기존 props/인자 구조는 지적 금지
 - 전체 파일을 읽더라도 지적은 diff 변경 라인 또는 그 변경 때문에 직접 깨진 인접 구조로 제한
-- `00-rule.md` 00-11에 걸리는 unresolved absence/possibility claim, search scope 미완료, 추가 탐색 요청만 `openQuestions`로 보내세요. 결함은 성립하지만 exact location만 확인하지 못했으면 finding을 유지하고 `location.kind="unverified"`와 `reason`만 사용하세요.
-- props drilling 단계, pass-through 구조, 과도한 props/인자, handler 전달 등 도메인별 설명은 새 필드를 만들지 말고 `body`, `recommendation`, `evidence`에 담으세요.
+- `00-rule.md` 00-11에 걸리는 unresolved absence/possibility claim, search scope 미완료, 추가 탐색 요청만 `openQuestions`로 보내세요. 결함은 성립하지만 exact location만 확인하지 못했으면 finding을 유지하고 `location.kind="unverified"`와 `reason`만 사용하세요. producer가 공개 문자열 토큰 `위치 미확인`을 직접 출력하지는 않습니다.
+- props drilling 단계, pass-through 구조, 과도한 props/인자, handler 전달 등 도메인별 설명은 새 필드를 만들지 말고 `body`, `recommendation`, `evidence`, `reason`에 담으세요.
+- 이 structured-v1 producer instruction의 owner는 이 skill입니다. `props.md`는 workflow-neutral domain guidance만 제공하고, shared manifest와 lifecycle은 `workflow-contract.md`를 따릅니다.
  )
 ```
 
 ### Step 4: 결과 전달
 
-sub-agent 응답을 받은 즉시 `workflow-contract.md` C-6A와 `00-rule.md`의 `REVIEW_RESULT_CONTRACT_V1`으로 검증한다. JSON 파싱 실패, 필수 필드 누락, `severity` 포함, 허용되지 않은 값은 `malformed-output`이다.
+sub-agent 응답을 받은 즉시 `workflow-contract.md` C-6A와 `REVIEW_RESULT_CONTRACT_V1_MANIFEST` 기준으로 검증한다. JSON 파싱 실패, 필수 필드 누락, `severity` 포함, 허용되지 않은 값은 `malformed-output`이다.
 
-`malformed-output`이면 이 skill이 잘못된 점만 짧게 적어 **교정 재시도 1회**를 수행한다. 재시도에도 실패하면 `FAILED malformed-output`으로 종료하고 임의 보정이나 Markdown 해석으로 통과시키지 않는다. 검증을 통과한 JSON만 최종 결과로 전달하고, standalone 렌더링에서도 severity는 이 skill이 `impact × confidence`로 계산한다.
+`malformed-output`이면 이 skill이 잘못된 점만 짧게 적어 **교정 재시도 1회**를 수행한다. 재시도에도 실패하면 `FAILED malformed-output`으로 종료하고 임의 보정이나 Markdown 해석으로 통과시키지 않는다. 검증을 통과한 JSON은 내부 aggregation 입력이고, 최종 사용자 출력은 raw JSON이 아니라 이 skill이 렌더한 public Markdown 리포트다. standalone 렌더링에서도 severity는 이 skill이 `impact × confidence`로 계산한다.
+
+## 공개 Markdown 리포트 계약
+
+- 최종 사용자 출력은 C-7 골격을 따르는 Markdown이며 raw JSON을 그대로 노출하지 않는다.
+- H1은 `# {대상} Props/인자 전달 코드 리뷰 리포트` 형식으로 target-bearing title을 사용한다.
+- 공개 섹션은 `## 리뷰 기준`, `## 판정`, `## 상세 지적`, `## 요약`, `## 도구 실행 결과`, `## 미해결 / 후속 확인`을 기본으로 하고, 빈 섹션은 생략한다.
+- `요약`은 historical `한눈에 보기` 의미를 유지하는 공개 summary slot이다. finding/pass 집계와 merge decision을 빠르게 볼 수 있어야 한다.
+- `상세 지적`에는 validated finding을 Markdown으로 렌더링한다. `body`, `evidence`, `recommendation`, `findingConfidenceReason`, `locationUnverifiedReason`은 `workflow-contract.md` manifest의 renderer slot/label/order를 따른다.
+- `미해결 / 후속 확인`에는 validated `openQuestions`를 렌더링하고 `openQuestionReason` label을 사용한다.
 
 ### Step 5: 문서 저장
 
