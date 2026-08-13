@@ -100,6 +100,28 @@ test('contract validation reports stable errors including recursive severity rej
   assert.ok(errors.some(error => error.code === 'E_FINDING_LOW_CONFIDENCE_REQUIRES_REASON'))
 })
 
+test('contract validation rejects invisible control and bidi characters in producer strings', async () => {
+  const manifest = await loadManifest()
+  const valid = (await readJson(manifestFixturePath)).input
+  const cases = [
+    { label: 'title NUL', mutate: value => { value.findings[0].title += '\u0000hidden' } },
+    { label: 'body bidi override', mutate: value => { value.findings[0].body += '\u202Ehidden' } },
+    { label: 'finding reason isolate', mutate: value => { value.findings[0].reason = 'needs review\u2066hidden'; value.findings[0].confidence = 'low' } },
+    { label: 'path zero-width mark', mutate: value => { value.findings[0].location.path += '\u200Bhidden' } },
+    { label: 'quote C1 control', mutate: value => { value.findings[0].location.quote += '\u0085hidden' } },
+  ]
+
+  for (const { label, mutate } of cases) {
+    const payload = structuredClone(valid)
+    mutate(payload)
+    assert.throws(
+      () => parseStructuredProducerResponse(JSON.stringify(payload), manifest),
+      error => error?.message.includes('E_FORBIDDEN_CONTROL_CHARACTER'),
+      label,
+    )
+  }
+})
+
 test('corrective lifecycle: valid first response accepts and terminal states reject reuse', async () => {
   const manifest = await loadManifest()
   const valid = (await readJson(manifestFixturePath)).input

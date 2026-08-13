@@ -70,6 +70,23 @@ function scanForbiddenSeverity(value, errors, where) {
   for (const [key, nested] of Object.entries(value)) scanForbiddenSeverity(nested, errors, `${where}.${key}`)
 }
 
+const FORBIDDEN_CONTROL_CHARACTER = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F\u061C\u200B-\u200F\u202A-\u202E\u2060-\u206F\uFEFF]/
+
+function scanForbiddenControlCharacters(value, errors, where) {
+  if (typeof value === 'string') {
+    if (FORBIDDEN_CONTROL_CHARACTER.test(value)) {
+      addError(errors, 'E_FORBIDDEN_CONTROL_CHARACTER', `${where} must not contain invisible control or bidirectional formatting characters`)
+    }
+    return
+  }
+  if (!value || typeof value !== 'object') return
+  if (Array.isArray(value)) {
+    value.forEach((item, index) => scanForbiddenControlCharacters(item, errors, `${where}[${index}]`))
+    return
+  }
+  for (const [key, nested] of Object.entries(value)) scanForbiddenControlCharacters(nested, errors, `${where}.${key}`)
+}
+
 function validateRequiredString(object, key, errors, code, where) {
   if (!hasOwn(object, key) || typeof object[key] !== 'string' || object[key].trim() === '') {
     addError(errors, code, `${where}.${key} must be a non-empty string`)
@@ -156,6 +173,7 @@ export function validateReviewResultContract(value, manifest) {
   const errors = []
   if (!validatePlainObject(value, errors, 'E_TOPLEVEL_NOT_OBJECT', 'result')) return errors
   scanForbiddenSeverity(value, errors, 'result')
+  scanForbiddenControlCharacters(value, errors, 'result')
   validateUnknownKeys(value, schema?.topLevelAllowed ?? new Set(), errors, 'E_TOPLEVEL_UNKNOWN_KEY', 'result')
   if (!hasOwn(value, 'schemaVersion')) addError(errors, 'E_TOPLEVEL_MISSING_SCHEMA_VERSION', 'result.schemaVersion is required')
   else if (value.schemaVersion !== 1) addError(errors, 'E_TOPLEVEL_INVALID_SCHEMA_VERSION', 'result.schemaVersion must be 1')
