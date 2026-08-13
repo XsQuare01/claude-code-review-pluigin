@@ -18,13 +18,12 @@
 
 **TypeScript 버전도 확인한다.** 새 버전의 기본값이나 새 문법을 이전 버전 프로젝트에 요구하지 않는다. 없는 기능을 쓰라는 지적은 개선 제안이 아니라 오탐이다.
 
-## Severity 기준
+## 영향도 보정 예시
 
-| Severity | 의미 |
+| 영향도 | 이 모듈에서 자주 보이는 근거 |
 |----------|------|
-| 🔴 ERROR | 런타임 에러 가능, 타입 시스템 무력화 |
-| 🟡 WARNING | 타입 불일치, 잠재적 버그 |
-| 🔵 INFO | 더 정확한 타입 표현 가능 |
+| 높음 | 런타임 에러, 검증 실패, 타입 시스템 무력화가 현재 변경에서 직접 닫히는 경우 |
+| 낮음 | 타입 표현 정밀도, 잠재적 버그 가능성, 유지보수성 중심 문제에 머무는 경우 |
 
 ---
 
@@ -39,8 +38,8 @@
 - **사유**: 왜 우회가 필요한지가 코드나 주석에서 드러나는가
 - **제거 조건**: 언제 없앨 수 있는지가 특정 가능한가 (라이브러리 타입 수정, 버전 업 등)
 
-| 대상 | Severity | 판정 |
-|------|----------|------|
+| 대상 | 영향도 경향 | 판정 |
+|------|-------------|------|
 | 근거 없는 타입 단언 (`as User` — narrowing도 런타임 검증도 없음) | 🔴 | 항상 위반 |
 | `as unknown as T` 이중 단언 | 🔴 | 항상 위반. 검사를 완전히 우회하고 컴파일러가 불일치를 더 못 잡는다 |
 | catch-all Props (`[key: string]: any`) | 🔴 | 항상 위반. 오타와 잘못된 prop이 전부 통과한다 |
@@ -294,15 +293,8 @@ function assertUser(v: unknown): asserts v is User {
 <button onClick={e => { e.currentTarget.disabled = true }} />
 ```
 
-## 02-OUTPUT. 출력 형식
+## 02-OUTPUT. 도메인 결과 가이드
 
-<!-- REVIEW_RESULT_CONTRACT_V1_PRODUCER_OUTPUT -->
-
-이 문서를 producer prompt에 쓸 때는 **`REVIEW_RESULT_CONTRACT_V1`** 을 따른다. 응답은 Markdown 표나 헤딩이 아니라 **raw JSON 객체 하나만** 반환한다.
-
-- top-level에는 `schemaVersion`, `findings`, `openQuestions`를 항상 포함하고 `schemaVersion`은 `1`이어야 한다.
-- `severity`는 producer가 내지 않는다. 이 모듈은 `impact`와 `confidence`만 판정한다.
-- 타입 우회 범위, trust boundary, tsconfig 의존성, variance, React typing 같은 도메인별 설명은 새 schema field를 만들지 말고 `body`, `recommendation`, `evidence`에 담는다.
-- `00-rule.md` 00-11에 걸리는 unresolved absence/possibility claim, search scope 미완료, 추가 탐색 요청만 `openQuestions`로 보낸다.
-- 결함은 성립하지만 exact location만 확인하지 못했으면 finding을 유지하고 `location.kind="unverified"`와 `reason`만 사용한다.
-- producer 문자열 필드는 최종 리포트의 신뢰된 Markdown이 아니다. heading/table/raw HTML/link를 직접 만들려고 하지 말고 plain prose만 넣는다.
+- 지적은 **어떤 타입 보장이 실제로 없는데 있는 것처럼 쓰였는지**를 설명해야 한다. 특히 trust boundary라면 값이 어디서 들어왔고 어떤 검증이 빠졌는지를 적는다.
+- tsconfig나 TypeScript 버전에 판정이 의존하면, **어떤 설정이 켜져 있거나 꺼져 있어서** 이 지적이 성립하는지 남긴다.
+- `any`, 단언, variance, React typing 문제는 단순 문법 취향이 아니라 **어느 런타임 실패나 오해된 계약**으로 이어지는지를 함께 적는다.

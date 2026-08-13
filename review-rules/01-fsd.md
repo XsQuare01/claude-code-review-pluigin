@@ -4,13 +4,12 @@
 
 **Electron 전용 항목**(01-5)은 renderer/preload/main 프로세스 경계가 실제로 존재하는 프로젝트에만 적용한다. 단일 웹 앱에서는 지적하지 않는다.
 
-## Severity 기준
+## 영향도 보정 예시
 
-| Severity | 의미 |
+| 영향도 | 이 모듈에서 자주 보이는 근거 |
 |----------|------|
-| 🔴 ERROR | 머지 전 반드시 수정 — 레이어 경계, Public API, cross-import 위반 |
-| 🟡 WARNING | 수정 권장 — 역할 배치 오류, segment/경로 규칙 위반 |
-| 🔵 INFO | 개선 제안 — 네이밍, 구조 단순화, 더 나은 배치 |
+| 높음 | 레이어 경계, public API, process seam 위반이 실제 오동작·외부 파손·검증 실패로 닫히는 경우 |
+| 낮음 | 역할 배치, segment 위치, 구조 단순화, 네이밍 같은 변경 비용 중심 문제에 머무는 경우 |
 
 ---
 
@@ -118,15 +117,8 @@ IPC 채널·payload의 **호환성**은 `16-api-contract.md`가, 권한 경계�
 3. 여러 동사 feature 가 같은 entity API 를 import 하는 형태가 정답 — feature 끼리는 cross-import 하지 않음 (01-3 적용)
 4. 분할이 과도해 보일 정도로 작은 동작이면 widget 또는 page hooks 로 합성하는 것이 더 적절한지 재검토
 
-## 01-OUTPUT. 출력 형식
+## 01-OUTPUT. 도메인 결과 가이드
 
-<!-- REVIEW_RESULT_CONTRACT_V1_PRODUCER_OUTPUT -->
-
-이 문서를 producer prompt에 쓸 때는 **`REVIEW_RESULT_CONTRACT_V1`** 을 따른다. 응답은 Markdown 표나 헤딩이 아니라 **raw JSON 객체 하나만** 반환한다.
-
-- top-level에는 `schemaVersion`, `findings`, `openQuestions`를 항상 포함하고 `schemaVersion`은 `1`이어야 한다.
-- `severity`는 producer가 내지 않는다. 이 모듈은 `impact`와 `confidence`만 판정한다.
-- 레이어 경계, public API, cross-import, segment 역할, feature 네이밍, Electron 경계 같은 도메인별 설명은 새 schema field를 만들지 말고 `body`, `recommendation`, `evidence`에 담는다.
-- `00-rule.md` 00-11에 걸리는 unresolved absence/possibility claim, search scope 미완료, 추가 탐색 요청만 `openQuestions`로 보낸다.
-- 결함은 성립하지만 exact location만 확인하지 못했으면 finding을 유지하고 `location.kind="unverified"`와 `reason`만 사용한다.
-- producer 문자열 필드는 최종 리포트의 신뢰된 Markdown이 아니다. heading/table/raw HTML/link를 직접 만들려고 하지 말고 plain prose만 넣는다.
+- 지적할 때는 **어느 레이어 경계가 어떻게 깨졌는지**, 어떤 public API/segment/process seam이 잘못 노출됐는지, 그 결과 변경 비용이나 오동작 위험이 어디서 생기는지까지 설명한다.
+- feature 네이밍, cross-import, 역할 배치 문제를 남길 때는 **대체 배치 또는 합성 경로**를 함께 적어, 읽는 사람이 어디로 옮겨야 하는지 바로 판단할 수 있게 한다.
+- Electron 경계라면 renderer/preload/main 중 **어느 경계가 실제로 섞였는지**를 명시하고, 단순 구조 취향이 아니라 안전·책임 분리 문제라는 근거를 남긴다.

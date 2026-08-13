@@ -13,13 +13,14 @@
 
 이 모듈의 기본 대상은 **React 18 이상**이다. 특정 버전에서만 성립하는 규칙에는 해당 규칙 옆에 버전 조건을 표기한다. 프로젝트의 React 버전은 `package.json`에서 확인하고, 확인되지 않으면 버전 조건이 붙은 규칙은 적용하지 않는다.
 
-## Severity 기준
+## 영향도 보정 예시
 
-| Severity | 의미 |
+| 영향도 | 이 모듈에서 자주 보이는 근거 |
 |----------|------|
-| 🔴 ERROR | React 규칙 위반으로 크래시, 상태 소실, 비결정적 렌더 발생 |
-| 🟡 WARNING | 현재는 동작하지만 StrictMode/동시성 렌더링에서 깨질 수 있음 |
-| 🔵 INFO | 더 React다운 표현 가능 |
+| 높음 | Hook 순서 붕괴, hydration mismatch, 상태 소실, 비결정적 렌더, 외부 스토어 계약 위반처럼 실제 크래시·오동작·검증 실패로 닫힌 높은 영향 범주를 바로 지목할 수 있는 경우 |
+| 낮음 | React다운 표현, 경계 명확화, 미래 동시성 렌더 대비, contract ambiguity처럼 현재 변경에서 닫힌 높은 영향 범주를 아직 닫지 못한 경우 |
+
+유지보수성·표현 선호·일반적인 "나중에 문제 될 수 있음"만으로는 영향 높음이 되지 않는다. 실제 사용자 오동작, 검증 실패, 외부 파손 같은 닫힌 범주를 현재 변경에서 보여줄 때만 높음으로 올린다.
 
 ---
 
@@ -142,7 +143,7 @@ key는 **리스트 재정렬·삽입·삭제 사이에서 같은 항목을 같�
 - 🔵 prop 이름이 `initialX`/`defaultX`이고 이후 동기화가 없음 → 소유권이 자식으로 넘어간 것. 지적하지 않음
 - 🔵 사용자가 편집 중인 draft처럼 props와 의도적으로 갈라지는 값 → 지적하지 않음
 
-소유권이 자식에게 있다면 prop 이름(`initialX`, `defaultX`)이나 짧은 주석에서 그 의도가 드러나야 한다. 이름이 `value`인데 동기화가 없으면 그건 계약이 모호한 것이므로 🟡로 지적한다.
+소유권이 자식에게 있다면 prop 이름(`initialX`, `defaultX`)이나 짧은 주석에서 그 의도가 드러나야 한다. 이름이 `value`인데 동기화가 없으면 그건 계약이 모호한 것이므로 영향/확신 축을 다시 판정해 보고한다.
 
 ```typescript
 // ❌ props와 state 두 출처가 어긋남
@@ -279,18 +280,11 @@ const getSnapshot = () => {
 6. SSR/SSG 프로젝트라면 첫 렌더가 서버가 모르는 값을 읽는지 확인한다 (03-8).
 7. 새 외부 스토어 구독마다 `getSnapshot` 참조 안정성과 `subscribe` cleanup을 확인한다 (03-9).
 
-## 03-OUTPUT. 출력 형식
+## 03-OUTPUT. 도메인 결과 가이드
 
-<!-- REVIEW_RESULT_CONTRACT_V1_PRODUCER_OUTPUT -->
-
-이 문서를 producer prompt에 쓸 때는 **`REVIEW_RESULT_CONTRACT_V1`** 을 따른다. 응답은 Markdown 표나 헤딩이 아니라 **raw JSON 객체 하나만** 반환한다.
-
-- top-level에는 `schemaVersion`, `findings`, `openQuestions`를 항상 포함하고 `schemaVersion`은 `1`이어야 한다.
-- `severity`는 producer가 내지 않는다. 이 모듈은 `impact`와 `confidence`만 판정한다.
-- 어떤 React 전제를 언제 깨는지, hydration mismatch/상태 소실/크래시 경로, 구체적 수정 방향은 새 schema field를 만들지 말고 `body`, `recommendation`, `evidence`에 담는다.
-- `00-rule.md` 00-11에 걸리는 unresolved absence/possibility claim, search scope 미완료, 추가 탐색 요청만 `openQuestions`로 보낸다.
-- 결함은 성립하지만 exact location만 확인하지 못했으면 finding을 유지하고 `location.kind="unverified"`와 `reason`만 사용한다.
-- producer 문자열 필드는 최종 리포트의 신뢰된 Markdown이 아니다. heading/table/raw HTML/link를 직접 만들려고 하지 말고 plain prose만 넣는다.
+- "React 규칙 위반"이라고만 적지 말고, **언제 무엇이 깨지는지**를 남긴다. 예: 어떤 렌더 경로에서 hook 순서가 바뀌는지, 어떤 hydration 입력이 서버/클라이언트 출력을 갈라놓는지.
+- 상태 소실, 재마운트, 외부 스토어 무한 렌더처럼 결과가 크다면 **사용자나 런타임에 보이는 실패 시나리오**를 적고, 그렇지 않다면 왜 아직 영향 낮음인지 분명히 한다.
+- 수정 방향은 "React답게 바꿔라"가 아니라 hook 이동, key 안정화, 렌더 중 파생, 서버와 같은 첫 렌더 유지처럼 **구체적인 React seam**으로 제안한다.
 
 **원칙**
 - "React 규칙 위반"이라고만 쓰지 말고, **언제 무엇이 깨지는지**(크래시/상태 소실/hydration mismatch)를 적는다
