@@ -4,7 +4,7 @@ import assert from 'node:assert/strict'
 import {
   validateEffectiveCommonContext,
   EFFECTIVE_COMMON_CONTEXT_CODES,
-} from './lib/effective-common-context-validator.mjs'
+} from '../scripts/lib/effective-common-context-validator.mjs'
 
 const VALID_BASELINE = [
   '## 00-6. 문서/리포트 표현 규칙 🟡',
@@ -17,7 +17,7 @@ const VALID_BASELINE = [
   '  "representationOwner": "workflow-contract.md",',
   '  "structuredProducerUnverifiedLocation": "location.kind=unverified",',
   '  "structuredProducerReasonField": "reason",',
-  '  "publicLiteralForbiddenInCommonContext": "위치 미확인",',
+  '  "publicLiteralForbiddenInPolicyBearingCommonInstructionContext": "위치 미확인",',
   '  "publicLiteralAllowBlock": "PUBLIC_OUTPUT_LOCATION_LITERAL_ALLOW"',
   '}',
   '```',

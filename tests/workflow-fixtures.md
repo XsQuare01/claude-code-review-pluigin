@@ -131,7 +131,7 @@ These scenarios pin the behaviour that `review-rules/workflow-contract.md` promi
     {
       "id": 55,
       "clauses": ["C-6A", "C-7"],
-      "scenario": "Injected common context must carry machine markers saying workflow-contract.md owns representation and that 위치 미확인 is forbidden except inside one explicit public-output allow block",
+"scenario": "Policy-bearing common instruction context must carry machine markers saying workflow-contract.md owns representation and that 위치 미확인 is forbidden except inside one explicit public-output allow block; canonical manifest renderer labels remain independently validated data",
       "expected": "Static validation fails unless the marker-driven absence guard keeps structured raw output on location.kind=unverified plus reason and allows 위치 미확인 only inside the marked public/legacy allow block"
     },
     {

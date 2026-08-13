@@ -152,13 +152,13 @@ correctness 패스는 규칙 문서가 아니라 PR 의도를 근거로 지적�
   "representationOwner": "workflow-contract.md",
   "structuredProducerUnverifiedLocation": "location.kind=unverified",
   "structuredProducerReasonField": "reason",
-  "publicLiteralForbiddenInCommonContext": "위치 미확인",
+  "publicLiteralForbiddenInPolicyBearingCommonInstructionContext": "위치 미확인",
   "publicLiteralAllowBlock": "PUBLIC_OUTPUT_LOCATION_LITERAL_ALLOW"
 }
 ```
 <!-- EFFECTIVE_COMMON_CONTEXT_POLICY:END -->
 
-- 공통 생산자 문맥의 불변식은 **경로/줄번호/코드 인용을 추측하지 않는다**는 점이다. 위치·렌더링의 표현 형식은 `workflow-contract.md`가 소유하고, 이 문서는 workflow-neutral 판단 규칙만 제공한다
+- 이 policy가 있는 공통 생산자 지시 문맥의 불변식은 **경로/줄번호/코드 인용을 추측하지 않는다**는 점이다. 위치·렌더링의 표현 형식과 manifest의 renderer label은 `workflow-contract.md`가 소유하고, 이 문서는 workflow-neutral 판단 규칙만 제공한다
 
 ### 다른 언어를 요청받았을 때
 

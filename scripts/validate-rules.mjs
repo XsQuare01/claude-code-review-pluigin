@@ -82,7 +82,7 @@ const STRUCTURED_OWNER_CONSUMERS = {
   'skills/code-review-math/SKILL.md': ['validation', 'rendering'],
   'skills/code-review-exception/SKILL.md': ['validation', 'rendering'],
 }
-const STRUCTURED_OWNER_COMMON_CONTEXTS = {
+const STRUCTURED_OWNER_POLICY_BEARING_COMMON_CONTEXTS = {
   'skills/code-review-full/SKILL.md': ['review-rules/00-rule.md'],
   'skills/code-review-props/SKILL.md': ['review-rules/00-rule.md'],
   'skills/code-review-math/SKILL.md': ['review-rules/00-rule.md'],
@@ -894,7 +894,7 @@ function validateStructuredProducerDocs() {
     ...Object.keys(manifest.renderingSafety.slots ?? {}),
   ] : []
 
-  for (const [owner, contextPaths] of Object.entries(STRUCTURED_OWNER_COMMON_CONTEXTS)) {
+for (const [owner, contextPaths] of Object.entries(STRUCTURED_OWNER_POLICY_BEARING_COMMON_CONTEXTS)) {
     for (const contextPath of contextPaths) {
       const context = read(join(ROOT, contextPath))
       const errors = validateEffectiveCommonContext(context, contextPath)

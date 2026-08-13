@@ -78,7 +78,7 @@ function validatePolicyShape(policy) {
     representationOwner: 'workflow-contract.md',
     structuredProducerUnverifiedLocation: 'location.kind=unverified',
     structuredProducerReasonField: 'reason',
-    publicLiteralForbiddenInCommonContext: '위치 미확인',
+    publicLiteralForbiddenInPolicyBearingCommonInstructionContext: '위치 미확인',
     publicLiteralAllowBlock: PUBLIC_OUTPUT_LOCATION_LITERAL_ALLOW_MARKER,
   }
   for (const [key, value] of Object.entries(expected)) {
@@ -120,14 +120,14 @@ export function validateEffectiveCommonContext(text, contextPath = 'effective co
   const shapeError = validatePolicyShape(parsedPolicy.value)
   if (shapeError) return [{ ...shapeError, message: `${contextPath}: ${shapeError.message}` }]
 
-  const publicLiteral = parsedPolicy.value.publicLiteralForbiddenInCommonContext
+  const publicLiteral = parsedPolicy.value.publicLiteralForbiddenInPolicyBearingCommonInstructionContext
   const stripped = text
     .replace(policyResult.fullMatch, '')
     .replace(allowResult.fullMatch, '')
   if (stripped.includes(publicLiteral)) {
     errors.push({
       code: EFFECTIVE_COMMON_CONTEXT_CODES.PUBLIC_LITERAL_OUTSIDE_ALLOW_BLOCK,
-      message: `${contextPath}: public literal ${JSON.stringify(publicLiteral)} must not appear outside ${PUBLIC_OUTPUT_LOCATION_LITERAL_ALLOW_MARKER}`,
+      message: `${contextPath}: public literal ${JSON.stringify(publicLiteral)} must not appear in policy-bearing common instruction context outside ${PUBLIC_OUTPUT_LOCATION_LITERAL_ALLOW_MARKER}`,
     })
   }
 

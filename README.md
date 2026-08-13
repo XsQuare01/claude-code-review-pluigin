@@ -316,7 +316,9 @@ claude-code-review-plugin/
 ├── .github/workflows/validate.yml
 ├── LICENSE
 ├── scripts/validate-rules.mjs
-├── tests/workflow-fixtures.md
+├── tests/
+│   ├── effective-common-context-validator.test.mjs
+│   └── workflow-fixtures.md
 ├── docs/                          # design records, not current state
 ├── agents/correctness-reviewer.md
 ├── skills/
@@ -343,6 +345,7 @@ claude-code-review-plugin/
 ## Validation
 
 ```bash
+node --test tests/effective-common-context-validator.test.mjs
 node scripts/validate-rules.mjs
 ```
 
