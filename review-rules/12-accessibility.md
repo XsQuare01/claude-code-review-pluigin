@@ -17,13 +17,14 @@
 
 backend-only diff, 데이터 모델만 바뀐 diff, UI에 닿지 않는 설정 변경에는 적용하지 않는다.
 
-## Severity 기준
+## 영향도 보정 예시
 
-| Severity | 의미 |
+| 영향도 | 이 모듈에서 자주 보이는 근거 |
 |----------|------|
-| 🔴 ERROR | 키보드 사용, 이름/라벨, focus, form error, semantic control 결함으로 실제 사용 경로가 막힘 |
-| 🟡 WARNING | 접근 가능한 대안은 일부 있으나 보조기술, 키보드, 상태 동기화가 불완전함 |
-| 🔵 INFO | 접근성 명확성, 유지보수성, 보조기술 힌트를 더 분명히 할 수 있음 |
+| 높음 | 키보드 사용 경로 차단, accessible name/label 부재, focus 관리 실패, form error 미연결처럼 **사용자가 기능을 조작하지 못하게 되는 실제 user malfunction** |
+| 낮음 | 대안은 남아 있지만 보조기술 힌트, 상태 동기화, motion/contrast 명확성이 부족한 경우 |
+
+접근성 문제라도 실제 사용자 조작 차단이 닫히지 않으면 자동으로 높은 영향이 되지 않는다. 반대로 maintenance/style만의 문제는 이 모듈에서 높은 영향 근거가 아니다.
 
 ---
 
@@ -130,18 +131,11 @@ motion과 contrast는 변경 코드에서 직접 추론할 수 있을 때만 지
 7. image/icon/SVG/canvas/chart가 의미를 전달하면 텍스트 대안을 확인한다.
 8. ARIA는 유효한 role/state 조합이며 실제 UI 상태와 동기화되는지 확인한다.
 
-## 12-OUTPUT. 출력 형식
+## 12-OUTPUT. 도메인 결과 가이드
 
-<!-- REVIEW_RESULT_CONTRACT_V1_PRODUCER_OUTPUT -->
-
-이 문서를 producer prompt에 쓸 때는 **`REVIEW_RESULT_CONTRACT_V1`** 을 따른다. 응답은 Markdown 표나 헤딩이 아니라 **raw JSON 객체 하나만** 반환한다.
-
-- top-level에는 `schemaVersion`, `findings`, `openQuestions`를 항상 포함하고 `schemaVersion`은 `1`이어야 한다.
-- `severity`는 producer가 내지 않는다. 이 모듈은 `impact`와 `confidence`만 판정한다.
-- keyboard path, focus 처리, accessible name, error 연결, semantic element 같은 도메인별 설명은 새 schema field를 만들지 말고 `body`, `recommendation`, `evidence`에 담는다.
-- `00-rule.md` 00-11에 걸리는 unresolved absence/possibility claim, search scope 미완료, 추가 탐색 요청만 `openQuestions`로 보낸다.
-- 결함은 성립하지만 exact location만 확인하지 못했으면 finding을 유지하고 `location.kind="unverified"`와 `reason`만 사용한다.
-- producer 문자열 필드는 최종 리포트의 신뢰된 Markdown이 아니다. heading/table/raw HTML/link를 직접 만들려고 하지 말고 plain prose만 넣는다.
+- 어떤 접근성 지적이든 **어느 사용자 경로가 실제로 막히는지** 또는 어떤 보조기술 정보가 왜 불충분한지를 적는다.
+- semantic HTML, keyboard path, focus, error 연결은 각각 어떤 동작을 막는지까지 설명하고, 단순 WCAG 이름 나열로 끝내지 않는다.
+- motion/contrast처럼 보정 성격이 강한 항목은 왜 현재 diff만으로 판단 가능한지 근거를 남긴다.
 
 예시 문장:
 

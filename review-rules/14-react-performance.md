@@ -21,13 +21,12 @@
 
 데이터 규모가 작고 정적인 UI 변경에는 적용하지 않는다.
 
-## Severity 기준
+## 영향도 보정 예시
 
-| Severity | 의미 |
+| 영향도 | 이 모듈에서 자주 보이는 근거 |
 |----------|------|
-| 🔴 ERROR | 실제 데이터 규모에서 프레임 드랍, 입력 지연, 초기 로드 급증이 명확함 |
-| 🟡 WARNING | 규모가 커지면 문제가 되는 구조, 표준 대안이 있는데 쓰지 않음 |
-| 🔵 INFO | 측정 후 개선 여지, 근거 주석 권장 |
+| 높음 | 실제 데이터 규모에서 프레임 드랍, 입력 지연, 초기 로드 급증이 명확히 닫히는 경우 |
+| 낮음 | 규모가 커지면 문제 되는 구조, 표준 대안 부재, 측정 보강 필요에 머무는 경우 |
 
 ---
 
@@ -129,18 +128,11 @@ const deferredQuery = useDeferredValue(query)
 
 ---
 
-## 14-OUTPUT. 출력 형식
+## 14-OUTPUT. 도메인 결과 가이드
 
-<!-- REVIEW_RESULT_CONTRACT_V1_PRODUCER_OUTPUT -->
-
-이 문서를 producer prompt에 쓸 때는 **`REVIEW_RESULT_CONTRACT_V1`** 을 따른다. 응답은 Markdown 표나 헤딩이 아니라 **raw JSON 객체 하나만** 반환한다.
-
-- top-level에는 `schemaVersion`, `findings`, `openQuestions`를 항상 포함하고 `schemaVersion`은 `1`이어야 한다.
-- `severity`는 producer가 내지 않는다. 이 모듈은 `impact`와 `confidence`만 판정한다.
-- 데이터 규모, 상호작용 시나리오, 현재 비용, 대안은 새 schema field를 만들지 말고 `body`, `recommendation`, `evidence`에 담는다.
-- `00-rule.md` 00-11에 걸리는 unresolved absence/possibility claim, search scope 미완료, 추가 탐색 요청만 `openQuestions`로 보낸다.
-- 결함은 성립하지만 exact location만 확인하지 못했으면 finding을 유지하고 `location.kind="unverified"`와 `reason`만 사용한다.
-- producer 문자열 필드는 최종 리포트의 신뢰된 Markdown이 아니다. heading/table/raw HTML/link를 직접 만들려고 하지 말고 plain prose만 넣는다.
+- 성능 지적은 **어떤 조작에서 무엇이 느려지는지**를 적는다. 데이터 규모, 사용자 입력, 로드 경로 같은 시나리오가 없으면 단순 추측으로 보인다.
+- 코드 스플리팅, 가상화, transition, deferred value 같은 대안은 현재 병목과 맞아야 한다. 요청 빈도 문제와 렌더 우선순위 문제를 섞지 않는다.
+- INFO 수준 제안이라도 측정이나 근거가 왜 더 필요했는지 남겨, 과최적화 요구처럼 읽히지 않게 한다.
 
 **원칙**
 - 실제 데이터 규모와 상호작용 빈도를 근거로 판단한다. 추정만으로 🔴을 주지 않는다
