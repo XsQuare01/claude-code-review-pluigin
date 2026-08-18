@@ -1,0 +1,11 @@
+{
+  "name": "schema-version-invalid",
+  "expected": "invalid",
+  "expectedErrorCodes": [
+    "E_VERDICT_SCHEMA_VERSION_INVALID"
+  ],
+  "input": {
+    "schemaVersion": 2,
+    "verdicts": []
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "name": "unknown-disposition",
+  "expected": "invalid",
+  "expectedErrorCodes": [
+    "E_VERDICT_UNKNOWN_DISPOSITION"
+  ],
+  "input": {
+    "schemaVersion": 1,
+    "verdicts": [
+      {
+        "candidateId": "03-1#1",
+        "disposition": "probably-fine",
+        "evidence": "use-feed.ts 전체를 읽었습니다.",
+        "location": {
+          "kind": "verified",
+          "path": "src/features/feed/use-feed.ts",
+          "line": 14,
+          "quote": "const sorted = items.toSorted(sortByNewest)"
+        }
+      }
+    ]
+  }
+}

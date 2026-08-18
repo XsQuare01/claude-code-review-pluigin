@@ -29,13 +29,29 @@
     "react": {
       "description": "Always true for this plugin — every module assumes a React codebase.",
       "implicit": true,
-      "detect": { "any": [{ "dependency": "react" }] }
+      "detect": {
+        "any": [
+          {
+            "dependency": "react"
+          }
+        ]
+      }
     },
     "fsd": {
       "description": "Feature-Sliced Design layout (app/pages/widgets/features/entities/shared directories).",
       "detect": {
-        "dirs": ["app", "pages", "widgets", "features", "entities", "shared"],
-        "under": ["src", "."],
+        "dirs": [
+          "app",
+          "pages",
+          "widgets",
+          "features",
+          "entities",
+          "shared"
+        ],
+        "under": [
+          "src",
+          "."
+        ],
         "min": 3
       },
       "cautions": "Requiring all six layers false-negatives real FSD projects — widgets and pages are commonly absent. Two matches are not evidence either: any project can have shared/ and features/ without the layering the module checks."
@@ -44,9 +60,15 @@
       "description": "Electron project with main/preload/renderer processes.",
       "detect": {
         "any": [
-          { "dependency": "electron" },
-          { "file": "forge.config.{js,cjs,mjs,ts}" },
-          { "file": "electron-builder.{yml,yaml,json,js}" }
+          {
+            "dependency": "electron"
+          },
+          {
+            "file": "forge.config.{js,cjs,mjs,ts}"
+          },
+          {
+            "file": "electron-builder.{yml,yaml,json,js}"
+          }
         ]
       }
     },
@@ -54,10 +76,20 @@
       "description": "Tailwind CSS configured.",
       "detect": {
         "any": [
-          { "dependency": "tailwindcss" },
-          { "file": "tailwind.config.{js,cjs,mjs,ts}" },
-          { "content": "@import \"tailwindcss\"", "in": "**/*.css" },
-          { "content": "@tailwind ", "in": "**/*.css" }
+          {
+            "dependency": "tailwindcss"
+          },
+          {
+            "file": "tailwind.config.{js,cjs,mjs,ts}"
+          },
+          {
+            "content": "@import \"tailwindcss\"",
+            "in": "**/*.css"
+          },
+          {
+            "content": "@tailwind ",
+            "in": "**/*.css"
+          }
         ]
       },
       "cautions": "Tailwind 4 moves configuration into CSS and ships no tailwind.config file, so a config-file-only check skips 11-styling.md on every v4 project. The dependency and the CSS entry point are the signals that survive both versions."
@@ -66,8 +98,28 @@
       "description": "React Server Components: 'use client' boundaries inside an RSC-capable framework.",
       "detect": {
         "any": [
-          { "content": "use client", "in": "**/*.{ts,tsx,js,jsx}", "notes": "top-of-file directive, single or double quoted" },
-          { "all": [{ "dependency": "next" }, { "dirs": ["app"], "under": ["src", "."], "min": 1 }] }
+          {
+            "content": "use client",
+            "in": "**/*.{ts,tsx,js,jsx}",
+            "notes": "top-of-file directive, single or double quoted"
+          },
+          {
+            "all": [
+              {
+                "dependency": "next"
+              },
+              {
+                "dirs": [
+                  "app"
+                ],
+                "under": [
+                  "src",
+                  "."
+                ],
+                "min": 1
+              }
+            ]
+          }
         ]
       },
       "cautions": "'use server' alone marks a Server Function, not an RSC render tree — it is server-code evidence, not rsc evidence. Next.js with only pages/ is not RSC either."
@@ -76,13 +128,30 @@
       "description": "Server-side rendering or static generation in use (includes RSC).",
       "detect": {
         "any": [
-          { "profile": "rsc" },
-          { "dependency": "next" },
-          { "dependency": "@remix-run/react" },
-          { "dependency": "@tanstack/react-start" },
-          { "content": "renderToPipeableStream", "in": "**/*.{ts,tsx,js,jsx}" },
-          { "content": "renderToString", "in": "**/*.{ts,tsx,js,jsx}" },
-          { "content": "hydrateRoot", "in": "**/*.{ts,tsx,js,jsx}" }
+          {
+            "profile": "rsc"
+          },
+          {
+            "dependency": "next"
+          },
+          {
+            "dependency": "@remix-run/react"
+          },
+          {
+            "dependency": "@tanstack/react-start"
+          },
+          {
+            "content": "renderToPipeableStream",
+            "in": "**/*.{ts,tsx,js,jsx}"
+          },
+          {
+            "content": "renderToString",
+            "in": "**/*.{ts,tsx,js,jsx}"
+          },
+          {
+            "content": "hydrateRoot",
+            "in": "**/*.{ts,tsx,js,jsx}"
+          }
         ]
       },
       "cautions": "hydrateRoot is the client half of SSR — a project calling createRoot only is not server-rendered no matter what framework is installed."
@@ -91,17 +160,33 @@
       "description": "Three.js / React Three Fiber / WebGL in the codebase.",
       "detect": {
         "any": [
-          { "dependency": "three" },
-          { "dependency": "@react-three/fiber" },
-          { "dependency": "@react-three/drei" },
-          { "content": "getContext('webgl", "in": "**/*.{ts,tsx,js,jsx}" }
+          {
+            "dependency": "three"
+          },
+          {
+            "dependency": "@react-three/fiber"
+          },
+          {
+            "dependency": "@react-three/drei"
+          },
+          {
+            "content": "getContext('webgl",
+            "in": "**/*.{ts,tsx,js,jsx}"
+          }
         ]
       }
     },
     "tanstack-query": {
       "description": "TanStack Query (React Query) used for server state.",
       "detect": {
-        "any": [{ "dependency": "@tanstack/react-query" }, { "dependency": "react-query" }]
+        "any": [
+          {
+            "dependency": "@tanstack/react-query"
+          },
+          {
+            "dependency": "react-query"
+          }
+        ]
       },
       "cautions": "react-query is the pre-v4 package name; a project still on it has the same query keys and invalidation to review."
     },
@@ -109,13 +194,43 @@
       "description": "Server-side code reviewed in this repository (Electron main, BFF, route handlers, Server Functions).",
       "detect": {
         "any": [
-          { "content": "use server", "in": "**/*.{ts,tsx,js,jsx}" },
-          { "file": "**/app/**/route.{ts,js}" },
-          { "file": "**/pages/api/**/*.{ts,js}" },
-          { "all": [{ "profile": "electron" }, { "dirs": ["electron", "src/main", "main"], "under": ["."], "min": 1 }] },
-          { "dependency": "express" },
-          { "dependency": "fastify" },
-          { "dependency": "hono" }
+          {
+            "content": "use server",
+            "in": "**/*.{ts,tsx,js,jsx}"
+          },
+          {
+            "file": "**/app/**/route.{ts,js}"
+          },
+          {
+            "file": "**/pages/api/**/*.{ts,js}"
+          },
+          {
+            "all": [
+              {
+                "profile": "electron"
+              },
+              {
+                "dirs": [
+                  "electron",
+                  "src/main",
+                  "main"
+                ],
+                "under": [
+                  "."
+                ],
+                "min": 1
+              }
+            ]
+          },
+          {
+            "dependency": "express"
+          },
+          {
+            "dependency": "fastify"
+          },
+          {
+            "dependency": "hono"
+          }
         ]
       },
       "cautions": "The question is whether server code is reviewed *in this repository*, not whether the app talks to a server. A frontend calling someone else's API does not hold this profile."
@@ -138,7 +253,15 @@
       "path": "00-rule.md",
       "title": "공통 리뷰 규칙",
       "role": "common-context",
-      "workflows": ["default", "full", "fast", "commit", "props", "math", "exception"],
+      "workflows": [
+        "default",
+        "full",
+        "fast",
+        "commit",
+        "props",
+        "math",
+        "exception"
+      ],
       "requires": [],
       "notes": "Never dispatched as an independent module pass — see workflow-contract.md C-2."
     },
@@ -147,18 +270,39 @@
       "path": "01-fsd.md",
       "title": "FSD 아키텍처",
       "role": "module",
-      "workflows": ["default", "full", "commit"],
-      "requires": ["fsd"],
-      "partial": [{ "rules": ["01-5"], "requires": ["electron"] }]
+      "workflows": [
+        "default",
+        "full",
+        "commit"
+      ],
+      "requires": [
+        "fsd"
+      ],
+      "partial": [
+        {
+          "rules": [
+            "01-5"
+          ],
+          "requires": [
+            "electron"
+          ]
+        }
+      ]
     },
     {
       "id": "02",
       "path": "02-type.md",
       "title": "타입 안전성",
       "role": "module",
-      "workflows": ["default", "full", "commit"],
+      "workflows": [
+        "default",
+        "full",
+        "commit"
+      ],
       "requires": [],
-      "reads": ["tsconfig.json"],
+      "reads": [
+        "tsconfig.json"
+      ],
       "notes": "Judgment depends on compiler options; see the tsconfig table in the module."
     },
     {
@@ -166,13 +310,34 @@
       "path": "03-react-rules.md",
       "title": "React 규칙 위반",
       "role": "module",
-      "workflows": ["default", "full", "commit"],
+      "workflows": [
+        "default",
+        "full",
+        "commit"
+      ],
       "requires": [],
       "reactMin": "18",
       "partial": [
-        { "rules": ["03-8"], "requires": ["ssr"] },
-        { "rules": ["03-10"], "reactMin": "19" },
-        { "rules": ["03-1 use exception"], "reactMin": "19" }
+        {
+          "rules": [
+            "03-8"
+          ],
+          "requires": [
+            "ssr"
+          ]
+        },
+        {
+          "rules": [
+            "03-10"
+          ],
+          "reactMin": "19"
+        },
+        {
+          "rules": [
+            "03-1 use exception"
+          ],
+          "reactMin": "19"
+        }
       ]
     },
     {
@@ -180,40 +345,195 @@
       "path": "04-state.md",
       "title": "상태 관리 & 사이드이펙트",
       "role": "module",
-      "workflows": ["default", "full", "commit"],
+      "workflows": [
+        "default",
+        "full",
+        "commit"
+      ],
       "requires": [],
-      "partial": [{ "rules": ["04-9"], "requires": ["tanstack-query"] }]
+      "partial": [
+        {
+          "rules": [
+            "04-9"
+          ],
+          "requires": [
+            "tanstack-query"
+          ]
+        }
+      ]
     },
-    { "id": "05", "path": "05-structure.md", "title": "함수 & 컴포넌트 구조", "role": "module", "workflows": ["default", "full", "commit"], "requires": [] },
-    { "id": "06", "path": "06-jsx.md", "title": "JSX", "role": "module", "workflows": ["default", "full", "commit"], "requires": [] },
-    { "id": "07", "path": "07-naming.md", "title": "네이밍 & 주석", "role": "module", "workflows": ["default", "full", "commit"], "requires": [] },
-    { "id": "08", "path": "08-constants.md", "title": "상수 & 매직값", "role": "module", "workflows": ["default", "full", "commit"], "requires": [] },
-    { "id": "09", "path": "09-code-quality.md", "title": "코드 품질", "role": "module", "workflows": ["default", "full", "commit"], "requires": [] },
-    { "id": "10", "path": "10-principles.md", "title": "개발 원칙", "role": "module", "workflows": ["default", "full", "commit"], "requires": [], "idFormat": "10-{abbrev}" },
-    { "id": "11", "path": "11-styling.md", "title": "스타일링", "role": "module", "workflows": ["default", "full", "commit"], "requires": ["tailwind"] },
-    { "id": "12", "path": "12-accessibility.md", "title": "접근성", "role": "module", "workflows": ["default", "full", "commit"], "requires": [] },
-    { "id": "13", "path": "13-dx.md", "title": "DX", "role": "module", "workflows": ["default", "full", "commit"], "requires": [] },
+    {
+      "id": "05",
+      "path": "05-structure.md",
+      "title": "함수 & 컴포넌트 구조",
+      "role": "module",
+      "workflows": [
+        "default",
+        "full",
+        "commit"
+      ],
+      "requires": []
+    },
+    {
+      "id": "06",
+      "path": "06-jsx.md",
+      "title": "JSX",
+      "role": "module",
+      "workflows": [
+        "default",
+        "full",
+        "commit"
+      ],
+      "requires": []
+    },
+    {
+      "id": "07",
+      "path": "07-naming.md",
+      "title": "네이밍 & 주석",
+      "role": "module",
+      "workflows": [
+        "default",
+        "full",
+        "commit"
+      ],
+      "requires": []
+    },
+    {
+      "id": "08",
+      "path": "08-constants.md",
+      "title": "상수 & 매직값",
+      "role": "module",
+      "workflows": [
+        "default",
+        "full",
+        "commit"
+      ],
+      "requires": []
+    },
+    {
+      "id": "09",
+      "path": "09-code-quality.md",
+      "title": "코드 품질",
+      "role": "module",
+      "workflows": [
+        "default",
+        "full",
+        "commit"
+      ],
+      "requires": []
+    },
+    {
+      "id": "10",
+      "path": "10-principles.md",
+      "title": "개발 원칙",
+      "role": "module",
+      "workflows": [
+        "default",
+        "full",
+        "commit"
+      ],
+      "requires": [],
+      "idFormat": "10-{abbrev}",
+      "phaseByWorkflow": {
+        "default": "consolidated",
+        "commit": "consolidated",
+        "full": "post-verification-synthesis"
+      }
+    },
+    {
+      "id": "11",
+      "path": "11-styling.md",
+      "title": "스타일링",
+      "role": "module",
+      "workflows": [
+        "default",
+        "full",
+        "commit"
+      ],
+      "requires": [
+        "tailwind"
+      ]
+    },
+    {
+      "id": "12",
+      "path": "12-accessibility.md",
+      "title": "접근성",
+      "role": "module",
+      "workflows": [
+        "default",
+        "full",
+        "commit"
+      ],
+      "requires": []
+    },
+    {
+      "id": "13",
+      "path": "13-dx.md",
+      "title": "DX",
+      "role": "module",
+      "workflows": [
+        "default",
+        "full",
+        "commit"
+      ],
+      "requires": []
+    },
     {
       "id": "14",
       "path": "14-react-performance.md",
       "title": "React 성능",
       "role": "module",
-      "workflows": ["default", "full", "commit"],
+      "workflows": [
+        "default",
+        "full",
+        "commit"
+      ],
       "requires": [],
       "reactMin": "18",
       "trigger": "List/table rendering, route or large import added, heavy computation on input, media/3D assets, new global subscription."
     },
-    { "id": "15", "path": "15-performance.md", "title": "알고리즘 복잡도", "role": "module", "workflows": ["default", "full", "commit"], "requires": [] },
+    {
+      "id": "15",
+      "path": "15-performance.md",
+      "title": "알고리즘 복잡도",
+      "role": "module",
+      "workflows": [
+        "default",
+        "full",
+        "commit"
+      ],
+      "requires": []
+    },
     {
       "id": "16",
       "path": "16-api-contract.md",
       "title": "API 계약 호환성",
       "role": "module",
-      "workflows": ["default", "full", "commit"],
+      "workflows": [
+        "default",
+        "full",
+        "commit"
+      ],
       "requires": [],
       "partial": [
-        { "rules": ["16-5", "16-6", "16-7"], "requires": ["contract-provider"] },
-        { "rules": ["16-3"], "requires": ["tanstack-query"] }
+        {
+          "rules": [
+            "16-5",
+            "16-6",
+            "16-7"
+          ],
+          "requires": [
+            "contract-provider"
+          ]
+        },
+        {
+          "rules": [
+            "16-3"
+          ],
+          "requires": [
+            "tanstack-query"
+          ]
+        }
       ]
     },
     {
@@ -221,17 +541,123 @@
       "path": "17-concurrency.md",
       "title": "동시성 & 멱등성",
       "role": "module",
-      "workflows": ["default", "full", "commit"],
+      "workflows": [
+        "default",
+        "full",
+        "commit"
+      ],
       "requires": [],
-      "partial": [{ "rules": ["17-5", "17-6", "17-7"], "requires": ["server-code"] }]
+      "partial": [
+        {
+          "rules": [
+            "17-5",
+            "17-6",
+            "17-7"
+          ],
+          "requires": [
+            "server-code"
+          ]
+        }
+      ]
     },
-    { "id": "18", "path": "18-dangerous-change.md", "title": "위험 변경", "role": "module", "workflows": ["default", "full", "commit"], "requires": [] },
-    { "id": "19", "path": "19-intent.md", "title": "의도 & 선택 근거", "role": "module", "workflows": ["default", "full", "commit"], "requires": [] },
-    { "id": "20", "path": "20-deletion-regression.md", "title": "삭제 회귀", "role": "module", "workflows": ["default", "full", "commit"], "requires": [] },
-    { "id": "21", "path": "21-rsc.md", "title": "RSC & Server/Client 경계", "role": "module", "workflows": ["default", "full", "commit"], "requires": ["rsc"] },
-    { "id": "fast", "path": "fast.md", "title": "Fast 압축본", "role": "digest", "workflows": ["fast"], "requires": [], "notes": "Hand-maintained compression of the numbered modules. Severity, applicability, and exception clauses must match the source." },
-    { "id": "props", "path": "props.md", "title": "Props 전달 구조", "role": "specialist", "workflows": ["full", "props"], "requires": [], "idFormat": "P-{n}" },
-    { "id": "math", "path": "math.md", "title": "선형대수 / 행렬", "role": "specialist", "workflows": ["full", "math"], "requires": ["three"], "idFormat": "A-{n} / C-{n}" },
-    { "id": "exception", "path": "exception.md", "title": "예외 처리", "role": "specialist", "workflows": ["full", "exception"], "requires": [], "idFormat": "EX-{n}" }
+    {
+      "id": "18",
+      "path": "18-dangerous-change.md",
+      "title": "위험 변경",
+      "role": "module",
+      "workflows": [
+        "default",
+        "full",
+        "commit"
+      ],
+      "requires": []
+    },
+    {
+      "id": "19",
+      "path": "19-intent.md",
+      "title": "의도 & 선택 근거",
+      "role": "module",
+      "workflows": [
+        "default",
+        "full",
+        "commit"
+      ],
+      "requires": []
+    },
+    {
+      "id": "20",
+      "path": "20-deletion-regression.md",
+      "title": "삭제 회귀",
+      "role": "module",
+      "workflows": [
+        "default",
+        "full",
+        "commit"
+      ],
+      "requires": []
+    },
+    {
+      "id": "21",
+      "path": "21-rsc.md",
+      "title": "RSC & Server/Client 경계",
+      "role": "module",
+      "workflows": [
+        "default",
+        "full",
+        "commit"
+      ],
+      "requires": [
+        "rsc"
+      ]
+    },
+    {
+      "id": "fast",
+      "path": "fast.md",
+      "title": "Fast 압축본",
+      "role": "digest",
+      "workflows": [
+        "fast"
+      ],
+      "requires": [],
+      "notes": "Hand-maintained compression of the numbered modules. Severity, applicability, and exception clauses must match the source."
+    },
+    {
+      "id": "props",
+      "path": "props.md",
+      "title": "Props 전달 구조",
+      "role": "specialist",
+      "workflows": [
+        "full",
+        "props"
+      ],
+      "requires": [],
+      "idFormat": "P-{n}"
+    },
+    {
+      "id": "math",
+      "path": "math.md",
+      "title": "선형대수 / 행렬",
+      "role": "specialist",
+      "workflows": [
+        "full",
+        "math"
+      ],
+      "requires": [
+        "three"
+      ],
+      "idFormat": "A-{n} / C-{n}"
+    },
+    {
+      "id": "exception",
+      "path": "exception.md",
+      "title": "예외 처리",
+      "role": "specialist",
+      "workflows": [
+        "full",
+        "exception"
+      ],
+      "requires": [],
+      "idFormat": "EX-{n}"
+    }
   ]
 }

@@ -1250,6 +1250,233 @@ function validateContractManifestAndFixtures() {
   if (!sameMembers([...coverage.categoryCoverage], categoryEnum)) failCode('fixtures', 'E_FIXTURE_COVERAGE_CATEGORY_ENUM', 'fixture set must exercise every manifest category ID at least once through valid findings')
 }
 
+// ---------------------------------------------------------- verdict contract
+
+let VERDICT_MANIFEST_CACHE = null
+
+function getVerdictManifest() {
+  if (VERDICT_MANIFEST_CACHE) return VERDICT_MANIFEST_CACHE
+  const workflowContract = rulesFile('workflow-contract.md')
+  const block = extractMarkedBlock(workflowContract, 'REVIEW_VERDICT_CONTRACT_V1', 'verdict-contract', 'E_VERDICT_MANIFEST_BLOCK_COUNT')
+  if (!block) return null
+  const manifest = parseJsonCodeBlock(block, 'REVIEW_VERDICT_CONTRACT_V1', 'verdict-contract', 'E_VERDICT_MANIFEST_JSON')
+  if (!manifest) return null
+  VERDICT_MANIFEST_CACHE = manifest
+  return VERDICT_MANIFEST_CACHE
+}
+
+function validateRebuttal(rebuttal, manifest, errors, where) {
+  if (!validatePlainObject(rebuttal, errors, 'E_REBUTTAL_NOT_OBJECT', where)) return
+  const spec = manifest.rebuttal ?? {}
+  validateUnknownKeys(rebuttal, manifestAllowedSet(spec.allowed), errors, 'E_REBUTTAL_UNKNOWN_KEY', where, new Set(['severity']))
+  const kindEnum = spec.kindEnum ?? []
+  if (typeof rebuttal.kind !== 'string' || !kindEnum.includes(rebuttal.kind)) {
+    addError(errors, 'E_REBUTTAL_UNKNOWN_KIND', `${where}.kind must be one of ${kindEnum.join(', ')}`)
+    return
+  }
+  const requiredByKind = spec.kindRequires?.[rebuttal.kind]
+  if (requiredByKind === 'note') validateRequiredString(rebuttal, 'note', errors, 'E_REBUTTAL_OTHER_REQUIRES_NOTE', where)
+  const locationOptional = (spec.locationOptionalKinds ?? []).includes(rebuttal.kind)
+  if (!hasOwn(rebuttal, 'location')) {
+    if (!locationOptional) addError(errors, 'E_REBUTTAL_REQUIRES_LOCATION', `${where}.location is required unless kind is ${(spec.locationOptionalKinds ?? []).join(', ')}`)
+    return
+  }
+  const allowedVariants = spec.locationVariants ?? []
+  if (rebuttal.location && typeof rebuttal.location === 'object' && typeof rebuttal.location.kind === 'string' && !allowedVariants.includes(rebuttal.location.kind)) {
+    addError(errors, 'E_REBUTTAL_LOCATION_FORBIDS_UNVERIFIED', `${where}.location.kind must be one of ${allowedVariants.join(', ')} — an unverified rebuttal cannot delete a finding`)
+    return
+  }
+  validateLocation(rebuttal.location, errors, `${where}.location`)
+}
+
+function validateVerdictItem(item, manifest, errors, where) {
+  if (!validatePlainObject(item, errors, 'E_VERDICT_ITEM_NOT_OBJECT', where)) return
+  const spec = manifest.verdictsItem ?? {}
+  validateUnknownKeys(item, manifestAllowedSet(spec.allowed), errors, 'E_VERDICT_ITEM_UNKNOWN_KEY', where, new Set(['severity']))
+  validateRequiredString(item, 'candidateId', errors, 'E_VERDICT_ITEM_REQUIRES_CANDIDATE_ID', where)
+  validateRequiredString(item, 'evidence', errors, 'E_VERDICT_ITEM_REQUIRES_EVIDENCE', where)
+
+  const dispositionEnum = manifest.disposition?.enum ?? []
+  if (typeof item.disposition !== 'string' || !dispositionEnum.includes(item.disposition)) {
+    addError(errors, 'E_VERDICT_UNKNOWN_DISPOSITION', `${where}.disposition must be one of ${dispositionEnum.join(', ')}`)
+  } else {
+    const requiredField = manifest.disposition?.requires?.[item.disposition]
+    if (requiredField === 'rebuttal' && !hasOwn(item, 'rebuttal')) {
+      addError(errors, 'E_VERDICT_REJECTED_REQUIRES_REBUTTAL', `${where}.rebuttal is required when disposition is rejected`)
+    }
+    if (requiredField === 'reason') validateRequiredString(item, 'reason', errors, 'E_VERDICT_NEEDS_CONTEXT_REQUIRES_REASON', where)
+  }
+
+  if (hasOwn(item, 'rebuttal')) validateRebuttal(item.rebuttal, manifest, errors, `${where}.rebuttal`)
+  if (hasOwn(item, 'usedCrossFileContext') && typeof item.usedCrossFileContext !== 'boolean') {
+    addError(errors, 'E_VERDICT_USED_CROSS_FILE_CONTEXT_INVALID', `${where}.usedCrossFileContext must be a boolean`)
+  }
+  const axisEnum = manifest.observedAxes?.enum ?? []
+  if (hasOwn(item, 'observedImpact') && !axisEnum.includes(item.observedImpact)) {
+    addError(errors, 'E_VERDICT_OBSERVED_IMPACT_INVALID', `${where}.observedImpact must be one of ${axisEnum.join(', ')}`)
+  }
+  if (hasOwn(item, 'observedConfidence') && !axisEnum.includes(item.observedConfidence)) {
+    addError(errors, 'E_VERDICT_OBSERVED_CONFIDENCE_INVALID', `${where}.observedConfidence must be one of ${axisEnum.join(', ')}`)
+  }
+  if (hasOwn(item, 'location')) validateLocation(item.location, errors, `${where}.location`)
+  else addError(errors, 'E_VERDICT_ITEM_REQUIRES_LOCATION', `${where}.location is required`)
+}
+
+function validateReviewVerdictContract(value) {
+  const errors = []
+  const manifest = getVerdictManifest()
+  if (!manifest) {
+    addError(errors, 'E_VERDICT_MANIFEST_MISSING', 'REVIEW_VERDICT_CONTRACT_V1 manifest is unavailable')
+    return errors
+  }
+  if (!validatePlainObject(value, errors, 'E_VERDICT_NOT_OBJECT', 'result')) return errors
+  scanForbiddenSeverity(value, errors, 'result')
+  validateUnknownKeys(value, manifestAllowedSet(manifest.topLevel?.allowed), errors, 'E_VERDICT_TOP_LEVEL_UNKNOWN_KEY', 'result', new Set(['severity']))
+  if (value.schemaVersion !== manifest.schemaVersion) {
+    addError(errors, 'E_VERDICT_SCHEMA_VERSION_INVALID', `result.schemaVersion must be ${manifest.schemaVersion}`)
+  }
+  if (!Array.isArray(value.verdicts)) {
+    addError(errors, 'E_VERDICT_TOP_LEVEL_REQUIRES_VERDICTS', 'result.verdicts must always be an array')
+    return errors
+  }
+  value.verdicts.forEach((item, index) => validateVerdictItem(item, manifest, errors, `result.verdicts[${index}]`))
+  return errors
+}
+
+function validateVerdictContractAndFixtures() {
+  const fixtureRoot = join(ROOT, 'tests', 'review-verdict-contract')
+  if (!existsSync(fixtureRoot)) {
+    failCode('verdict-fixtures', 'E_VERDICT_FIXTURE_DIR_MISSING', 'tests/review-verdict-contract is missing')
+    return
+  }
+  const fixtureFiles = walkFiles(fixtureRoot).filter(path => path.endsWith('.json'))
+  if (fixtureFiles.length === 0) {
+    failCode('verdict-fixtures', 'E_VERDICT_FIXTURE_FILES_MISSING', 'tests/review-verdict-contract must contain JSON fixtures')
+  }
+  for (const path of fixtureFiles) {
+    const where = path.slice(ROOT.length + 1)
+    let payload
+    try {
+      payload = JSON.parse(read(path))
+    } catch (error) {
+      failCode('verdict-fixtures', 'E_VERDICT_FIXTURE_INVALID_JSON', `${where} is not valid JSON: ${error.message}`)
+      continue
+    }
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+      failCode('verdict-fixtures', 'E_VERDICT_FIXTURE_INVALID_SHAPE', `${where} must contain an object fixture envelope`)
+      continue
+    }
+    const errors = validateReviewVerdictContract(payload.input)
+    const actualCodes = [...new Set(errors.map(error => error.code))].sort()
+    const expectedCodes = [...new Set(payload.expectedErrorCodes ?? [])].sort()
+    if (payload.expected === 'valid') {
+      if (errors.length > 0) failCode('verdict-fixtures', 'E_VERDICT_FIXTURE_EXPECTED_VALID', `${where} should be valid but failed with ${actualCodes.join(', ')}`)
+    } else if (payload.expected === 'invalid') {
+      if (errors.length === 0) failCode('verdict-fixtures', 'E_VERDICT_FIXTURE_EXPECTED_INVALID', `${where} should be invalid but passed`)
+      else if (actualCodes.join('|') !== expectedCodes.join('|')) {
+        failCode('verdict-fixtures', 'E_VERDICT_FIXTURE_ERROR_CODES', `${where} expected error codes [${expectedCodes.join(', ')}] but got [${actualCodes.join(', ')}]`)
+      }
+    } else {
+      failCode('verdict-fixtures', 'E_VERDICT_FIXTURE_EXPECTED_FIELD', `${where} must declare expected as valid or invalid`)
+    }
+  }
+}
+
+validateVerdictContractAndFixtures()
+
+function validateVerdictOwnerSync() {
+  const manifest = getVerdictManifest()
+  if (!manifest) return
+
+  // A contract nobody injects drifts silently. The owner skill must carry the runtime
+  // placeholder, the same way the structured-result owners carry theirs.
+  const OWNER = 'skills/code-review-full/SKILL.md'
+  const ownerPath = join(ROOT, OWNER)
+  if (!existsSync(ownerPath)) {
+    failCode('verdict-contract', 'E_VERDICT_OWNER_MISSING', `${OWNER} is missing`)
+    return
+  }
+  const owner = read(ownerPath)
+  if (!owner.includes('REVIEW_VERDICT_CONTRACT_V1_MANIFEST')) {
+    failCode('verdict-contract', 'E_VERDICT_OWNER_NO_MANIFEST_INJECTION', `${OWNER} must inject REVIEW_VERDICT_CONTRACT_V1_MANIFEST — a verdict contract with no producer instruction cannot be reached at runtime`)
+  }
+
+  // The closed lists live in the manifest. If the owner restates them they can drift apart,
+  // so require that every disposition and rebuttal kind the owner names actually exists.
+  const dispositions = manifest.disposition?.enum ?? []
+  const kinds = manifest.rebuttal?.kindEnum ?? []
+  const quoted = [...owner.matchAll(/`([a-z][a-z-]{2,})`/g)].map(m => m[1])
+  const DISPOSITION_SHAPED = new Set(['upheld', 'rejected', 'needs-context', 'verification-unavailable', 'verification-disabled', 'not-eligible', 'scope-open'])
+  for (const token of new Set(quoted)) {
+    if (!DISPOSITION_SHAPED.has(token)) continue
+    if (dispositions.includes(token)) continue
+    if (['verification-unavailable', 'verification-disabled', 'not-eligible', 'scope-open'].includes(token)) continue
+    failCode('verdict-contract', 'E_VERDICT_OWNER_UNKNOWN_DISPOSITION', `${OWNER} names disposition "${token}" which is not in the manifest enum`)
+  }
+  for (const token of new Set(quoted)) {
+    if (!token.includes('-')) continue
+    if (!/^(guard|idempotent|unreachable|contract-differs|location-wrong)/.test(token)) continue
+    if (kinds.includes(token)) continue
+    failCode('verdict-contract', 'E_VERDICT_OWNER_UNKNOWN_REBUTTAL_KIND', `${OWNER} names rebuttal kind "${token}" which is not in the manifest kindEnum`)
+  }
+}
+
+validateVerdictOwnerSync()
+
+function validateClauseReferences() {
+  const contract = rulesFile('workflow-contract.md')
+  const defined = new Set([...contract.matchAll(/^## (C-\d+[A-Z]?)\./gm)].map(m => m[1]))
+  if (defined.size === 0) return
+  const sources = [
+    ...skillDirs.map(dir => [`skills/${dir}/SKILL.md`, read(join(SKILLS, dir, 'SKILL.md'))]),
+    ['review-rules/workflow-contract.md', contract],
+  ]
+  for (const [where, text] of sources) {
+    for (const match of text.matchAll(/(?<![\w-])(C-\d+[A-Z]?)(?![\w-])/g)) {
+      const clause = match[1]
+      if (defined.has(clause)) continue
+      failCode('clause-refs', 'E_UNKNOWN_CONTRACT_CLAUSE', `${where} references ${clause}, which workflow-contract.md does not define`)
+    }
+  }
+}
+
+validateClauseReferences()
+
+const KNOWN_MODULE_PHASES = new Set(['consolidated', 'module', 'post-verification-synthesis'])
+
+function validatePhaseByWorkflow() {
+  let catalog
+  try {
+    catalog = JSON.parse(rulesFile('catalog.json'))
+  } catch {
+    return
+  }
+  const contract = rulesFile('workflow-contract.md')
+  const modules = Object.values(catalog.modules ?? {})
+  for (const module of modules) {
+    const phases = module.phaseByWorkflow
+    if (!phases) continue
+    const declared = new Set(module.workflows ?? [])
+    for (const [workflow, phase] of Object.entries(phases)) {
+      if (!declared.has(workflow)) {
+        failCode('catalog', 'E_PHASE_WORKFLOW_NOT_DECLARED', `module ${module.id} declares phaseByWorkflow.${workflow} but ${workflow} is not in its workflows list`)
+      }
+      if (!KNOWN_MODULE_PHASES.has(phase)) {
+        failCode('catalog', 'E_PHASE_UNKNOWN', `module ${module.id} declares unknown phase "${phase}" for ${workflow}`)
+      }
+      if (phase === 'module' || phase === 'consolidated') continue
+      // A module scheduled out of the normal fan-out changes the module count. If C-2 does
+      // not say so, the orchestrator reads the gap as a missing module and fails the run.
+      const mentionsModule = contract.includes('`' + module.id + '`')
+      if (!contract.includes(phase) || !mentionsModule) {
+        failCode('catalog', 'E_PHASE_NOT_IN_C2', `module ${module.id} is scheduled as "${phase}" for ${workflow}, but workflow-contract.md C-2 does not declare it — the module count would silently disagree`)
+      }
+    }
+  }
+}
+
+validatePhaseByWorkflow()
+
 // ------------------------------------------------------- workflow fixtures
 
 {

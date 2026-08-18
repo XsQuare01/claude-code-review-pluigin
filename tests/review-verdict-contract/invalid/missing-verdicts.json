@@ -1,0 +1,10 @@
+{
+  "name": "missing-verdicts",
+  "expected": "invalid",
+  "expectedErrorCodes": [
+    "E_VERDICT_TOP_LEVEL_REQUIRES_VERDICTS"
+  ],
+  "input": {
+    "schemaVersion": 1
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "name": "needs-context-with-reason",
+  "expected": "valid",
+  "input": {
+    "schemaVersion": 1,
+    "verdicts": [
+      {
+        "candidateId": "EX-4#1",
+        "disposition": "needs-context",
+        "evidence": "order.ts 안에서는 재시도가 어디서 멈추는지 닫아 말할 수 없었습니다.",
+        "reason": "idempotency key가 서버 쪽에 있는지 확인하려면 이 파일 밖을 봐야 합니다.",
+        "location": {
+          "kind": "verified",
+          "path": "src/api/order.ts",
+          "line": 31,
+          "quote": "return retry(() => post(url, body))"
+        }
+      }
+    ]
+  }
+}

@@ -13,10 +13,10 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
-      - name: Run effective common-context regression tests
-        run: node --test tests/effective-common-context-validator.test.mjs
       - name: Validate rule consistency
         run: node scripts/validate-rules.mjs
+      - name: Run unit tests
+        run: node --test tests/*.test.mjs
 
   version:
     if: github.event_name == 'pull_request'

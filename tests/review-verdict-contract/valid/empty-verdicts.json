@@ -1,0 +1,8 @@
+{
+  "name": "empty-verdicts",
+  "expected": "valid",
+  "input": {
+    "schemaVersion": 1,
+    "verdicts": []
+  }
+}

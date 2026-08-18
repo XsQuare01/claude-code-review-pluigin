@@ -1,0 +1,26 @@
+{
+  "name": "rebuttal-other-missing-note",
+  "expected": "invalid",
+  "expectedErrorCodes": [
+    "E_REBUTTAL_OTHER_REQUIRES_NOTE"
+  ],
+  "input": {
+    "schemaVersion": 1,
+    "verdicts": [
+      {
+        "candidateId": "16-2#1",
+        "disposition": "rejected",
+        "evidence": "계약 표면을 읽었지만 다섯 범주 중 어디에도 맞지 않았습니다.",
+        "rebuttal": {
+          "kind": "other"
+        },
+        "location": {
+          "kind": "verified",
+          "path": "src/api/contract.ts",
+          "line": 22,
+          "quote": "export type OrderResponse = z.infer<typeof orderSchema>"
+        }
+      }
+    ]
+  }
+}
