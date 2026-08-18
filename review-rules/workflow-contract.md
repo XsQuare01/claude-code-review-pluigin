@@ -766,6 +766,38 @@ finding 헤딩 **바로 다음 줄**에 영향도와 확신도를 적는다. `00
 개선 제안: 계산을 상위에서 memoize하거나 필요 시 데이터 shape를 안정화하세요.
 ```
 
+### 교차검증 표기
+
+교차검증을 수행하는 워크플로우는 두 축 줄에 축을 하나 더 붙인다.
+
+```
+#### 🔴 `17-3` close 중 pending Start가 target을 되살림
+영향: 높음 (사용자에게 보이는 오동작) · 확신: 높음 · 교차검증: `유지`
+```
+
+**값은 아래 목록으로 고정한다.** producer가 내는 `disposition` 값(`upheld`, `rejected`, `needs-context`)을 공개 리포트에 그대로 쓰지 않는다 — 그것은 내부 인터페이스 값이고, 공개 표기는 renderer 책임이다 (C-6A).
+
+<!-- CROSS_VERIFICATION_RENDER_TOKENS:BEGIN -->
+```json
+{
+  "label": "교차검증",
+  "tokens": {
+    "upheld": "유지",
+    "rejected-shadow": "반박됨 — 관찰 중",
+    "rejected-other": "반박 시도 — 분류 밖",
+    "scope-open": "범위 미확정",
+    "verification-unavailable": "검증 실패",
+    "not-eligible": "대상 아님",
+    "verification-disabled": "꺼짐"
+  }
+}
+```
+<!-- CROSS_VERIFICATION_RENDER_TOKENS:END -->
+
+- `rejected`는 `active-deletion` phase에서 active 리포트에 나타나지 않으므로 표기 대상이 아니다. `rollout-shadow`에서만 `반박됨 — 관찰 중`으로 나타난다 (C-6B)
+- **검증 대상이 아니었던 finding에도 `대상 아님`을 적는다.** 축을 비워두면 "검증했는데 결과가 없음"과 "검증 대상이 아님"이 구분되지 않는다
+- 반박 사실을 heading에 접미사로 덧붙이지 않는다. 상태는 축 줄 한 곳에서만 표현한다
+
 `location.kind = "unverified"` 인 finding은 같은 자리에서 위치 줄 대신 `위치 미확인 사유: …`를 렌더링한다. `openQuestions`는 `미해결 / 후속 확인` 섹션에서 `추가 확인 이유: …` label을 쓴다. 둘 다 `reason` field를 사용하지만 slot 의미는 다르다.
 
 - 판정 기준은 `00-rule.md`의 **Severity 기준**을 따른다. 여기에 복제하지 않는다

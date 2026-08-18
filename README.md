@@ -264,7 +264,7 @@ It does not re-review the same diff with the same rules. Two agents given the sa
 | `exhaustive` | Every candidate is verified. Writes a `VerificationAuditSidecar` next to the report |
 | `off` | Location checking still runs; no verifier agents are spawned |
 
-**Location checking and eligibility are decided by `scripts/prepare-verification.mjs`, not by a model.** Comparing a finding's quoted line against the file it claims to come from is a mechanical check, and describing it in Markdown would not make it deterministic. Line endings are normalized and the ends are trimmed, but internal whitespace is preserved — collapsing it would make `"x  y"` and `"x y"` compare equal, which is the exact class of difference the check exists to catch.
+**Location checking and eligibility are decided by `scripts/prepare-verification.mjs`, not by a model.** The orchestrator runs it — `node scripts/prepare-verification.mjs --merge-base <sha>` reads candidates on stdin and returns each one's location check, eligibility and route along with the coverage counts, so the numbers in the report are derived rather than tallied by hand. Comparing a finding's quoted line against the file it claims to come from is a mechanical check, and describing it in Markdown would not make it deterministic. Line endings are normalized and the ends are trimmed, but internal whitespace is preserved — collapsing it would make `"x  y"` and `"x y"` compare equal, which is the exact class of difference the check exists to catch.
 
 **A refuted finding is not deleted yet.** Removing a finding from the report cannot be undone, and when the refutation is wrong the report simply looks cleaner — the failure is invisible. So deletion starts in `rollout-shadow`, where a refuted finding stays visible, keeps its severity, and **still blocks the merge**. Moving to `active-deletion` requires measured suppression accuracy rather than elapsed time, and `high` and `low` impact are promoted independently.
 
@@ -391,6 +391,7 @@ It checks the properties this repo promises but cannot hold by hand:
 | `verdict-fixtures` | a cross-verification verdict fixture whose expected error codes drifted from the validator |
 | `verdict-contract` | a verdict contract that no skill injects, or an owner naming a disposition or rebuttal kind the manifest does not define |
 | `clause-refs` | a skill pointing at a `C-` contract clause that `workflow-contract.md` does not define |
+| `render-tokens` | a report rendering a cross-verification status the contract never declared, which is how producer enums leak into public output |
 | `catalog` | a module scheduled out of the normal fan-out in `catalog.json` without the matching declaration in C-2, or without the workflow's own skill excluding it — either gap makes the module run twice or count as missing |
 | `fixtures` | two workflow-contract scenarios sharing an id, which makes a regression impossible to attribute |
 | `fast-sync` | a missing digest section, a conditional rule whose applicability, exception, or typical impact calibration was lost in compression, a stale module range |
