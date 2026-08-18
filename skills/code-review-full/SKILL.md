@@ -71,6 +71,8 @@ Trigger 섹션이 있는 모듈(`12`, `14`, `16`, `17`, `18`, `21`)은 diff에 �
   **왜 4인가** — 이 값은 실측으로 정한 것이지 임의로 고른 것이 아니다. 처음에는 2였고, 그때는 모듈 하나가 2~5분씩 걸려 동시에 많이 띄우면 timeout과 큐 포화 위험이 컸다. 디스패치 전 준비(3a)로 각 에이전트가 diff와 프로파일을 다시 조사하지 않게 된 뒤 모듈당 평균 약 71초로 내려갔고(20개 모듈 실측, 합 23분 33초), 개별 에이전트가 짧아진 만큼 동시에 띄워도 한 세션이 오래 붙잡히지 않는다.
 
   **되돌리는 조건** — timeout, inactivity timeout, queue expiry가 한 실행에서 두 건 이상 나오면 4가 이 런타임에 과했다는 신호다. 2로 내리고, 어떤 실패 클래스가 몇 번 나왔는지 기록한다. 실패 없이 느리기만 한 것은 되돌릴 근거가 아니다.
+
+  **관측 (2026-08-18, 교차검증 패스 도입 후 첫 실행)** — 이 조건이 실제로 발동했다. 한 실행에서 skill-injection validation 4건, inactivity timeout 4건, task-not-found 4건이 나와 in-flight를 4에서 2로 내렸고, fresh retry 1회로 전부 회복해 적용 모듈 19개를 모두 수집했다. **되돌리기 장치는 설계대로 동작했다.** 다만 관측이 1회뿐이므로 기본값 4는 그대로 둔다 — 71초/모듈 실측으로 정한 값을 표본 하나로 뒤집지 않는다. 같은 발동이 반복되면 그때 기본값을 다시 본다.
 - **배리어를 두지 않는다.** 어느 한 모듈이 terminal 상태(`COMPLETED` 또는 `FAILED_ORCHESTRATION`)가 되면 **즉시** 다음 대기 모듈을 그 슬롯에 넣는다. 두 모듈이 모두 끝나기를 기다리지 않는다 — 기다리면 빨리 끝난 슬롯이 느린 모듈이 끝날 때까지 놀고, 그 유휴 시간이 모듈 수만큼 누적된다.
 - 대기열 순서는 모듈 번호 순으로 하되, 순서 자체가 정확성 요건은 아니다. 결과는 리포팅 시점에 모듈 번호로 정렬한다.
 
@@ -194,7 +196,16 @@ instanceId 부여
   → rendering
 ```
 
-**위치 대조와 eligibility는 모델이 아니라 `scripts/prepare-verification.mjs`가 판정한다.** Markdown 지시로는 결정성을 주장할 수 없다. 오케스트레이터는 그 모듈의 출력을 입력으로 받는다.
+**위치 대조와 eligibility는 모델이 아니라 `scripts/prepare-verification.mjs`가 판정한다.** Markdown 지시로는 결정성을 주장할 수 없다. **판단으로 대체하지 말고 실제로 실행한다.**
+
+```bash
+echo '{"candidates":[…]}' | node "$RULES_DIR/../scripts/prepare-verification.mjs" --merge-base "$MERGE_BASE"
+```
+
+- 입력 `candidates[]`의 각 항목은 `candidateId`, `ruleId`, `impact`, `confidence`, `category`(있을 때), `location`을 담는다
+- 출력은 candidate별 `locationCheck`·`eligibility`·`route`와 `bundles`, 그리고 `counts`다
+- **coverage 숫자는 이 `counts`를 그대로 옮긴다.** 직접 세지 않는다 — 손으로 센 수치는 `verify + skipVerify = total`을 깨뜨린다
+- 플러그인으로 설치된 경우 스크립트는 `RULES_DIR`의 상위에 있다. 경로를 찾지 못하면 그 사실을 `실행 계획`에 적고, **결정적으로 판정했다고 서술하지 않는다**
 
 ### `--verify` 모드
 
@@ -223,6 +234,7 @@ bundle verifier와 isolated verifier는 **같은 prompt 계약**을 쓴다. 단�
 > `severity`는 어떤 depth에도 넣지 마세요. 등급은 판정하지 않습니다.
 > `disposition`이 `rejected`면 `rebuttal`이 필수입니다. 무엇이 이 주장을 막는지와 **그 코드의 위치**를 대세요. 위치를 댈 수 없으면 반박이 아니라 의견이며, 그때는 `rebuttal.kind`를 `other`로 두고 `note`에 사유를 적으세요.
 > `rebuttal.location`은 `verified` 또는 `deleted`만 허용합니다. `unverified`는 허용하지 않습니다.
+> location은 두 형태뿐입니다. `verified`는 `path`·`line`·`quote`(선택 `endLine`)를 HEAD 기준으로, `deleted`는 `path`·`lineBefore`·`quote`(선택 `endLine`)를 merge-base 기준으로 씁니다. `line`과 `lineBefore`를 섞지 말고, 허용되지 않은 key를 넣지 마세요.
 > 이 파일 안에서 닫아 말할 수 없으면 `needs-context`와 `reason`을 쓰세요.
 > isolated verifier는 anchor file 밖을 실제로 봐야 했는지 `usedCrossFileContext`로 보고하세요. 판정에는 영향을 주지 않는 지표 전용 필드입니다.
 
@@ -231,6 +243,8 @@ bundle verifier와 isolated verifier는 **같은 prompt 계약**을 쓴다. 단�
 `disposition`은 verifier가 반환하고, `not-eligible`·`verification-disabled`·`verification-unavailable`은 **오케스트레이터가 부여**한다. verifier는 자기 부재를 보고할 수 없다.
 
 상태별 active/synthesis/차단 처리는 `workflow-contract.md` C-6B 상태표가 정본이다. 이 문서에서 다시 정의하지 않는다.
+
+**공개 리포트의 `교차검증:` 표기 값은 C-7의 `CROSS_VERIFICATION_RENDER_TOKENS`가 정본이다.** `upheld`·`rejected` 같은 producer enum을 리포트에 그대로 쓰지 않고, 검증 대상이 아니었던 finding에도 `대상 아님`을 적는다. 반박 사실을 heading 접미사로 덧붙이지 않는다 — 상태는 축 줄 한 곳에서만 표현한다.
 
 ### synthesis 단계 (`10-principles.md`)
 

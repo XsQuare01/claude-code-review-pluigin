@@ -1,3 +1,6 @@
+import { execFileSync } from 'node:child_process'
+import { pathToFileURL } from 'node:url'
+
 // Deterministic preparation for the cross-verification pass.
 //
 // Everything here runs without a sub-agent. The orchestrator calls it before
@@ -138,4 +141,103 @@ export function buildBundles(routed) {
     byPath.get(path).push(entry.candidateId)
   }
   return [...byPath.entries()].map(([anchorPath, candidateIds]) => ({ anchorPath, candidateIds }))
+}
+
+/**
+ * Run the whole deterministic preparation in one call and report counts alongside it.
+ *
+ * The counts exist so the report cannot claim a coverage split that does not add up:
+ * verify + skipVerify always equals total, and bundle + isolated always equals verify.
+ * Deriving them here rather than in prose is the point — a hand-written tally is exactly
+ * what drifted before.
+ */
+export function prepareVerification(candidates, blobs) {
+  const list = candidates ?? []
+  const collisions = computeOwnerCollisions(list)
+  const decided = list.map(candidate => {
+    const check = checkLocation(candidate.location, blobs)
+    const input = { candidate, locationCheck: check.status, ownerCollision: collisions.has(candidate.candidateId) }
+    const { eligibility, reasons } = decideEligibility(input)
+    const { route } = routeCandidate(input)
+    return {
+      candidateId: candidate.candidateId,
+      ruleId: candidate.ruleId,
+      locationCheck: check.status,
+      observed: check.observed ?? null,
+      ownerCollision: collisions.has(candidate.candidateId),
+      eligibility,
+      reasons,
+      route,
+      location: candidate.location,
+    }
+  })
+
+  const counts = {
+    total: decided.length,
+    verify: decided.filter(entry => entry.eligibility === 'VERIFY').length,
+    skipVerify: decided.filter(entry => entry.eligibility === 'SKIP-VERIFY').length,
+    bundle: decided.filter(entry => entry.route === 'bundle').length,
+    isolated: decided.filter(entry => entry.route === 'isolated').length,
+    locationMismatch: decided.filter(entry => entry.locationCheck === 'location-mismatch').length,
+    locationUnresolvable: decided.filter(entry => entry.locationCheck === 'location-unresolvable').length,
+  }
+
+  return { candidates: decided, bundles: buildBundles(decided), counts }
+}
+
+// ---------------------------------------------------------------------- CLI
+//
+//   node scripts/prepare-verification.mjs --merge-base <sha> < candidates.json
+//
+// stdin  : { "candidates": [ … ] }  (a bare array is accepted too)
+// stdout : { "candidates": [ … ], "bundles": [ … ], "counts": { … } }
+//
+// Blobs are read here rather than passed in, so the caller does not have to
+// serialize file contents and cannot accidentally supply the wrong revision.
+
+function readBlobs(candidates, mergeBase) {
+  const head = {}
+  const base = {}
+  const show = ref => {
+    try {
+      // A missing path is an expected outcome, not a problem to report on stderr.
+      return execFileSync('git', ['show', ref], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'] })
+    } catch {
+      return undefined
+    }
+  }
+  for (const candidate of candidates) {
+    const location = candidate?.location
+    const path = location?.path
+    if (typeof path !== 'string') continue
+    if (location.kind === 'deleted') {
+      if (!(path in base)) base[path] = show(`${mergeBase}:${path}`)
+    } else if (!(path in head)) {
+      head[path] = show(`HEAD:${path}`)
+    }
+  }
+  return { head, base }
+}
+
+async function main() {
+  const argv = process.argv.slice(2)
+  const mergeBaseIndex = argv.indexOf('--merge-base')
+  const mergeBase = mergeBaseIndex === -1 ? 'HEAD' : argv[mergeBaseIndex + 1]
+
+  let raw = ''
+  for await (const chunk of process.stdin) raw += chunk
+  let payload
+  try {
+    payload = JSON.parse(raw)
+  } catch (error) {
+    process.stderr.write(`stdin is not valid JSON: ${error.message}\n`)
+    process.exit(2)
+  }
+  const candidates = Array.isArray(payload) ? payload : (payload.candidates ?? [])
+  const result = prepareVerification(candidates, readBlobs(candidates, mergeBase))
+  process.stdout.write(`${JSON.stringify(result, null, 2)}\n`)
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  await main()
 }

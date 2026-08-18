@@ -8,6 +8,7 @@ import {
   decideEligibility,
   routeCandidate,
   buildBundles,
+  prepareVerification,
 } from '../scripts/prepare-verification.mjs'
 
 // ------------------------------------------------------------- normalization
@@ -187,4 +188,40 @@ test('a file with no bundle-routed candidate produces no bundle', () => {
     { candidateId: 'a', route: 'isolated', location: { kind: 'verified', path: 'src/x.ts', line: 1, quote: 'q' } },
   ])
   assert.deepEqual(bundles, [])
+})
+
+// ------------------------------------------------------- composed preparation
+
+test('prepareVerification reports counts that reconcile with the candidate total', () => {
+  const result = prepareVerification(
+    [
+      { candidateId: 'a', ruleId: '17-3', impact: 'high', confidence: 'high', category: 'user-malfunction', location: { kind: 'verified', path: 'src/hooks/use-camera.ts', line: 2, quote: 'if (pending) return' } },
+      { candidateId: 'b', ruleId: '05-4', impact: 'low', confidence: 'high', location: { kind: 'verified', path: 'src/hooks/use-camera.ts', line: 1, quote: 'const a = 1' } },
+      { candidateId: 'c', ruleId: '20-4', impact: 'low', confidence: 'low', location: { kind: 'deleted', path: 'src/features/chat/use-room.ts', lineBefore: 3, quote: 'return () => subscription.unsubscribe()' } },
+    ],
+    blobs,
+  )
+  assert.equal(result.counts.total, 3)
+  assert.equal(result.counts.verify + result.counts.skipVerify, result.counts.total)
+  assert.equal(result.counts.bundle + result.counts.isolated, result.counts.verify)
+})
+
+test('prepareVerification counts a settled low-impact candidate as skipped, not verified', () => {
+  const result = prepareVerification(
+    [{ candidateId: 'b', ruleId: '05-4', impact: 'low', confidence: 'high', location: { kind: 'verified', path: 'src/hooks/use-camera.ts', line: 1, quote: 'const a = 1' } }],
+    blobs,
+  )
+  assert.equal(result.counts.verify, 0)
+  assert.equal(result.counts.skipVerify, 1)
+})
+
+test('prepareVerification carries the per-candidate decision alongside the counts', () => {
+  const result = prepareVerification(
+    [{ candidateId: 'a', ruleId: '17-3', impact: 'high', confidence: 'high', category: 'security-exposure', location: { kind: 'verified', path: 'src/hooks/use-camera.ts', line: 2, quote: 'if (pending) return' } }],
+    blobs,
+  )
+  const decision = result.candidates.find(entry => entry.candidateId === 'a')
+  assert.equal(decision.eligibility, 'VERIFY')
+  assert.equal(decision.route, 'isolated')
+  assert.equal(decision.locationCheck, 'location-ok')
 })

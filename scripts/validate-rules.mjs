@@ -1516,6 +1516,31 @@ function validateFixtureIdUniqueness() {
 
 validateFixtureIdUniqueness()
 
+function validateCrossVerificationRenderTokens() {
+  const contract = rulesFile('workflow-contract.md')
+  const block = extractMarkedBlock(contract, 'CROSS_VERIFICATION_RENDER_TOKENS', 'render-tokens', 'E_RENDER_TOKEN_BLOCK_COUNT')
+  if (!block) {
+    failCode('render-tokens', 'E_RENDER_TOKENS_MISSING', 'workflow-contract.md must declare the public 교차검증 render tokens — without them a report invents its own wording and producer enums leak into public output')
+    return
+  }
+  const declared = parseJsonCodeBlock(block, 'CROSS_VERIFICATION_RENDER_TOKENS', 'render-tokens', 'E_RENDER_TOKENS_JSON')
+  if (!declared) return
+  const allowed = new Set(Object.values(declared.tokens ?? {}))
+  if (allowed.size === 0) {
+    failCode('render-tokens', 'E_RENDER_TOKENS_EMPTY', 'CROSS_VERIFICATION_RENDER_TOKENS declares no tokens')
+    return
+  }
+  for (const dir of skillDirs) {
+    const text = read(join(SKILLS, dir, 'SKILL.md'))
+    for (const match of text.matchAll(/교차검증:[ 	]+`([^`s][^`]*)`/g)) {
+      if (allowed.has(match[1])) continue
+      failCode('render-tokens', 'E_RENDER_TOKEN_UNKNOWN', `skills/${dir}/SKILL.md renders 교차검증 value "${match[1]}", which C-7 does not declare`)
+    }
+  }
+}
+
+validateCrossVerificationRenderTokens()
+
 // ------------------------------------------------------- workflow fixtures
 
 {
