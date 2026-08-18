@@ -77,7 +77,7 @@ ls "$RULES_DIR"/[0-9]*.md
 지정이 없으면 base 브랜치를 다음 순서로 찾는다.
 
 ```bash
-for candidate in dev main master; do
+for candidate in main master; do
   if git rev-parse --verify --quiet "$candidate" >/dev/null; then
     BASE_BRANCH=$candidate; break
   fi

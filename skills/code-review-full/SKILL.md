@@ -29,7 +29,7 @@ description: Use when the user invokes /code-review-full or asks for a full code
 
 ## 오케스트레이션
 1. 변경 집합만 기준으로 리뷰 범위를 결정한다.
-    - 범위 결정은 `workflow-contract.md` C-4를 따른다. **사용자가 범위를 지정했으면 그것이 최우선**이고, 지정이 없을 때만 `dev` → `main` → `master` → `origin/HEAD` 순으로 base를 찾는다. 후보가 모두 없으면 사용자에게 묻고 임의로 정하지 않는다.
+    - 범위 결정은 `workflow-contract.md` C-4를 따른다. **사용자가 범위를 지정했으면 그것이 최우선**이고, 지정이 없을 때만 `main` → `master` → `origin/HEAD` 순으로 base를 찾는다. 후보가 모두 없으면 사용자에게 묻고 임의로 정하지 않는다.
     - 그 기준 이후 변경된 파일만 리뷰한다.
     - lint는 C-6(`00-rule.md` 00-9)을 따른다: **수정 옵션 없이 실행**하고 자동 수정은 사용자가 명시적으로 요청했을 때만 한다. 자동 수정 가능한 항목은 실행하지 않고 개수와 성격만 `도구 실행 결과` 섹션에 기록한다.
 2. 패스 순서는 일반 → Props → 수학 → 예외 → 요약/리포팅이다.
