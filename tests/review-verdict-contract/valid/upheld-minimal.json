@@ -1,0 +1,20 @@
+{
+  "name": "upheld-minimal",
+  "expected": "valid",
+  "input": {
+    "schemaVersion": 1,
+    "verdicts": [
+      {
+        "candidateId": "17-3#1",
+        "disposition": "upheld",
+        "evidence": "use-camera.ts 전체를 읽고 close 경로에 재진입 차단이 없음을 확인했습니다.",
+        "location": {
+          "kind": "verified",
+          "path": "src/hooks/use-camera.ts",
+          "line": 88,
+          "quote": "if (pending) return"
+        }
+      }
+    ]
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "name": "rebuttal-missing-location",
+  "expected": "invalid",
+  "expectedErrorCodes": [
+    "E_REBUTTAL_REQUIRES_LOCATION"
+  ],
+  "input": {
+    "schemaVersion": 1,
+    "verdicts": [
+      {
+        "candidateId": "17-3#1",
+        "disposition": "rejected",
+        "evidence": "재진입을 막는 가드가 있다고 판단했습니다.",
+        "rebuttal": {
+          "kind": "guard-exists",
+          "note": "어딘가에 가드가 있었던 것 같습니다"
+        },
+        "location": {
+          "kind": "verified",
+          "path": "src/hooks/use-camera.ts",
+          "line": 88,
+          "quote": "if (pending) return"
+        }
+      }
+    ]
+  }
+}

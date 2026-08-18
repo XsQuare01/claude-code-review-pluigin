@@ -1,0 +1,32 @@
+{
+  "name": "rebuttal-unknown-kind",
+  "expected": "invalid",
+  "expectedErrorCodes": [
+    "E_REBUTTAL_UNKNOWN_KIND"
+  ],
+  "input": {
+    "schemaVersion": 1,
+    "verdicts": [
+      {
+        "candidateId": "17-3#1",
+        "disposition": "rejected",
+        "evidence": "use-camera.ts 전체와 호출부를 읽었습니다.",
+        "rebuttal": {
+          "kind": "looks-fine-to-me",
+          "location": {
+            "kind": "verified",
+            "path": "src/hooks/use-camera.ts",
+            "line": 71,
+            "quote": "if (startGuard.current) return"
+          }
+        },
+        "location": {
+          "kind": "verified",
+          "path": "src/hooks/use-camera.ts",
+          "line": 88,
+          "quote": "if (pending) return"
+        }
+      }
+    ]
+  }
+}

@@ -1,0 +1,30 @@
+{
+  "name": "rejected-unreachable-deleted-location",
+  "expected": "valid",
+  "input": {
+    "schemaVersion": 1,
+    "verdicts": [
+      {
+        "candidateId": "20-4#1",
+        "disposition": "rejected",
+        "evidence": "지적이 가리키는 경로는 이번 변경에서 제거돼 더 이상 도달하지 않습니다.",
+        "rebuttal": {
+          "kind": "unreachable",
+          "location": {
+            "kind": "deleted",
+            "path": "src/features/chat/use-room.ts",
+            "lineBefore": 54,
+            "endLine": 57,
+            "quote": "return () => subscription.unsubscribe()"
+          }
+        },
+        "location": {
+          "kind": "verified",
+          "path": "src/features/chat/use-room.ts",
+          "line": 44,
+          "quote": "useEffect(() => connect(roomId), [roomId])"
+        }
+      }
+    ]
+  }
+}

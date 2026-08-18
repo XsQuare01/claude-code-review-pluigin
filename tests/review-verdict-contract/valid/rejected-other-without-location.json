@@ -1,0 +1,24 @@
+{
+  "name": "rejected-other-without-location",
+  "expected": "valid",
+  "input": {
+    "schemaVersion": 1,
+    "verdicts": [
+      {
+        "candidateId": "16-2#1",
+        "disposition": "rejected",
+        "evidence": "계약 표면과 소비자 코드를 읽었습니다.",
+        "rebuttal": {
+          "kind": "other",
+          "note": "이 계약은 서버가 하위호환 필드를 함께 내보내기로 합의된 구간이라 다섯 범주 어디에도 맞지 않습니다."
+        },
+        "location": {
+          "kind": "verified",
+          "path": "src/api/contract.ts",
+          "line": 22,
+          "quote": "export type OrderResponse = z.infer<typeof orderSchema>"
+        }
+      }
+    ]
+  }
+}

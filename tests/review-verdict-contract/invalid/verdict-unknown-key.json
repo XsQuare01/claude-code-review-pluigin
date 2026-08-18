@@ -1,0 +1,24 @@
+{
+  "name": "verdict-unknown-key",
+  "expected": "invalid",
+  "expectedErrorCodes": [
+    "E_VERDICT_ITEM_UNKNOWN_KEY"
+  ],
+  "input": {
+    "schemaVersion": 1,
+    "verdicts": [
+      {
+        "candidateId": "17-3#1",
+        "disposition": "upheld",
+        "evidence": "use-camera.ts 전체를 읽었습니다.",
+        "recommendation": "가드를 추가하세요",
+        "location": {
+          "kind": "verified",
+          "path": "src/hooks/use-camera.ts",
+          "line": 88,
+          "quote": "if (pending) return"
+        }
+      }
+    ]
+  }
+}

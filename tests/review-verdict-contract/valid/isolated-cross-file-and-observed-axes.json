@@ -1,0 +1,34 @@
+{
+  "name": "isolated-cross-file-and-observed-axes",
+  "expected": "valid",
+  "input": {
+    "schemaVersion": 1,
+    "verdicts": [
+      {
+        "candidateId": "18-2#1",
+        "disposition": "upheld",
+        "evidence": "결제 진입점과 호출자 두 곳을 rg로 확인했습니다.",
+        "usedCrossFileContext": true,
+        "observedImpact": "high",
+        "observedConfidence": "low",
+        "location": {
+          "kind": "verified",
+          "path": "src/features/checkout/submit.ts",
+          "line": 61,
+          "endLine": 64,
+          "quote": "await charge(cart.total)"
+        }
+      },
+      {
+        "candidateId": "05-4#1",
+        "disposition": "upheld",
+        "evidence": "이 파일 안에서 인자 구조가 그대로 확인됐습니다.",
+        "usedCrossFileContext": false,
+        "location": {
+          "kind": "unverified",
+          "reason": "원 지적이 가리킨 줄을 재앵커하지 못했습니다"
+        }
+      }
+    ]
+  }
+}

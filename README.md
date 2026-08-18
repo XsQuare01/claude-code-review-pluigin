@@ -177,6 +177,8 @@ A version-gated rule that fires on a project that cannot use the API is a false 
 | `/code-review-math` | 3D transform / matrix logic (Three.js, R3F, WebGL) |
 | `/code-review-exception` | Exception handling, propagation, fallback, recovery |
 
+`/code-review-full` accepts `--verify` to control its cross-verification pass — `selective` (default), `exhaustive`, or `off`. See [Cross-verification](#cross-verification-25) below.
+
 `/code-review` accepts `--module` to restrict the pass to specific rule modules. Tokens resolve against the module filenames at runtime — by number (`--module 01,02`), by slug (`--module fsd,type`), or by unambiguous slug prefix. An unknown or ambiguous token stops the review and lists the available modules rather than silently falling back to a full pass; modules that were filtered out are never reported as passing.
 
 ## Rule modules
@@ -249,6 +251,26 @@ For structured owners, producers return one raw JSON object with `findings` and 
 The orchestrator validates those results, aggregates only valid JSON, derives severity from `impact × confidence`, and renders the final Markdown report. Deduplication is owned by the shared workflow contract: only findings with the same rule ID, the same verified/deleted normalized location, the same core claim / root cause / breaking condition, the same impact/category, and the same confidence may merge. `unverified` findings and `openQuestions` never auto-merge; source labels are preserved when valid merges do happen. JSON conformance is prompt-only, not a native model-output schema. Malformed structured output **or legacy/prose output from a structured owner** gets one corrective retry; a second malformed response ends that pass as `FAILED malformed-output` rather than being partially parsed or repaired. There is **no compatibility parser** for legacy/prose output in structured-v1 owners.
 
 Producer strings are treated as untrusted report content. The renderer places fields by slot rather than trusting producer-authored Markdown, escapes control/block Markdown in prose fields so they cannot create headings, fences, tables, raw HTML, or links that look orchestrator-authored, renders `location.quote` in a safe code form with delimiter escaping, renders paths as code, and leaves any URLs as plain text. The static validator checks that the contract and prompts stay synchronized on those rules; it does not claim to execute or prove the renderer.
+
+## Cross-verification (2.5.0)
+
+`/code-review-full` no longer treats a single module agent's judgement as settled fact. After the first pass it re-examines findings along a **different axis** — anchor-file context rather than rule module — and asks a verifier to refute them.
+
+It does not re-review the same diff with the same rules. Two agents given the same model, the same input, and a similar prompt make correlated mistakes, and a majority vote between them does not establish that a finding is true.
+
+| `--verify` | Behaviour |
+|------------|-----------|
+| `selective` (default) | Only candidates that meet a deterministic eligibility test are verified — high impact, low confidence, an unverified or mismatched location, or two different rules anchored on the same line |
+| `exhaustive` | Every candidate is verified. Writes a `VerificationAuditSidecar` next to the report |
+| `off` | Location checking still runs; no verifier agents are spawned |
+
+**Location checking and eligibility are decided by `scripts/prepare-verification.mjs`, not by a model.** Comparing a finding's quoted line against the file it claims to come from is a mechanical check, and describing it in Markdown would not make it deterministic. Line endings are normalized and the ends are trimmed, but internal whitespace is preserved — collapsing it would make `"x  y"` and `"x y"` compare equal, which is the exact class of difference the check exists to catch.
+
+**A refuted finding is not deleted yet.** Removing a finding from the report cannot be undone, and when the refutation is wrong the report simply looks cleaner — the failure is invisible. So deletion starts in `rollout-shadow`, where a refuted finding stays visible, keeps its severity, and **still blocks the merge**. Moving to `active-deletion` requires measured suppression accuracy rather than elapsed time, and `high` and `low` impact are promoted independently.
+
+A verifier that cannot fit its objection into the closed list of rebuttal kinds uses `other`, which records the objection and changes nothing else. It never removes a finding and never releases a block.
+
+Verifier failure is not orchestration failure. An unverified finding stays in the report and keeps blocking, because treating "we could not check this" as "this was disproven" would make killing the verifier a way to erase findings.
 
 ## Applicability metadata
 
@@ -351,6 +373,12 @@ node scripts/validate-rules.mjs
 
 No dependencies, no install step. CI runs it on every pull request and a failure blocks the merge.
 
+Unit tests for the deterministic verification module run alongside it:
+
+```bash
+node --test tests/*.test.mjs
+```
+
 It checks the properties this repo promises but cannot hold by hand:
 
 | Check | What it catches |
@@ -360,6 +388,11 @@ It checks the properties this repo promises but cannot hold by hand:
 | `cross-ref` | a reference to a module file or rule ID that does not exist |
 | `readme` | README inventory out of step with the actual files |
 | `skill` | a skill that does not defer to the contract, declares an unregistered `workflow-name`, or points at a missing rule document |
+| `verdict-fixtures` | a cross-verification verdict fixture whose expected error codes drifted from the validator |
+| `verdict-contract` | a verdict contract that no skill injects, or an owner naming a disposition or rebuttal kind the manifest does not define |
+| `clause-refs` | a skill pointing at a `C-` contract clause that `workflow-contract.md` does not define |
+| `catalog` | a module scheduled out of the normal fan-out in `catalog.json` without the matching declaration in C-2, or without the workflow's own skill excluding it — either gap makes the module run twice or count as missing |
+| `fixtures` | two workflow-contract scenarios sharing an id, which makes a regression impossible to attribute |
 | `fast-sync` | a missing digest section, a conditional rule whose applicability, exception, or typical impact calibration was lost in compression, a stale module range |
 | `hardcoded-path` | `~/.claude/review-rules` re-introduced into a skill instead of using the resolution order |
 | `catalog` | a module with no catalog entry, an entry pointing at a missing file, an undefined profile, a profile with no detection signal, a mistyped or incomplete signal, a profile reference cycle, a profile no module requires, workflow membership that disagrees with the module set a skill declares it loads |

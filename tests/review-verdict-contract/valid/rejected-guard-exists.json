@@ -1,0 +1,30 @@
+{
+  "name": "rejected-guard-exists",
+  "expected": "valid",
+  "input": {
+    "schemaVersion": 1,
+    "verdicts": [
+      {
+        "candidateId": "17-3#1",
+        "disposition": "rejected",
+        "evidence": "start 진입부에 재진입 차단 가드가 있어 두 번째 호출이 즉시 반환됩니다.",
+        "rebuttal": {
+          "kind": "guard-exists",
+          "location": {
+            "kind": "verified",
+            "path": "src/hooks/use-camera.ts",
+            "line": 71,
+            "quote": "if (startGuard.current) return"
+          },
+          "note": "startGuard는 close 이후에도 다음 tick까지 유지됩니다."
+        },
+        "location": {
+          "kind": "verified",
+          "path": "src/hooks/use-camera.ts",
+          "line": 88,
+          "quote": "if (pending) return"
+        }
+      }
+    ]
+  }
+}

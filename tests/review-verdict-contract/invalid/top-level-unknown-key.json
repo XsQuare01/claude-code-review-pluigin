@@ -1,0 +1,12 @@
+{
+  "name": "top-level-unknown-key",
+  "expected": "invalid",
+  "expectedErrorCodes": [
+    "E_VERDICT_TOP_LEVEL_UNKNOWN_KEY"
+  ],
+  "input": {
+    "schemaVersion": 1,
+    "verdicts": [],
+    "findings": []
+  }
+}
