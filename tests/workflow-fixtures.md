@@ -171,8 +171,11 @@ These scenarios pin the behaviour that `review-rules/workflow-contract.md` promi
     },
     {
       "id": 55,
-      "clauses": ["C-6A", "C-7"],
-"scenario": "Policy-bearing common instruction context must carry machine markers saying workflow-contract.md owns representation and that 위치 미확인 is forbidden except inside one explicit public-output allow block; canonical manifest renderer labels remain independently validated data",
+      "clauses": [
+        "C-6A",
+        "C-7"
+      ],
+      "scenario": "Policy-bearing common instruction context must carry machine markers saying workflow-contract.md owns representation and that 위치 미확인 is forbidden except inside one explicit public-output allow block; canonical manifest renderer labels remain independently validated data",
       "expected": "Static validation fails unless the marker-driven absence guard keeps structured raw output on location.kind=unverified plus reason and allows 위치 미확인 only inside the marked public/legacy allow block"
     },
     {
@@ -416,7 +419,7 @@ These scenarios pin the behaviour that `review-rules/workflow-contract.md` promi
       "expected": "The matched signal, or the fact that none matched, appears in the report so the decision can be checked against catalog.json without re-running the review"
     },
     {
-      "id": 55,
+      "id": 56,
       "clauses": [
         "C-6B"
       ],
@@ -424,7 +427,7 @@ These scenarios pin the behaviour that `review-rules/workflow-contract.md` promi
       "expected": "The finding stays in the active report marked 반박됨 — 관찰 중, keeps its original severity, and still blocks the merge; the counterfactual deletion is recorded only in the audit"
     },
     {
-      "id": 56,
+      "id": 57,
       "clauses": [
         "C-6B"
       ],
@@ -432,7 +435,7 @@ These scenarios pin the behaviour that `review-rules/workflow-contract.md` promi
       "expected": "The finding keeps its active status, severity, and blocking in every phase — other never removes a finding and never releases a block"
     },
     {
-      "id": 57,
+      "id": 58,
       "clauses": [
         "C-6B"
       ],
@@ -440,7 +443,7 @@ These scenarios pin the behaviour that `review-rules/workflow-contract.md` promi
       "expected": "The candidate is recorded as verification-disabled, stays active and blocking, and is counted separately from verification-unavailable in coverage"
     },
     {
-      "id": 58,
+      "id": 59,
       "clauses": [
         "C-6B"
       ],
@@ -448,7 +451,7 @@ These scenarios pin the behaviour that `review-rules/workflow-contract.md` promi
       "expected": "The candidate is verification-unavailable, stays active and blocking (fail-open), and the whole review is not marked FAILED orchestration"
     },
     {
-      "id": 59,
+      "id": 60,
       "clauses": [
         "C-6B"
       ],
@@ -456,7 +459,7 @@ These scenarios pin the behaviour that `review-rules/workflow-contract.md` promi
       "expected": "Low-impact rejected findings are removed while high-impact rejected findings remain active — the phase is per impact, not global"
     },
     {
-      "id": 60,
+      "id": 61,
       "clauses": [
         "C-6B"
       ],
@@ -464,7 +467,7 @@ These scenarios pin the behaviour that `review-rules/workflow-contract.md` promi
       "expected": "Neither writes an audit sidecar file and both report audit persistence disabled; the exhaustive default to persist yields to the user's read-only request"
     },
     {
-      "id": 61,
+      "id": 62,
       "clauses": [
         "C-6B",
         "C-6"
@@ -473,7 +476,7 @@ These scenarios pin the behaviour that `review-rules/workflow-contract.md` promi
       "expected": "A VerificationAuditSidecar is written containing every candidate's disposition, but not the original finding text or free-form evidence"
     },
     {
-      "id": 62,
+      "id": 63,
       "clauses": [
         "C-6B"
       ],

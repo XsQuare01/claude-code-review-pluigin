@@ -391,7 +391,8 @@ It checks the properties this repo promises but cannot hold by hand:
 | `verdict-fixtures` | a cross-verification verdict fixture whose expected error codes drifted from the validator |
 | `verdict-contract` | a verdict contract that no skill injects, or an owner naming a disposition or rebuttal kind the manifest does not define |
 | `clause-refs` | a skill pointing at a `C-` contract clause that `workflow-contract.md` does not define |
-| `catalog` | a module scheduled out of the normal fan-out in `catalog.json` without the matching declaration in C-2 |
+| `catalog` | a module scheduled out of the normal fan-out in `catalog.json` without the matching declaration in C-2, or without the workflow's own skill excluding it — either gap makes the module run twice or count as missing |
+| `fixtures` | two workflow-contract scenarios sharing an id, which makes a regression impossible to attribute |
 | `fast-sync` | a missing digest section, a conditional rule whose applicability, exception, or typical impact calibration was lost in compression, a stale module range |
 | `hardcoded-path` | `~/.claude/review-rules` re-introduced into a skill instead of using the resolution order |
 | `catalog` | a module with no catalog entry, an entry pointing at a missing file, an undefined profile, a profile with no detection signal, a mistyped or incomplete signal, a profile reference cycle, a profile no module requires, workflow membership that disagrees with the module set a skill declares it loads |

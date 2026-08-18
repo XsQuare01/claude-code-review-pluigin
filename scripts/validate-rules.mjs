@@ -1401,23 +1401,33 @@ function validateVerdictOwnerSync() {
     failCode('verdict-contract', 'E_VERDICT_OWNER_NO_MANIFEST_INJECTION', `${OWNER} must inject REVIEW_VERDICT_CONTRACT_V1_MANIFEST — a verdict contract with no producer instruction cannot be reached at runtime`)
   }
 
-  // The closed lists live in the manifest. If the owner restates them they can drift apart,
-  // so require that every disposition and rebuttal kind the owner names actually exists.
+  // The closed lists live in the manifest. Guessing which words are contract tokens by
+  // their shape misses the ones that look like ordinary prose, so read only the token the
+  // owner actually attaches to each field name.
+  const firstTokenAfter = (text, marker, limit = 40) => {
+    const found = new Set()
+    let at = text.indexOf(marker)
+    while (at !== -1) {
+      const window = text.slice(at + marker.length, at + marker.length + limit)
+      const hit = window.match(/`([a-z][a-z-]*)`/)
+      // The field name repeats near itself in prose; it is not a value.
+      if (hit && hit[1] !== marker.split('.').pop()) found.add(hit[1])
+      at = text.indexOf(marker, at + 1)
+    }
+    return found
+  }
+
   const dispositions = manifest.disposition?.enum ?? []
   const kinds = manifest.rebuttal?.kindEnum ?? []
-  const quoted = [...owner.matchAll(/`([a-z][a-z-]{2,})`/g)].map(m => m[1])
-  const DISPOSITION_SHAPED = new Set(['upheld', 'rejected', 'needs-context', 'verification-unavailable', 'verification-disabled', 'not-eligible', 'scope-open'])
-  for (const token of new Set(quoted)) {
-    if (!DISPOSITION_SHAPED.has(token)) continue
-    if (dispositions.includes(token)) continue
-    if (['verification-unavailable', 'verification-disabled', 'not-eligible', 'scope-open'].includes(token)) continue
-    failCode('verdict-contract', 'E_VERDICT_OWNER_UNKNOWN_DISPOSITION', `${OWNER} names disposition "${token}" which is not in the manifest enum`)
-  }
-  for (const token of new Set(quoted)) {
-    if (!token.includes('-')) continue
-    if (!/^(guard|idempotent|unreachable|contract-differs|location-wrong)/.test(token)) continue
+  const ORCHESTRATOR_ASSIGNED = new Set(['not-eligible', 'verification-disabled', 'verification-unavailable', 'scope-open'])
+
+  for (const token of firstTokenAfter(owner, 'rebuttal.kind')) {
     if (kinds.includes(token)) continue
     failCode('verdict-contract', 'E_VERDICT_OWNER_UNKNOWN_REBUTTAL_KIND', `${OWNER} names rebuttal kind "${token}" which is not in the manifest kindEnum`)
+  }
+  for (const token of firstTokenAfter(owner, 'disposition')) {
+    if (dispositions.includes(token) || ORCHESTRATOR_ASSIGNED.has(token)) continue
+    failCode('verdict-contract', 'E_VERDICT_OWNER_UNKNOWN_DISPOSITION', `${OWNER} names disposition "${token}" which is neither in the manifest enum nor orchestrator-assigned`)
   }
 }
 
@@ -1465,6 +1475,13 @@ function validatePhaseByWorkflow() {
         failCode('catalog', 'E_PHASE_UNKNOWN', `module ${module.id} declares unknown phase "${phase}" for ${workflow}`)
       }
       if (phase === 'module' || phase === 'consolidated') continue
+      // The skill that runs this workflow decides the candidate set. If it does not name the
+      // deferred phase, it will either dispatch the module twice or count its absence as a failure.
+      const skillDir = workflow === 'default' ? 'code-review' : `code-review-${workflow}`
+      const skillPath = join(SKILLS, skillDir, 'SKILL.md')
+      if (existsSync(skillPath) && !read(skillPath).includes(phase)) {
+        failCode('catalog', 'E_PHASE_NOT_IN_SKILL', `module ${module.id} is scheduled as "${phase}" for ${workflow}, but skills/${skillDir}/SKILL.md does not exclude it from the normal fan-out`)
+      }
       // A module scheduled out of the normal fan-out changes the module count. If C-2 does
       // not say so, the orchestrator reads the gap as a missing module and fails the run.
       const mentionsModule = contract.includes('`' + module.id + '`')
@@ -1476,6 +1493,28 @@ function validatePhaseByWorkflow() {
 }
 
 validatePhaseByWorkflow()
+
+function validateFixtureIdUniqueness() {
+  const fixturePath = join(ROOT, 'tests', 'workflow-fixtures.md')
+  if (!existsSync(fixturePath)) return
+  const block = extractMarkedBlock(read(fixturePath), 'WORKFLOW_FIXTURES_JSON', 'fixtures', 'E_FIXTURE_JSON_BLOCK_COUNT')
+  if (!block) return
+  const parsed = parseJsonCodeBlock(block, 'WORKFLOW_FIXTURES_JSON', 'fixtures', 'E_FIXTURE_JSON_PARSE')
+  if (!parsed) return
+  for (const [group, cases] of Object.entries(parsed)) {
+    if (!Array.isArray(cases)) continue
+    const seen = new Set()
+    for (const item of cases) {
+      const id = item?.id
+      if (id === undefined) continue
+      // Two scenarios sharing an id cannot be told apart when one of them regresses.
+      if (seen.has(id)) failCode('fixtures', 'E_FIXTURE_DUPLICATE_ID', `${group} has more than one case with id ${id}`)
+      seen.add(id)
+    }
+  }
+}
+
+validateFixtureIdUniqueness()
 
 // ------------------------------------------------------- workflow fixtures
 

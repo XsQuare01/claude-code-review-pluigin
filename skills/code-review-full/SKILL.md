@@ -35,9 +35,10 @@ description: Use when the user invokes /code-review-full or asks for a full code
 2. 패스 순서는 일반 → Props → 수학 → 예외 → 요약/리포팅이다.
 3. 일반 패스 규칙.
     - 일반 패스는 단일 general review가 아니다. 숫자 prefix 모듈별 리뷰를 유지하되, 큐 포화와 timeout을 피하기 위해 in-flight 개수를 제한해 실행한다.
-    - `RULES_DIR`의 `[0-9]*.md`를 반드시 스캔하고(C-1, C-2), 발견된 숫자 prefix 파일 중 `00-rule.md`를 제외한 전부를 **후보 모듈**로 삼는다. 모듈 목록을 파일명으로 하드코딩하지 않는다.
+    - `RULES_DIR`의 `[0-9]*.md`를 반드시 스캔하고(C-1, C-2), 발견된 숫자 prefix 파일 중 `00-rule.md`와 **`catalog.json`의 `phaseByWorkflow.full`이 `post-verification-synthesis`인 모듈**을 제외한 전부를 **후보 모듈**로 삼는다. 모듈 목록을 파일명으로 하드코딩하지 않는다.
+    - `phaseByWorkflow.full`이 `post-verification-synthesis`인 모듈(현재 `10-principles.md`)은 **일반 패스의 후보가 아니다.** 다른 모듈의 결과를 입력으로 받아야 자기 역할을 할 수 있으므로 검증 이후 synthesis 단계에서 한 번만 실행한다. 일반 패스에서 함께 띄우면 같은 모듈이 두 번 실행된다.
     - `00-rule.md`는 **공통 컨텍스트 전용**이다. 모든 일반 모듈보다 먼저 읽고 각 모듈 sub-agent의 prompt에 공통 규칙으로 함께 전달하되, **`00-rule.md`를 위한 독립 module pass나 별도 sub-agent를 실행하지 않는다.** 기본 `/code-review`와 같은 처리다.
-    - 따라서 모듈 수 계산은 numbered non-00 모듈만으로 한다. `00-rule.md`가 독립 pass로 실행되지 않았다는 사실은 누락이나 `FAILED orchestration`이 아니다.
+    - 따라서 모듈 수 계산은 **numbered non-00 중 `post-verification-synthesis`가 아닌 모듈**만으로 한다. `00-rule.md`와 synthesis 단계 모듈이 독립 pass로 실행되지 않았다는 사실은 누락이나 `FAILED orchestration`이 아니다.
     - 일반 패스를 하나의 summary/general agent로 대체하거나 Props/수학/예외만 실행해서 일반 패스를 생략해서는 안 된다.
 
 ### 3a. 디스패치 전 준비 (에이전트를 띄우기 전에 한 번만 수행)
@@ -127,9 +128,9 @@ Trigger 섹션이 있는 모듈(`12`, `14`, `16`, `17`, `18`, `21`)은 diff에 �
 에이전트가 자기 문서 구조를 만들어 반환하면 오케스트레이터가 그것을 이어붙일 때 **헤딩 레벨이 깨지고**(모듈 래퍼보다 상위 레벨이 안쪽에 들어옴), 모듈마다 다른 하위 구조와 언어가 섞인다. structured result로 고정하면 하위 에이전트는 판단 결과만 반환하고, 최종 골격과 severity 표기는 오케스트레이터가 일관되게 만든다.
 
 **단 하나의 예외: 위치 확인.** 지적을 만들 때는 그 줄을 실제로 읽어 번호를 확인하고 코드를 인용한다 (`00-rule.md` 00-10). 이건 diff만으로 대체할 수 없다 — hunk 헤더로 계산한 번호는 어긋나고, 어긋난 번호는 결과를 받은 뒤 정정하는 왕복을 만든다. 지적 한 건을 확인하는 비용이 리포트를 다시 고치는 비용보다 훨씬 싸다.
-- `00-rule.md`, `props.md`, `math.md`, `exception.md`, `fast.md`, 그리고 숫자 prefix가 없는 모든 파일은 일반 패스의 **독립 모듈 대상에서 제외**한다. (`00-rule.md`는 제외되지만 공통 규칙으로는 모든 모듈에 전달된다.)
+- `00-rule.md`, `props.md`, `math.md`, `exception.md`, `fast.md`, 숫자 prefix가 없는 모든 파일, 그리고 **`phaseByWorkflow.full`이 `post-verification-synthesis`인 모듈**은 일반 패스의 **독립 모듈 대상에서 제외**한다. (`00-rule.md`는 제외되지만 공통 규칙으로는 모든 모듈에 전달된다. synthesis 모듈은 뒤에서 한 번 실행된다.)
 - **적용 대상 모듈(3a에서 확정된 M개) 결과를 전부 수집해야** 일반 패스가 완료된다. 누락, 실패, timeout, inactivity timeout, queue expiry가 발생한 모듈이 있으면 완료된 리뷰가 아니라 `FAILED orchestration`으로 처리한다.
-- `SKIPPED`와 `FAILED`를 구분한다 (C-8). 3a에서 전제 미성립으로 제외한 모듈은 `FAILED orchestration`이 아니다. 반대로 **적용 대상인데 결과가 없는 것**은 언제나 실패다.
+- `SKIPPED`와 `FAILED`를 구분한다 (C-8). 3a에서 전제 미성립으로 제외한 모듈과 `post-verification-synthesis` 모듈은 `FAILED orchestration`이 아니다. 반대로 **적용 대상인데 결과가 없는 것**은 언제나 실패다.
 - 일부 모듈이 실패해도 이미 완료된 모듈 결과는 수집해 partial result로 보존한다. 단, 실패/누락/timeout 모듈 목록을 명시하고 전체 리뷰를 fully complete로 요약하지 않는다.
 - `01-fsd.md`와 `20-deletion-regression.md`가 **적용 대상인데** 실행/수집되지 않으면 architecture/deletion-regression coverage 누락으로 보고 `FAILED orchestration` 처리한다. (`01-fsd.md`는 FSD 프로젝트가 아니면 3a에서 `SKIPPED`가 되며, 그건 실패가 아니다.)
 - 별도 architecture 또는 deletion-regression summary agent로 `01-fsd.md`/`20-deletion-regression.md` 결과를 대체하지 않는다. 해당 지적은 반드시 숫자 모듈 결과로 유지한다.
@@ -231,6 +232,17 @@ bundle verifier와 isolated verifier는 **같은 prompt 계약**을 쓴다. 단�
 
 상태별 active/synthesis/차단 처리는 `workflow-contract.md` C-6B 상태표가 정본이다. 이 문서에서 다시 정의하지 않는다.
 
+### synthesis 단계 (`10-principles.md`)
+
+`phaseByWorkflow.full`이 `post-verification-synthesis`인 모듈은 여기서 **한 번만** 실행한다. 일반 패스에서 제외한 모듈이 어디서 돌아가는지가 이 절이다 — 빼기만 하고 여기 적지 않으면 그 모듈은 그냥 사라진다.
+
+- **입력**: disposition이 적용된 finding 전량 + openQuestions + 해당 모듈 전문 + `00-rule.md`. 포함·제외 기준은 C-6B 상태표를 따른다. `rejected`만 빠지고 `not-eligible`·`verification-disabled`·`verification-unavailable`은 들어간다
+- 검증 이후에 두는 이유는 **반박당한 증상 여러 개를 묶어 근본 원인을 만들면 오탐이 증폭**되기 때문이다
+- **출력**: 관계 클러스터와 근본 원인 가설, openQuestion. **새 active finding을 만들지 않는다** — 위치가 맞는다고 주장이 맞는 것은 아니며, 신규 finding을 그대로 편입하면 검증 gate를 통째로 우회한다
+- 클러스터는 자체 severity를 갖지 않고 기존 finding을 참조만 한다. 존재하지 않는 candidate ID를 만들지 않는다
+- 이 단계 실패는 `FAILED orchestration`이 아니다. 클러스터 없이 렌더링하고 `미해결 / 후속 확인`에 명시한다
+- 리포트에서는 일반 패스 모듈 목록이 아니라 **synthesis 결과로 따로 표시**한다
+
 ### 실패 처리
 
 - **검증 에이전트 실패는 `FAILED orchestration`이 아니다.** 해당 candidate에 `verification-unavailable`을 부여하고 coverage에 건수를 남긴다. 보조 단계의 실패가 전체 리뷰를 실패로 만들면, 새로 붙인 단계가 리뷰 전체의 신뢰성을 떨어뜨린다
@@ -242,7 +254,7 @@ bundle verifier와 isolated verifier는 **같은 prompt 계약**을 쓴다. 단�
 - 문서 골격(섹션 이름·순서·헤딩 레벨)은 `workflow-contract.md` C-7의 **문서 골격** 표를 따른다. 매 실행마다 다른 골격을 만들지 않는다.
 - 네 패스의 결과를 각각 구분해 출력한다: 일반, Props, 수학, 예외.
 - producer가 반환한 원본은 Markdown이 아니라 parsed JSON이다. 오케스트레이터는 producer heading/section/severity를 보존·정규화하는 대신, **검증을 통과한 구조화 필드만** 수집 대상으로 삼는다: finding/openQuestion의 내용, `impact`/`confidence`, `category`, `location`, 규칙 ID, 출처 패스 라벨.
-- 일반 패스 리포트는 `RULES_DIR`의 `[0-9]*.md`에서 발견한 numbered non-00 모듈명을 모두 나열하고, 모듈별 sub-agent 결과를 각각 표시한다. `00-rule.md`는 공통 규칙이므로 모듈 목록에 넣지 않는다.
+- 일반 패스 리포트는 `RULES_DIR`의 `[0-9]*.md`에서 발견한 numbered non-00 모듈명을 나열하고, 모듈별 sub-agent 결과를 각각 표시한다. `00-rule.md`는 공통 규칙이므로, `post-verification-synthesis` 모듈은 일반 패스 소속이 아니므로 이 목록에 넣지 않는다. 후자는 synthesis 단계 결과로 따로 표시한다.
 - numbered non-00 모듈 중 실행 또는 수집이 누락된 항목이 있으면 `FAILED orchestration`으로 표시하고, 완료된 리뷰처럼 요약하지 않는다.
 - lint/typecheck/test를 실행했으면 `도구 실행 결과` 섹션으로 분리해 보고하고, 리뷰 지적과 섞지 않는다 (`00-rule.md` 00-9).
 - 개별 패스의 구조화 결과는 출력 전에 임의 축약하거나 버리지 않는다. aggregation은 parsed field를 유지한 채 병합·정렬만 하고, 최종 헤딩/섹션/표현은 renderer가 새로 만든다.
