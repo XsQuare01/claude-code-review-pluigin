@@ -266,6 +266,32 @@ verifier가 반환하는 값과 오케스트레이터가 부여하는 값을 구
 
 **`rollout-shadow`에서도 high-impact가 차단한다는 것이 이 phase의 핵심이다.** 관찰 기간을 무방비 기간으로 만들지 않는다. 삭제했다면 어떤 차단이 풀렸을지의 가상 결과는 audit에만 기록한다.
 
+
+#### 오케스트레이터가 다시 적어야 하는 규칙
+
+C-6B에만 있고 실행 문서에 없는 규칙은 **실행 문서만 읽는 오케스트레이터에게 보이지 않는다.** 실제로 한 실행이 shadow에서 반박된 차단 후보를 "판정 근거로 승격하지 않았다"고 처리했다 — 다른 차단 후보가 있어 결과는 바뀌지 않았지만, 그것이 유일한 차단 후보였다면 관찰 기간이 곧 무방비 기간이 됐을 것이다.
+
+아래 문구는 owner skill이 **그대로 담아야 한다.** validator가 확인한다.
+
+<!-- CROSS_VERIFICATION_OWNER_RESTATEMENTS:BEGIN -->
+```json
+{
+  "mustAppearInOwner": {
+    "shadow-still-blocks": "rollout-shadow에서 반박된 finding도 원 severity를 유지하며 판정에서 차단 후보로 계산한다",
+    "candidate-id-mapping": "candidate ID를 리포트에 쓰면 finding과의 매핑을 같은 리포트 안에 싣는다"
+  }
+}
+```
+<!-- CROSS_VERIFICATION_OWNER_RESTATEMENTS:END -->
+
+### candidate ID 표기
+
+candidate ID는 오케스트레이터가 부여하는 내부 식별자이고 형식을 고정하지 않는다. 다만 **리포트 본문에 등장하는 순간 독자의 것이 된다.**
+
+- **candidate ID를 리포트에 쓰면 finding과의 매핑을 같은 리포트 안에 싣는다.** 표 한 줄이면 충분하다
+- 매핑 없이 ID만 언급하면 독자는 그 ID가 어느 지적인지 문서를 뒤져 추측해야 한다. 실제로 한 실행이 반박 사실을 `HR-2`로만 적어, 그것이 어느 finding인지 두 절을 대조해야 알 수 있었다
+- ID를 쓰지 않고 규칙 ID와 위치로만 지칭해도 된다. 요구는 "추적 가능할 것"이지 "ID를 쓸 것"이 아니다
+
 phase는 전역이 아니라 **`impact`별 오케스트레이터 설정**이다. 하나뿐이면 아래의 독립 승인을 표현할 수 없다.
 
 ```

@@ -1541,6 +1541,27 @@ function validateCrossVerificationRenderTokens() {
 
 validateCrossVerificationRenderTokens()
 
+function validateOwnerRestatements() {
+  const contract = rulesFile('workflow-contract.md')
+  const block = extractMarkedBlock(contract, 'CROSS_VERIFICATION_OWNER_RESTATEMENTS', 'restatements', 'E_RESTATEMENT_BLOCK_COUNT')
+  if (!block) {
+    failCode('restatements', 'E_RESTATEMENTS_MISSING', 'workflow-contract.md must declare which C-6B rules the owner skill has to restate — a rule that lives only in the contract is invisible to an orchestrator reading the skill')
+    return
+  }
+  const declared = parseJsonCodeBlock(block, 'CROSS_VERIFICATION_OWNER_RESTATEMENTS', 'restatements', 'E_RESTATEMENTS_JSON')
+  if (!declared) return
+  const OWNER = 'skills/code-review-full/SKILL.md'
+  const ownerPath = join(ROOT, OWNER)
+  if (!existsSync(ownerPath)) return
+  const owner = read(ownerPath)
+  for (const [id, phrase] of Object.entries(declared.mustAppearInOwner ?? {})) {
+    if (owner.includes(phrase)) continue
+    failCode('restatements', 'E_RESTATEMENT_MISSING', `${OWNER} does not restate "${id}" — the contract requires the phrase ${JSON.stringify(phrase)}`)
+  }
+}
+
+validateOwnerRestatements()
+
 // ------------------------------------------------------- workflow fixtures
 
 {

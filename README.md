@@ -391,6 +391,7 @@ It checks the properties this repo promises but cannot hold by hand:
 | `verdict-fixtures` | a cross-verification verdict fixture whose expected error codes drifted from the validator |
 | `verdict-contract` | a verdict contract that no skill injects, or an owner naming a disposition or rebuttal kind the manifest does not define |
 | `clause-refs` | a skill pointing at a `C-` contract clause that `workflow-contract.md` does not define |
+| `restatements` | a C-6B rule the owner skill never restates, so an orchestrator reading only the skill cannot follow it — this is how a shadow-rejected blocker got dropped from a verdict |
 | `render-tokens` | a report rendering a cross-verification status the contract never declared, which is how producer enums leak into public output |
 | `catalog` | a module scheduled out of the normal fan-out in `catalog.json` without the matching declaration in C-2, or without the workflow's own skill excluding it — either gap makes the module run twice or count as missing |
 | `fixtures` | two workflow-contract scenarios sharing an id, which makes a regression impossible to attribute |

@@ -244,6 +244,10 @@ bundle verifier와 isolated verifier는 **같은 prompt 계약**을 쓴다. 단�
 
 상태별 active/synthesis/차단 처리는 `workflow-contract.md` C-6B 상태표가 정본이다. 이 문서에서 다시 정의하지 않는다.
 
+**`rollout-shadow`에서 반박된 finding은 지워지지 않을 뿐 아니라 등급도 그대로다.** rollout-shadow에서 반박된 finding도 원 severity를 유지하며 판정에서 차단 후보로 계산한다. 반박됐다는 이유로 `판정` 근거에서 빼면, 그것이 유일한 차단 후보였을 때 관찰 기간이 곧 무방비 기간이 된다 — 삭제를 켜지 않은 의미가 사라진다.
+
+**candidate ID를 리포트에 쓰면 finding과의 매핑을 같은 리포트 안에 싣는다.** ID 형식은 자유지만, 매핑 없이 `HR-2` 같은 식별자만 적으면 독자가 그것이 어느 지적인지 문서를 뒤져 추측해야 한다. 규칙 ID와 위치로만 지칭하고 candidate ID를 아예 쓰지 않아도 된다.
+
 **공개 리포트의 `교차검증:` 표기 값은 C-7의 `CROSS_VERIFICATION_RENDER_TOKENS`가 정본이다.** `upheld`·`rejected` 같은 producer enum을 리포트에 그대로 쓰지 않고, 검증 대상이 아니었던 finding에도 `대상 아님`을 적는다. 반박 사실을 heading 접미사로 덧붙이지 않는다 — 상태는 축 줄 한 곳에서만 표현한다.
 
 ### synthesis 단계 (`10-principles.md`)
