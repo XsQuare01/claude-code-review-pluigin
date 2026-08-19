@@ -189,7 +189,8 @@ export function prepareVerification(candidates, blobs) {
 //
 //   node scripts/prepare-verification.mjs --merge-base <sha> < candidates.json
 //
-// stdin  : { "candidates": [ … ] }  (a bare array is accepted too)
+// stdin  : { "results": [ <REVIEW_RESULT_CONTRACT_V1>, … ] }   preferred — pipe what you have
+//          { "candidates": [ … ] }                            when the caller owns the ids
 // stdout : { "candidates": [ … ], "bundles": [ … ], "counts": { … } }
 //
 // Blobs are read here rather than passed in, so the caller does not have to
@@ -233,11 +234,64 @@ async function main() {
     process.stderr.write(`stdin is not valid JSON: ${error.message}\n`)
     process.exit(2)
   }
-  const candidates = Array.isArray(payload) ? payload : (payload.candidates ?? [])
+  // Producer results are what the orchestrator already holds, so that is the cheap shape.
+  // The candidates shape stays accepted for callers that assign their own ids.
+  const candidates = Array.isArray(payload)
+    ? payload
+    : payload.results
+      ? candidatesFromResults(payload.results)
+      : (payload.candidates ?? [])
   const result = prepareVerification(candidates, readBlobs(candidates, mergeBase))
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`)
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   await main()
+}
+
+/**
+ * Turn validated producer results into candidates, assigning the ids here.
+ *
+ * The caller already holds these objects, so accepting them verbatim removes the
+ * transformation step that made calling this module more expensive than eyeballing the
+ * numbers. Assigning ids here also settles them: every run names the same finding the
+ * same way, and the name traces back to a rule id the report already prints.
+ *
+ * The ordinal follows normalized location rather than the order producers happened to
+ * finish in, so a slow module does not rename everyone else's candidates.
+ */
+export function candidatesFromResults(results) {
+  const findings = []
+  for (const result of results ?? []) {
+    for (const finding of result?.findings ?? []) findings.push(finding)
+  }
+
+  const sortKey = finding => {
+    const location = finding.location ?? {}
+    const line = location.line ?? location.lineBefore ?? 0
+    return `${location.path ?? ''}:${String(line).padStart(9, '0')}:${finding.title ?? ''}`
+  }
+
+  const byRule = new Map()
+  for (const finding of findings) {
+    const ruleId = finding.ruleId ?? 'unknown'
+    if (!byRule.has(ruleId)) byRule.set(ruleId, [])
+    byRule.get(ruleId).push(finding)
+  }
+
+  const candidates = []
+  for (const [ruleId, group] of byRule) {
+    group.sort((a, b) => sortKey(a).localeCompare(sortKey(b)))
+    group.forEach((finding, index) => {
+      candidates.push({
+        candidateId: `${ruleId}#${index + 1}`,
+        ruleId,
+        impact: finding.impact,
+        confidence: finding.confidence,
+        category: finding.category,
+        location: finding.location,
+      })
+    })
+  }
+  return candidates
 }

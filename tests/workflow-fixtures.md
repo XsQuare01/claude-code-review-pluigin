@@ -499,6 +499,23 @@ These scenarios pin the behaviour that `review-rules/workflow-contract.md` promi
       ],
       "scenario": "A report names candidate ids such as HR-2 when reporting a rebuttal",
       "expected": "The same report carries a mapping from each named candidate id to its finding; naming an id with no mapping forces the reader to guess which finding it was"
+    },
+    {
+      "id": 66,
+      "clauses": [
+        "C-6B",
+        "C-7"
+      ],
+      "scenario": "A run reports verification coverage without having executed prepare-verification.mjs",
+      "expected": "The coverage line says the counts were not produced by the script, and the report does not describe the判정 as deterministic; hand-tallied numbers that happen to add up are still labelled as such"
+    },
+    {
+      "id": 67,
+      "clauses": [
+        "C-6B"
+      ],
+      "scenario": "The same producer results are prepared twice, with the producers finishing in a different order the second time",
+      "expected": "Every candidate keeps the same {ruleId}#{n} id both times — the ordinal follows normalized location, so a slow module does not renumber other findings"
     }
   ],
   "defaultWorkflowOnlyCases": [

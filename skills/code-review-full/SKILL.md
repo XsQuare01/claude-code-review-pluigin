@@ -198,14 +198,18 @@ instanceId 부여
 
 **위치 대조와 eligibility는 모델이 아니라 `scripts/prepare-verification.mjs`가 판정한다.** Markdown 지시로는 결정성을 주장할 수 없다. **판단으로 대체하지 말고 실제로 실행한다.**
 
+**입력을 새로 만들지 않는다.** 검증을 통과한 producer 결과를 그대로 파이프한다.
+
 ```bash
-echo '{"candidates":[…]}' | node "$RULES_DIR/../scripts/prepare-verification.mjs" --merge-base "$MERGE_BASE"
+echo '{"results":[ <REVIEW_RESULT_CONTRACT_V1 객체들> ]}'   | node "$RULES_DIR/../scripts/prepare-verification.mjs" --merge-base "$MERGE_BASE"
 ```
 
-- 입력 `candidates[]`의 각 항목은 `candidateId`, `ruleId`, `impact`, `confidence`, `category`(있을 때), `location`을 담는다
+- `results[]`는 C-6A validation을 통과한 producer JSON **그대로**다. 필드를 골라 옮기거나 변환하지 않는다
+- **`candidateId`는 스크립트가 부여한다.** `{ruleId}#{n}` 형식이고 정규화 위치 순서로 매겨지므로, 같은 입력이면 항상 같은 ID가 나오고 규칙 ID로 리포트에서 바로 추적된다
 - 출력은 candidate별 `locationCheck`·`eligibility`·`route`와 `bundles`, 그리고 `counts`다
 - **coverage 숫자는 이 `counts`를 그대로 옮긴다.** 직접 세지 않는다 — 손으로 센 수치는 `verify + skipVerify = total`을 깨뜨린다
-- 플러그인으로 설치된 경우 스크립트는 `RULES_DIR`의 상위에 있다. 경로를 찾지 못하면 그 사실을 `실행 계획`에 적고, **결정적으로 판정했다고 서술하지 않는다**
+- **coverage 숫자의 출처를 함께 적는다.** 스크립트를 돌렸으면 `도구 실행 결과`에도 실행을 남기고, 돌리지 않았으면 미실행이라고 적는다. 숫자가 맞더라도 **결정적으로 판정했다고 서술하지 않는다**
+- 플러그인으로 설치된 경우 스크립트는 `RULES_DIR`의 상위에 있다. 경로를 찾지 못하면 그 사실을 `실행 계획`에 적는다
 
 ### `--verify` 모드
 
