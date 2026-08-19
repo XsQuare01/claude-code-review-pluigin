@@ -482,6 +482,23 @@ These scenarios pin the behaviour that `review-rules/workflow-contract.md` promi
       ],
       "scenario": "Two findings from different rule modules that were merged by exact dedup, then verified",
       "expected": "The verdict is carried on the canonical candidate id while every contributing instance id and source label is preserved"
+    },
+    {
+      "id": 64,
+      "clauses": [
+        "C-6B"
+      ],
+      "scenario": "A high-impact finding is rejected in rollout-shadow and it is the only blocking candidate in the run",
+      "expected": "The verdict still blocks the merge — a shadow-rejected finding keeps its severity and counts as a blocking candidate, so the observation window is not an unguarded window"
+    },
+    {
+      "id": 65,
+      "clauses": [
+        "C-6B",
+        "C-7"
+      ],
+      "scenario": "A report names candidate ids such as HR-2 when reporting a rebuttal",
+      "expected": "The same report carries a mapping from each named candidate id to its finding; naming an id with no mapping forces the reader to guess which finding it was"
     }
   ],
   "defaultWorkflowOnlyCases": [
