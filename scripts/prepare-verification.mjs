@@ -1,4 +1,5 @@
 import { execFileSync } from 'node:child_process'
+import { readFileSync } from 'node:fs'
 import { pathToFileURL } from 'node:url'
 
 // Deterministic preparation for the cross-verification pass.
@@ -196,9 +197,34 @@ export function prepareVerification(candidates, blobs) {
 // Blobs are read here rather than passed in, so the caller does not have to
 // serialize file contents and cannot accidentally supply the wrong revision.
 
-function readBlobs(candidates, mergeBase) {
+/**
+ * Gather the file contents each location claims to come from.
+ *
+ * A verified location is read from the working tree first, because that is what the
+ * producer read when it recorded the line. Reading HEAD instead makes every uncommitted
+ * edit look like a wrong line number, which would discredit the check rather than the
+ * finding. HEAD remains the fallback for paths that are not on disk.
+ *
+ * A deleted location can only come from the merge base — the point of it is that the code
+ * is gone from HEAD.
+ */
+export function collectBlobs(candidates, readers) {
   const head = {}
   const base = {}
+  for (const candidate of candidates ?? []) {
+    const location = candidate?.location
+    const path = location?.path
+    if (typeof path !== 'string') continue
+    if (location.kind === 'deleted') {
+      if (!(path in base)) base[path] = readers.base(path)
+    } else if (!(path in head)) {
+      head[path] = readers.working(path) ?? readers.head(path)
+    }
+  }
+  return { head, base }
+}
+
+function gitReaders(mergeBase) {
   const show = ref => {
     try {
       // A missing path is an expected outcome, not a problem to report on stderr.
@@ -207,17 +233,17 @@ function readBlobs(candidates, mergeBase) {
       return undefined
     }
   }
-  for (const candidate of candidates) {
-    const location = candidate?.location
-    const path = location?.path
-    if (typeof path !== 'string') continue
-    if (location.kind === 'deleted') {
-      if (!(path in base)) base[path] = show(`${mergeBase}:${path}`)
-    } else if (!(path in head)) {
-      head[path] = show(`HEAD:${path}`)
-    }
+  return {
+    working: path => {
+      try {
+        return readFileSync(path, 'utf8')
+      } catch {
+        return undefined
+      }
+    },
+    head: path => show(`HEAD:${path}`),
+    base: path => show(`${mergeBase}:${path}`),
   }
-  return { head, base }
 }
 
 async function main() {
@@ -241,7 +267,7 @@ async function main() {
     : payload.results
       ? candidatesFromResults(payload.results)
       : (payload.candidates ?? [])
-  const result = prepareVerification(candidates, readBlobs(candidates, mergeBase))
+  const result = prepareVerification(candidates, collectBlobs(candidates, gitReaders(mergeBase)))
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`)
 }
 
@@ -281,7 +307,13 @@ export function candidatesFromResults(results) {
 
   const candidates = []
   for (const [ruleId, group] of byRule) {
-    group.sort((a, b) => sortKey(a).localeCompare(sortKey(b)))
+    // Code points, not localeCompare — collation varies by machine locale, and an id that
+    // shifts with the reviewer's locale is not the stable id this function promises.
+    group.sort((a, b) => {
+      const left = sortKey(a)
+      const right = sortKey(b)
+      return left < right ? -1 : left > right ? 1 : 0
+    })
     group.forEach((finding, index) => {
       candidates.push({
         candidateId: `${ruleId}#${index + 1}`,

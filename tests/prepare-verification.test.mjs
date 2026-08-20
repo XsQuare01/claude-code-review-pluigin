@@ -10,6 +10,7 @@ import {
   buildBundles,
   prepareVerification,
   candidatesFromResults,
+  collectBlobs,
 } from '../scripts/prepare-verification.mjs'
 
 // ------------------------------------------------------------- normalization
@@ -284,4 +285,51 @@ test('prepareVerification accepts producer results directly and still reconciles
   const result = prepareVerification(candidatesFromResults(producerResults), blobs)
   assert.equal(result.counts.total, 3)
   assert.equal(result.counts.verify + result.counts.skipVerify, result.counts.total)
+})
+
+// -------------------------------------------------------------- blob sources
+
+const readers = {
+  working: path => (path === 'src/edited.ts' ? 'working tree line\n' : undefined),
+  head: path => (path === 'src/edited.ts' ? 'committed line\n' : path === 'src/clean.ts' ? 'clean line\n' : undefined),
+  base: path => (path === 'src/gone.ts' ? 'removed line\n' : undefined),
+}
+
+test('a verified location reads the working tree, which is what the producer read', () => {
+  const collected = collectBlobs([{ location: { kind: 'verified', path: 'src/edited.ts', line: 1, quote: 'x' } }], readers)
+  assert.equal(collected.head['src/edited.ts'], 'working tree line\n')
+})
+
+test('a verified location falls back to HEAD when the file is not in the working tree', () => {
+  const collected = collectBlobs([{ location: { kind: 'verified', path: 'src/clean.ts', line: 1, quote: 'x' } }], readers)
+  assert.equal(collected.head['src/clean.ts'], 'clean line\n')
+})
+
+test('a deleted location reads the merge base, not the working tree', () => {
+  const collected = collectBlobs([{ location: { kind: 'deleted', path: 'src/gone.ts', lineBefore: 1, quote: 'x' } }], readers)
+  assert.equal(collected.base['src/gone.ts'], 'removed line\n')
+  assert.equal(collected.head['src/gone.ts'], undefined)
+})
+
+test('an uncommitted edit does not produce a false location mismatch', () => {
+  const candidates = [{ candidateId: 'a#1', ruleId: 'a', impact: 'low', confidence: 'high', location: { kind: 'verified', path: 'src/edited.ts', line: 1, quote: 'working tree line' } }]
+  const result = prepareVerification(candidates, collectBlobs(candidates, readers), { locationsOnly: true })
+  assert.equal(result.candidates[0].locationCheck, 'location-ok')
+})
+
+// ------------------------------------------------------------- stable sorting
+
+test('candidate ordering uses code points, so it does not shift with the machine locale', () => {
+  const ids = candidatesFromResults([
+    {
+      schemaVersion: 1,
+      openQuestions: [],
+      findings: [
+        { ruleId: '01-1', title: 't', body: 'b', impact: 'low', confidence: 'high', location: { kind: 'verified', path: 'a.ts', line: 1, quote: 'q' } },
+        { ruleId: '01-1', title: 't', body: 'b', impact: 'low', confidence: 'high', location: { kind: 'verified', path: 'B.ts', line: 1, quote: 'q' } },
+      ],
+    },
+  ])
+  // 'B' (0x42) sorts before 'a' (0x61) by code point; most locales collate the other way.
+  assert.deepEqual(ids.map(c => `${c.candidateId}:${c.location.path}`), ['01-1#1:B.ts', '01-1#2:a.ts'])
 })
