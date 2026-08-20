@@ -9,6 +9,7 @@ import {
   routeCandidate,
   buildBundles,
   prepareVerification,
+  candidatesFromResults,
 } from '../scripts/prepare-verification.mjs'
 
 // ------------------------------------------------------------- normalization
@@ -224,4 +225,63 @@ test('prepareVerification carries the per-candidate decision alongside the count
   assert.equal(decision.eligibility, 'VERIFY')
   assert.equal(decision.route, 'isolated')
   assert.equal(decision.locationCheck, 'location-ok')
+})
+
+// ------------------------------------------- producer results as direct input
+
+const producerResults = [
+  {
+    schemaVersion: 1,
+    findings: [
+      { ruleId: '17-3', title: 'a', body: 'b', impact: 'high', category: 'user-malfunction', evidence: 'e', confidence: 'high', location: { kind: 'verified', path: 'src/hooks/use-camera.ts', line: 2, quote: 'if (pending) return' } },
+      { ruleId: '17-3', title: 'c', body: 'd', impact: 'low', confidence: 'high', location: { kind: 'verified', path: 'src/hooks/use-camera.ts', line: 1, quote: 'const a = 1' } },
+    ],
+    openQuestions: [],
+  },
+  {
+    schemaVersion: 1,
+    findings: [
+      { ruleId: '05-4', title: 'e', body: 'f', impact: 'low', confidence: 'high', location: { kind: 'verified', path: 'src/wide.ts', line: 1, quote: 'first' } },
+    ],
+    openQuestions: [],
+  },
+]
+
+test('candidatesFromResults flattens producer findings without needing a caller-supplied id', () => {
+  const candidates = candidatesFromResults(producerResults)
+  assert.equal(candidates.length, 3)
+  assert.deepEqual(candidates.map(c => c.ruleId).sort(), ['05-4', '17-3', '17-3'])
+})
+
+test('candidate ids are ordinal within a rule id, so they trace back to the report', () => {
+  const ids = candidatesFromResults(producerResults).map(c => c.candidateId).sort()
+  assert.deepEqual(ids, ['05-4#1', '17-3#1', '17-3#2'])
+})
+
+test('candidate ids are stable across runs for the same input', () => {
+  const first = candidatesFromResults(producerResults).map(c => c.candidateId)
+  const again = candidatesFromResults(producerResults).map(c => c.candidateId)
+  assert.equal(first.length, 3)
+  assert.deepEqual(first, again)
+})
+
+test('candidate ids do not depend on the order producers happened to return in', () => {
+  const forward = candidatesFromResults(producerResults)
+  const reversed = candidatesFromResults([...producerResults].reverse())
+  const key = list => list.map(c => `${c.candidateId}:${c.location.line}`).sort()
+  assert.equal(forward.length, 3)
+  assert.deepEqual(key(forward), key(reversed))
+})
+
+test('a finding with an unverified location still receives an id', () => {
+  const candidates = candidatesFromResults([
+    { schemaVersion: 1, findings: [{ ruleId: '09-1', title: 't', body: 'b', impact: 'low', confidence: 'low', reason: 'r', location: { kind: 'unverified', reason: 'not found' } }], openQuestions: [] },
+  ])
+  assert.equal(candidates[0].candidateId, '09-1#1')
+})
+
+test('prepareVerification accepts producer results directly and still reconciles', () => {
+  const result = prepareVerification(candidatesFromResults(producerResults), blobs)
+  assert.equal(result.counts.total, 3)
+  assert.equal(result.counts.verify + result.counts.skipVerify, result.counts.total)
 })

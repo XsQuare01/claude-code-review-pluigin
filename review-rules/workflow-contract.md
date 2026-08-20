@@ -278,11 +278,29 @@ C-6B에만 있고 실행 문서에 없는 규칙은 **실행 문서만 읽는 �
 {
   "mustAppearInOwner": {
     "shadow-still-blocks": "rollout-shadow에서 반박된 finding도 원 severity를 유지하며 판정에서 차단 후보로 계산한다",
-    "candidate-id-mapping": "candidate ID를 리포트에 쓰면 finding과의 매핑을 같은 리포트 안에 싣는다"
+    "candidate-id-mapping": "candidate ID를 리포트에 쓰면 finding과의 매핑을 같은 리포트 안에 싣는다",
+    "counts-provenance": "coverage 숫자의 출처를 함께 적는다"
   }
 }
 ```
 <!-- CROSS_VERIFICATION_OWNER_RESTATEMENTS:END -->
+
+### coverage 숫자의 출처
+
+`prepare-verification.mjs`를 돌린 리포트와 모델이 눈으로 센 리포트는 **겉보기에 똑같다.** 산술이 맞아도 그것이 결정적으로 계산된 것인지 알 수 없다.
+
+**coverage 숫자의 출처를 함께 적는다.**
+
+```
+Verification coverage: 대상 10 중 7 검증 … · counts 출처: `prepare-verification.mjs`
+Verification coverage: 대상 10 중 7 검증 … · counts 출처: 미실행 (모델 판정)
+```
+
+- 스크립트를 돌렸으면 그 사실을 적고, `도구 실행 결과`에도 실행을 남긴다
+- 돌리지 않았으면 **미실행이라고 적는다.** 숫자가 맞더라도 결정적으로 판정했다고 서술하지 않는다
+- 경로를 찾지 못했으면 그 사실을 사유와 함께 적는다
+
+이 요구는 실행을 강제하지 못한다. **강제하는 대신 생략이 보이게 한다** — `SKIPPED`·`FAILED`·`UNKNOWN`을 구분해 적게 하는 C-8과 같은 이유다.
 
 ### candidate ID 표기
 
