@@ -285,3 +285,39 @@ test('prepareVerification accepts producer results directly and still reconciles
   assert.equal(result.counts.total, 3)
   assert.equal(result.counts.verify + result.counts.skipVerify, result.counts.total)
 })
+
+// ------------------------------------------------------------ locations only
+
+test('prepareVerification in locations-only mode reports location checks without eligibility', () => {
+  const result = prepareVerification(candidatesFromResults(producerResults), blobs, { locationsOnly: true })
+  assert.equal(result.counts.total, 3)
+  assert.equal(result.counts.locationOk + result.counts.locationMismatch + result.counts.locationUnresolvable, result.counts.total)
+})
+
+test('locations-only omits eligibility, routing and bundles so a report cannot imply a verify pass ran', () => {
+  const result = prepareVerification(candidatesFromResults(producerResults), blobs, { locationsOnly: true })
+  assert.equal(result.bundles, undefined)
+  assert.equal(result.counts.verify, undefined)
+  assert.equal(result.counts.bundle, undefined)
+  for (const candidate of result.candidates) {
+    assert.equal(candidate.eligibility, undefined)
+    assert.equal(candidate.route, undefined)
+    assert.ok(candidate.locationCheck)
+  }
+})
+
+test('locations-only still reports the mismatch so the renderer can fall back to 위치 미확인', () => {
+  const result = prepareVerification(
+    [{ candidateId: 'x#1', ruleId: '03-1', impact: 'low', confidence: 'high', location: { kind: 'verified', path: 'src/hooks/use-camera.ts', line: 2, quote: 'WRONG' } }],
+    blobs,
+    { locationsOnly: true },
+  )
+  assert.equal(result.candidates[0].locationCheck, 'location-mismatch')
+  assert.equal(result.counts.locationMismatch, 1)
+})
+
+test('the default mode is unchanged and still reports eligibility', () => {
+  const result = prepareVerification(candidatesFromResults(producerResults), blobs)
+  assert.ok(result.bundles)
+  assert.equal(typeof result.counts.verify, 'number')
+})

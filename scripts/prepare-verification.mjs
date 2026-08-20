@@ -144,6 +144,38 @@ export function buildBundles(routed) {
 }
 
 /**
+ * Location checking with nothing else attached.
+ *
+ * `/code-review` has no rebuttal pass, so returning eligibility, routes or bundles here
+ * would let a report read as though one had run. What it needs is narrower: did the
+ * quoted line survive contact with the file.
+ */
+function locationsOnly(candidates, blobs) {
+  const checked = candidates.map(candidate => {
+    const check = checkLocation(candidate.location, blobs)
+    return {
+      candidateId: candidate.candidateId,
+      ruleId: candidate.ruleId,
+      locationCheck: check.status,
+      observed: check.observed ?? null,
+      reason: check.reason ?? null,
+      location: candidate.location,
+    }
+  })
+  const count = status => checked.filter(entry => entry.locationCheck === status).length
+  return {
+    candidates: checked,
+    counts: {
+      total: checked.length,
+      locationOk: count('location-ok'),
+      locationMismatch: count('location-mismatch'),
+      locationUnresolvable: count('location-unresolvable'),
+      locationNotApplicable: count('not-applicable'),
+    },
+  }
+}
+
+/**
  * Run the whole deterministic preparation in one call and report counts alongside it.
  *
  * The counts exist so the report cannot claim a coverage split that does not add up:
@@ -151,8 +183,9 @@ export function buildBundles(routed) {
  * Deriving them here rather than in prose is the point — a hand-written tally is exactly
  * what drifted before.
  */
-export function prepareVerification(candidates, blobs) {
+export function prepareVerification(candidates, blobs, options = {}) {
   const list = candidates ?? []
+  if (options.locationsOnly) return locationsOnly(list, blobs)
   const collisions = computeOwnerCollisions(list)
   const decided = list.map(candidate => {
     const check = checkLocation(candidate.location, blobs)
@@ -193,6 +226,9 @@ export function prepareVerification(candidates, blobs) {
 //          { "candidates": [ … ] }                            when the caller owns the ids
 // stdout : { "candidates": [ … ], "bundles": [ … ], "counts": { … } }
 //
+// --locations-only : location checks and their counts, with no eligibility, route or
+//                    bundle. For workflows that have no rebuttal pass.
+//
 // Blobs are read here rather than passed in, so the caller does not have to
 // serialize file contents and cannot accidentally supply the wrong revision.
 
@@ -224,6 +260,7 @@ async function main() {
   const argv = process.argv.slice(2)
   const mergeBaseIndex = argv.indexOf('--merge-base')
   const mergeBase = mergeBaseIndex === -1 ? 'HEAD' : argv[mergeBaseIndex + 1]
+  const locationsOnly = argv.includes('--locations-only')
 
   let raw = ''
   for await (const chunk of process.stdin) raw += chunk
@@ -241,7 +278,7 @@ async function main() {
     : payload.results
       ? candidatesFromResults(payload.results)
       : (payload.candidates ?? [])
-  const result = prepareVerification(candidates, readBlobs(candidates, mergeBase))
+  const result = prepareVerification(candidates, readBlobs(candidates, mergeBase), { locationsOnly })
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`)
 }
 

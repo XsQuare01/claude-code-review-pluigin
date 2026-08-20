@@ -125,14 +125,15 @@ MERGE_BASE=$(git merge-base $BASE_BRANCH HEAD)
 | `skills/code-review-props/SKILL.md` | `props` standalone specialist | structured-v1 producer 지시 보유 |
 | `skills/code-review-math/SKILL.md` | `math` standalone specialist | structured-v1 producer 지시 보유 |
 | `skills/code-review-exception/SKILL.md` | `exception` standalone specialist | structured-v1 producer 지시 보유 |
+| `skills/code-review/SKILL.md` | `default` 단일 통합 bounded pass | structured-v1 producer 지시 보유 (반박 없이 위치 대조만) |
 | `agents/correctness-reviewer.md` | correctness pass | direct agent only (`not structured-v1 until orchestrated consumer exists`) |
-| `skills/code-review/SKILL.md` | `default` | legacy producer 유지 |
 | `skills/code-review-commit/SKILL.md` | `commit` | legacy producer 유지 |
 | `skills/code-review-fast/SKILL.md` | `fast` | legacy producer 유지 |
 
 - numbered rule modules `01`~`21`과 specialist rule docs `props.md` / `math.md` / `exception.md`는 **workflow-neutral domain judgment docs**다. producer schema, raw JSON, malformed-output, renderer, legacy/structured ownership을 직접 소유하지 않는다.
 - correctness agent는 `CR-{n}` namespace와 `00-9`/`00-10`/`00-11` evidence discipline을 그대로 따르지만, **phase-1 structured-v1 owner는 아니다.** 지금은 built-in validation/render consumer가 없으므로 direct-agent evidence-first 결과만 낸다.
-- 아래 lifecycle은 **structured-v1 owner에만 적용**한다. legacy owner(`default`, `commit`, `fast`)는 기존 producer 계약을 유지한다.
+- 아래 lifecycle은 **structured-v1 owner에만 적용**한다. legacy owner(`commit`, `fast`)는 기존 producer 계약을 유지한다.
+- `default`는 structured-v1 owner지만 **반박 패스를 갖지 않는다.** producer 결과를 검증한 뒤 위치 대조(`--locations-only`)만 돌리고 렌더한다. sub-agent 수는 하나 그대로이며, 그것이 이 워크플로우가 가벼운 이유다.
 
 `REVIEW_RESULT_CONTRACT_V1`을 쓰는 owner에서는 결과가 **producer → validation → aggregation → Markdown rendering** 순서로 흐른다. 공통 원칙은 다음과 같다.
 
@@ -177,7 +178,7 @@ MERGE_BASE=$(git merge-base $BASE_BRANCH HEAD)
 - severity는 오케스트레이터가 `impact × confidence` 파생표로 계산한다. producer는 severity를 내지 않는다
 - 기존 리포트 의미는 유지한다. 즉, 판정/상세 지적/요약/도구 실행 결과/미해결·후속 확인의 역할은 그대로 두고, structured result는 그 입력 형식만 바꾼다
 - `openQuestions`는 `미해결 / 후속 확인` 섹션에 렌더링한다
-- 아직 structured result를 쓰지 않는 워크플로우(`default`, `commit`, `fast`)는 기존 producer 계약을 유지한다. 이 문단은 structured owner에만 적용한다
+- 아직 structured result를 쓰지 않는 워크플로우(`commit`, `fast`)는 기존 producer 계약을 유지한다. 이 문단은 structured owner에만 적용한다
 - direct-only correctness agent는 이 structured lifecycle의 outside다. consumerless producer를 phase-1 owner로 등록하지 않고, 실제 validation/render consumer가 생긴 뒤에만 structured-v1로 승격한다
 - producer 문자열 필드(`title`, `body`, `recommendation`, `reason`, `evidence`)는 **신뢰하지 않는 report content**다. renderer는 `renderBySlot` 원칙으로 이 값을 문서 골격에 그대로 이어붙이지 말고 **field slot별로** 배치한다
 - `title`과 prose 필드는 heading, fence, table, raw HTML, Markdown link, block quote처럼 **오케스트레이터가 쓴 것처럼 보이는 block/control Markdown** 을 만들지 못하게 escape해서 렌더링한다
