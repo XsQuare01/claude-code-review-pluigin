@@ -239,7 +239,7 @@ test('collectBlobs()의 원시 문자열을 그대로 넘기면 채점 대신 �
 
 import { checkSkeleton, checkScriptRan, checkSummaryArithmetic, grade } from '../scripts/lib/eval-grade.mjs'
 
-test('C-7 골격 섹션이 다 있으면 통과한다', () => {
+test('C-7 골격에서 빠진 섹션을 잡아낸다', () => {
   assert.equal(checkSkeleton(REPORT).ok, false, '샘플 리포트에는 뒤쪽 섹션이 없다')
   assert.ok(checkSkeleton(REPORT).problems.some(p => p.includes('도구 실행 결과')))
 })

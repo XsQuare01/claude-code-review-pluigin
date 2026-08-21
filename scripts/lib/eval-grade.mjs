@@ -9,17 +9,22 @@ const DETAIL_HEADING = '## 상세 지적'
 const strip = value => String(value ?? '').replace(/`/g, '').trim()
 
 /**
- * `## 상세 지적` 아래부터 다음 `## ` 헤딩 직전까지를 잘라낸다.
+ * `heading` 아래부터 다음 `## ` 헤딩 직전까지를 잘라낸다.
  *
  * `### ` 하위 헤딩은 경계가 아니다 — 모듈 이름이 거기 있다.
  */
-export function extractDetailSection(reportText) {
+function sectionBetween(reportText, heading) {
   const lines = String(reportText ?? '').split(/\r\n|\r|\n/)
-  const start = lines.findIndex(line => line.trim() === DETAIL_HEADING)
+  const start = lines.findIndex(line => line.trim() === heading)
   if (start === -1) return []
   const rest = lines.slice(start + 1)
   const end = rest.findIndex(line => /^## /.test(line.trim()))
   return end === -1 ? rest : rest.slice(0, end)
+}
+
+// `## 상세 지적` 아래 섹션만 잘라낸다 — 지적 파서가 신뢰하는 경계.
+export function extractDetailSection(reportText) {
+  return sectionBetween(reportText, DETAIL_HEADING)
 }
 
 /**
@@ -243,18 +248,9 @@ export function checkScriptRan(reportText) {
 
 const SEVERITY_KEY = { '🔴': 'red', '🟡': 'yellow', '🔵': 'blue' }
 
-function summarySection(reportText) {
-  const lines = String(reportText ?? '').split(/\r\n|\r|\n/)
-  const start = lines.findIndex(line => line.trim() === '## 요약')
-  if (start === -1) return []
-  const rest = lines.slice(start + 1)
-  const end = rest.findIndex(line => /^## /.test(line.trim()))
-  return end === -1 ? rest : rest.slice(0, end)
-}
-
 export function checkSummaryArithmetic(reportText, findings) {
   const summary = { red: 0, yellow: 0, blue: 0 }
-  for (const line of summarySection(reportText)) {
+  for (const line of sectionBetween(reportText, '## 요약')) {
     const cells = splitRow(line)
     if (!cells || cells.length < 4) continue
     const [, red, yellow, blue] = cells
