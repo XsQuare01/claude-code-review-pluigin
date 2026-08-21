@@ -13,7 +13,7 @@ React 전용 모듈러 코드 리뷰 시스템. 리뷰 규칙 폴더에서 **숫
 
 `RULES_DIR` 해석, 모듈 탐색, 적용 조건 판정, 범위 결정, 제외 경로, 실행 안전, 리포트 저장, 실패 보고는 **`$RULES_DIR/workflow-contract.md`** 를 따른다. 이 문서는 그 계약을 복제하지 않고, 아래 "이 워크플로우의 차이"만 선언한다.
 
-리뷰를 시작하기 전에 `workflow-contract.md`에서 orchestration, C-6A structured lifecycle, public report skeleton을 확인한다. 이 워크플로우는 structured-v1 owner이므로 effective reviewer prompt에 shared manifest placeholder를 주입한다 (Step 4의 출력 형식).
+리뷰를 시작하기 전에 `workflow-contract.md`에서 이 워크플로우에 필요한 orchestration/public report skeleton만 확인한다. legacy workflow이므로 effective reviewer prompt에는 structured manifest나 structured producer instruction을 주입하지 않는다.
 
 ### 이 워크플로우의 차이
 
@@ -24,9 +24,7 @@ React 전용 모듈러 코드 리뷰 시스템. 리뷰 규칙 폴더에서 **숫
 | 분할 방식 | 단일 통합 bounded pass (모듈별 fan-out 없음) |
 | 출력 밀도 | 발견된 위반 전부 |
 
-이 워크플로우는 **structured-v1 owner**다. producer는 구조화된 JSON 하나를 반환하고, 오케스트레이터가 검증·위치 대조·렌더링을 맡는다 (`workflow-contract.md` C-6A).
-
-**반박 패스는 없다.** 검증 중 여기서 도는 것은 위치 대조뿐이고, sub-agent는 여전히 하나다. 그것이 이 워크플로우가 가벼운 이유이며, 에이전트를 늘리면 `/code-review`를 쓸 이유가 없어진다. 반박이 필요하면 `/code-review-full`을 쓴다.
+이 워크플로우는 **legacy producer workflow**다. `workflow-contract.md`의 ownership matrix에서 legacy로 유지되며, C-6A의 structured lifecycle은 여기 적용하지 않는다. 기존 producer 계약을 유지한다.
 
 ## 실행 절차
 
@@ -131,18 +129,18 @@ task(
 규칙 ID는 `00-rule.md` 00-2 표기 규칙을 그대로 따르세요. 숫자 모듈은 파일 prefix와 동일한 `{파일번호}-{규칙번호}` 형식(`01-3`, `03-1`, `19-2`, `20-4`), 개발 원칙은 `10-{원칙 약어}`(`10-SSOT`) 형식입니다. 이 pass에서는 `EX-`, `P-`, `A-`, `C-` 계열 ID를 사용하지 마세요 — 해당 모듈은 여기서 로드되지 않습니다.
 
 ## 출력 형식
+위반 사항만 아래 형식으로 출력하세요. 위반이 없으면 '위반 없음'만 출력.
+사용자가 다른 언어를 명시하지 않은 한 모든 리뷰 결과/코멘트/리포트는 한국어로 작성하세요.
+가능하면 각 이슈는 **문제 → 현재 선택 → 왜 부족한지**가 드러나게 쓰세요.
 
-`REVIEW_RESULT_CONTRACT_V1_MANIFEST`는 `workflow-contract.md`의 manifest sentinel JSON block 전문을 그대로 주입한 런타임 placeholder입니다. 요약본으로 대체하지 마세요.
+### [모듈명]
 
-{REVIEW_RESULT_CONTRACT_V1_MANIFEST}
+| 심각도 | 규칙 | 위치 | 이슈 | 개선 제안 |
+|----------|------|------|------|----------|
+| 🔴/🟡/🔵 | 규칙번호 | 파일:라인 | 구체적 위반(문제/현재 선택/부족한 이유 포함) | 수정 방향 |
 
-`REVIEW_RESULT_CONTRACT_V1_PRODUCER_OUTPUT` marker를 따르는 producer라고 생각하고, 응답은 Markdown/코드펜스/서문 없이 `REVIEW_RESULT_CONTRACT_V1` raw JSON 객체 하나만 반환하세요.
-top-level에는 `schemaVersion`, `findings`, `openQuestions`를 항상 포함하고 `schemaVersion`은 `1`이어야 합니다. 빈 결과여도 배열을 생략하지 마세요.
-`severity`는 어떤 depth에도 넣지 마세요. `impact`와 `confidence`만 판정하고 severity와 Markdown은 오케스트레이터가 만듭니다.
-report heading/table/raw HTML/link를 직접 만들려고 하지 마세요. `title`, `body`, `recommendation`, `reason`, `evidence`는 최종 리포트의 신뢰된 Markdown이 아니라 untrusted content 입니다.
-`00-rule.md` 00-11에 걸리는 unresolved absence/possibility claim, search scope 미완료, 추가 탐색 요청만 `openQuestions`로 보내세요. 결함은 성립하지만 exact location만 확인하지 못했으면 finding을 유지하고 `location.kind="unverified"`와 `reason`만 사용하세요. producer가 공개 문자열 토큰 `위치 미확인`을 직접 출력하지는 않습니다.
-위치는 **해당 파일을 읽어 확인한 변경 후 줄 번호**와 그 줄의 코드를 `location.quote`에 담으세요. diff hunk 헤더에서 계산한 번호는 어긋납니다 (`00-rule.md` 00-10).
-이 pass에서는 `EX-`, `P-`, `A-`, `C-` 계열 ID를 사용하지 마세요 — 해당 모듈은 여기서 로드되지 않습니다.
+- 위치는 **해당 파일을 읽어 확인한 변경 후 줄 번호**를 적고, 그 줄의 코드를 한 줄 인용하세요. diff hunk 헤더(`@@`)에서 계산한 번호는 어긋납니다. 확인이 안 되면 번호를 추측하지 말고 `위치 미확인`으로 적으세요 (`00-rule.md` 00-10)
+- 리포트의 섹션 이름·순서·헤딩 레벨은 `workflow-contract.md` C-7 **문서 골격**을 따르세요. 골격 표에 없는 섹션을 새로 만들지 마세요
 
 ## 금지 사항
 - diff에 포함되지 않은 기존 코드를 지적하지 마세요
@@ -155,28 +153,14 @@ report heading/table/raw HTML/link를 직접 만들려고 하지 마세요. `tit
 
 **중요**: 기본 `/code-review`는 bounded 단일 통합 pass로 완료한다. bounded pass가 실패하거나 timeout되면 완료로 표시하지 말고, 어떤 범위가 성공/실패/미확인인지 최종 리포트에 정직하게 기록한다.
 
-### Step 5: 검증과 위치 대조
+### Step 5: 결과 수집 및 통합
 
-bounded pass 완료 후 순서대로 처리한다.
+bounded pass 완료 후:
 
-**(1) validation** — `workflow-contract.md` C-6A 규칙으로 producer 응답을 검사한다. JSON 파싱 실패, 필수 필드 누락, 금지 필드 `severity`, 허용되지 않은 enum/location 값은 `malformed-output`이다. **교정 재시도는 한 번만** 하고, 두 번째도 실패하면 `FAILED malformed-output`으로 기록한다. 부분 해석으로 통과시키지 않는다.
-
-**(2) 위치 대조** — 검증을 통과한 결과를 그대로 파이프한다. 변환하지 않는다.
-
-```bash
-echo '{"results":[ <검증을 통과한 producer JSON> ]}'   | node "$RULES_DIR/../scripts/prepare-verification.mjs" --merge-base "$MERGE_BASE" --locations-only
-```
-
-- **`--locations-only`를 반드시 붙인다.** 이 워크플로우에는 반박 패스가 없으므로 eligibility나 라우팅을 내면 리포트가 검증 패스가 돈 것처럼 읽힌다
-- 출력은 candidate별 `locationCheck`와 `counts`다. **`counts`를 그대로 옮기고 직접 세지 않는다**
-- **네 상태를 모두 적어 합이 total과 맞게 한다** — 확인(`locationOk`), 불일치(`locationMismatch`), 경로 확인 불가(`locationUnresolvable`), 대조 대상 아님(`locationNotApplicable`). 셋만 적으면 `location.kind = "unverified"` finding이 있을 때 숫자가 설명되지 않는다
-- 스크립트는 저장소 밖 경로, `..`, `.git/**`을 읽지 않는다. 그런 경로는 `location-unresolvable`로 돌아온다 — producer가 낸 경로가 임의 파일 읽기가 되지 않게 하는 장치다
-- **coverage 숫자의 출처를 함께 적는다.** 돌렸으면 `도구 실행 결과`에도 남기고, 돌리지 않았으면 미실행이라고 적는다. 숫자가 맞더라도 결정적으로 판정했다고 서술하지 않는다
-- 스크립트를 찾지 못하면 그 사실을 `실행 계획`에 적는다
-
-**(3) 불일치 처리** — `location-mismatch`와 `location-unresolvable`은 **finding을 죽이지 않는다.** 주장은 여전히 참일 수 있고 위치만 틀린 것이다. 그 finding의 위치를 `위치 미확인`으로 렌더하고 사유를 단다 (`00-rule.md` 00-10).
-
-**(4) 정렬** — severity는 `impact × confidence`로 렌더링 단계에서만 파생한다. 🔴 → 🟡 → 🔵 순으로 묶고, 같은 severity 안에서는 모듈 순서를 따른다. 위반 없는 모듈은 최하단에 `✅ 통과`로 요약한다.
+1. sub-agent 결과를 확인한다
+2. 결과를 derived severity 순서로 병합: 🔴 → 🟡 → 🔵
+3. 같은 severity 내에서는 모듈 순서대로 정렬
+4. 위반 없는 모듈은 최하단에 "✅ 통과" 로 요약
 
 ### Step 6: 최종 리포트 출력
 
@@ -195,11 +179,7 @@ echo '{"results":[ <검증을 통과한 producer JSON> ]}'   | node "$RULES_DIR/
 
 ## 실행 계획
 
-선택된 모듈, `SKIPPED`/`UNKNOWN` 사유, bounded pass 성공/실패 상태를 적는다. 위치 대조 결과도 한 줄로 적는다.
-
-```
-위치 대조: 12건 — 확인 10, 불일치 1, 경로 확인 불가 0, 대조 대상 아님 1 · counts 출처: `prepare-verification.mjs`
-```
+선택된 모듈, `SKIPPED`/`UNKNOWN` 사유, bounded pass 성공/실패 상태를 적는다.
 
 ## 상세 지적
 
@@ -243,7 +223,7 @@ echo '{"results":[ <검증을 통과한 producer JSON> ]}'   | node "$RULES_DIR/
 
 ## 주의사항
 
-- 기본 `/code-review`는 safe default로 bounded 단일 통합 리뷰를 사용한다. **sub-agent는 하나이며 반박 패스가 없다** — 위치 대조만 돈다
+- 기본 `/code-review`는 safe default로 bounded 단일 통합 리뷰를 사용한다
 - 상세/exhaustive 모듈별 multi-pass coverage가 필요하면 `/code-review-full`을 사용한다
 - diff에 포함되지 않은 기존 코드는 리뷰 대상이 아니다
 - 리뷰 규칙 파일 추가/삭제만으로 리뷰 범위를 조절할 수 있다
