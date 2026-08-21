@@ -516,6 +516,30 @@ These scenarios pin the behaviour that `review-rules/workflow-contract.md` promi
       ],
       "scenario": "The same producer results are prepared twice, with the producers finishing in a different order the second time",
       "expected": "Every candidate keeps the same {ruleId}#{n} id both times — the ordinal follows normalized location, so a slow module does not renumber other findings"
+    },
+    {
+      "id": 68,
+      "clauses": [
+        "C-7"
+      ],
+      "scenario": "A /code-review run emits its table but no REVIEW_LOCATIONS block",
+      "expected": "The report says 대조 미실행 and keeps every finding; no corrective retry is issued and the run is not described as location-verified"
+    },
+    {
+      "id": 69,
+      "clauses": [
+        "C-7"
+      ],
+      "scenario": "A REVIEW_LOCATIONS row quotes a line that does not match the file",
+      "expected": "The finding stays in the table with its severity and only its location becomes 위치 미확인 with a reason"
+    },
+    {
+      "id": 70,
+      "clauses": [
+        "C-7"
+      ],
+      "scenario": "The script returns fewer rows than the REVIEW_LOCATIONS block sent",
+      "expected": "The whole check degrades to 대조 미실행 rather than reporting a partial result as complete"
     }
   ],
   "defaultWorkflowOnlyCases": [
