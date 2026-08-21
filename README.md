@@ -177,7 +177,7 @@ A version-gated rule that fires on a project that cannot use the API is a false 
 | `/code-review-math` | 3D transform / matrix logic (Three.js, R3F, WebGL) |
 | `/code-review-exception` | Exception handling, propagation, fallback, recovery |
 
-`/code-review` runs a location check on its findings — one sub-agent, no rebuttal pass. `/code-review-full` accepts `--verify` to control its cross-verification pass — `selective` (default), `exhaustive`, or `off`. See [Cross-verification](#cross-verification-25) below.
+`/code-review-full` accepts `--verify` to control its cross-verification pass — `selective` (default), `exhaustive`, or `off`. See [Cross-verification](#cross-verification-25) below.
 
 `/code-review` accepts `--module` to restrict the pass to specific rule modules. Tokens resolve against the module filenames at runtime — by number (`--module 01,02`), by slug (`--module fsd,type`), or by unambiguous slug prefix. An unknown or ambiguous token stops the review and lists the available modules rather than silently falling back to a full pass; modules that were filtered out are never reported as passing.
 
@@ -224,12 +224,6 @@ Non-numbered files are excluded from the automatic scan:
 `review-rules/workflow-contract.md` holds the procedure every workflow shares: rules-directory resolution, module discovery, applicability gating, diff range, excluded paths, execution safety, report naming, and honest failure reporting. Each skill references it and declares only what differs in its own mode — scope, module set, fan-out strategy, output density.
 
 The contract exists because the alternative had already failed: the same procedure copied into seven skill documents drifted apart, and workflows started behaving differently for the same request.
-
-### Location checking in `/code-review` (2.6.0)
-
-`/code-review` now returns structured results and its findings get their quoted lines compared against the files they name. A quote that does not match renders as `위치 미확인` with a reason rather than disappearing — a wrong line number does not make the claim false.
-
-It does **not** gain a rebuttal pass. The command stays at one sub-agent, which is the reason to reach for it over `/code-review-full`; adding verifier agents would remove that reason. `fast` and `commit` remain legacy producers.
 
 ### Structured producer results, accepted internal interface in 2.4.0
 

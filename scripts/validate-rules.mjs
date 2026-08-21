@@ -77,7 +77,6 @@ function hasOwn(object, key) {
 
 const STRUCTURED_PRODUCER_MARKER = 'REVIEW_RESULT_CONTRACT_V1_PRODUCER_OUTPUT'
 const STRUCTURED_OWNER_CONSUMERS = {
-  'skills/code-review/SKILL.md': ['validation', 'rendering'],
   'skills/code-review-full/SKILL.md': ['validation', 'aggregation', 'rendering'],
   'skills/code-review-props/SKILL.md': ['validation', 'rendering'],
   'skills/code-review-math/SKILL.md': ['validation', 'rendering'],
@@ -90,6 +89,7 @@ const STRUCTURED_OWNER_POLICY_BEARING_COMMON_CONTEXTS = {
   'skills/code-review-exception/SKILL.md': ['review-rules/00-rule.md'],
 }
 const LEGACY_WORKFLOW_FILES = [
+  'skills/code-review/SKILL.md',
   'skills/code-review-commit/SKILL.md',
   'skills/code-review-fast/SKILL.md',
 ]
@@ -309,7 +309,6 @@ function nearestHeadingSlice(text, anchor) {
 }
 
 const EXPLICIT_STRUCTURED_PRODUCER_FILES = [
-  'skills/code-review/SKILL.md',
   'skills/code-review-full/SKILL.md',
   'skills/code-review-props/SKILL.md',
   'skills/code-review-math/SKILL.md',
@@ -998,14 +997,14 @@ for (const [owner, contextPaths] of Object.entries(STRUCTURED_OWNER_POLICY_BEARI
     }
   }
 
-  for (const relativePath of ['skills/code-review-commit/SKILL.md']) {
+  for (const relativePath of ['skills/code-review/SKILL.md', 'skills/code-review-commit/SKILL.md']) {
     const text = read(join(ROOT, relativePath))
     if (/workflow-contract\.md.*먼저 읽|workflow-contract\.md.*문서 골격/s.test(text) && !/structured manifest|structured producer instruction|effective reviewer prompt에는 structured manifest/.test(text)) {
       failCode('structured-producer', 'E_LEGACY_EFFECTIVE_CONTEXT_STRUCTURED_LEAK', `${relativePath} still imports workflow-contract.md into the effective reviewer prompt even though this workflow is registered as legacy-only`)
     }
   }
 
-  for (const relativePath of ['skills/code-review/SKILL.md', 'skills/code-review-full/SKILL.md', 'skills/code-review-props/SKILL.md', 'skills/code-review-math/SKILL.md', 'skills/code-review-exception/SKILL.md']) {
+  for (const relativePath of ['skills/code-review-full/SKILL.md', 'skills/code-review-props/SKILL.md', 'skills/code-review-math/SKILL.md', 'skills/code-review-exception/SKILL.md']) {
     const text = read(join(ROOT, relativePath))
     if (/00-rule\.md.*REVIEW_RESULT_CONTRACT_V1/.test(text)) {
       failCode('structured-producer', 'E_STALE_REFERENCE_STRUCTURED_MANIFEST', `${relativePath} still points structured validation at 00-rule.md instead of workflow-contract.md C-6A`)
