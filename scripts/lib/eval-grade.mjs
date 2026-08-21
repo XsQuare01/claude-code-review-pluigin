@@ -196,3 +196,92 @@ export function gradeFindings(findings, expected, blobLines) {
     modulesWithFindings: modules,
   }
 }
+
+// workflow-contract C-7 문서 골격. 이름과 순서를 그대로 따른다.
+export const REQUIRED_SECTIONS = [
+  '## 리뷰 기준',
+  '## 판정',
+  '## 실행 계획',
+  '## 상세 지적',
+  '## 요약',
+  '## 도구 실행 결과',
+  '## 미해결 / 후속 확인',
+]
+
+export function checkSkeleton(reportText) {
+  const headings = String(reportText ?? '')
+    .split(/\r\n|\r|\n/)
+    .map(line => line.trim())
+    .filter(line => /^## /.test(line))
+  const problems = []
+  let cursor = -1
+  for (const section of REQUIRED_SECTIONS) {
+    const at = headings.indexOf(section)
+    if (at === -1) {
+      problems.push(`빠짐: ${section}`)
+      continue
+    }
+    if (at < cursor) problems.push(`순서 어긋남: ${section}`)
+    cursor = Math.max(cursor, at)
+  }
+  return { ok: problems.length === 0, problems }
+}
+
+/**
+ * 위치 대조 스크립트가 실제로 돌았는지 본다 — 이슈 #50의 질문이다.
+ *
+ * 세 신호를 따로 남긴다. "돌았다"와 "안 돌렸다고 정직하게 적었다"와
+ * "아무 말도 없다"는 서로 다른 결과이고, 세 번째가 가장 나쁘다.
+ */
+export function checkScriptRan(reportText) {
+  const text = String(reportText ?? '')
+  const manifestBlock = text.includes('REVIEW_LOCATIONS:BEGIN')
+  const countsAttributed = text.includes('counts 출처')
+  const declaredSkipped = text.includes('대조 미실행')
+  return { ran: countsAttributed && !declaredSkipped, manifestBlock, countsAttributed, declaredSkipped }
+}
+
+const SEVERITY_KEY = { '🔴': 'red', '🟡': 'yellow', '🔵': 'blue' }
+
+function summarySection(reportText) {
+  const lines = String(reportText ?? '').split(/\r\n|\r|\n/)
+  const start = lines.findIndex(line => line.trim() === '## 요약')
+  if (start === -1) return []
+  const rest = lines.slice(start + 1)
+  const end = rest.findIndex(line => /^## /.test(line.trim()))
+  return end === -1 ? rest : rest.slice(0, end)
+}
+
+export function checkSummaryArithmetic(reportText, findings) {
+  const summary = { red: 0, yellow: 0, blue: 0 }
+  for (const line of summarySection(reportText)) {
+    const cells = splitRow(line)
+    if (!cells || cells.length < 4) continue
+    const [, red, yellow, blue] = cells
+    if (!/^\d+$/.test(red) || !/^\d+$/.test(yellow) || !/^\d+$/.test(blue)) continue
+    summary.red += Number(red)
+    summary.yellow += Number(yellow)
+    summary.blue += Number(blue)
+  }
+  const detail = { red: 0, yellow: 0, blue: 0 }
+  for (const finding of findings) {
+    const key = SEVERITY_KEY[finding.severity]
+    if (key) detail[key] += 1
+  }
+  const ok = summary.red === detail.red && summary.yellow === detail.yellow && summary.blue === detail.blue
+  return { ok, summary, detail }
+}
+
+/**
+ * runner가 부르는 유일한 함수. 축을 하나의 점수로 접지 않는다 —
+ * 어느 축이 움직였는지가 이 계측의 전부다.
+ */
+export function grade(reportText, expected, blobLines) {
+  const findings = parseFindings(reportText)
+  return {
+    ...gradeFindings(findings, expected, blobLines),
+    scriptRan: checkScriptRan(reportText),
+    skeletonOk: checkSkeleton(reportText),
+    summaryArithmetic: checkSummaryArithmetic(reportText, findings),
+  }
+}

@@ -236,3 +236,69 @@ test('collectBlobs()의 원시 문자열을 그대로 넘기면 채점 대신 �
     /array of lines/,
   )
 })
+
+import { checkSkeleton, checkScriptRan, checkSummaryArithmetic, grade } from '../scripts/lib/eval-grade.mjs'
+
+test('C-7 골격 섹션이 다 있으면 통과한다', () => {
+  assert.equal(checkSkeleton(REPORT).ok, false, '샘플 리포트에는 뒤쪽 섹션이 없다')
+  assert.ok(checkSkeleton(REPORT).problems.some(p => p.includes('도구 실행 결과')))
+})
+
+test('섹션 순서가 뒤바뀌면 잡아낸다', () => {
+  const swapped = [
+    '# t', '## 리뷰 기준', '## 실행 계획', '## 판정', '## 상세 지적',
+    '## 요약', '## 도구 실행 결과', '## 미해결 / 후속 확인',
+  ].join('\n\n')
+  const result = checkSkeleton(swapped)
+  assert.equal(result.ok, false)
+  assert.ok(result.problems.some(p => p.includes('순서')))
+})
+
+test('모든 섹션이 순서대로 있으면 ok다', () => {
+  const good = [
+    '# t', '## 리뷰 기준', '## 판정', '## 실행 계획', '## 상세 지적',
+    '## 요약', '## 도구 실행 결과', '## 미해결 / 후속 확인',
+  ].join('\n\n')
+  assert.deepEqual(checkSkeleton(good), { ok: true, problems: [] })
+})
+
+test('counts 출처가 적혀 있으면 스크립트가 돈 것으로 본다', () => {
+  const result = checkScriptRan(REPORT)
+  assert.equal(result.countsAttributed, true)
+  assert.equal(result.declaredSkipped, false)
+  assert.equal(result.ran, true)
+})
+
+test('대조 미실행이라고 적었으면 돈 것이 아니다', () => {
+  const result = checkScriptRan('## 실행 계획\n\n위치 대조: 대조 미실행 (REVIEW_LOCATIONS 블록 없음)\n')
+  assert.equal(result.declaredSkipped, true)
+  assert.equal(result.ran, false)
+})
+
+test('아무 언급도 없으면 돈 것이 아니고 건너뛴다고 선언한 것도 아니다', () => {
+  const result = checkScriptRan('## 실행 계획\n\n모듈 21개 검토\n')
+  assert.equal(result.ran, false)
+  assert.equal(result.declaredSkipped, false)
+  assert.equal(result.manifestBlock, false)
+})
+
+test('요약 표 합계가 상세 지적과 맞는지 본다', () => {
+  const findings = parseFindings(REPORT)
+  const result = checkSummaryArithmetic(REPORT, findings)
+  assert.deepEqual(result.summary, { red: 1, yellow: 1, blue: 0 })
+  assert.deepEqual(result.detail, { red: 2, yellow: 1, blue: 0 })
+  assert.equal(result.ok, false, '샘플은 02-1이 요약에서 빠져 있다')
+})
+
+test('grade가 모든 축을 한 객체로 준다', () => {
+  const blobs = { head: { 'src/a.tsx': new Array(40).fill('x') }, base: {} }
+  const expected = {
+    mustFind: [{ id: 'key-index', ruleIds: ['03-3'], path: 'src/a.tsx', line: 31, lineTolerance: 1 }],
+    mustNotFlag: [],
+  }
+  const result = grade(REPORT, expected, blobs)
+  assert.equal(result.recall.found, 1)
+  assert.equal(result.scriptRan.ran, true)
+  assert.equal(result.skeletonOk.ok, false)
+  assert.equal(typeof result.summaryArithmetic.ok, 'boolean')
+})
