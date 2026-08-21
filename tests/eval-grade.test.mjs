@@ -228,3 +228,11 @@ test('mustFind와 mustNotFlag가 같은 경로를 쓰면 채점 대신 던진다
   }
   assert.throws(() => assertNoPathOverlap(bad), /src\/x\.tsx/)
 })
+
+test('collectBlobs()의 원시 문자열을 그대로 넘기면 채점 대신 던진다', () => {
+  const blobs = { head: { 'src/a.tsx': 'line one\nline two' }, base: {} }
+  assert.throws(
+    () => gradeFindings([finding('03-3', 'src/a.tsx', 1)], { mustFind: [], mustNotFlag: [] }, blobs),
+    /array of lines/,
+  )
+})

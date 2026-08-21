@@ -104,8 +104,17 @@ const onTargetPath = (finding, target) => {
 
 const ruleAllowed = (finding, target) => (target.ruleIds ?? []).includes(finding.ruleId)
 
-const resolveLines = (location, blobLines) =>
-  blobLines?.head?.[location.path] ?? blobLines?.base?.[location.path]
+// collectBlobs() (prepare-verification.mjs) stores raw file content as a string, not an
+// array of lines. If that string ever reaches here unsplit, `.length` silently becomes a
+// character count instead of a line count, and locationsInRange stops catching anything —
+// so a wrong shape must throw here, not be scored.
+const resolveLines = (location, blobLines) => {
+  const lines = blobLines?.head?.[location.path] ?? blobLines?.base?.[location.path]
+  if (typeof lines === 'string') {
+    throw new Error(`blobLines['${location.path}'] is a string, not an array of lines — collectBlobs() output cannot be passed to gradeFindings() directly; split it into lines first`)
+  }
+  return lines
+}
 
 export function gradeFindings(findings, expected, blobLines) {
   assertNoPathOverlap(expected)
