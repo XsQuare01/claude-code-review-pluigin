@@ -111,3 +111,120 @@ test('이슈 칸에 파이프가 들어와도 앞 세 칸이 밀리지 않는다
   assert.equal(findings[0].ruleId, '09-13')
   assert.equal(findings[0].location.line, 5)
 })
+
+import { assertNoPathOverlap, gradeFindings } from '../scripts/lib/eval-grade.mjs'
+
+const EXPECTED = {
+  mustFind: [
+    { id: 'key-index', ruleIds: ['03-3', '06-3'], path: 'src/a.tsx', line: 31, lineTolerance: 1 },
+    { id: 'falsy-render', ruleIds: ['06-1'], path: 'src/a.tsx', line: 12, lineTolerance: 1 },
+    { id: 'missing-cleanup', ruleIds: ['04-1'], path: 'src/b.ts', line: 8, lineTolerance: 2 },
+  ],
+  mustNotFlag: [
+    { id: 'violation-in-test', path: 'src/a.test.tsx', why: 'C-5 제외 경로' },
+  ],
+}
+
+const BLOBS = {
+  head: {
+    'src/a.tsx': new Array(40).fill('x'),
+    'src/b.ts': new Array(10).fill('x'),
+    'src/a.test.tsx': new Array(20).fill('x'),
+  },
+  base: {},
+}
+
+const finding = (ruleId, path, line) => ({
+  module: 'M', severity: '🔴', ruleId,
+  location: path === null ? { unverified: true, raw: '위치 미확인' } : { path, line, endLine: undefined },
+})
+
+test('기대한 결함을 규칙과 경로로 맞춘다', () => {
+  const result = gradeFindings(
+    [finding('03-3', 'src/a.tsx', 31), finding('06-1', 'src/a.tsx', 12)],
+    EXPECTED, BLOBS,
+  )
+  assert.equal(result.recall.found, 2)
+  assert.equal(result.recall.of, 3)
+  assert.deepEqual(result.recall.missed, ['missing-cleanup'])
+})
+
+test('허용 규칙 ID 중 하나만 맞아도 탐지로 센다', () => {
+  const result = gradeFindings([finding('06-3', 'src/a.tsx', 31)], EXPECTED, BLOBS)
+  assert.equal(result.recall.found, 1)
+})
+
+test('줄 번호가 tolerance를 벗어나면 재현율은 인정하고 정확도만 깎는다', () => {
+  const result = gradeFindings([finding('03-3', 'src/a.tsx', 23)], EXPECTED, BLOBS)
+  assert.equal(result.recall.found, 1, '결함은 찾았다')
+  assert.equal(result.locationsOnTarget.ok, 0, '위치는 틀렸다')
+  assert.equal(result.locationsOnTarget.of, 1)
+})
+
+test('위치를 못 잡은 지적도 규칙만으로 탐지에 센다 — 다만 따로 표시한다', () => {
+  const result = gradeFindings([finding('04-1', null, null)], EXPECTED, BLOBS)
+  assert.equal(result.recall.found, 1)
+  assert.equal(result.recall.ruleOnly, 1)
+  assert.equal(result.locationsInRange.of, 0, '경로가 없으니 존재성 검사 대상이 아니다')
+})
+
+test('금지 대상을 지적하면 오탐으로 센다', () => {
+  const result = gradeFindings([finding('03-3', 'src/a.test.tsx', 4)], EXPECTED, BLOBS)
+  assert.equal(result.falsePositives.count, 1)
+  assert.deepEqual(result.falsePositives.hits.map(h => h.target), ['violation-in-test'])
+  assert.equal(result.unclassified, 0, '오탐은 unclassified가 아니다')
+})
+
+test('심지 않은 진짜 문제는 오탐이 아니라 unclassified다', () => {
+  const result = gradeFindings([finding('15-2', 'src/b.ts', 3)], EXPECTED, BLOBS)
+  assert.equal(result.falsePositives.count, 0)
+  assert.equal(result.unclassified, 1)
+})
+
+test('파일 길이를 넘는 줄 번호를 잡아낸다', () => {
+  const result = gradeFindings([finding('03-3', 'src/a.tsx', 999)], EXPECTED, BLOBS)
+  assert.equal(result.locationsInRange.ok, 0)
+  assert.equal(result.locationsInRange.of, 1)
+  assert.deepEqual(result.locationsInRange.bad, [{ path: 'src/a.tsx', line: 999, reason: 'line beyond file length' }])
+})
+
+test('없는 경로를 잡아낸다', () => {
+  const result = gradeFindings([finding('03-3', 'src/nope.tsx', 1)], EXPECTED, BLOBS)
+  assert.deepEqual(result.locationsInRange.bad, [{ path: 'src/nope.tsx', line: 1, reason: 'path not in fixture' }])
+})
+
+test('삭제된 위치는 merge base 쪽에서 찾는다', () => {
+  const blobs = { head: {}, base: { 'src/gone.ts': new Array(5).fill('x') } }
+  const result = gradeFindings([finding('20-2', 'src/gone.ts', 3)], { mustFind: [], mustNotFlag: [] }, blobs)
+  assert.equal(result.locationsInRange.ok, 1)
+})
+
+test('하나의 지적이 두 기대값을 동시에 채우지 않는다', () => {
+  const expected = {
+    mustFind: [
+      { id: 'first', ruleIds: ['03-3'], path: 'src/a.tsx', line: 31, lineTolerance: 1 },
+      { id: 'second', ruleIds: ['03-3'], path: 'src/a.tsx', line: 31, lineTolerance: 1 },
+    ],
+    mustNotFlag: [],
+  }
+  const result = gradeFindings([finding('03-3', 'src/a.tsx', 31)], expected, BLOBS)
+  assert.equal(result.recall.found, 1)
+  assert.deepEqual(result.recall.missed, ['second'])
+})
+
+test('발견된 모듈을 모은다', () => {
+  const result = gradeFindings(
+    [{ ...finding('03-3', 'src/a.tsx', 31), module: 'React 규칙' },
+     { ...finding('02-1', 'src/b.ts', 2), module: '타입 안전성' }],
+    EXPECTED, BLOBS,
+  )
+  assert.deepEqual(result.modulesWithFindings, ['React 규칙', '타입 안전성'])
+})
+
+test('mustFind와 mustNotFlag가 같은 경로를 쓰면 채점 대신 던진다', () => {
+  const bad = {
+    mustFind: [{ id: 'a', ruleIds: ['03-3'], path: 'src/x.tsx', line: 1, lineTolerance: 0 }],
+    mustNotFlag: [{ id: 'b', path: 'src/x.tsx', why: '겹침' }],
+  }
+  assert.throws(() => assertNoPathOverlap(bad), /src\/x\.tsx/)
+})

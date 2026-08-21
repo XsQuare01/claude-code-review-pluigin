@@ -79,3 +79,111 @@ export function parseFindings(reportText) {
   }
   return findings
 }
+
+/**
+ * 같은 경로가 mustFind와 mustNotFlag에 동시에 있으면 채점 결과가 조용히
+ * 틀린다. 조용히 틀리는 대신 크게 실패한다 — fixture 작성 실수는 지표가
+ * 아니라 예외로 드러나야 한다.
+ */
+export function assertNoPathOverlap(expected) {
+  const findPaths = new Set((expected?.mustFind ?? []).map(target => target.path))
+  for (const target of expected?.mustNotFlag ?? []) {
+    if (findPaths.has(target.path)) {
+      throw new Error(`expected.json overlaps on ${target.path} — a path cannot be both mustFind and mustNotFlag`)
+    }
+  }
+}
+
+const onTargetPath = (finding, target) => {
+  const location = finding.location
+  if (location.unverified) return false
+  if (location.path !== target.path) return false
+  if (!target.lineRange) return true
+  return location.line >= target.lineRange[0] && location.line <= target.lineRange[1]
+}
+
+const ruleAllowed = (finding, target) => (target.ruleIds ?? []).includes(finding.ruleId)
+
+const resolveLines = (location, blobLines) =>
+  blobLines?.head?.[location.path] ?? blobLines?.base?.[location.path]
+
+export function gradeFindings(findings, expected, blobLines) {
+  assertNoPathOverlap(expected)
+
+  const claimed = new Set()
+  const matched = []
+  const missed = []
+  let ruleOnly = 0
+
+  for (const target of expected?.mustFind ?? []) {
+    let index = findings.findIndex((f, i) => !claimed.has(i) && ruleAllowed(f, target) && onTargetPath(f, target))
+    let via = 'path'
+    if (index === -1) {
+      // 결함은 찾았는데 위치를 못 잡은 경우. 탐지로는 인정하되 따로 센다 —
+      // 규칙 ID만 나열하고 위치를 전부 비운 리포트가 재현율만으로는 만점이
+      // 되기 때문에, 그 형태가 벡터에서 보여야 한다.
+      index = findings.findIndex((f, i) => !claimed.has(i) && ruleAllowed(f, target) && f.location.unverified)
+      via = 'rule-only'
+    }
+    if (index === -1) {
+      missed.push(target.id)
+      continue
+    }
+    claimed.add(index)
+    if (via === 'rule-only') ruleOnly += 1
+    matched.push({ target: target.id, index, via })
+  }
+
+  const targetById = new Map((expected?.mustFind ?? []).map(target => [target.id, target]))
+  const pathMatched = matched.filter(entry => entry.via === 'path')
+  const onTargetCount = pathMatched.filter(entry => {
+    const target = targetById.get(entry.target)
+    const line = findings[entry.index].location.line
+    return Math.abs(line - target.line) <= (target.lineTolerance ?? 0)
+  }).length
+
+  const falsePositiveHits = []
+  const flaggedForbidden = new Set()
+  findings.forEach((finding, index) => {
+    const hit = (expected?.mustNotFlag ?? []).find(target => onTargetPath(finding, target))
+    if (!hit) return
+    flaggedForbidden.add(index)
+    falsePositiveHits.push({ target: hit.id, ruleId: finding.ruleId, location: finding.location })
+  })
+
+  const badLocations = []
+  let inRangeOk = 0
+  let inRangeOf = 0
+  for (const finding of findings) {
+    const location = finding.location
+    if (location.unverified) continue
+    inRangeOf += 1
+    const lines = resolveLines(location, blobLines)
+    if (!lines) {
+      badLocations.push({ path: location.path, line: location.line, reason: 'path not in fixture' })
+      continue
+    }
+    if (location.line < 1 || location.line > lines.length) {
+      badLocations.push({ path: location.path, line: location.line, reason: 'line beyond file length' })
+      continue
+    }
+    inRangeOk += 1
+  }
+
+  const unclassified = findings.filter((_, index) => !claimed.has(index) && !flaggedForbidden.has(index)).length
+
+  const modules = []
+  for (const finding of findings) {
+    if (finding.module && !modules.includes(finding.module)) modules.push(finding.module)
+  }
+
+  return {
+    findings: findings.length,
+    recall: { found: matched.length, of: (expected?.mustFind ?? []).length, ruleOnly, missed },
+    falsePositives: { count: falsePositiveHits.length, hits: falsePositiveHits },
+    unclassified,
+    locationsInRange: { ok: inRangeOk, of: inRangeOf, bad: badLocations },
+    locationsOnTarget: { ok: onTargetCount, of: pathMatched.length },
+    modulesWithFindings: modules,
+  }
+}
