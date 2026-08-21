@@ -1,4 +1,6 @@
 import { execFileSync } from 'node:child_process'
+import { readFileSync } from 'node:fs'
+import { isAbsolute, resolve, sep } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
 // Deterministic preparation for the cross-verification pass.
@@ -144,6 +146,38 @@ export function buildBundles(routed) {
 }
 
 /**
+ * Location checking with nothing else attached.
+ *
+ * `/code-review` has no rebuttal pass, so returning eligibility, routes or bundles here
+ * would let a report read as though one had run. What it needs is narrower: did the
+ * quoted line survive contact with the file.
+ */
+function locationsOnly(candidates, blobs) {
+  const checked = candidates.map(candidate => {
+    const check = checkLocation(candidate.location, blobs)
+    return {
+      candidateId: candidate.candidateId,
+      ruleId: candidate.ruleId,
+      locationCheck: check.status,
+      observed: check.observed ?? null,
+      reason: check.reason ?? null,
+      location: candidate.location,
+    }
+  })
+  const count = status => checked.filter(entry => entry.locationCheck === status).length
+  return {
+    candidates: checked,
+    counts: {
+      total: checked.length,
+      locationOk: count('location-ok'),
+      locationMismatch: count('location-mismatch'),
+      locationUnresolvable: count('location-unresolvable'),
+      locationNotApplicable: count('not-applicable'),
+    },
+  }
+}
+
+/**
  * Run the whole deterministic preparation in one call and report counts alongside it.
  *
  * The counts exist so the report cannot claim a coverage split that does not add up:
@@ -151,8 +185,9 @@ export function buildBundles(routed) {
  * Deriving them here rather than in prose is the point — a hand-written tally is exactly
  * what drifted before.
  */
-export function prepareVerification(candidates, blobs) {
+export function prepareVerification(candidates, blobs, options = {}) {
   const list = candidates ?? []
+  if (options.locationsOnly) return locationsOnly(list, blobs)
   const collisions = computeOwnerCollisions(list)
   const decided = list.map(candidate => {
     const check = checkLocation(candidate.location, blobs)
@@ -193,12 +228,72 @@ export function prepareVerification(candidates, blobs) {
 //          { "candidates": [ … ] }                            when the caller owns the ids
 // stdout : { "candidates": [ … ], "bundles": [ … ], "counts": { … } }
 //
+// --locations-only : location checks and their counts, with no eligibility, route or
+//                    bundle. For workflows that have no rebuttal pass.
+//
 // Blobs are read here rather than passed in, so the caller does not have to
 // serialize file contents and cannot accidentally supply the wrong revision.
 
-function readBlobs(candidates, mergeBase) {
+/**
+ * Gather the file contents each location claims to come from.
+ *
+ * A verified location is read from the working tree first, because that is what the
+ * producer read when it recorded the line. Reading HEAD instead makes every uncommitted
+ * edit look like a wrong line number, which would discredit the check rather than the
+ * finding. HEAD remains the fallback for paths that are not on disk.
+ *
+ * A deleted location can only come from the merge base — the point of it is that the code
+ * is gone from HEAD.
+ */
+export function collectBlobs(candidates, readers) {
   const head = {}
   const base = {}
+  for (const candidate of candidates ?? []) {
+    const location = candidate?.location
+    const path = location?.path
+    if (typeof path !== 'string') continue
+    if (location.kind === 'deleted') {
+      if (!(path in base)) base[path] = readers.base(path)
+    } else if (!(path in head)) {
+      head[path] = readers.working(path) ?? readers.head(path)
+    }
+  }
+  return { head, base }
+}
+
+/**
+ * Resolve a producer-supplied path inside the repository, or refuse it.
+ *
+ * These paths come from model output, so reading one straight off disk turns a finding
+ * into an arbitrary local file read — and the line that comes back is echoed as `observed`.
+ * Reading through `git show` was contained by accident, because git refuses paths outside
+ * its tree; reading the working tree has to be contained on purpose.
+ */
+export function resolveWithinRoot(candidatePath, root) {
+  if (typeof candidatePath !== 'string' || candidatePath === '') return null
+  if (isAbsolute(candidatePath)) return null
+  const segments = candidatePath.split('/').flatMap(part => part.split('\\')).filter(Boolean)
+  if (segments.includes('..')) return null
+  // Segment comparison, not a string prefix — .github is not .git.
+  if (segments[0] === '.git') return null
+  const resolved = resolve(root, candidatePath)
+  const prefix = root.endsWith(sep) ? root : root + sep
+  return resolved.startsWith(prefix) ? resolved : null
+}
+
+let REPO_ROOT_CACHE = null
+
+function repoRoot() {
+  if (REPO_ROOT_CACHE) return REPO_ROOT_CACHE
+  try {
+    REPO_ROOT_CACHE = execFileSync('git', ['rev-parse', '--show-toplevel'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim()
+  } catch {
+    REPO_ROOT_CACHE = process.cwd()
+  }
+  return REPO_ROOT_CACHE
+}
+
+function gitReaders(mergeBase) {
   const show = ref => {
     try {
       // A missing path is an expected outcome, not a problem to report on stderr.
@@ -207,23 +302,26 @@ function readBlobs(candidates, mergeBase) {
       return undefined
     }
   }
-  for (const candidate of candidates) {
-    const location = candidate?.location
-    const path = location?.path
-    if (typeof path !== 'string') continue
-    if (location.kind === 'deleted') {
-      if (!(path in base)) base[path] = show(`${mergeBase}:${path}`)
-    } else if (!(path in head)) {
-      head[path] = show(`HEAD:${path}`)
-    }
+  return {
+    working: path => {
+      const resolved = resolveWithinRoot(path, repoRoot())
+      if (!resolved) return undefined
+      try {
+        return readFileSync(resolved, 'utf8')
+      } catch {
+        return undefined
+      }
+    },
+    head: path => show(`HEAD:${path}`),
+    base: path => show(`${mergeBase}:${path}`),
   }
-  return { head, base }
 }
 
 async function main() {
   const argv = process.argv.slice(2)
   const mergeBaseIndex = argv.indexOf('--merge-base')
   const mergeBase = mergeBaseIndex === -1 ? 'HEAD' : argv[mergeBaseIndex + 1]
+  const locationsOnly = argv.includes('--locations-only')
 
   let raw = ''
   for await (const chunk of process.stdin) raw += chunk
@@ -241,7 +339,7 @@ async function main() {
     : payload.results
       ? candidatesFromResults(payload.results)
       : (payload.candidates ?? [])
-  const result = prepareVerification(candidates, readBlobs(candidates, mergeBase))
+  const result = prepareVerification(candidates, collectBlobs(candidates, gitReaders(mergeBase)), { locationsOnly })
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`)
 }
 
@@ -269,7 +367,16 @@ export function candidatesFromResults(results) {
   const sortKey = finding => {
     const location = finding.location ?? {}
     const line = location.line ?? location.lineBefore ?? 0
-    return `${location.path ?? ''}:${String(line).padStart(9, '0')}:${finding.title ?? ''}`
+    // Everything the finding says, not just its heading. Two findings sharing a rule,
+    // path, line and title still get a stable order from their body and quote; a tie
+    // below all of that means the two are indistinguishable, which exact dedup settles.
+    return [
+      location.path ?? '',
+      String(line).padStart(9, '0'),
+      location.quote ?? '',
+      finding.title ?? '',
+      finding.body ?? '',
+    ].join(' ')
   }
 
   const byRule = new Map()
@@ -281,7 +388,13 @@ export function candidatesFromResults(results) {
 
   const candidates = []
   for (const [ruleId, group] of byRule) {
-    group.sort((a, b) => sortKey(a).localeCompare(sortKey(b)))
+    // Code points, not localeCompare — collation varies by machine locale, and an id that
+    // shifts with the reviewer's locale is not the stable id this function promises.
+    group.sort((a, b) => {
+      const left = sortKey(a)
+      const right = sortKey(b)
+      return left < right ? -1 : left > right ? 1 : 0
+    })
     group.forEach((finding, index) => {
       candidates.push({
         candidateId: `${ruleId}#${index + 1}`,

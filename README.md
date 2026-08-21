@@ -177,7 +177,7 @@ A version-gated rule that fires on a project that cannot use the API is a false 
 | `/code-review-math` | 3D transform / matrix logic (Three.js, R3F, WebGL) |
 | `/code-review-exception` | Exception handling, propagation, fallback, recovery |
 
-`/code-review-full` accepts `--verify` to control its cross-verification pass — `selective` (default), `exhaustive`, or `off`. See [Cross-verification](#cross-verification-25) below.
+`/code-review` runs a location check on its findings — one sub-agent, no rebuttal pass. `/code-review-full` accepts `--verify` to control its cross-verification pass — `selective` (default), `exhaustive`, or `off`. See [Cross-verification](#cross-verification-25) below.
 
 `/code-review` accepts `--module` to restrict the pass to specific rule modules. Tokens resolve against the module filenames at runtime — by number (`--module 01,02`), by slug (`--module fsd,type`), or by unambiguous slug prefix. An unknown or ambiguous token stops the review and lists the available modules rather than silently falling back to a full pass; modules that were filtered out are never reported as passing.
 
@@ -225,22 +225,32 @@ Non-numbered files are excluded from the automatic scan:
 
 The contract exists because the alternative had already failed: the same procedure copied into seven skill documents drifted apart, and workflows started behaving differently for the same request.
 
+### Location checking in `/code-review` (2.6.0)
+
+`/code-review` now returns structured results and its findings get their quoted lines compared against the files they name. A quote that does not match renders as `위치 미확인` with a reason rather than disappearing — a wrong line number does not make the claim false.
+
+It does **not** gain a rebuttal pass. The command stays at one sub-agent, which is the reason to reach for it over `/code-review-full`; adding verifier agents would remove that reason. `fast` and `commit` remain legacy producers.
+
 ### Structured producer results, accepted internal interface in 2.4.0
 
 `REVIEW_RESULT_CONTRACT_V1` is an intentionally accepted **internal producer→orchestrator interface change**. It ships in `2.4.0` as a **MINOR** change because the public Markdown report stays stable while a registered set of producers moves to a structured envelope.
 
-Structured-v1 owners are:
+Structured-v1 owners **when this interface shipped in 2.4.0** were:
 
 - `/code-review-full` for numbered modules plus its full specialist dispatch
 - `/code-review-props`
 - `/code-review-math`
 - `/code-review-exception`
 
-Legacy owners remain unchanged:
+and the legacy producers were `/code-review`, `/code-review-commit` and `/code-review-fast`.
 
-- `/code-review`
-- `/code-review-commit`
-- `/code-review-fast`
+**Current ownership (2.6.0)** — `/code-review` joined the structured owners when it gained its location check, so:
+
+| Structured-v1 owners | Legacy producers |
+|---|---|
+| `/code-review`, `/code-review-full`, `/code-review-props`, `/code-review-math`, `/code-review-exception` | `/code-review-commit`, `/code-review-fast` |
+
+`workflow-contract.md` C-6A is the authority; this table is a summary of it.
 
 `agents/correctness-reviewer.md` is **not** a phase-1 structured-v1 owner. It stays an optional direct/evidence-first agent until a built-in orchestrator consumer exists that validates and renders its output.
 

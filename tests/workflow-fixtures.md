@@ -516,6 +516,23 @@ These scenarios pin the behaviour that `review-rules/workflow-contract.md` promi
       ],
       "scenario": "The same producer results are prepared twice, with the producers finishing in a different order the second time",
       "expected": "Every candidate keeps the same {ruleId}#{n} id both times — the ordinal follows normalized location, so a slow module does not renumber other findings"
+    },
+    {
+      "id": 68,
+      "clauses": [
+        "C-6A",
+        "C-7"
+      ],
+      "scenario": "A /code-review finding quotes a line that does not match the file at that number",
+      "expected": "The finding stays in the report with its severity and its location renders as 위치 미확인 with a reason — a wrong line number does not make the claim false"
+    },
+    {
+      "id": 69,
+      "clauses": [
+        "C-6A"
+      ],
+      "scenario": "/code-review runs its location check",
+      "expected": "prepare-verification.mjs is called with --locations-only, so no eligibility or routing appears and the report cannot read as though a rebuttal pass ran; the sub-agent count stays at one"
     }
   ],
   "defaultWorkflowOnlyCases": [
