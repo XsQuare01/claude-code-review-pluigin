@@ -169,6 +169,8 @@ echo '{"results":[ <검증을 통과한 producer JSON> ]}'   | node "$RULES_DIR/
 
 - **`--locations-only`를 반드시 붙인다.** 이 워크플로우에는 반박 패스가 없으므로 eligibility나 라우팅을 내면 리포트가 검증 패스가 돈 것처럼 읽힌다
 - 출력은 candidate별 `locationCheck`와 `counts`다. **`counts`를 그대로 옮기고 직접 세지 않는다**
+- **네 상태를 모두 적어 합이 total과 맞게 한다** — 확인(`locationOk`), 불일치(`locationMismatch`), 경로 확인 불가(`locationUnresolvable`), 대조 대상 아님(`locationNotApplicable`). 셋만 적으면 `location.kind = "unverified"` finding이 있을 때 숫자가 설명되지 않는다
+- 스크립트는 저장소 밖 경로, `..`, `.git/**`을 읽지 않는다. 그런 경로는 `location-unresolvable`로 돌아온다 — producer가 낸 경로가 임의 파일 읽기가 되지 않게 하는 장치다
 - **coverage 숫자의 출처를 함께 적는다.** 돌렸으면 `도구 실행 결과`에도 남기고, 돌리지 않았으면 미실행이라고 적는다. 숫자가 맞더라도 결정적으로 판정했다고 서술하지 않는다
 - 스크립트를 찾지 못하면 그 사실을 `실행 계획`에 적는다
 
@@ -196,7 +198,7 @@ echo '{"results":[ <검증을 통과한 producer JSON> ]}'   | node "$RULES_DIR/
 선택된 모듈, `SKIPPED`/`UNKNOWN` 사유, bounded pass 성공/실패 상태를 적는다. 위치 대조 결과도 한 줄로 적는다.
 
 ```
-위치 대조: 12건 중 11 확인, 1 불일치(`위치 미확인`으로 표기) · counts 출처: `prepare-verification.mjs`
+위치 대조: 12건 — 확인 10, 불일치 1, 경로 확인 불가 0, 대조 대상 아님 1 · counts 출처: `prepare-verification.mjs`
 ```
 
 ## 상세 지적

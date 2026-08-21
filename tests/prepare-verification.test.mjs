@@ -1,5 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { resolve } from 'node:path'
 
 import {
   normalizeForCompare,
@@ -10,6 +11,8 @@ import {
   buildBundles,
   prepareVerification,
   candidatesFromResults,
+  collectBlobs,
+  resolveWithinRoot,
 } from '../scripts/prepare-verification.mjs'
 
 // ------------------------------------------------------------- normalization
@@ -286,6 +289,53 @@ test('prepareVerification accepts producer results directly and still reconciles
   assert.equal(result.counts.verify + result.counts.skipVerify, result.counts.total)
 })
 
+// -------------------------------------------------------------- blob sources
+
+const readers = {
+  working: path => (path === 'src/edited.ts' ? 'working tree line\n' : undefined),
+  head: path => (path === 'src/edited.ts' ? 'committed line\n' : path === 'src/clean.ts' ? 'clean line\n' : undefined),
+  base: path => (path === 'src/gone.ts' ? 'removed line\n' : undefined),
+}
+
+test('a verified location reads the working tree, which is what the producer read', () => {
+  const collected = collectBlobs([{ location: { kind: 'verified', path: 'src/edited.ts', line: 1, quote: 'x' } }], readers)
+  assert.equal(collected.head['src/edited.ts'], 'working tree line\n')
+})
+
+test('a verified location falls back to HEAD when the file is not in the working tree', () => {
+  const collected = collectBlobs([{ location: { kind: 'verified', path: 'src/clean.ts', line: 1, quote: 'x' } }], readers)
+  assert.equal(collected.head['src/clean.ts'], 'clean line\n')
+})
+
+test('a deleted location reads the merge base, not the working tree', () => {
+  const collected = collectBlobs([{ location: { kind: 'deleted', path: 'src/gone.ts', lineBefore: 1, quote: 'x' } }], readers)
+  assert.equal(collected.base['src/gone.ts'], 'removed line\n')
+  assert.equal(collected.head['src/gone.ts'], undefined)
+})
+
+test('an uncommitted edit does not produce a false location mismatch', () => {
+  const candidates = [{ candidateId: 'a#1', ruleId: 'a', impact: 'low', confidence: 'high', location: { kind: 'verified', path: 'src/edited.ts', line: 1, quote: 'working tree line' } }]
+  const result = prepareVerification(candidates, collectBlobs(candidates, readers), { locationsOnly: true })
+  assert.equal(result.candidates[0].locationCheck, 'location-ok')
+})
+
+// ------------------------------------------------------------- stable sorting
+
+test('candidate ordering uses code points, so it does not shift with the machine locale', () => {
+  const ids = candidatesFromResults([
+    {
+      schemaVersion: 1,
+      openQuestions: [],
+      findings: [
+        { ruleId: '01-1', title: 't', body: 'b', impact: 'low', confidence: 'high', location: { kind: 'verified', path: 'a.ts', line: 1, quote: 'q' } },
+        { ruleId: '01-1', title: 't', body: 'b', impact: 'low', confidence: 'high', location: { kind: 'verified', path: 'B.ts', line: 1, quote: 'q' } },
+      ],
+    },
+  ])
+  // 'B' (0x42) sorts before 'a' (0x61) by code point; most locales collate the other way.
+  assert.deepEqual(ids.map(c => `${c.candidateId}:${c.location.path}`), ['01-1#1:B.ts', '01-1#2:a.ts'])
+})
+
 // ------------------------------------------------------------ locations only
 
 test('prepareVerification in locations-only mode reports location checks without eligibility', () => {
@@ -320,4 +370,76 @@ test('the default mode is unchanged and still reports eligibility', () => {
   const result = prepareVerification(candidatesFromResults(producerResults), blobs)
   assert.ok(result.bundles)
   assert.equal(typeof result.counts.verify, 'number')
+})
+
+// ---------------------------------------------------------- path containment
+
+// Derived rather than written as a literal — a Windows path spelled inline invites an
+// escaping mistake that makes every case fail for the wrong reason.
+const ROOT = process.cwd()
+
+test('a repo-relative source path resolves inside the root', () => {
+  assert.ok(resolveWithinRoot('src/hooks/use-camera.ts', ROOT))
+})
+
+test('an absolute path is refused', () => {
+  assert.equal(resolveWithinRoot(resolve(ROOT, 'src/x.ts'), ROOT), null)
+  assert.equal(resolveWithinRoot('/etc/passwd', ROOT), null)
+})
+
+test('a parent traversal is refused', () => {
+  assert.equal(resolveWithinRoot('../.claude/settings.json', ROOT), null)
+})
+
+test('a traversal buried mid-path is refused', () => {
+  assert.equal(resolveWithinRoot('src/a/../../../outside.ts', ROOT), null)
+})
+
+test('the git directory is refused', () => {
+  assert.equal(resolveWithinRoot('.git/config', ROOT), null)
+  assert.equal(resolveWithinRoot('.git', ROOT), null)
+})
+
+test('a directory that merely starts with .git is still readable', () => {
+  // .github is not .git — comparing string prefixes instead of path segments would refuse it.
+  assert.ok(resolveWithinRoot('.github/workflows/validate.yml', ROOT))
+})
+
+test('a refused path yields location-unresolvable rather than reading the file', () => {
+  const candidates = [{ candidateId: 'p#1', ruleId: 'x', impact: 'low', confidence: 'high', location: { kind: 'verified', path: '../secret.json', line: 1, quote: 'q' } }]
+  const guarded = {
+    working: path => (resolveWithinRoot(path, ROOT) ? 'readable\n' : undefined),
+    head: () => undefined,
+    base: () => undefined,
+  }
+  const result = prepareVerification(candidates, collectBlobs(candidates, guarded), { locationsOnly: true })
+  assert.equal(result.candidates[0].locationCheck, 'location-unresolvable')
+})
+
+// ------------------------------------------------------------- id tie-break
+
+const tiedResult = body => ({
+  schemaVersion: 1,
+  openQuestions: [],
+  findings: [{ ruleId: '01-1', title: 't', body, impact: 'low', confidence: 'high', location: { kind: 'verified', path: 'a.ts', line: 1, quote: `q-${body}` } }],
+})
+
+test('two findings that differ only below the title keep their ids when producer order flips', () => {
+  const forward = candidatesFromResults([tiedResult('A'), tiedResult('B')])
+  const reverse = candidatesFromResults([tiedResult('B'), tiedResult('A')])
+  const pair = list => list.map(c => `${c.candidateId}:${c.location.quote}`).sort()
+  assert.deepEqual(pair(forward), pair(reverse))
+  assert.deepEqual(pair(forward), ['01-1#1:q-A', '01-1#2:q-B'])
+})
+
+test('all four location states account for the total', () => {
+  const candidates = [
+    { candidateId: 'a#1', ruleId: 'a', impact: 'low', confidence: 'high', location: { kind: 'verified', path: 'src/hooks/use-camera.ts', line: 2, quote: 'if (pending) return' } },
+    { candidateId: 'b#1', ruleId: 'b', impact: 'low', confidence: 'high', location: { kind: 'verified', path: 'src/hooks/use-camera.ts', line: 2, quote: 'WRONG' } },
+    { candidateId: 'c#1', ruleId: 'c', impact: 'low', confidence: 'high', location: { kind: 'verified', path: 'src/gone.ts', line: 1, quote: 'q' } },
+    { candidateId: 'd#1', ruleId: 'd', impact: 'low', confidence: 'low', location: { kind: 'unverified', reason: 'r' } },
+  ]
+  const { counts } = prepareVerification(candidates, blobs, { locationsOnly: true })
+  assert.equal(counts.locationOk + counts.locationMismatch + counts.locationUnresolvable + counts.locationNotApplicable, counts.total)
+  assert.equal(counts.locationNotApplicable, 1)
 })

@@ -235,18 +235,22 @@ It does **not** gain a rebuttal pass. The command stays at one sub-agent, which 
 
 `REVIEW_RESULT_CONTRACT_V1` is an intentionally accepted **internal producer→orchestrator interface change**. It ships in `2.4.0` as a **MINOR** change because the public Markdown report stays stable while a registered set of producers moves to a structured envelope.
 
-Structured-v1 owners are:
+Structured-v1 owners **when this interface shipped in 2.4.0** were:
 
 - `/code-review-full` for numbered modules plus its full specialist dispatch
 - `/code-review-props`
 - `/code-review-math`
 - `/code-review-exception`
 
-Legacy owners remain unchanged:
+and the legacy producers were `/code-review`, `/code-review-commit` and `/code-review-fast`.
 
-- `/code-review`
-- `/code-review-commit`
-- `/code-review-fast`
+**Current ownership (2.6.0)** — `/code-review` joined the structured owners when it gained its location check, so:
+
+| Structured-v1 owners | Legacy producers |
+|---|---|
+| `/code-review`, `/code-review-full`, `/code-review-props`, `/code-review-math`, `/code-review-exception` | `/code-review-commit`, `/code-review-fast` |
+
+`workflow-contract.md` C-6A is the authority; this table is a summary of it.
 
 `agents/correctness-reviewer.md` is **not** a phase-1 structured-v1 owner. It stays an optional direct/evidence-first agent until a built-in orchestrator consumer exists that validates and renders its output.
 
