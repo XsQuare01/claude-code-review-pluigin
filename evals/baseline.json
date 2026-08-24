@@ -1,0 +1,191 @@
+{
+  "recordedAt": "2026-08-24",
+  "stage": "A1",
+  "note": "harness 검증 실행. 케이스 1개, 팔당 1회. 기준선이 아니라 harness가 산다는 증거다. 실행 중 harness 자체의 결함 4개(JSON 봉투 미파싱, --plugin-dir 스킬명 충돌, 규칙 모듈 미접근, 리포트 파서가 표/#### 두 레이아웃 중 하나만 인식)를 고치고 나서야 이 값이 나왔다 — 그 전 실행은 report=false 또는 findings=0으로 harness의 결함을 그대로 보여줬다.",
+  "exitConditions": {
+    "1_unitTestsPassWithoutReview": {
+      "met": true,
+      "evidence": "`node --test tests/*.test.mjs` -> 128 pass, 0 fail, duration ~2.0s, 리뷰 프로세스(claude) 미실행."
+    },
+    "2_bothArmsCompletedWithReport": {
+      "met": true,
+      "evidence": "main: completed=true, reportSource=file (430s, 35 turns). pr52: completed=true, reportSource=file (483s, 37 turns)."
+    },
+    "3_pluginDirResolvesRulesDirToGivenTree": {
+      "met": true,
+      "evidence": "코디네이터가 사전에 확인: 저장소에 심은 sentinel 규칙 파일을 넣고 `claude -p \"/code-review --module zzz-does-not-exist\" --plugin-dir .`을 실행하자 플러그인의 모듈 해석 경로가 그 sentinel을 나열하고 저장소 안의 SKILL 경로를 인용했다. `--plugin-dir`은 설치된 캐시가 아니라 주어진 워킹 트리를 로드한다."
+    },
+    "4_scriptRanOrLocationsOnTargetDiffersBetweenArms": {
+      "met": true,
+      "evidence": "scriptRan이 갈린다: main={ran:false, countsAttributed:false, declaredSkipped:false} (위치 대조를 언급조차 하지 않음) vs pr52={ran:false, countsAttributed:true, declaredSkipped:true} (\"대조 미실행\"을 스스로 선언). locationsOnTarget은 이번 표본에서는 1/1로 양쪽이 같았다 — 판별축은 scriptRan이다."
+    }
+  },
+  "variance": "동일한 두 팔로 이번 표본 전에 한 차례 더 돈 표본에서는 findings가 main 5 / pr52 5로 나왔다(이번 표본은 3 / 4). recall과 locationsOnTarget은 두 표본 모두 1/1로 안정적이었다. findings와 unclassified가 실행마다 흔들리는 것은 비결정적 리뷰의 정상 범위이고, 이것이 A2에서 케이스당 1회가 아니라 3회를 돌려야 하는 구체적 근거다 — 수치축은 중앙값, 불리언축은 \"n회 중 m회\"로 집계한다.",
+  "arms": {
+    "main": {
+      "pluginVersion": "2.5.6",
+      "cases": {
+        "location-trap": {
+          "run": 1,
+          "completed": true,
+          "exitCode": 0,
+          "durationSec": 430,
+          "reportFound": true,
+          "reportSource": "file",
+          "fixtureRoot": "C:\\Users\\bhmun\\AppData\\Local\\Temp\\eval-location-trap-7mHh8Q\\repo",
+          "numTurns": 35,
+          "isError": false,
+          "stopReason": "end_turn",
+          "permissionDenials": [
+            {
+              "tool_name": "Bash",
+              "tool_use_id": "toolu_01VQXhegzmEDqXrj2gZ8uTCc",
+              "tool_input": {
+                "command": "cd \"C:/Users/bhmun/AppData/Local/Temp/eval-location-trap-7mHh8Q/repo\" && find src -type f | sort && echo \"===ENTITIES===\" && cat src/entities/order/index.ts 2>/dev/null || find src -path \"*entities*\" -type f -exec sh -c 'echo \"--- $1\"; cat \"$1\"' _ {} \\;",
+                "description": "List src tree and read order entity"
+              }
+            }
+          ],
+          "totalCostUsd": 3.116936,
+          "stdoutTail": "{\"is_error\":false,\"duration_api_ms\":420846,\"num_turns\":35,\"stop_reason\":\"end_turn\",\"session_id\":\"58c470fe-70a9-4d89-8a35-de765e024831\",\"total_cost_usd\":3.116936,\"usage\":{\"input_tokens\":30,\"cache_creation_input_tokens\":163778,\"cache_read_input_tokens\":1493962,\"output_tokens\":29281,\"output_tokens_details\":{\"thinking_tokens\":16753},\"server_tool_use\":{\"web_search_requests\":0,\"web_fetch_requests\":0},\"service_tier\":\"standard\",\"cache_creation\":{\"ephemeral_1h_input_tokens\":163778,\"ephemeral_5m_input_tokens\":0},\"inference_geo\":\"not_available\",\"iterations\":[{\"input_tokens\":2,\"output_tokens\":1358,\"cache_read_input_tokens\":171823,\"cache_creation_input_tokens\":13768,\"cache_creation\":{\"ephemeral_5m_input_tokens\":0,\"ephemeral_1h_input_tokens\":13768},\"type\":\"message\"}],\"speed\":\"standard\"},\"modelUsage\":{\"claude-opus-5[1m]\":{\"inputTokens\":30,\"outputTokens\":29281,\"cacheReadInputTokens\":1493962,\"cacheCreationInputTokens\":163778,\"webSearchRequests\":0,\"costUSD\":3.116936,\"contextWindow\":1000000,\"maxOutputTokens\":64000,\"canonicalModel\":\"claude-opus-5\",\"provider\":\"firstParty\"}},\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_use_id\":\"toolu_01VQXhegzmEDqXrj2gZ8uTCc\",\"tool_input\":{\"command\":\"cd \\\"C:/Users/bhmun/AppData/Local/Temp/eval-location-trap-7mHh8Q/repo\\\" && find src -type f | sort && echo \\\"===ENTITIES===\\\" && cat src/entities/order/index.ts 2>/dev/null || find src -path \\\"*entities*\\\" -type f -exec sh -c 'echo \\\"--- $1\\\"; cat \\\"$1\\\"' _ {} \\\\;\",\"description\":\"List src tree and read order entity\"}}],\"terminal_reason\":\"completed\",\"fast_mode_state\":\"off\",\"fast_mode_disabled_reason\":\"sdk_opt_in_required\",\"subagent_stats\":{\"spawned\":0,\"requested\":{\"background\":0,\"foreground\":0,\"unset\":0},\"started_in_background\":0,\"max_depth\":0,\"spawned_by_subagents\":0,\"completed\":0,\"failed\":0,\"killed\":{\"parent\":0,\"user\":0,\"system\":0},\"refused\":{\"depth_limit\":0,\"concurrency_limit\":0,\"budget\":0},\"by_type\":{}},\"subtype\":\"success\",\"api_error_status\":null,\"result\":\"코드 리뷰 완료했습니다.\\n\\n**저장 경로**: `C:\\\\Users\\\\bhmun\\\\AppData\\\\Local\\\\Temp\\\\eval-location-trap-7mHh8Q\\\\repo\\\\review-reports\\\\code-review-default-main-2026-08-24.md`\\n\\n저장 위치는 프로젝트 `CLAUDE.md`(\\\"리뷰 리포트는 반드시 이 저장소의 `./review-reports/`에 저장한다\\\")를 따랐습니다. 전역 설정의 기본 문서 경로(OneDrive `Docs`)는 \\\"별도 경로 명시 지시가 없는 한\\\" 적용되는 기본값이고, 여기서는 저장소 지시가 그 예외에 해당합니다. `workflow-contract.md` C-7도 프로젝트 설정이 저장 위치를 지정하면 그쪽이 우선한다고 명시합니다. 코드는 수정하지 않았습니다.\\n\\n## 판정\\n🔴 0건 — 머지 차단 사유 없음. 🟡 3건.\\n\\n| 심각도 | 규칙 | 위치 | 요지 |\\n|---|---|---|---|\\n| 🟡 | `03-3` | `order-list.tsx:31` | 안정 key `order.id` → `key={index}`. 정렬·필터가 걸린 리스트라 인덱스가 항목이 아니라 위치를 식별한다. `<li>`에 로컬 state·포커스가 없어 지금 화면은 멀쩡하지만, 원복 비용이 0이라 되돌리는 걸 권합니다 |\\n| 🟡 | `14-3` | `order-list.tsx:21-24` | `useMemo` 의존성에 `query`가 들어가 검색어 한 글자마다 `sortOrders`가 재실행됨. memo 경계를 정렬/필터 2단계로 쪼개면 해결 |\\n| 🟡 | `02-3` | `order-list.tsx:7`, `:10` | `'date' \\\\| 'total'` 인라인 유니온이 두 곳에 복제. named 타입으로 단일 출처화 |\\n\\n## 짚어둘 것\\n- **범위 가정**: 브랜치가 `main`이고 `merge-base == HEAD`라 계약(C-4)대로면 \\\"변경 없음\\\"으로 종료됩니다. `before`/`after` 두 커밋만 있어 의도가 명확하므로 `845474e..48637b0`으로 리뷰했고, 리포트에 가정으로 명시했습니다.\\n- **SKIPPED 6개**: `01`(FSD 레이어 디렉터리 2/3 미달), `11`(Tailwind 신호 없음), `21`(RSC 신호 없음), `16`·`17`·`18`(trigger 미충족). 조용히 빼지 않고 사유를 남겼습니다.\\n- **도구 미실행**: `package.json`에 `scripts`가 없고 lint 설정·`typescript`·`node_modules`가 모두 없어 lint/typecheck/test를 실행할 수 없었습니다. 자동 수정은 시도하지 않았습니다.\\n- **`확인 필요` 1건**: `right.date.localeCompare(left.date)`의 정확성이 `Order.date`(`string`, 형식 제약 없음)의 실제 포맷에 달려 있습니다. `orders` 공급 경로가 저장소에 없어 확인 불가 — 00-11에 따라 지적 대신 확인 요청으로 남겼습니다.\\n- `<li onClick>`의 키보드 접근성 문제는 변경 전에도 있던 것이고 이번 diff가 악화시키지 않아 `12-SCOPE`에 따라 지적하지 않고 메모로만 남겼습니다.\",\"ttft_ms\":6679,\"ttft_stream_ms\":1718,\"time_to_request_ms\":82,\"type\":\"result\",\"duration_ms\":423067,\"uuid\":\"6b17d4b9-42c0-41a4-9cc9-46a2caf9d0d2\"}\n",
+          "findings": 3,
+          "recall": {
+            "found": 1,
+            "of": 1,
+            "ruleOnly": 0,
+            "missed": []
+          },
+          "falsePositives": {
+            "count": 0,
+            "hits": []
+          },
+          "unclassified": 2,
+          "locationsInRange": {
+            "ok": 3,
+            "of": 3,
+            "bad": []
+          },
+          "locationsOnTarget": {
+            "ok": 1,
+            "of": 1
+          },
+          "modulesWithFindings": [
+            "02 타입 안전성",
+            "03 React 규칙 위반",
+            "14 React 성능"
+          ],
+          "scriptRan": {
+            "ran": false,
+            "manifestBlock": false,
+            "countsAttributed": false,
+            "declaredSkipped": false
+          },
+          "skeletonOk": {
+            "ok": true,
+            "problems": []
+          },
+          "summaryArithmetic": {
+            "ok": true,
+            "summary": {
+              "red": 0,
+              "yellow": 3,
+              "blue": 0
+            },
+            "detail": {
+              "red": 0,
+              "yellow": 3,
+              "blue": 0
+            }
+          }
+        }
+      }
+    },
+    "pr52": {
+      "pluginVersion": "2.6.1",
+      "cases": {
+        "location-trap": {
+          "run": 1,
+          "completed": true,
+          "exitCode": 0,
+          "durationSec": 483,
+          "reportFound": true,
+          "reportSource": "file",
+          "fixtureRoot": "C:\\Users\\bhmun\\AppData\\Local\\Temp\\eval-location-trap-v6RPRg\\repo",
+          "numTurns": 37,
+          "isError": false,
+          "stopReason": "end_turn",
+          "permissionDenials": [
+            {
+              "tool_name": "Bash",
+              "tool_use_id": "toolu_013F7BhxTo2hvDvzpPa6wg3o",
+              "tool_input": {
+                "command": "cd \"C:/Users/bhmun/AppData/Local/Temp/eval-location-trap-v6RPRg/repo\" && echo '{\"locations\": [\n  {\"ruleId\": \"03-3\", \"path\": \"src/features/order-list/ui/order-list.tsx\", \"line\": 31, \"quote\": \"          <li key={index} onClick={() => onSelect(order.id)}>\"},\n  {\"ruleId\": \"14-3\", \"path\": \"src/features/order-list/ui/order-list.tsx\", \"line\": 22, \"quote\": \"    () => sortOrders(orders, sortBy).filter(order => order.customer.includes(query)),\"},\n  {\"ruleId\": \"19-3\", \"path\": \"src/features/order-list/ui/order-list.tsx\", \"line\": 13, \"quote\": \"    sortBy === '\"'\"'total'\"'\"' ? right.total - left.total : right.date.localeCompare(left.date),\"},\n  {\"ruleId\": \"02-3\", \"path\": \"src/features/order-list/ui/order-list.tsx\", \"line\": 10, \"quote\": \"function sortOrders(orders: Order[], sortBy: '\"'\"'date'\"'\"' | '\"'\"'total'\"'\"'): Order[] {\"}\n]}' | node \"C:/Users/bhmun/AppData/Local/Temp/claude/C--Users-bhmun-claude-code-review-pluigin/92a61afe-d3c7-4a4d-a574-aafd32b00186/scripts/prepare-verification.mjs\" --merge-base a323b9c --locations-only",
+                "description": "Run location verification script"
+              }
+            },
+            {
+              "tool_name": "Bash",
+              "tool_use_id": "toolu_019bpjeoUZ5QKztrLb4SMQvS",
+              "tool_input": {
+                "command": "node \"C:/Users/bhmun/AppData/Local/Temp/claude/C--Users-bhmun-claude-code-review-pluigin/92a61afe-d3c7-4a4d-a574-aafd32b00186/scratchpad/arm-pr52/scripts/prepare-verification.mjs\" --merge-base a323b9c --locations-only < \"C:/Users/bhmun/AppData/Local/Temp/claude/C--Users-bhmun-claude-code-review-pluigin/92a61afe-d3c7-4a4d-a574-aafd32b00186/scratchpad/arm-pr52/locations-input.json\"",
+                "description": "Run location verification script"
+              }
+            }
+          ],
+          "totalCostUsd": 3.6937430000000004,
+          "stdoutTail": "al/Temp/eval-location-trap-v6RPRg/repo\\\" && echo '{\\\"locations\\\": [\\n  {\\\"ruleId\\\": \\\"03-3\\\", \\\"path\\\": \\\"src/features/order-list/ui/order-list.tsx\\\", \\\"line\\\": 31, \\\"quote\\\": \\\"          <li key={index} onClick={() => onSelect(order.id)}>\\\"},\\n  {\\\"ruleId\\\": \\\"14-3\\\", \\\"path\\\": \\\"src/features/order-list/ui/order-list.tsx\\\", \\\"line\\\": 22, \\\"quote\\\": \\\"    () => sortOrders(orders, sortBy).filter(order => order.customer.includes(query)),\\\"},\\n  {\\\"ruleId\\\": \\\"19-3\\\", \\\"path\\\": \\\"src/features/order-list/ui/order-list.tsx\\\", \\\"line\\\": 13, \\\"quote\\\": \\\"    sortBy === '\\\"'\\\"'total'\\\"'\\\"' ? right.total - left.total : right.date.localeCompare(left.date),\\\"},\\n  {\\\"ruleId\\\": \\\"02-3\\\", \\\"path\\\": \\\"src/features/order-list/ui/order-list.tsx\\\", \\\"line\\\": 10, \\\"quote\\\": \\\"function sortOrders(orders: Order[], sortBy: '\\\"'\\\"'date'\\\"'\\\"' | '\\\"'\\\"'total'\\\"'\\\"'): Order[] {\\\"}\\n]}' | node \\\"C:/Users/bhmun/AppData/Local/Temp/claude/C--Users-bhmun-claude-code-review-pluigin/92a61afe-d3c7-4a4d-a574-aafd32b00186/scripts/prepare-verification.mjs\\\" --merge-base a323b9c --locations-only\",\"description\":\"Run location verification script\"}},{\"tool_name\":\"Bash\",\"tool_use_id\":\"toolu_019bpjeoUZ5QKztrLb4SMQvS\",\"tool_input\":{\"command\":\"node \\\"C:/Users/bhmun/AppData/Local/Temp/claude/C--Users-bhmun-claude-code-review-pluigin/92a61afe-d3c7-4a4d-a574-aafd32b00186/scratchpad/arm-pr52/scripts/prepare-verification.mjs\\\" --merge-base a323b9c --locations-only < \\\"C:/Users/bhmun/AppData/Local/Temp/claude/C--Users-bhmun-claude-code-review-pluigin/92a61afe-d3c7-4a4d-a574-aafd32b00186/scratchpad/arm-pr52/locations-input.json\\\"\",\"description\":\"Run location verification script\"}}],\"terminal_reason\":\"completed\",\"fast_mode_state\":\"off\",\"fast_mode_disabled_reason\":\"sdk_opt_in_required\",\"subagent_stats\":{\"spawned\":0,\"requested\":{\"background\":0,\"foreground\":0,\"unset\":0},\"started_in_background\":0,\"max_depth\":0,\"spawned_by_subagents\":0,\"completed\":0,\"failed\":0,\"killed\":{\"parent\":0,\"user\":0,\"system\":0},\"refused\":{\"depth_limit\":0,\"concurrency_limit\":0,\"budget\":0},\"by_type\":{}},\"subtype\":\"success\",\"api_error_status\":null,\"result\":\"리뷰 완료했습니다.\\n\\n**저장 위치**: `review-reports/code-review-default-main-2026-08-24.md`\\n(프로젝트 `CLAUDE.md`가 이 저장소의 `./review-reports/`를 지정하므로 전역 기본 경로 대신 여기에 저장했습니다. 코드는 수정하지 않았습니다.)\\n\\n## 판정\\n\\n🔴 0건 · 🟡 4건 — 형식적 차단 사유는 없지만 `03-3`은 머지 전 되돌리기를 권합니다.\\n\\n| 규칙 | 위치 | 요지 |\\n|---|---|---|\\n| `03-3` | `order-list.tsx:31` | 안정 key `order.id` → 배열 인덱스로 교체. 이 리스트는 정렬(`sortOrders`)과 필터(`query`)가 모두 일어나 인덱스가 매 입력마다 달라진다. 얻는 것 없이 정확한 key를 부정확한 key로 바꾼 회귀 |\\n| `14-3` | `order-list.tsx:22` | 정렬+필터를 한 `useMemo`에 묶고 deps에 `query`를 넣어, memo가 정렬 비용을 전혀 막지 못한다 — 추가한 목적과 실제 효과가 어긋남 |\\n| `19-3` | `order-list.tsx:13` | 날짜 정렬이 \\\"`date` 문자열이 사전순=시간순\\\"이라는 전제에 의존하는데 `Order.date`는 그냥 `string` (형식 계약 없음). `localeCompare`는 기계 포맷 비교에 맞는 도구도 아님 |\\n| `02-3` | `order-list.tsx:10` | `'date' \\\\| 'total'` 유니온이 Props(`:7`)와 함수 시그니처 두 곳에 복제 |\\n\\n`03-3`을 🔴이 아닌 🟡로 둔 이유: `<li>` 서브트리(`:30`–`:34`)를 읽어 로컬 state·uncontrolled input·focus 대상이 없음을 확인했고, 그래서 **오늘 당장의 사용자 오동작이 닫히지 않기** 때문입니다(영향 낮음 × 확신 높음). 모듈 `03-3` 자신도 이 케이스를 🟡로 규정하고 있습니다.\\n\\n## 짚어둘 실행상의 이탈 3가지\\n\\n1. **base** — HEAD가 `main` 자체라 `merge-base main HEAD == HEAD`입니다. 계약대로면 \\\"변경 없음\\\"으로 종료해야 하지만 `before`/`after` 커밋 쌍이 실제 리뷰 대상이므로 `HEAD~1`(`a323b9c`)을 base로 썼습니다. 다른 base가 의도였다면 지정해 다시 돌려주세요.\\n2. **위치 대조 미실행** — `prepare-verification.mjs`가 실행 승인을 요구하는데 비대화형 세션이라 받을 수 없었습니다. 4건의 줄 번호·인용은 `00-10`대로 **변경 후 파일을 직접 읽어** 확인한 값이지 hunk 헤더 계산이 아니지만, 스크립트에 의한 결정적 대조는 하지 않았습니다.\\n3. **sub-agent 미사용** — 세션 지시(\\\"요청 없이 Agent 도구 사용 금지\\\")에 따라 Step 4의 dispatch 대신 동일한 규칙 집합·출력 계약으로 인라인 통합 pass를 수행했습니다. 범위 축소는 없습니다.\\n\\nlint/typecheck는 둘 다 **미실행**입니다 — `package.json`에 `scripts`가 없고 lint 설정 파일도, `node_modules`도 없습니다.\\n\\n`SKIPPED` 3개(`01` fsd, `11` tailwind, `21` rsc)와 트리거 미충족 3개(`12`, `17`, `18`)는 \\\"통과\\\"와 구분해 사유와 함께 리포트에 적었습니다.\",\"ttft_ms\":2001,\"ttft_stream_ms\":1251,\"time_to_request_ms\":84,\"type\":\"result\",\"duration_ms\":476082,\"uuid\":\"36291545-0649-4660-9e72-0ff4f04cd04e\"}\n",
+          "findings": 4,
+          "recall": {
+            "found": 1,
+            "of": 1,
+            "ruleOnly": 0,
+            "missed": []
+          },
+          "falsePositives": {
+            "count": 0,
+            "hits": []
+          },
+          "unclassified": 3,
+          "locationsInRange": {
+            "ok": 4,
+            "of": 4,
+            "bad": []
+          },
+          "locationsOnTarget": {
+            "ok": 1,
+            "of": 1
+          },
+          "modulesWithFindings": [
+            "02 타입 안전성",
+            "03 React 규칙 위반",
+            "14 React 성능",
+            "19 의도 & 선택 근거"
+          ],
+          "scriptRan": {
+            "ran": false,
+            "manifestBlock": false,
+            "countsAttributed": true,
+            "declaredSkipped": true
+          },
+          "skeletonOk": {
+            "ok": true,
+            "problems": []
+          },
+          "summaryArithmetic": {
+            "ok": true,
+            "summary": {
+              "red": 0,
+              "yellow": 4,
+              "blue": 0
+            },
+            "detail": {
+              "red": 0,
+              "yellow": 4,
+              "blue": 0
+            }
+          }
+        }
+      }
+    }
+  }
+}
