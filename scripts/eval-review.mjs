@@ -88,12 +88,12 @@ const runClaude = (fixtureRoot, command) => new Promise(resolve => {
   })
 })
 
-const fixtureRoots = []
+// 실행이 끝나도 이 임시 fixture 디렉터리를 지우지 않는다. 실패한 run을
+// 사후에 직접 열어봐야 할 때, 결과 파일의 `fixtureRoot`가 실제로 뭔가를
+// 가리키고 있어야 한다 — 여기서 지우면 그 경로가 유령이 된다.
 const makeFixture = () => {
   const target = join(mkdtempSync(join(tmpdir(), `eval-${caseName}-`)), 'repo')
-  const fixture = buildFixture(caseDir, target)
-  fixtureRoots.push(fixture.root)
-  return fixture
+  return buildFixture(caseDir, target)
 }
 
 if (has('dry-run')) {
