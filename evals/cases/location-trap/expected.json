@@ -1,0 +1,13 @@
+{
+  "mustFind": [
+    {
+      "id": "index-key-on-sorted-list",
+      "ruleIds": ["03-3"],
+      "path": "src/features/order-list/ui/order-list.tsx",
+      "line": 31,
+      "lineTolerance": 1,
+      "why": "정렬 키가 사용자 선택이라 index key는 재정렬 시 DOM/상태 불일치를 만든다"
+    }
+  ],
+  "mustNotFlag": []
+}

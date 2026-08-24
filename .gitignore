@@ -15,6 +15,11 @@ $RECYCLE.BIN/
 # Reports this plugin writes when reviewing this repository with itself
 review-reports/
 
+### Eval output
+# Per-run eval results. Only evals/baseline.json is committed — otherwise every
+# eval run would need a plugin version bump, churning the cache key for nothing.
+evals/results/
+
 ### Agent tooling state
 # Session, HUD, and notepad state written by the assistant tooling in use.
 # Local scratch, not repository content — anything here worth keeping is moved
