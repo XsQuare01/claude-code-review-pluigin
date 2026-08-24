@@ -1,0 +1,6 @@
+{
+  "name": "eval-fixture-location-trap",
+  "private": true,
+  "version": "0.0.0",
+  "dependencies": { "react": "^19.0.0" }
+}

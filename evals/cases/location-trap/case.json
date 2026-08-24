@@ -1,0 +1,12 @@
+{
+  "name": "location-trap",
+  "command": "/code-review",
+  "isolates": "줄 번호 정확도. hunk 헤더 산술이 틀린 답을 내도록 설계했다.",
+  "changedFiles": {
+    "added": [],
+    "removed": [],
+    "modified": ["src/features/order-list/ui/order-list.tsx"]
+  },
+  "runs": 1,
+  "timeoutMinutes": 15
+}
