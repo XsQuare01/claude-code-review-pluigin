@@ -2,6 +2,8 @@ import { execFileSync } from 'node:child_process'
 import { mkdirSync, readdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs'
 import { join, relative, dirname } from 'node:path'
 
+import { resolveWithinRoot } from '../prepare-verification.mjs'
+
 // 케이스 매니페스트에서 임시 git 저장소를 만든다.
 //
 // fixture를 저장소에 커밋된 git 저장소로 두지 않는 이유는 중첩 저장소를 피하고,
@@ -123,6 +125,13 @@ export function buildFixture(caseDir, targetDir) {
  * 저장소가 아니다, mergeBase가 틀렸다 — 는 던진다. 그런 환경 문제를 조용히
  * 삼키면 "이 경로는 없다"와 구분이 안 되고, 결과가 비어 있을 뿐 틀렸다는
  * 신호가 전혀 없는 채로 grader에 넘어간다.
+ *
+ * `paths`는 리포트가 언급한 경로를 포함하므로 모델 출력이다. `join(root, path)`로
+ * 곧바로 읽으면 `join(root, '../../x')`가 fixture 밖으로 새어나가 grader가
+ * "observed"로 echo하는 내용이 임의의 로컬 파일이 될 수 있다.
+ * `prepare-verification.mjs`의 `resolveWithinRoot`가 정확히 이 문제를 위해
+ * 이미 있고 테스트도 돼 있다 — 여기서 같은 검사를 다시 쓰면 두 번째 구현이
+ * 갈라질 위험만 생기므로 새로 만들지 않고 그 함수를 그대로 가져다 쓴다.
  */
 export function readBlobLines(root, mergeBase, paths) {
   const head = {}
@@ -135,10 +144,17 @@ export function readBlobLines(root, mergeBase, paths) {
 
   for (const path of paths) {
     let workingTreeText
-    try {
-      workingTreeText = readFileSync(join(root, path), 'utf8')
-    } catch (err) {
-      if (err.code !== 'ENOENT') throw err
+    const resolved = resolveWithinRoot(path, root)
+    if (resolved) {
+      try {
+        workingTreeText = readFileSync(resolved, 'utf8')
+      } catch {
+        // 모델이 준 경로라 어떤 에러 코드든 나올 수 있다(ENOENT뿐 아니라
+        // Windows의 EISDIR/ENOTDIR/EINVAL 등도 실제로 도달 가능하다). 코드별로
+        // 갈라 일부만 삼키면 못 잡은 코드 하나가 유료 배치 전체를 던져
+        // 끝낸다 — 그래서 여기서는 모두 "못 읽었다"로 접는다. 읽지 못한 경로는
+        // grader가 `path not in fixture`로 기록하는, 있는 그대로 정직한 결과다.
+      }
     }
     if (workingTreeText !== undefined) {
       head[path] = toLines(workingTreeText)

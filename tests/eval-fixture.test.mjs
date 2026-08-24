@@ -89,6 +89,29 @@ test('삭제된 파일은 merge base에서, 남은 파일은 working tree에서 
   assert.equal(blobs.head['src/gone.ts'], undefined)
 })
 
+// I3 회귀 테스트: `paths`는 리포트가 언급한 경로라 모델 출력이다. 예전에는
+// `join(root, path)`로 곧바로 읽어서 `../../x` 같은 경로가 fixture 밖으로
+// 새어나갔다 — grader가 "observed"로 echo하는 내용이 임의의 로컬 파일이 될
+// 수 있었다는 뜻이다. `resolveWithinRoot`를 재사용한 뒤에는 그런 경로가
+// 조용히 "존재하지 않음"으로 접혀야 한다(던지지도, fixture 밖 내용을 읽지도
+// 않아야 한다).
+test('fixture 밖으로 나가는 경로는 존재하지 않는 것으로 접힌다 — 밖의 파일을 읽지 않는다', t => {
+  const dir = makeCase()
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const targetParent = scratch()
+  t.after(() => rmSync(targetParent, { recursive: true, force: true }))
+  // repo 밖, targetParent 바로 아래에 "비밀" 파일을 둔다 — `../secret.txt`가
+  // 정확히 이 파일을 가리킨다.
+  writeFileSync(join(targetParent, 'secret.txt'), 'do-not-leak-this-line\n', 'utf8')
+  const fixture = buildFixture(dir, join(targetParent, 'repo'))
+
+  const blobs = readBlobLines(fixture.root, fixture.mergeBase, ['../secret.txt', '..\\secret.txt'])
+  assert.equal(blobs.head['../secret.txt'], undefined)
+  assert.equal(blobs.base['../secret.txt'], undefined)
+  assert.equal(blobs.head['..\\secret.txt'], undefined)
+  assert.equal(blobs.base['..\\secret.txt'], undefined)
+})
+
 // Finding 1 회귀 테스트: 삭제된 파일의 blob을 `git show`로 읽을 때 앞뒤 빈 줄이
 // 사라지면 안 된다. 이전 구현은 rev-parse용 `.trim()` 헬퍼를 파일 내용에도
 // 재사용해서 첫/마지막 빈 줄을 지웠고, 그 결과 삭제된 파일 쪽 줄 번호가
@@ -119,5 +142,10 @@ test('mergeBase가 유효하지 않으면 조용히 빈 값을 주지 않고 던
   t.after(() => rmSync(targetParent, { recursive: true, force: true }))
   const fixture = buildFixture(dir, join(targetParent, 'repo'))
 
-  assert.throws(() => readBlobLines(fixture.root, 'not-a-real-sha', ['src/gone.ts']))
+  // 매처 없는 assert.throws는 아무 에러나 던지면 통과한다 — 이 테스트가 지키려는
+  // 회귀(사전 검증이 mergeBase 자체를 잡아내는 것)가 조용히 다른 이유로 던지는
+  // 것으로 바뀌어도 계속 초록으로 남는다. 잘못된 ref 문자열이 에러 메시지 안에
+  // 그대로 나오는지까지 확인해야, 이 던짐이 실제로 mergeBase 검증에서 온 것임을
+  // 고정한다.
+  assert.throws(() => readBlobLines(fixture.root, 'not-a-real-sha', ['src/gone.ts']), /not-a-real-sha/)
 })
