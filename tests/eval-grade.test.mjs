@@ -112,6 +112,35 @@ test('이슈 칸에 파이프가 들어와도 앞 세 칸이 밀리지 않는다
   assert.equal(findings[0].location.line, 5)
 })
 
+// 실제 리포트는 지적마다 표를 따로 낸다 — 같은 `### 모듈` 아래서 헤더/구분 행이
+// 지적 개수만큼 반복된다. 위쪽 테스트들은 표 경계가 모듈 경계와 겹치는 경우만
+// 확인했으니, 모듈 하나 안에서 표가 세 번 반복되는 더 촉박한 모양도 고정해 둔다.
+test('한 모듈 아래 표가 지적마다 따로 나와도(헤더/구분 행이 여러 번 반복돼도) 모두 지적으로 뽑는다', () => {
+  const report = `## 상세 지적
+
+### React 규칙
+
+| 심각도 | 규칙 | 위치 | 이슈 | 개선 제안 |
+|--------|------|------|------|----------|
+| 🔴 | 규칙 미확인 | \`src/order-list.tsx:31\` | index를 key로 쓴다 | id를 쓴다 |
+
+| 심각도 | 규칙 | 위치 | 이슈 | 개선 제안 |
+|--------|------|------|------|----------|
+| 🟡 | 06-1 | \`src/order-list.tsx:40\` | 조건부 렌더에 0이 샌다 | \`> 0\` 비교 |
+
+| 심각도 | 규칙 | 위치 | 이슈 | 개선 제안 |
+|--------|------|------|------|----------|
+| 🔵 | 09-2 | \`src/order-list.tsx:55\` | 사소한 스타일 | 정리 |
+
+## 요약
+`
+  const findings = parseFindings(report)
+  assert.equal(findings.length, 3)
+  assert.deepEqual(findings.map(f => f.ruleId), ['규칙 미확인', '06-1', '09-2'])
+  assert.deepEqual(findings.map(f => f.location.line), [31, 40, 55])
+  assert.ok(findings.every(f => f.module === 'React 규칙'))
+})
+
 import { assertNoPathOverlap, gradeFindings } from '../scripts/lib/eval-grade.mjs'
 
 const EXPECTED = {

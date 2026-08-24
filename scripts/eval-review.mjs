@@ -76,10 +76,17 @@ const newestReport = root => {
  * 항목이고, 그 항목만은 harness가 직접 들고 있어야 한다.
  */
 const runClaude = (fixtureRoot, command) => new Promise(resolve => {
+  // pluginDir도 allowed 디렉터리로 넣는다. --plugin-dir는 플러그인을 로드만
+  // 하고, 스킬이 자기 규칙 모듈(00-rule.md, 번호 모듈들)과
+  // prepare-verification.mjs를 읽으려면 그 경로 자체가 이 세션의 허용 작업
+  // 디렉터리 안에 있어야 한다. fixture만 허용하면 스킬이 자기 규칙을 Glob도
+  // Read도 못 해서, 리뷰가 조용히 규칙 없는 판단으로 줄어든다 — 실제로 첫
+  // 실행에서 "규칙 미확인"만 나온 이유가 이것이었다.
   const args = [
     '-p', command,
     '--plugin-dir', pluginDir,
     '--add-dir', fixtureRoot,
+    '--add-dir', pluginDir,
     '--permission-mode', 'acceptEdits',
     '--output-format', 'json',
   ]
