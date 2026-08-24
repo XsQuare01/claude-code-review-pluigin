@@ -1,7 +1,7 @@
 {
   "recordedAt": "2026-08-24",
   "stage": "A1",
-  "note": "harness 검증 실행. 케이스 1개, 팔당 1회. 기준선이 아니라 harness가 산다는 증거다. 실행 중 harness 자체의 결함 4개(JSON 봉투 미파싱, --plugin-dir 스킬명 충돌, 규칙 모듈 미접근, 리포트 파서가 표/#### 두 레이아웃 중 하나만 인식)를 고치고 나서야 이 값이 나왔다 — 그 전 실행은 report=false 또는 findings=0으로 harness의 결함을 그대로 보여줬다.",
+  "note": "harness 검증 실행. 케이스 1개, 팔당 1회. 기준선이 아니라 harness가 산다는 증거다. 실행 중 harness 자체의 결함 4개(JSON 봉투 미파싱, --plugin-dir 스킬명 충돌, 규칙 모듈 미접근, 리포트 파서가 표/#### 두 레이아웃 중 하나만 인식)를 고치고 나서야 이 값이 나왔다 — 그 전 실행은 report=false 또는 findings=0으로 harness의 결함을 그대로 보여줬다. 두 캐비어트: (1) 두 팔 모두 `--permission-mode acceptEdits`가 Bash를 거부한다(main: `find`/`cat` 거부, pr52: `prepare-verification.mjs` 실행 두 번 거부) — 그래서 `scriptRan: {ran:false}`가 이 harness가 도는 모든 run에서 구조적으로 불가피하고, `## 도구 실행 결과`는 늘 비어 있다. 이 값을 읽을 때 \"워크플로우가 대조를 건너뛰었다\"와 \"harness가 도구 실행을 막았다\"를 구분해야 한다 — 후자를 전자로 읽으면 harness 자신의 권한 설정을 워크플로우의 결함으로 오독한다. (2) 두 팔의 `falsePositives.count`가 0인 것은 이 케이스의 `expected.json`이 `mustNotFlag: []`이기 때문이다 — 오탐 목표 자체가 정의돼 있지 않아 0이 나오는 것이고, 두 팔이 실제로 오탐을 내지 않았다는 증거가 아니다.",
   "exitConditions": {
     "1_unitTestsPassWithoutReview": {
       "met": true,
@@ -24,6 +24,8 @@
   "arms": {
     "main": {
       "pluginVersion": "2.5.6",
+      "pluginRef": "6443be70f72e4b269e601bd39c0285fc06bbe2a1",
+      "timestamp": "2026-08-24T04:09:47.728Z",
       "cases": {
         "location-trap": {
           "run": 1,
@@ -102,6 +104,8 @@
     },
     "pr52": {
       "pluginVersion": "2.6.1",
+      "pluginRef": "240fec5d8a58e2a4f3d17ef4430ce469819e44e2",
+      "timestamp": "2026-08-24T04:16:58.112Z",
       "cases": {
         "location-trap": {
           "run": 1,
