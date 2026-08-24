@@ -1138,6 +1138,30 @@ function validateContractManifestAndFixtures() {
     failCode('structured-contract', 'E_STRUCTURED_OWNER_MATRIX_SYNC', `workflow-contract.md ownership matrix structured-v1 owners must match validator registry exactly; expected [${registeredStructuredOwners.join(', ')}], got [${structuredOwnersFromMatrix.join(', ')}]`)
   }
 
+  // README carries a second copy of the ownership split, written as commands rather than
+  // paths. It drifted: the 2.6.0 revert corrected the contract matrix and this registry but
+  // left README claiming `/code-review` was still a structured owner, and nothing caught it
+  // because the sync check above only reads workflow-contract.md. A summary that no check
+  // compares is a second source of truth, and the stale one is the one people read first.
+  const commandOf = ownerPath => `/${ownerPath.replace(/^skills\//, '').replace(/\/SKILL\.md$/, '')}`
+  const readmeOwnershipRow = read(join(ROOT, 'README.md'))
+    .split('\n')
+    .find(line => /^\|\s*`\/code-review[^|]*\|[^|]*`\/code-review[^|]*\|\s*$/.test(line))
+  if (!readmeOwnershipRow) {
+    failCode('structured-contract', 'E_README_OWNERSHIP_TABLE_MISSING', 'README.md must carry an ownership table row listing structured-v1 owners and legacy producers as commands')
+  } else {
+    const [structuredCell = '', legacyCell = ''] = readmeOwnershipRow.split('|').slice(1, -1)
+    const commandsIn = cell => (cell.match(/`\/[\w-]+`/g) ?? []).map(token => token.replace(/`/g, '')).sort()
+    const expectedStructured = registeredStructuredOwners.map(commandOf).sort()
+    const expectedLegacy = LEGACY_WORKFLOW_FILES.map(commandOf).sort()
+    if (!sameMembers(commandsIn(structuredCell), expectedStructured)) {
+      failCode('structured-contract', 'E_README_OWNERSHIP_SYNC', `README.md ownership table structured-v1 owners must match the validator registry exactly; expected [${expectedStructured.join(', ')}], got [${commandsIn(structuredCell).join(', ')}]`)
+    }
+    if (!sameMembers(commandsIn(legacyCell), expectedLegacy)) {
+      failCode('structured-contract', 'E_README_OWNERSHIP_SYNC', `README.md ownership table legacy producers must match the validator registry exactly; expected [${expectedLegacy.join(', ')}], got [${commandsIn(legacyCell).join(', ')}]`)
+    }
+  }
+
   for (const [owner, consumers] of Object.entries(STRUCTURED_OWNER_CONSUMERS)) {
     if (!Array.isArray(consumers) || consumers.length === 0) {
       failCode('structured-contract', 'E_STRUCTURED_OWNER_CONSUMER_REGISTRY', `${owner} must declare at least one structured-v1 consumer in STRUCTURED_OWNER_CONSUMERS`)
