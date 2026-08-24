@@ -311,6 +311,42 @@ test('아무 언급도 없으면 돈 것이 아니고 건너뛴다고 선언한 
   assert.equal(result.manifestBlock, false)
 })
 
+// C1 회귀 테스트: 라벨(`counts 출처`)만 보고 판단하던 첫 구현은 아래 두 줄을
+// 구분하지 못했다 — 둘 다 라벨을 담기 때문이다. workflow-contract.md:295-296의
+// 두 줄을 그대로 복사해, 값까지 읽어야 진짜로 돈 것과 정직하게 안 돌렸다고
+// 적은 것이 서로 다른 결과로 나오는지 고정한다.
+test('workflow-contract의 실제 실행 줄은 ran:true를 낸다', () => {
+  const result = checkScriptRan('Verification coverage: 대상 10 중 7 검증 … · counts 출처: `prepare-verification.mjs`')
+  assert.deepEqual(result, { ran: true, manifestBlock: false, countsAttributed: true, declaredSkipped: false })
+})
+
+test('workflow-contract의 미실행 줄은 ran:false를 낸다 — 라벨은 실행 줄과 똑같이 있다', () => {
+  const result = checkScriptRan('Verification coverage: 대상 10 중 7 검증 … · counts 출처: 미실행 (모델 판정)')
+  assert.deepEqual(result, { ran: false, manifestBlock: false, countsAttributed: true, declaredSkipped: true })
+})
+
+test('실행 줄과 미실행 줄은 서로 다른 결과를 낸다 — 라벨만 보면 둘이 같아진다', () => {
+  const ran = checkScriptRan('Verification coverage: 대상 10 중 7 검증 … · counts 출처: `prepare-verification.mjs`')
+  const skipped = checkScriptRan('Verification coverage: 대상 10 중 7 검증 … · counts 출처: 미실행 (모델 판정)')
+  assert.notDeepEqual(ran, skipped)
+  assert.equal(ran.countsAttributed, skipped.countsAttributed, '라벨 존재 여부는 둘 다 true — 이것만 보면 구분이 안 된다')
+  assert.notEqual(ran.ran, skipped.ran)
+})
+
+test('counts 출처 줄 자체가 없으면 countsAttributed가 false다', () => {
+  const result = checkScriptRan('## 실행 계획\n\n위치 대조는 언급하지 않는다\n')
+  assert.equal(result.countsAttributed, false)
+  assert.equal(result.declaredSkipped, false)
+  assert.equal(result.ran, false)
+})
+
+test('대조 미실행 산문만 있고 counts 출처 라벨이 없어도 declaredSkipped는 true다', () => {
+  const result = checkScriptRan('위치 대조: 대조 미실행 (prepare-verification.mjs 실행 권한 거부)')
+  assert.equal(result.countsAttributed, false)
+  assert.equal(result.declaredSkipped, true)
+  assert.equal(result.ran, false)
+})
+
 test('요약 표 합계가 상세 지적과 맞는지 본다', () => {
   const findings = parseFindings(REPORT)
   const result = checkSummaryArithmetic(REPORT, findings)

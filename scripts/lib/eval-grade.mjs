@@ -321,12 +321,32 @@ export function checkSkeleton(reportText) {
  *
  * 세 신호를 따로 남긴다. "돌았다"와 "안 돌렸다고 정직하게 적었다"와
  * "아무 말도 없다"는 서로 다른 결과이고, 세 번째가 가장 나쁘다.
+ *
+ * `counts 출처`가 있는지 **라벨만** 보고 판단하던 첫 구현은 틀렸다.
+ * workflow-contract.md가 정의하는 두 provenance 줄은 둘 다 그 라벨을
+ * 담는다 —
+ *   `counts 출처: \`prepare-verification.mjs\`` (실제로 돌았다)
+ *   `counts 출처: 미실행 (모델 판정)` (정직하게 안 돌렸다고 적었다)
+ * 라벨은 두 경우 모두 등장하므로, 라벨 존재만으로는 이 둘을 구분하지
+ * 못한다 — 정확히 이 함수가 구분해야 하는 두 경우가 서로 같은 값으로
+ * 접힌다. 반드시 라벨 **뒤에 오는 값**을 읽어야 한다.
  */
 export function checkScriptRan(reportText) {
   const text = String(reportText ?? '')
+  // `REVIEW_LOCATIONS:BEGIN`은 이 branch(`feat/eval-harness`) 기준 `review-rules/`,
+  // `skills/`, `prepare-verification.mjs` 어디에도 없다 — 그래서 지금은 항상
+  // false다. 이 sentinel은 아직 머지되지 않은 `feat/light-location-manifest`
+  // (PR #52, `skills/code-review/SKILL.md`)가 심는 것을 겨냥한다. 그 브랜치가
+  // 머지되기 전까지는 신호가 아니라 항상-false 상수이므로, 소비하는 쪽에서
+  // "false=신호 없음"과 "false=아직 이 sentinel을 낼 수 있는 코드가 없음"을
+  // 구분해서 읽어야 한다. PR #52가 머지되면 이 주석을 지운다.
   const manifestBlock = text.includes('REVIEW_LOCATIONS:BEGIN')
-  const countsAttributed = text.includes('counts 출처')
-  const declaredSkipped = text.includes('대조 미실행')
+  const provenance = /counts 출처:\s*(.+)/.exec(text)?.[1] ?? ''
+  const countsAttributed = provenance !== ''
+  // 계약의 1차 신호는 provenance 값 안의 `미실행`. `대조 미실행`은 일부
+  // 실제 리포트가 provenance 절 자체를 이 문구로 대신 쓰는 것을 받아주는
+  // 보조 신호로 남긴다 — 계약 문구가 우선이고 이것은 대안이다.
+  const declaredSkipped = /미실행/.test(provenance) || text.includes('대조 미실행')
   return { ran: countsAttributed && !declaredSkipped, manifestBlock, countsAttributed, declaredSkipped }
 }
 
