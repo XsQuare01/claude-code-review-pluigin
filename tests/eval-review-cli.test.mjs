@@ -29,3 +29,46 @@ test('없는 케이스는 크래시 대신 사유를 낸다', () => {
     },
   )
 })
+
+// 아래 네 테스트는 인자 파싱 단계에서 die()로 끝나므로 --dry-run 여부와 무관하게
+// claude를 부르지 않는다 — fixture조차 만들기 전에 죽는다.
+
+test('플래그처럼 보이는 --runs 값은 사유를 낸다', () => {
+  assert.throws(
+    () => run('--case', 'location-trap', '--runs', '--dry-run'),
+    error => {
+      assert.match(String(error.stderr), /runs/)
+      return true
+    },
+  )
+})
+
+test('마지막에 위치해 값이 없는 --timeout-minutes는 사유를 낸다', () => {
+  assert.throws(
+    () => run('--case', 'location-trap', '--dry-run', '--timeout-minutes'),
+    error => {
+      assert.match(String(error.stderr), /timeout-minutes/)
+      return true
+    },
+  )
+})
+
+test('숫자가 아닌 --runs 값은 사유를 낸다', () => {
+  assert.throws(
+    () => run('--case', 'location-trap', '--runs', 'abc', '--dry-run'),
+    error => {
+      assert.match(String(error.stderr), /runs/)
+      return true
+    },
+  )
+})
+
+test('0 이하의 --timeout-minutes 값은 사유를 낸다', () => {
+  assert.throws(
+    () => run('--case', 'location-trap', '--timeout-minutes', '0', '--dry-run'),
+    error => {
+      assert.match(String(error.stderr), /timeout-minutes/)
+      return true
+    },
+  )
+})
