@@ -45,10 +45,15 @@ test('두 트리의 차이를 추가/삭제/수정으로 나눈다', () => {
   rmSync(dir, { recursive: true, force: true })
 })
 
-test('before 커밋과 after 커밋을 가진 저장소를 만든다', () => {
+test('before 커밋과 after 커밋을 가진 저장소를 만든다', t => {
   const dir = makeCase()
-  const target = join(scratch(), 'repo')
-  const fixture = buildFixture(dir, target)
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  // `scratch()`가 만드는 부모 디렉터리를 변수에 묶어야 나중에 지울 수 있다 —
+  // `join(scratch(), 'repo')`처럼 인라인으로만 쓰면 그 부모 경로가 어디에도
+  // 남지 않아 정리할 수 없다.
+  const targetParent = scratch()
+  t.after(() => rmSync(targetParent, { recursive: true, force: true }))
+  const fixture = buildFixture(dir, join(targetParent, 'repo'))
 
   const git = (...args) => execFileSync('git', args, { cwd: fixture.root, encoding: 'utf8' }).trim()
   assert.notEqual(fixture.mergeBase, fixture.head)
@@ -56,27 +61,63 @@ test('before 커밋과 after 커밋을 가진 저장소를 만든다', () => {
 
   const names = git('diff', '--name-only', `${fixture.mergeBase}..HEAD`).split('\n').filter(Boolean).sort()
   assert.deepEqual(names, ['src/added.ts', 'src/edit.ts', 'src/gone.ts'])
-  rmSync(dir, { recursive: true, force: true })
 })
 
-test('CLAUDE.md와 .gitignore는 before 커밋에 들어가 diff에 나타나지 않는다', () => {
+test('CLAUDE.md와 .gitignore는 before 커밋에 들어가 diff에 나타나지 않는다', t => {
   const dir = makeCase()
-  const fixture = buildFixture(dir, join(scratch(), 'repo'))
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const targetParent = scratch()
+  t.after(() => rmSync(targetParent, { recursive: true, force: true }))
+  const fixture = buildFixture(dir, join(targetParent, 'repo'))
   const git = (...args) => execFileSync('git', args, { cwd: fixture.root, encoding: 'utf8' }).trim()
 
   assert.ok(existsSync(join(fixture.root, 'CLAUDE.md')))
   const names = git('diff', '--name-only', `${fixture.mergeBase}..HEAD`).split('\n').filter(Boolean)
   assert.ok(!names.includes('CLAUDE.md'), 'CLAUDE.md가 리뷰 대상이 되면 안 된다')
   assert.ok(!names.includes('.gitignore'))
-  rmSync(dir, { recursive: true, force: true })
 })
 
-test('삭제된 파일은 merge base에서, 남은 파일은 working tree에서 읽는다', () => {
+test('삭제된 파일은 merge base에서, 남은 파일은 working tree에서 읽는다', t => {
   const dir = makeCase()
-  const fixture = buildFixture(dir, join(scratch(), 'repo'))
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const targetParent = scratch()
+  t.after(() => rmSync(targetParent, { recursive: true, force: true }))
+  const fixture = buildFixture(dir, join(targetParent, 'repo'))
   const blobs = readBlobLines(fixture.root, fixture.mergeBase, ['src/edit.ts', 'src/gone.ts'])
   assert.deepEqual(blobs.head['src/edit.ts'], ['export const edit = 4'])
   assert.deepEqual(blobs.base['src/gone.ts'], ['export const gone = 2'])
   assert.equal(blobs.head['src/gone.ts'], undefined)
-  rmSync(dir, { recursive: true, force: true })
+})
+
+// Finding 1 회귀 테스트: 삭제된 파일의 blob을 `git show`로 읽을 때 앞뒤 빈 줄이
+// 사라지면 안 된다. 이전 구현은 rev-parse용 `.trim()` 헬퍼를 파일 내용에도
+// 재사용해서 첫/마지막 빈 줄을 지웠고, 그 결과 삭제된 파일 쪽 줄 번호가
+// working tree 쪽과 어긋났다. 길이만 비교하면 이 버그를 못 잡으므로 정확한
+// 배열을 비교한다.
+test('삭제된 파일의 앞뒤 빈 줄이 git show 결과에서 사라지지 않는다', t => {
+  const dir = scratch()
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  write(dir, 'before/src/keep.ts', 'export const keep = 1\n')
+  write(dir, 'before/src/gone.ts', '\nexport const gone = 2\n\n')
+  write(dir, 'after/src/keep.ts', 'export const keep = 1\n')
+
+  const targetParent = scratch()
+  t.after(() => rmSync(targetParent, { recursive: true, force: true }))
+  const fixture = buildFixture(dir, join(targetParent, 'repo'))
+
+  const blobs = readBlobLines(fixture.root, fixture.mergeBase, ['src/gone.ts'])
+  assert.deepEqual(blobs.base['src/gone.ts'], ['', 'export const gone = 2', ''])
+})
+
+// Finding 2 회귀 테스트: mergeBase가 가리키는 대상이 없으면 조용히 빈 결과를
+// 주는 게 아니라 던져야 한다. 그래야 "환경이 망가졌다"와 "이 경로가 양쪽에
+// 다 없다"가 구분된다.
+test('mergeBase가 유효하지 않으면 조용히 빈 값을 주지 않고 던진다', t => {
+  const dir = makeCase()
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const targetParent = scratch()
+  t.after(() => rmSync(targetParent, { recursive: true, force: true }))
+  const fixture = buildFixture(dir, join(targetParent, 'repo'))
+
+  assert.throws(() => readBlobLines(fixture.root, 'not-a-real-sha', ['src/gone.ts']))
 })
