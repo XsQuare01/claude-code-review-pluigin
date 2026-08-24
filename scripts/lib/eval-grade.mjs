@@ -27,22 +27,45 @@ export function extractDetailSection(reportText) {
   return sectionBetween(reportText, DETAIL_HEADING)
 }
 
+// 셀/줄 전체가 정확히 path:line[-endLine]일 때만 맞는 앵커 패턴. 백틱 조각
+// 하나가 위치 자체인지 (코드 인용이 아닌지) 판단할 때 쓴다.
+const LOCATION_EXACT = /^(.+?):(\d+)(?:\s*[-~]\s*(\d+))?$/
+
+// 백틱이 없을 때, 평문 어디든 처음 나오는 path:line 조각을 찾는다. 공백·백틱·
+// 파이프는 경로 문자에서 제외한다 — 표 칸 구분자와 뒤따르는 설명이 경로에
+// 섞이지 않게 한다.
+const LOCATION_ANYWHERE = /([^\s`|]+):(\d+)(?:\s*[-~]\s*(\d+))?/
+
+const toLocation = match => ({
+  path: match[1].trim(),
+  line: Number(match[2]),
+  endLine: match[3] === undefined ? undefined : Number(match[3]),
+})
+
 /**
- * 위치 셀을 경로와 줄 번호로 나눈다.
+ * 위치 칸/줄에서 경로와 줄 번호를 찾는다.
  *
  * 확인하지 못한 위치는 버리지 않고 `unverified`로 남긴다. 위치를 못 잡은 것과
  * 결함을 못 찾은 것은 다른 실패이고, 채점에서 다른 축으로 간다.
+ *
+ * 실제 리포트는 위치와 코드 인용을 한 칸/한 줄에 같이 담는다
+ * (`` `path:line` — `code` ``). 그래서 칸 전체가 path:line이라고 요구하지
+ * 않고 첫 path:line 조각만 찾는다. 백틱으로 감싼 조각을 먼저 본다 — 워크플로가
+ * 위치를 백틱으로 감싸는 규칙이라 더 강한 신호이고, 인용된 코드 안에서 우연히
+ * path:line처럼 보이는 부분을 집어내는 사고도 막아준다. 백틱 조각이 없을
+ * 때만 평문에서 찾는다.
  */
 export function parseLocation(cell) {
-  const text = strip(cell).replace(/\s*\([^)]*\)\s*$/, '').trim()
-  if (text === '' || text.startsWith('위치 미확인')) return { unverified: true, raw: strip(cell) }
-  const match = /^(.+?):(\d+)(?:\s*[-~]\s*(\d+))?$/.exec(text)
-  if (!match) return { unverified: true, raw: strip(cell) }
-  return {
-    path: match[1].trim(),
-    line: Number(match[2]),
-    endLine: match[3] === undefined ? undefined : Number(match[3]),
+  const raw = strip(cell)
+  if (raw === '' || raw.startsWith('위치 미확인')) return { unverified: true, raw }
+
+  for (const segment of String(cell ?? '').matchAll(/`([^`]*)`/g)) {
+    const match = LOCATION_EXACT.exec(segment[1].trim())
+    if (match) return toLocation(match)
   }
+
+  const match = LOCATION_ANYWHERE.exec(raw)
+  return match ? toLocation(match) : { unverified: true, raw }
 }
 
 /**
@@ -60,27 +83,88 @@ function splitRow(line) {
 
 const isSeparatorRow = cell => cell !== '' && /^[-:\s]+$/.test(cell)
 
-export function parseFindings(reportText) {
+function tableFindingsInLines(lines, module) {
   const findings = []
-  let currentModule = null
-  for (const line of extractDetailSection(reportText)) {
-    const heading = /^###\s+(.*)$/.exec(line.trim())
-    if (heading) {
-      currentModule = strip(heading[1])
-      continue
-    }
+  for (const line of lines) {
     const cells = splitRow(line)
     if (!cells || cells.length < 3) continue
     const [severityCell, ruleCell, locationCell] = cells
     if (isSeparatorRow(severityCell)) continue
-    if (strip(severityCell) === '' ) continue
+    if (strip(severityCell) === '') continue
     if (strip(severityCell) === '심각도' || strip(ruleCell) === '규칙') continue
     findings.push({
-      module: currentModule,
+      module,
       severity: strip(severityCell),
       ruleId: strip(ruleCell),
       location: parseLocation(locationCell),
     })
+  }
+  return findings
+}
+
+const SEVERITY_GLYPHS = ['🔴', '🟡', '🔵']
+
+/**
+ * `#### 🟡 \`규칙-id\` 제목` 헤딩 블록으로 나온 지적을 읽는다.
+ *
+ * 실제 워크플로는 표 대신 이 형태를 쓰기도 한다 — C-7은 섹션 이름과 순서만
+ * 고정하고, `## 상세 지적` 안의 지적 표현 형식까지는 고정하지 않는다.
+ * 헤딩에서 심각도·규칙을 읽고, 헤딩 다음 줄부터 다음 `####`/`###` 헤딩
+ * 전까지에서 백틱 위치(`parseLocation`이 unverified가 아니라고 판단하는
+ * 첫 줄)를 위치로 삼는다 — 위치와 별개로 표에도 없는 `본문`/`근거` 같은 산문
+ * 줄에서 우연히 걸릴 수 있어, 위치를 찾으면 그 뒤로는 더 보지 않는다.
+ */
+function blockFindingsInLines(lines, module) {
+  const findings = []
+  let current = null
+  const flush = () => {
+    if (!current) return
+    findings.push({ module, severity: current.severity, ruleId: current.ruleId, location: current.location })
+    current = null
+  }
+  for (const line of lines) {
+    const trimmed = line.trim()
+    const heading = /^####\s+(.*)$/.exec(trimmed)
+    if (heading) {
+      flush()
+      const title = heading[1]
+      const severity = SEVERITY_GLYPHS.find(glyph => title.includes(glyph))
+      const ruleMatch = /`([^`]+)`/.exec(title)
+      if (!severity || !ruleMatch) continue // 형태가 안 맞으면 지적으로 세지 않는다
+      current = { severity, ruleId: ruleMatch[1].trim(), location: { unverified: true, raw: '' } }
+      continue
+    }
+    if (current && current.location.unverified) {
+      const location = parseLocation(trimmed)
+      if (!location.unverified) current.location = location
+    }
+  }
+  flush()
+  return findings
+}
+
+export function parseFindings(reportText) {
+  // `### ` 모듈 경계로 먼저 나눈다. 모듈마다 표/블록 중 무엇을 썼는지가
+  // 다를 수 있고, 같은 모듈에 둘 다 있으면 이중 집계가 되기 때문이다.
+  const segments = []
+  let current = { module: null, lines: [] }
+  for (const line of extractDetailSection(reportText)) {
+    const heading = /^###\s+(.*)$/.exec(line.trim())
+    if (heading) {
+      segments.push(current)
+      current = { module: strip(heading[1]), lines: [] }
+      continue
+    }
+    current.lines.push(line)
+  }
+  segments.push(current)
+
+  const findings = []
+  for (const segment of segments) {
+    const tableFindings = tableFindingsInLines(segment.lines, segment.module)
+    // 표가 하나라도 있으면 그 모듈은 표만 신뢰하고 블록은 무시한다 — 표가
+    // 더 엄격하게 구조화된 원래 형식이라 우선한다. 표가 없을 때만 블록을 본다.
+    findings.push(...(tableFindings.length > 0 ? tableFindings : blockFindingsInLines(segment.lines, segment.module)))
   }
   return findings
 }

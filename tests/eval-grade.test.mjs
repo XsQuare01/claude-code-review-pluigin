@@ -331,3 +331,182 @@ test('grade가 모든 축을 한 객체로 준다', () => {
   assert.equal(result.skeletonOk.ok, false)
   assert.equal(typeof result.summaryArithmetic.ok, 'boolean')
 })
+
+// D4/D5 — 실제로 실행된 리뷰가 만든 두 형태. 위치 칸/줄이 path:line만 담는다고
+// 가정한 것과, 지적이 항상 표라고 가정한 것이 둘 다 틀렸다. 실물 리포트는
+// 위치와 코드 인용을 한 칸/한 줄에 같이 담고, 표 대신 `#### ` 블록을 쓰기도
+// 한다.
+
+test('위치 칸에 코드 인용이 백틱으로 같이 들어와도 첫 위치만 읽는다', () => {
+  assert.deepEqual(
+    parseLocation('`src/features/order-list/ui/order-list.tsx:31` — `<li key={index} onClick={() => onSelect(order.id)}>`'),
+    { path: 'src/features/order-list/ui/order-list.tsx', line: 31, endLine: undefined },
+  )
+})
+
+test('범위 위치도 백틱 코드 인용과 함께 오면 여전히 읽는다', () => {
+  assert.deepEqual(
+    parseLocation('`src/features/order-list/ui/order-list.tsx:21-24` — `() => sortOrders(orders, sortKey)`'),
+    { path: 'src/features/order-list/ui/order-list.tsx', line: 21, endLine: 24 },
+  )
+})
+
+// 실제 pr52 리포트의 02-3 행 그대로 — 위치 칸의 코드 인용 안에 마크다운이
+// `\|`로 이스케이프한 파이프가 있다. splitRow는 이스케이프를 모르고 그 자리에서
+// 칸을 자르지만, 위치 자신을 담은 첫 백틱 조각은 그 파이프보다 앞에 있어 온전하다.
+test('위치 칸 안의 코드 인용에 이스케이프된 파이프(\\|)가 있어 표가 그 자리에서 잘려도 위치는 산다', () => {
+  const report = `## 상세 지적
+
+### 02 타입 안전성
+
+| 심각도 | 규칙 | 위치 | 이슈 | 개선 제안 |
+|--------|------|------|------|----------|
+| 🟡 | \`02-3\` | \`src/features/order-list/ui/order-list.tsx:10\` — \`function sortOrders(orders: Order[], sortBy: 'date' \\| 'total'): Order[] {\` | 문제 | 제안 |
+
+## 요약
+`
+  const findings = parseFindings(report)
+  assert.equal(findings.length, 1)
+  assert.deepEqual(findings[0].location, { path: 'src/features/order-list/ui/order-list.tsx', line: 10, endLine: undefined })
+})
+
+// 실제 pr52 리포트의 14-3 행 그대로 — 대표 줄(22) 뒤에 괄호로 실제 범위
+// (`21-24`)를 따로 적어 둔다. 첫 백틱 조각(대표 줄)을 위치로 삼고 괄호 안의
+// 범위 표기는 무시한다.
+test('위치 칸이 대표 줄 뒤에 괄호로 범위를 따로 적어도 대표 줄을 위치로 삼는다', () => {
+  const report = `## 상세 지적
+
+### 14 React 성능
+
+| 심각도 | 규칙 | 위치 | 이슈 | 개선 제안 |
+|--------|------|------|------|----------|
+| 🟡 | \`14-3\` | \`src/features/order-list/ui/order-list.tsx:22\` (범위 \`21-24\`) — \`() => sortOrders(orders, sortBy)\` | 문제 | 제안 |
+
+## 요약
+`
+  const findings = parseFindings(report)
+  assert.equal(findings.length, 1)
+  assert.deepEqual(findings[0].location, { path: 'src/features/order-list/ui/order-list.tsx', line: 22, endLine: undefined })
+})
+
+// 실제 main 리포트의 03-3 블록 그대로 — 헤딩 다음 줄부터 빈 줄 없이
+// 영향/확신, 위치, 본문·근거·개선 제안이 바로 이어진다.
+test('블록 형태 지적도 헤딩과 첫 위치 줄에서 심각도·규칙·위치를 읽는다', () => {
+  const report = `## 상세 지적
+
+### 03 React 규칙 위반
+
+#### 🟡 \`03-3\` 정렬·필터가 함께 일어나는 리스트의 key가 \`order.id\`에서 배열 인덱스로 바뀌었다
+영향: 낮음 · 확신: 높음
+\`src/features/order-list/ui/order-list.tsx:31\` — \`<li key={index} onClick={() => onSelect(order.id)}>\`
+본문: …
+근거: …
+개선 제안: …
+
+## 요약
+`
+  const findings = parseFindings(report)
+  assert.equal(findings.length, 1)
+  assert.deepEqual(findings[0], {
+    module: '03 React 규칙 위반',
+    severity: '🟡',
+    ruleId: '03-3',
+    location: { path: 'src/features/order-list/ui/order-list.tsx', line: 31, endLine: undefined },
+  })
+})
+
+// 실제 main 리포트처럼 같은 `###` 아래 `#### ` 블록이 두 번 연달아 온다 —
+// 하나를 다 읽고 다음 헤딩에서 flush 해야 첫 블록이 두 번째 블록에 먹히지 않는다.
+test('같은 모듈 아래 블록이 연달아 와도 각각 따로 지적으로 뽑는다', () => {
+  const report = `## 상세 지적
+
+### 19 의도 & 선택 근거
+
+#### 🟡 \`19-2\` 기본값 \`sortBy = 'date'\`가 호출자가 넘긴 배열 순서를 조용히 덮는다
+영향: 낮음 · 확신: 높음
+\`src/features/order-list/ui/order-list.tsx:18\` — \`export function OrderList({ orders, onSelect, sortBy = 'date' }: OrderListProps) {\`
+본문: …
+근거: …
+개선 제안: …
+
+#### 🟡 \`19-5\` 날짜 정렬이 \`Order.date\` 문자열 포맷에 대한 문서화되지 않은 전제 위에 서 있다
+영향: 낮음 · 확신: 높음
+\`src/features/order-list/ui/order-list.tsx:13\` — \`sortBy === 'total' ? right.total - left.total : right.date.localeCompare(left.date),\`
+본문: …
+근거: …
+개선 제안: …
+
+## 요약
+`
+  const findings = parseFindings(report)
+  assert.equal(findings.length, 2)
+  assert.deepEqual(findings.map(f => [f.ruleId, f.location.line]), [
+    ['19-2', 18],
+    ['19-5', 13],
+  ])
+  assert.ok(findings.every(f => f.module === '19 의도 & 선택 근거'))
+})
+
+test('한 리포트에 표를 쓰는 모듈과 블록을 쓰는 모듈이 섞여 있어도 둘 다 읽는다', () => {
+  const report = `## 상세 지적
+
+### 표 모듈
+
+| 심각도 | 규칙 | 위치 | 이슈 | 개선 제안 |
+|--------|------|------|------|----------|
+| 🔴 | 02-1 | \`src/b.ts:8\` | \`as any\` | 스키마 검증 |
+
+### 블록 모듈
+
+#### 🔵 \`09-2\` 사소한 스타일
+
+\`src/c.ts:5\` — \`padding: 4\`
+
+## 요약
+`
+  const findings = parseFindings(report)
+  assert.equal(findings.length, 2)
+  assert.deepEqual(findings.map(f => [f.module, f.ruleId, f.severity, f.location.line]), [
+    ['표 모듈', '02-1', '🔴', 8],
+    ['블록 모듈', '09-2', '🔵', 5],
+  ])
+})
+
+// 표와 블록이 같은 모듈에 동시에 있으면 이중 집계가 된다. 규칙: 표가 하나라도
+// 있으면 그 모듈은 표만 신뢰하고 블록은 무시한다 — 표가 더 엄격하게 구조화된
+// 원래 형식이기 때문이다.
+test('같은 모듈에 표와 블록이 동시에 있으면 표만 세고 블록은 무시한다', () => {
+  const report = `## 상세 지적
+
+### 뒤섞인 모듈
+
+| 심각도 | 규칙 | 위치 | 이슈 | 개선 제안 |
+|--------|------|------|------|----------|
+| 🔴 | 02-1 | \`src/b.ts:8\` | \`as any\` | 스키마 검증 |
+
+#### 🔵 \`09-2\` 사소한 스타일
+
+\`src/c.ts:5\` — \`padding: 4\`
+
+## 요약
+`
+  const findings = parseFindings(report)
+  assert.equal(findings.length, 1, '표가 있으면 같은 모듈의 블록은 세지 않는다')
+  assert.equal(findings[0].ruleId, '02-1')
+})
+
+test('블록에 위치 백틱 줄이 없으면 위치를 못 찾은 것으로 남긴다', () => {
+  const report = `## 상세 지적
+
+### 모듈
+
+#### 🔴 \`10-1\` 위치를 특정하지 못한 지적
+
+본문: 파일을 특정하지 못했다
+
+## 요약
+`
+  const findings = parseFindings(report)
+  assert.equal(findings.length, 1)
+  assert.equal(findings[0].location.unverified, true)
+})
