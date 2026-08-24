@@ -246,13 +246,15 @@ Structured-v1 owners **when this interface shipped in 2.4.0** were:
 
 and the legacy producers were `/code-review`, `/code-review-commit` and `/code-review-fast`.
 
-**Current ownership (2.6.0)** — `/code-review` joined the structured owners when it gained its location check, so:
+**Current ownership** — unchanged from 2.4.0:
 
 | Structured-v1 owners | Legacy producers |
 |---|---|
-| `/code-review`, `/code-review-full`, `/code-review-props`, `/code-review-math`, `/code-review-exception` | `/code-review-commit`, `/code-review-fast` |
+| `/code-review-full`, `/code-review-props`, `/code-review-math`, `/code-review-exception` | `/code-review`, `/code-review-commit`, `/code-review-fast` |
 
-`workflow-contract.md` C-6A is the authority; this table is a summary of it.
+`workflow-contract.md` C-6A is the authority; this table is a summary of it, and `validate-rules.mjs` fails the build when the two disagree.
+
+`2.6.0` briefly moved `/code-review` into the structured owners so it could gain a location check. That release was reverted: a consolidated single-agent workflow made to emit a full V1 envelope per finding ran out of time before it could finish, while the fan-out workflows were fine because they divide that output across agents. The cost of a producer contract lives in **output per agent**, not in prompt size, so the same contract is affordable for `full` and not for `default`. `/code-review` is a legacy producer again, and a future location check for it has to fit that shape.
 
 `agents/correctness-reviewer.md` is **not** a phase-1 structured-v1 owner. It stays an optional direct/evidence-first agent until a built-in orchestrator consumer exists that validates and renders its output.
 
