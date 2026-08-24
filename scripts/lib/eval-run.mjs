@@ -1,7 +1,7 @@
-// claude 프로세스의 종료를 분류하는 순수 함수.
+// claude 프로세스의 종료와 stdout을 다루는 순수 함수들.
 //
 // fs도 git도 spawn도 쓰지 않는다. 호출자가 관찰한 값만 받아서 셈한다 — 그래야
-// 이 분류 규칙을 실제 프로세스 하나 띄우지 않고 검증할 수 있다.
+// 이 규칙들을 실제 프로세스 하나 띄우지 않고 검증할 수 있다.
 //
 // 신호가 아니라 harness가 직접 kill을 호출했는지로 판단한다. Windows에는 POSIX
 // 시그널이 없어서, harness가 타임아웃으로 .kill('SIGKILL')한 프로세스도 close
@@ -15,4 +15,21 @@ export const classifyExit = ({ killedByTimeout, code, signal }) => {
   if (killedByTimeout) return 'timeout'
   if (code === 0) return true
   return 'failed'
+}
+
+/**
+ * `claude -p --output-format json`이 stdout에 남기는 결과 봉투를 해석한다.
+ *
+ * 크래시나 부분 출력이면 stdout이 JSON이 아닐 수 있다. 그 실패를 던지면
+ * grading 배치 전체가 한 run의 깨진 stdout 때문에 멈춘다 — 그래서 파싱
+ * 실패는 null로 접는다. 봉투는 있는데 `result`가 없는 경우(예: 리뷰가
+ * max-turns로 끝난 경우)는 파싱 실패가 아니다 — 봉투 그대로 돌려주고
+ * `result`가 undefined인 채로 호출부가 판단하게 둔다.
+ */
+export const parseEnvelope = stdout => {
+  try {
+    return JSON.parse(stdout)
+  } catch {
+    return null
+  }
 }

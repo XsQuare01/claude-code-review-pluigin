@@ -17,7 +17,7 @@ import { fileURLToPath } from 'node:url'
 
 import { buildFixture, readBlobLines } from './lib/eval-fixture.mjs'
 import { grade, parseFindings } from './lib/eval-grade.mjs'
-import { classifyExit } from './lib/eval-run.mjs'
+import { classifyExit, parseEnvelope } from './lib/eval-run.mjs'
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)))
 
@@ -102,6 +102,12 @@ const runClaude = (fixtureRoot, command) => new Promise(resolve => {
   }
   child.stdout.on('data', chunk => { stdout += chunk })
   child.stderr.on('data', chunk => { stderr += chunk })
+  // --output-format json이 stdout에 남기는 결과 봉투. error/close 두 종료
+  // 경로가 같은 값을 쓰도록 한 번만 계산하는 자리에 둔다. stdoutTail은
+  // 진단용으로 항상 남긴다 — 성공한 run도 예외가 아니다. 이전 리뷰가 이
+  // stdout이 파싱도 저장도 안 된 채로 버려진다고 짚었고, 그게 리포트가
+  // 없는 run이 블랙박스가 되는 이유였다.
+  const envelopeOf = () => parseEnvelope(stdout)
   // spawn 자체가 실패하면(바이너리를 못 찾는 등) close 이벤트는 절대 오지
   // 않는다. 여기서 받지 않으면 처리되지 않은 예외로 프로세스 전체가 죽고,
   // writeFileSync가 for 루프가 끝난 뒤에만 돌기 때문에 이미 끝낸 run들의
@@ -111,7 +117,8 @@ const runClaude = (fixtureRoot, command) => new Promise(resolve => {
       completed: 'failed',
       exitCode: null,
       durationSec: Math.round((Date.now() - started) / 1000),
-      stdout,
+      envelope: envelopeOf(),
+      stdoutTail: stdout.slice(-4000),
       stderr: `${stderr}${err.message}`.slice(-4000),
     })
   })
@@ -121,7 +128,8 @@ const runClaude = (fixtureRoot, command) => new Promise(resolve => {
       completed: classifyExit({ killedByTimeout, code, signal }),
       exitCode: code,
       durationSec: Math.round((Date.now() - started) / 1000),
-      stdout,
+      envelope: envelopeOf(),
+      stdoutTail: stdout.slice(-4000),
       stderr: stderr.slice(-4000),
     })
   })
@@ -174,7 +182,19 @@ for (let index = 0; index < runs; index += 1) {
   const fixture = makeFixture()
   const execution = await runClaude(fixture.root, meta.command)
   const reportPath = newestReport(fixture.root)
-  const reportText = reportPath ? readFileSync(reportPath, 'utf8') : ''
+  const envelope = execution.envelope
+
+  // 파일이 먼저다 — review-reports/에 저장하라는 C-7 계약이 그렇게 요구하고,
+  // 워크플로우가 그 계약을 실제로 지켰는지가 측정해야 할 신호이기 때문이다.
+  // 파일이 없을 때만 stdout 봉투의 result로 접는다. reportSource를 reportFound와
+  // 분리해서 남긴다: reportFound는 "디스크에 파일이 있었다"만 뜻하고,
+  // reportSource는 "리포트를 어디서 얻었나(file/stdout/둘 다 없음)"를 뜻한다 —
+  // 하나로 합치면 "계약대로 파일에 썼다"와 "stdout에서 겨우 건졌다"가
+  // 구분되지 않는다.
+  const reportSource = reportPath ? 'file' : envelope?.result ? 'stdout' : null
+  const reportText = reportSource === 'file' ? readFileSync(reportPath, 'utf8')
+    : reportSource === 'stdout' ? envelope.result
+    : ''
 
   // 채점에 필요한 경로만 읽는다: 기대값이 가리키는 경로 + 리포트가 실제로
   // 언급한 경로. 언급한 경로는 채점이 쓰는 것과 같은 파서(parseFindings)로
@@ -189,11 +209,11 @@ for (let index = 0; index < runs; index += 1) {
   ])
 
   const blobLines = readBlobLines(fixture.root, fixture.mergeBase, [...mentioned])
-  // completed와 reportFound를 둘 다 요구한다. claude가 exit 0으로 끝났는데
-  // 리포트를 안 남기면 grade('', ...)가 "찾은 게 0개"라는 멀쩡해 보이는 결과를
-  // 내놓는데, 이는 타임아웃과 똑같은 부류의 실패다 — 정직한 미완료 대신
-  // 오해를 주는 0.
-  const scored = execution.completed === true && reportPath ? grade(reportText, expected, blobLines) : null
+  // completed와 reportSource를 둘 다 요구한다 — 파일이든 stdout이든 실제
+  // 리포트 텍스트가 있어야 채점한다. 둘 다 없으면 grade('', ...)가 "찾은 게
+  // 0개"라는 멀쩡해 보이는 결과를 내놓는데, 이는 타임아웃과 똑같은 부류의
+  // 실패다 — 정직한 미완료 대신 오해를 주는 0.
+  const scored = execution.completed === true && reportSource ? grade(reportText, expected, blobLines) : null
 
   results.push({
     run: index + 1,
@@ -201,11 +221,20 @@ for (let index = 0; index < runs; index += 1) {
     exitCode: execution.exitCode,
     durationSec: execution.durationSec,
     reportFound: Boolean(reportPath),
+    reportSource,
     fixtureRoot: fixture.root,
+    // 봉투에서 나오는 진단 정보. permissionDenials가 특히 중요하다 — 리뷰가
+    // 리포트를 쓰려다가 --permission-mode acceptEdits에 막혔다면 여기 남는다.
+    numTurns: envelope?.num_turns,
+    isError: envelope?.is_error,
+    stopReason: envelope?.stop_reason,
+    permissionDenials: envelope?.permission_denials,
+    totalCostUsd: envelope?.total_cost_usd,
+    stdoutTail: execution.stdoutTail,
     stderrTail: execution.completed === true ? undefined : execution.stderr,
     ...(scored ?? {}),
   })
-  process.stdout.write(`run ${index + 1}/${runs}: completed=${execution.completed} ${execution.durationSec}s report=${Boolean(reportPath)}\n`)
+  process.stdout.write(`run ${index + 1}/${runs}: completed=${execution.completed} ${execution.durationSec}s report=${reportSource ?? 'none'}\n`)
 }
 
 const outDir = join(ROOT, 'evals', 'results')
@@ -234,6 +263,6 @@ for (const result of results) {
     )
   } else {
     // 조용히 넘어가지 않는다 — 채점이 없다는 사실과 그 이유를 그대로 낸다.
-    process.stdout.write(`  run ${result.run}: not graded (completed=${result.completed} reportFound=${result.reportFound})\n`)
+    process.stdout.write(`  run ${result.run}: not graded (completed=${result.completed} reportSource=${result.reportSource})\n`)
   }
 }
