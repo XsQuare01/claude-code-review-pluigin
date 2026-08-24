@@ -2,7 +2,7 @@
   "mustFind": [
     {
       "id": "index-key-on-sorted-list",
-      "ruleIds": ["03-3", "06-3"],
+      "ruleIds": ["03-3"],
       "path": "src/features/order-list/ui/order-list.tsx",
       "line": 31,
       "lineTolerance": 1,
