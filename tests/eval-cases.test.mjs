@@ -39,6 +39,22 @@ for (const name of caseNames) {
     assert.doesNotThrow(() => assertNoPathOverlap(readJson('expected.json')))
   })
 
+  // buildFixture()는 before 트리에 자기 CLAUDE.md/.gitignore를 써 넣고, after
+  // 커밋을 만들 때는 before가 소유한 경로를 먼저 지운 뒤 after 트리를 그대로
+  // 덮어쓴다. 케이스가 자기 CLAUDE.md나 .gitignore를 갖고 있으면 그 삭제
+  // 단계가 케이스 파일 대신 harness의 파일을 지우고, after 트리에는 harness가
+  // 다시 쓴 적 없는 그 경로가 남지 않는다 — 리포트 저장 위치를 지정하는
+  // CLAUDE.md가 사라지면 리포트가 다른 곳에 쓰이고 reportFound가 조용히
+  // false가 된다. 케이스 트리 자체에 이 두 이름이 없는지 여기서 고정한다.
+  test(`${name}: before/after 트리에 CLAUDE.md나 .gitignore가 없다`, () => {
+    const before = readTree(join(caseDir, 'before'))
+    const after = readTree(join(caseDir, 'after'))
+    for (const forbidden of ['CLAUDE.md', '.gitignore']) {
+      assert.ok(!before.has(forbidden), `before 트리가 자기 ${forbidden}를 갖고 있다 — harness의 것과 충돌한다`)
+      assert.ok(!after.has(forbidden), `after 트리가 자기 ${forbidden}를 갖고 있다 — harness의 것과 충돌한다`)
+    }
+  })
+
   test(`${name}: mustFind가 가리키는 줄이 after 트리에 실제로 있다`, () => {
     const expected = readJson('expected.json')
     const after = readTree(join(caseDir, 'after'))
