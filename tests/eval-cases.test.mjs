@@ -21,6 +21,18 @@ test('케이스가 최소 하나 있다', () => {
   assert.ok(caseNames.length > 0, 'evals/cases 아래에 케이스가 없다')
 })
 
+// mustFind가 가리키는 파일이 반드시 after에 있는 것은 아니다. 삭제 회귀
+// 케이스에서 결함은 **삭제된 파일 안**에 있고, 리뷰가 인용해야 하는 줄
+// 번호도 그 파일이 마지막으로 존재하던 트리의 것이다. 채점기의
+// resolveLines가 working tree 다음에 merge base를 보는 것과 같은 순서로
+// after -> mid -> before를 훑는다.
+const treesFor = caseDir => ({
+  after: readTree(join(caseDir, 'after')),
+  mid: existsSync(join(caseDir, 'mid')) ? readTree(join(caseDir, 'mid')) : null,
+  before: readTree(join(caseDir, 'before')),
+})
+const fileIn = (trees, path) => trees.after.get(path) ?? trees.mid?.get(path) ?? trees.before.get(path)
+
 for (const name of caseNames) {
   const caseDir = join(CASES_DIR, name)
   const readJson = file => JSON.parse(readFileSync(join(caseDir, file), 'utf8'))
@@ -55,12 +67,12 @@ for (const name of caseNames) {
     }
   })
 
-  test(`${name}: mustFind가 가리키는 줄이 after 트리에 실제로 있다`, () => {
+  test(`${name}: mustFind가 가리키는 줄이 그 파일 범위 안이다`, () => {
     const expected = readJson('expected.json')
-    const after = readTree(join(caseDir, 'after'))
+    const trees = treesFor(caseDir)
     for (const target of expected.mustFind) {
-      const contents = after.get(target.path)
-      assert.ok(contents, `${target.path}가 after 트리에 없다`)
+      const contents = fileIn(trees, target.path)
+      assert.ok(contents, `${target.path}가 after/mid/before 어느 트리에도 없다`)
       const lines = contents.split(/\r\n|\r|\n/)
       assert.ok(target.line >= 1 && target.line <= lines.length,
         `${target.id}: ${target.path}:${target.line} 은 파일 범위(1..${lines.length}) 밖이다`)
@@ -74,10 +86,9 @@ for (const name of caseNames) {
   // 무엇이 있어야 하는지를 못박는다.
   test(`${name}: mustFind의 anchor가 그 줄에 실제로 있다`, () => {
     const expected = readJson('expected.json')
-    const after = readTree(join(caseDir, 'after'))
     for (const target of expected.mustFind) {
       assert.ok(target.anchor, `${target.id}: anchor가 없다 — 줄 번호를 지킬 방법이 없다`)
-      const line = after.get(target.path).split(/\r\n|\r|\n/)[target.line - 1]
+      const line = fileIn(treesFor(caseDir), target.path).split(/\r\n|\r|\n/)[target.line - 1]
       assert.ok(line.includes(target.anchor),
         `${target.id}: ${target.path}:${target.line} 에 anchor ${JSON.stringify(target.anchor)} 가 없다. 실제 줄: ${JSON.stringify(line)}`)
     }
