@@ -17,7 +17,7 @@ import { fileURLToPath } from 'node:url'
 
 import { buildFixture, readBlobLines } from './lib/eval-fixture.mjs'
 import { assertNoPathOverlap, grade, parseFindings } from './lib/eval-grade.mjs'
-import { buildClaudeArgs, classifyExit, parseEnvelope, summarizeOpFailures } from './lib/eval-run.mjs'
+import { DISPATCH_REQUEST, buildClaudeArgs, classifyExit, parseEnvelope, summarizeOpFailures } from './lib/eval-run.mjs'
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)))
 
@@ -83,6 +83,12 @@ if (pluginDir === ROOT) {
     '         이 트리에 쓸 수 있습니다. 기준선을 뜰 때는 복사본을 넘기세요.\n',
   )
 }
+
+// 무엇을 기준선으로 삼는지의 선택이다. 기본값(as-experienced)은 이 머신에서
+// 사용자가 실제로 받는 것 — sub-agent 없는 통합 pass — 을 재고, --dispatch는
+// 워크플로우가 정의한 fan-out(as-designed)을 잰다. 둘은 서로 다른 명제이고
+// 비용도 다르므로, 어느 쪽으로 잰 숫자인지가 결과 파일에 남아야 한다.
+const executionShape = has('dispatch') ? 'as-designed' : 'as-experienced'
 
 const label = flag('label', 'local')
 if (!/^[\w.-]+$/.test(label)) die(`--label must match /^[\\w.-]+$/, got ${JSON.stringify(label)}`)
@@ -161,7 +167,13 @@ const runClaude = (fixtureRoot, command) => new Promise(resolve => {
   // 매 실행 새로 만드는 임시 디렉터리이므로 그 자체는 문제가 아니지만,
   // pluginDir도 --add-dir에 들어간다. 살아 있는 저장소를 넘기지 말 것 —
   // 시작 지점에서 경고한다.
-  const args = buildClaudeArgs({ command, pluginDir, fixtureRoot, permissionMode: 'bypassPermissions' })
+  const args = buildClaudeArgs({
+    command,
+    pluginDir,
+    fixtureRoot,
+    permissionMode: 'bypassPermissions',
+    appendSystemPrompt: executionShape === 'as-designed' ? DISPATCH_REQUEST : undefined,
+  })
   const started = Date.now()
   const child = spawn(CLAUDE.command, args, { cwd: fixtureRoot, shell: CLAUDE.shell })
   let stdout = ''
@@ -237,6 +249,7 @@ if (has('dry-run')) {
   process.stdout.write(JSON.stringify({
     case: caseName,
     root: fixture.root,
+    executionShape,
     mergeBase: fixture.mergeBase,
     mid: fixture.mid,
     head: fixture.head,

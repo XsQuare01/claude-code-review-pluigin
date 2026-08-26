@@ -46,14 +46,34 @@ export const parseEnvelope = stdout => {
  * pluginDir이 --add-dir에도 들어가는 이유는 runClaude 쪽 주석에 있다.
  * 스킬이 자기 규칙 모듈을 읽으려면 그 경로가 허용 작업 디렉터리여야 한다.
  */
-export const buildClaudeArgs = ({ command, pluginDir, fixtureRoot, permissionMode }) => [
+export const buildClaudeArgs = ({ command, pluginDir, fixtureRoot, permissionMode, appendSystemPrompt }) => [
   '-p', command,
   '--plugin-dir', pluginDir,
   '--add-dir', fixtureRoot,
   '--add-dir', pluginDir,
   '--permission-mode', permissionMode,
   '--output-format', 'json',
+  // 빈 문자열이면 붙이지 않는다. 값 없는 플래그는 claude가 다음 인자를 값으로
+  // 삼켜 조용히 다른 명령이 된다.
+  ...(appendSystemPrompt ? ['--append-system-prompt', appendSystemPrompt] : []),
 ]
+
+/**
+ * fan-out을 켜기 위한 최소 지시.
+ *
+ * 이 머신에서 뜨는 세션의 시스템 프롬프트에 "Do not call the AgentTool unless
+ * the user requested it"이 들어 있어서, harness가 띄운 모든 run이 sub-agent
+ * 없이 통합 pass로 돌았다 — /code-review가 모듈 fan-out으로 설계돼 있는데도.
+ * 그 조건문의 "unless"를 참으로 만드는 것이 이 문장의 전부다.
+ *
+ * 커버리지·심각도·철저함을 건드리는 표현을 넣지 않는다. 넣는 순간 harness는
+ * 워크플로우가 아니라 자기 프롬프트를 재게 되고, 그것이 fixture 과적합보다
+ * 먼저 오는 더 조용한 실패다. 단위 테스트가 이 범위를 강제한다.
+ */
+export const DISPATCH_REQUEST =
+  '이 세션은 code-review eval harness가 실행한 것이다. 사용자는 워크플로우가 정의한 대로 ' +
+  'sub-agent dispatch를 수행할 것을 명시적으로 요청했다. 리뷰의 범위·판정 기준·출력 형식은 ' +
+  '워크플로우 정의를 그대로 따른다.'
 
 /**
  * 봉투의 subagent_stats를 운영 실패 요약으로 접는다.

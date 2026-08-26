@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { buildClaudeArgs, classifyExit, parseEnvelope, summarizeOpFailures } from '../scripts/lib/eval-run.mjs'
+import { DISPATCH_REQUEST, buildClaudeArgs, classifyExit, parseEnvelope, summarizeOpFailures } from '../scripts/lib/eval-run.mjs'
 
 // Windows에는 POSIX 시그널이 없어서, harness가 .kill('SIGKILL')로 죽인 프로세스도
 // close 이벤트의 signal이 null로 온다. killedByTimeout 플래그가 아니라 signal로
@@ -113,4 +113,43 @@ test('killed와 refused는 하위 키를 합산한다', () => {
 test('하위 키가 빠져 있어도 던지지 않는다', () => {
   const summary = summarizeOpFailures({ spawned: 1 })
   assert.deepEqual(summary, { spawned: 1, failed: 0, killed: 0, refused: 0, total: 0 })
+})
+
+// 실행 shape. /code-review는 모듈 fan-out으로 설계돼 있지만, 이 머신의 세션
+// 시스템 프롬프트에 "Do not call the AgentTool unless the user requested it"이
+// 있어서 harness가 띄우는 모든 run이 sub-agent 없이 통합 pass로 돈다.
+// 그래서 무엇을 기준선으로 삼는지가 선택이 되고, 그 선택은 결과에 남아야 한다.
+
+test('appendSystemPrompt를 주지 않으면 --append-system-prompt가 붙지 않는다', () => {
+  const args = buildClaudeArgs({
+    command: '/x', pluginDir: 'p', fixtureRoot: 'f', permissionMode: 'bypassPermissions',
+  })
+  assert.ok(!args.includes('--append-system-prompt'))
+})
+
+test('appendSystemPrompt를 주면 값과 함께 붙는다', () => {
+  const args = buildClaudeArgs({
+    command: '/x', pluginDir: 'p', fixtureRoot: 'f', permissionMode: 'bypassPermissions',
+    appendSystemPrompt: 'dispatch를 요청한다',
+  })
+  assert.equal(args[args.indexOf('--append-system-prompt') + 1], 'dispatch를 요청한다')
+})
+
+test('빈 문자열은 플래그를 붙이지 않는다', () => {
+  // 빈 값을 넘기면 claude가 다음 인자를 값으로 삼켜 조용히 틀린 명령이 된다.
+  const args = buildClaudeArgs({
+    command: '/x', pluginDir: 'p', fixtureRoot: 'f', permissionMode: 'bypassPermissions',
+    appendSystemPrompt: '',
+  })
+  assert.ok(!args.includes('--append-system-prompt'))
+})
+
+test('DISPATCH_REQUEST는 dispatch만 요청하고 리뷰 내용은 건드리지 않는다', () => {
+  // 이 문장이 커버리지나 판정 기준을 건드리면 harness가 워크플로우가 아니라
+  // 자기 프롬프트를 재게 된다. 지시 범위를 테스트로 못박는다.
+  assert.match(DISPATCH_REQUEST, /sub-agent|dispatch/)
+  for (const forbidden of ['철저', '자세', '모두 찾', '빠짐없이', '심각도', '더 많']) {
+    assert.ok(!DISPATCH_REQUEST.includes(forbidden),
+      `DISPATCH_REQUEST가 리뷰 품질을 유도하는 표현을 담고 있다: ${forbidden}`)
+  }
 })
