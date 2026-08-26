@@ -238,6 +238,7 @@ if (has('dry-run')) {
     case: caseName,
     root: fixture.root,
     mergeBase: fixture.mergeBase,
+    mid: fixture.mid,
     head: fixture.head,
     changed: fixture.changed,
   }, null, 2) + '\n')
@@ -317,7 +318,10 @@ for (let index = 0; index < runs; index += 1) {
     ...findings.map(finding => finding.location.path).filter(Boolean),
   ])
 
-  const blobLines = readBlobLines(fixture.root, fixture.mergeBase, [...mentioned])
+  // 3커밋 케이스에서는 mid도 넘긴다. mid에만 있던 파일은 working tree에도
+  // merge base에도 없어서, 이것 없이는 지적이 인용한 위치를 검증할 방법이 없다 —
+  // 그리고 그 검증 불가 상태를 재현하는 것이 deletion-regression의 목적이다.
+  const blobLines = readBlobLines(fixture.root, fixture.mergeBase, [...mentioned], [fixture.mid])
   // completed와 reportSource를 둘 다 요구한다 — 파일이든 stdout이든 실제
   // 리포트 텍스트가 있어야 채점한다. 둘 다 없으면 grade('', ...)가 "찾은 게
   // 0개"라는 멀쩡해 보이는 결과를 내놓는데, 이는 타임아웃과 똑같은 부류의
