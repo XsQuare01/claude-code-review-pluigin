@@ -225,6 +225,8 @@ export function prepareVerification(candidates, blobs, options = {}) {
 //   node scripts/prepare-verification.mjs --merge-base <sha> < candidates.json
 //
 // stdin  : { "results": [ <REVIEW_RESULT_CONTRACT_V1>, … ] }   preferred — pipe what you have
+//          { "locations": [ {ruleId, path, line, quote}, … ] }  light form for a
+//                                                              consolidated pass
 //          { "candidates": [ … ] }                            when the caller owns the ids
 // stdout : { "candidates": [ … ], "bundles": [ … ], "counts": { … } }
 //
@@ -336,9 +338,11 @@ async function main() {
   // The candidates shape stays accepted for callers that assign their own ids.
   const candidates = Array.isArray(payload)
     ? payload
-    : payload.results
-      ? candidatesFromResults(payload.results)
-      : (payload.candidates ?? [])
+    : payload.locations
+      ? candidatesFromLocations(payload.locations)
+      : payload.results
+        ? candidatesFromResults(payload.results)
+        : (payload.candidates ?? [])
   const result = prepareVerification(candidates, collectBlobs(candidates, gitReaders(mergeBase)), { locationsOnly })
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`)
 }
@@ -407,4 +411,35 @@ export function candidatesFromResults(results) {
     })
   }
   return candidates
+}
+
+/**
+ * Accept a light location manifest instead of full producer results.
+ *
+ * A consolidated pass has one agent covering every module, and making it emit a complete
+ * REVIEW_RESULT_CONTRACT_V1 envelope for every finding is what timed that pass out. Four
+ * short fields per finding is what such a pass can afford, and it is all a location check
+ * needs.
+ *
+ * Rows without a line or a quote are dropped rather than treated as checked, so a caller
+ * comparing what it sent against what came back sees the gap instead of a passing check.
+ */
+export function candidatesFromLocations(locations) {
+  const usable = (locations ?? []).filter(
+    row => row && typeof row.path === 'string' && Number.isInteger(row.line) && typeof row.quote === 'string',
+  )
+  return candidatesFromResults([
+    {
+      schemaVersion: 1,
+      openQuestions: [],
+      findings: usable.map(row => ({
+        ruleId: row.ruleId,
+        title: row.title ?? '',
+        body: '',
+        impact: 'low',
+        confidence: 'high',
+        location: { kind: 'verified', path: row.path, line: row.line, quote: row.quote },
+      })),
+    },
+  ])
 }

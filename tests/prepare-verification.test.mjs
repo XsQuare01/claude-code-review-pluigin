@@ -13,6 +13,7 @@ import {
   candidatesFromResults,
   collectBlobs,
   resolveWithinRoot,
+  candidatesFromLocations,
 } from '../scripts/prepare-verification.mjs'
 
 // ------------------------------------------------------------- normalization
@@ -442,4 +443,42 @@ test('all four location states account for the total', () => {
   const { counts } = prepareVerification(candidates, blobs, { locationsOnly: true })
   assert.equal(counts.locationOk + counts.locationMismatch + counts.locationUnresolvable + counts.locationNotApplicable, counts.total)
   assert.equal(counts.locationNotApplicable, 1)
+})
+
+// ------------------------------------------------------- light location input
+
+const manifest = [
+  { ruleId: '03-1', path: 'src/hooks/use-camera.ts', line: 2, quote: 'if (pending) return' },
+  { ruleId: '03-1', path: 'src/hooks/use-camera.ts', line: 1, quote: 'const a = 1' },
+  { ruleId: '09-4', path: 'src/wide.ts', line: 1, quote: 'first' },
+]
+
+test('candidatesFromLocations accepts the light manifest a consolidated pass can afford', () => {
+  const candidates = candidatesFromLocations(manifest)
+  assert.equal(candidates.length, 3)
+  assert.deepEqual(candidates.map(c => c.candidateId).sort(), ['03-1#1', '03-1#2', '09-4#1'])
+  assert.equal(candidates[0].location.kind, 'verified')
+})
+
+test('the light manifest checks locations exactly like a full producer result would', () => {
+  const candidates = candidatesFromLocations(manifest)
+  const { counts } = prepareVerification(candidates, blobs, { locationsOnly: true })
+  assert.equal(counts.total, 3)
+  assert.equal(counts.locationOk, 3)
+})
+
+test('a manifest row with a wrong quote is reported as a mismatch', () => {
+  const candidates = candidatesFromLocations([{ ruleId: '03-1', path: 'src/hooks/use-camera.ts', line: 2, quote: 'WRONG' }])
+  const { counts } = prepareVerification(candidates, blobs, { locationsOnly: true })
+  assert.equal(counts.locationMismatch, 1)
+})
+
+test('a row missing its line or quote is dropped rather than checked as if complete', () => {
+  // A dropped row must not silently become a passing check — the caller counts what came
+  // back against what it sent, so a drop shows up as a count mismatch instead.
+  const candidates = candidatesFromLocations([
+    { ruleId: '03-1', path: 'src/x.ts' },
+    { ruleId: '03-1', path: 'src/x.ts', line: 1, quote: 'q' },
+  ])
+  assert.equal(candidates.length, 1)
 })

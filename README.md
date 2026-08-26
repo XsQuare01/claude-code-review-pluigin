@@ -225,6 +225,14 @@ Non-numbered files are excluded from the automatic scan:
 
 The contract exists because the alternative had already failed: the same procedure copied into seven skill documents drifted apart, and workflows started behaving differently for the same request.
 
+### Location checking in `/code-review` (2.6.1)
+
+`/code-review` findings get their quoted lines compared against the files they name. A quote that does not match becomes `위치 미확인` with a reason; the finding itself stays, because a wrong line number does not make a claim false.
+
+The command stays a legacy Markdown producer and keeps its single sub-agent. It emits a small `REVIEW_LOCATIONS` block — four fields per finding — alongside its table, and the orchestrator pipes that to the check. `2.6.0` tried moving this command to full structured output instead and timed out: one agent covering every module had to write a complete envelope per finding in a single JSON response. Four fields is what a consolidated pass can afford.
+
+Missing or malformed, the block costs nothing — the report says `대조 미실행` and keeps every finding. There is no corrective retry, because retrying a large single response is part of what timed `2.6.0` out.
+
 ### Structured producer results, accepted internal interface in 2.4.0
 
 `REVIEW_RESULT_CONTRACT_V1` is an intentionally accepted **internal producer→orchestrator interface change**. It ships in `2.4.0` as a **MINOR** change because the public Markdown report stays stable while a registered set of producers moves to a structured envelope.

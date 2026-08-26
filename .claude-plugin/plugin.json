@@ -1,6 +1,6 @@
 {
   "name": "react-code-review-plugin",
-  "version": "2.5.8",
+  "version": "2.6.1",
   "description": "Modular React code review workflows with default, full, fast, commit, props, math, and exception review modes",
   "author": {
     "name": "bhmun"
