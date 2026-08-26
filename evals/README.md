@@ -142,6 +142,47 @@ A1은 `--permission-mode acceptEdits`로 돌았고, 그것이 **Bash를 자동 �
 않는다 — 개발 중에 `--plugin-dir .`은 가장 흔한 사용법이고, 막으면 우회 경로가
 생긴다. 우회 가능한 차단보다 보이는 경고가 낫다.
 
+## sub-agent가 뜨지 않는다 — harness는 fan-out이 아니라 통합 pass를 재고 있다
+
+`/code-review`는 모듈 fan-out으로 설계돼 있는데, 이 harness가 띄우는 모든 run에서
+sub-agent가 **하나도 뜨지 않는다.** 봉투의 `subagent_stats.spawned`가 0이고,
+리뷰 자신이 리포트에 이유를 적는다.
+
+> 세션 지시상 Agent 도구를 쓰지 않아, bounded 통합 pass를 sub-agent 대신 직접 수행했습니다.
+
+### 출처는 시스템 프롬프트다 — 설정으로 끌 수 없다
+
+이 머신에서 뜨는 claude 세션의 시스템 프롬프트에 다음 두 줄이 들어 있다.
+
+    Do not call the AgentTool unless the user requested it
+    Do not use workflows or deep-research unless the user requested it
+
+`~/.claude/settings.json`에도 `~/.claude/CLAUDE.md`에도 없다 — headless 세션에
+직접 물어 확인했다. 훅은 전부 `conhost.exe`(터미널 깜빡임 억제)라 텍스트를
+주입하지 않는다. Agent 도구 자체는 headless에서도 **사용 가능하다**(별도 프로브로
+확인). 모델이 쓰지 않기로 선택하는 것이다.
+
+### 그래서 두 개의 서로 다른 기준선이 가능하다
+
+| | 무엇을 재는가 | 어떻게 |
+|---|---|---|
+| **as-experienced** | 이 머신에서 사용자가 실제로 받는 것 | 지금 그대로. sub-agent 없음 |
+| **as-designed** | 워크플로우 정의대로의 fan-out | `--append-system-prompt`로 dispatch를 명시적으로 요청 |
+
+**둘 중 무엇을 기준선으로 삼는지는 B의 판정을 바꾼다.** B의 후보가 묶음
+fan-out이므로, as-experienced 기준선과 비교하면 "fan-out 대 통합"이 아니라
+"fan-out 대 통합"을 재게 되는데 — 그 통합은 현재 *설계*가 아니라 현재 *실행*이다.
+반대로 as-designed 기준선은 이 사용자가 실제로 받지 않는 동작을 잰다.
+
+두 기준선의 비용도 다르다. 통합 pass는 실측 $3.4~4.0/run이고, 21개 모듈로
+fan-out하면 에이전트당 출력이 곱해져 그보다 크다 — 2.6.0을 죽인 것이 정확히
+그 곱셈이었다.
+
+### `opFailures`를 읽을 때
+
+`spawned: 0`인 run에서 `opFailures.total: 0`은 **"실패가 없었다"가 아니라
+"fan-out이 재현되지 않았다"**이다. 이 축은 as-designed 기준선에서만 의미를 갖는다.
+
 ### `scriptRan.ran`을 읽을 때
 
 권한이 열렸으므로 이제 `ran: false`는 **측정 결과**다. 다만 세 가지를 계속
