@@ -172,6 +172,8 @@ A1은 `--permission-mode acceptEdits`로 돌았고, 그것이 **Bash를 자동 �
 | `skeletonOk` | C-7 섹션 이름과 순서 |
 | `summaryArithmetic` | 요약 표 합계가 상세 지적과 맞는가 |
 | `fixtureDirty` | run 뒤 fixture의 `git status --porcelain` (`review-reports/` 제외). 비어 있어야 정상 — 리뷰가 파일을 고쳤다는 뜻이면 그 자체가 회귀다 |
+| `unverifiable` | 리뷰가 **확인할 수 없어 판단을 보류한** 건수. `위치 미확인 사유:`(상세 지적 안) + `추가 확인 이유:`(미해결 섹션 안) + `범위 미확정`(문서 전체). **탐지 실패가 아니다** — 이 축이 없으면 보류를 늘려 실패를 감추는 변화와 진짜 개선이 같은 점수를 받는다. `recall`의 분모에서 빼지 않는다 |
+| `opFailures` | sub-agent 실패·kill·거부의 합(봉투의 `subagent_stats`). 2.6.0은 타임아웃 3회로 죽었고 `-full`은 4회를 겪고도 완주했다 — `completed`만 세면 그 차이가 사라진다. **`spawned: 0`이면 이 값의 0은 "실패 없음"이 아니라 "fan-out이 재현되지 않음"이다.** 봉투에 stats가 없으면 0이 아니라 `null` |
 
 ## 주의
 

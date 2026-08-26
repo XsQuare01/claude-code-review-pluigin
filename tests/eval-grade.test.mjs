@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { extractDetailSection, parseLocation, parseFindings } from '../scripts/lib/eval-grade.mjs'
+import { countUnverifiable, extractDetailSection, parseLocation, parseFindings } from '../scripts/lib/eval-grade.mjs'
 
 // 리포트 골격은 workflow-contract C-7이 고정한다. 파서는 그 골격만 신뢰하고,
 // 셀 내용은 신뢰하지 않는다 — 이슈/개선 제안 칸에는 `a || b` 같은 코드 인용이 들어온다.
@@ -545,4 +545,94 @@ test('블록에 위치 백틱 줄이 없으면 위치를 못 찾은 것으로 �
   const findings = parseFindings(report)
   assert.equal(findings.length, 1)
   assert.equal(findings[0].location.unverified, true)
+})
+
+// ---------------------------------------------------------------------------
+// unverifiable — "확인할 수 없어 보류했다"를 "못 찾았다"와 구분하는 축.
+//
+// 실사용 리포트(/code-review-full @ 2.5.7)에서 4건이 "대상 파일이 현재 HEAD에
+// 없어 검증된 삭제 위치조차 잡지 못함"으로 보류됐다. 리포트는 그것을 정직하게
+// 신고했고 산술도 맞았다(후보 27 = 12+4+1+4+6). 담을 칸이 없던 것은 채점기
+// 쪽이었다. 이 축이 없으면 보류를 늘려 실패를 감추는 변화와 진짜 개선이 같은
+// 점수를 받는다.
+//
+// 표지는 발명하지 않는다. workflow-contract가 전체 워크플로우 공통으로 이미
+// 정의한 세 가지를 그대로 센다.
+
+const withSections = ({ detail = '없음.', tools = '없음.', open = '없음.' }) => [
+  '## 리뷰 기준', '', '> **기준**: abc123 | **대상**: HEAD', '',
+  '## 판정', '', '머지 보류.', '',
+  '## 실행 계획', '', '없음.', '',
+  '## 상세 지적', '', detail, '',
+  '## 요약', '', '없음.', '',
+  '## 도구 실행 결과', '', tools, '',
+  '## 미해결 / 후속 확인', '', open, '',
+].join('\n')
+
+test('표지가 하나도 없는 리포트는 전부 0이다', () => {
+  // 이 채점기가 다섯 번 틀린 방식이 전부 "표지가 없는데 있다고 세거나, 있는데
+  // 안 셈"이었다. 0을 내는 쪽을 먼저 고정한다.
+  const counts = countUnverifiable(withSections({
+    detail: '| 심각도 | 규칙 | 위치 | 이슈 | 개선 제안 |\n| 🔴 | 03-3 | src/a.tsx:31 | index key | id를 쓴다 |',
+  }))
+  assert.deepEqual(counts, { locationUnverified: 0, openQuestions: 0, scopeOpen: 0, total: 0 })
+})
+
+test('상세 지적의 `위치 미확인 사유:`를 센다', () => {
+  const counts = countUnverifiable(withSections({
+    detail: [
+      '#### 🟡 `07-1` 약어가 의미를 감춘다',
+      '위치 미확인 사유: 현재 HEAD에 해당 파일과 formatter가 없다.',
+      '',
+      '#### 🟡 `08-1` 임계값이 매직 넘버다',
+      '위치 미확인 사유: 현재 HEAD에 threshold expression이 없다.',
+    ].join('\n'),
+  }))
+  assert.equal(counts.locationUnverified, 2)
+  assert.equal(counts.total, 2)
+})
+
+test('미해결 섹션의 `추가 확인 이유:`를 센다', () => {
+  const counts = countUnverifiable(withSections({
+    open: [
+      '- `07-1#4` boolean 이름에 상태 접두어가 없음: 추가 확인 이유: 파일이 없다.',
+      '- `14-4#1` 진단 로거의 프레임 비용: 추가 확인 이유: callback이 없다.',
+    ].join('\n'),
+  }))
+  assert.equal(counts.openQuestions, 2)
+})
+
+test('섹션 밖의 표지는 그 섹션의 축으로 세지 않는다', () => {
+  // `추가 확인 이유:`가 상세 지적에 나와도 openQuestions가 아니다. 섹션 경계를
+  // 신뢰하지 않으면 이 축은 문서 전체 grep이 되고, 그 순간 "어느 결말이었나"를
+  // 구분하는 능력이 사라진다 — 세 결말을 구분하려고 만든 축이므로 치명적이다.
+  const counts = countUnverifiable(withSections({
+    detail: '#### 🟡 `05-1` 무언가\n추가 확인 이유: 여기 있으면 안 센다.',
+  }))
+  assert.equal(counts.openQuestions, 0)
+  assert.equal(counts.locationUnverified, 0)
+})
+
+test('`범위 미확정`은 문서 어디에 있어도 센다', () => {
+  // C-6B의 disposition 토큰이라 실행 계획에도 상세 지적에도 나올 수 있다.
+  const counts = countUnverifiable(withSections({
+    detail: '#### 🟡 `02-1` 무언가\n영향: 낮음 · 확신: 높음 · 교차검증: `범위 미확정`',
+  }))
+  assert.equal(counts.scopeOpen, 1)
+})
+
+test('total은 세 축의 합이다', () => {
+  const counts = countUnverifiable(withSections({
+    detail: '위치 미확인 사유: 없다.\n교차검증: `범위 미확정`',
+    open: '추가 확인 이유: 없다.',
+  }))
+  assert.deepEqual(counts, { locationUnverified: 1, openQuestions: 1, scopeOpen: 1, total: 3 })
+})
+
+test('섹션 자체가 없는 리포트에도 던지지 않는다', () => {
+  // 리포트가 잘려서 왔거나 골격이 깨진 run이 A1에서 실제로 있었다. 그 경우 이
+  // 축은 0이어야 하고, 골격이 깨졌다는 사실은 skeletonOk가 따로 말한다.
+  const zero = { locationUnverified: 0, openQuestions: 0, scopeOpen: 0, total: 0 }
+  assert.deepEqual(countUnverifiable(''), zero)
+  assert.deepEqual(countUnverifiable(undefined), zero)
 })

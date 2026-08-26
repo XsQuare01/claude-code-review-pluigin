@@ -5,6 +5,8 @@
 // 부분을, 비용이 드는 실행 없이 먼저 테스트한다는 것이 이 설계의 요점이다.
 
 const DETAIL_HEADING = '## 상세 지적'
+// C-7 섹션 표에 적용 범위 '전체'로 등재돼 있다 — /code-review에도 걸린다.
+const OPEN_QUESTIONS_HEADING = '## 미해결 / 후속 확인'
 
 const strip = value => String(value ?? '').replace(/`/g, '').trim()
 
@@ -373,6 +375,45 @@ export function checkSummaryArithmetic(reportText, findings) {
 }
 
 /**
+ * "확인할 수 없어 보류했다"를 "못 찾았다"와 구분해서 센다.
+ *
+ * 실사용 리포트(`/code-review-full` @ 2.5.7)에서 4건이 "대상 파일이 현재 HEAD에
+ * 없어 검증된 삭제 위치조차 잡지 못함"으로 보류됐다. 리포트는 그것을 정직하게
+ * 신고했고 산술도 맞았다 — 후보 27 = 유지 12 + 반박됨 4 + 분류 밖 1 + 범위 미확정
+ * 4 + 대상 아님 6. 담을 칸이 없던 것은 채점기 쪽이었다.
+ *
+ * 왜 축이 필요한가: 이 결말이 `recall`에도 `falsePositives`에도 `unclassified`에도
+ * 들어가지 않는다. 세지 않으면 **보류를 늘려 실패를 감추는 변화와 진짜 개선이
+ * 같은 점수를 받는다.**
+ *
+ * 반대로 이 값을 `recall`의 분모에서 빼서도 안 된다. 그러면 못 찾은 결함을
+ * "확인 불가"로 신고하는 것만으로 재현율이 오른다. 이 축은 감점이 아니라 관측이며,
+ * 두 축을 나눠 들고 가는 이유가 그것이다.
+ *
+ * 표지는 발명하지 않는다. `workflow-contract.md`가 전체 워크플로우 공통으로
+ * 이미 정의한 세 가지를 그대로 센다 — `위치 미확인 사유:`(C-7 렌더링),
+ * `추가 확인 이유:`(C-6A openQuestions), `범위 미확정`(C-6B disposition).
+ *
+ * 앞의 둘은 섹션 안에서만 센다. 문서 전체 grep으로 접으면 어느 결말이었는지를
+ * 구분하지 못하게 되고, 세 결말을 구분하려고 만든 축이 그 능력을 잃는다.
+ * `범위 미확정`은 disposition 토큰이라 실행 계획에도 상세 지적에도 나올 수 있어
+ * 문서 전체에서 센다.
+ */
+export function countUnverifiable(reportText) {
+  const text = String(reportText ?? '')
+  const occurrences = (haystack, marker) => haystack.split(marker).length - 1
+  const locationUnverified = occurrences(extractDetailSection(text).join('\n'), '위치 미확인 사유:')
+  const openQuestions = occurrences(sectionBetween(text, OPEN_QUESTIONS_HEADING).join('\n'), '추가 확인 이유:')
+  const scopeOpen = occurrences(text, '범위 미확정')
+  return {
+    locationUnverified,
+    openQuestions,
+    scopeOpen,
+    total: locationUnverified + openQuestions + scopeOpen,
+  }
+}
+
+/**
  * runner가 부르는 유일한 함수. 축을 하나의 점수로 접지 않는다 —
  * 어느 축이 움직였는지가 이 계측의 전부다.
  */
@@ -383,5 +424,6 @@ export function grade(reportText, expected, blobLines) {
     scriptRan: checkScriptRan(reportText),
     skeletonOk: checkSkeleton(reportText),
     summaryArithmetic: checkSummaryArithmetic(reportText, findings),
+    unverifiable: countUnverifiable(reportText),
   }
 }
