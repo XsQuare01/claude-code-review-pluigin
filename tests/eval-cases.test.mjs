@@ -66,4 +66,32 @@ for (const name of caseNames) {
         `${target.id}: ${target.path}:${target.line} 은 파일 범위(1..${lines.length}) 밖이다`)
     }
   })
+
+  // 범위 안이라는 것만으로는 줄 번호가 맞다는 증거가 못 된다. fixture를 한 줄
+  // 고치면 모든 줄 번호가 조용히 어긋나고, 그 상태로 채점하면 locationsOnTarget이
+  // 리뷰의 실패가 아니라 fixture의 낡음을 재게 된다 — 측정 장치의 결함을 측정
+  // 대상의 결함으로 읽는 이 저장소의 단골 실패다. anchor는 그 줄에 실제로
+  // 무엇이 있어야 하는지를 못박는다.
+  test(`${name}: mustFind의 anchor가 그 줄에 실제로 있다`, () => {
+    const expected = readJson('expected.json')
+    const after = readTree(join(caseDir, 'after'))
+    for (const target of expected.mustFind) {
+      assert.ok(target.anchor, `${target.id}: anchor가 없다 — 줄 번호를 지킬 방법이 없다`)
+      const line = after.get(target.path).split(/\r\n|\r|\n/)[target.line - 1]
+      assert.ok(line.includes(target.anchor),
+        `${target.id}: ${target.path}:${target.line} 에 anchor ${JSON.stringify(target.anchor)} 가 없다. 실제 줄: ${JSON.stringify(line)}`)
+    }
+  })
+
+  // 대조군이 실제로 diff 안에 있어야 오탐을 잴 수 있다. diff 밖에 두는 것이
+  // 의도인 대조군(any-outside-the-diff)은 반대로 diff에 나타나면 안 된다.
+  test(`${name}: 심은 결함이 전부 diff 안에 있다`, () => {
+    const expected = readJson('expected.json')
+    const changed = changedPaths(readTree(join(caseDir, 'before')), readTree(join(caseDir, 'after')))
+    const inDiff = new Set([...changed.added, ...changed.modified, ...changed.removed])
+    for (const target of expected.mustFind) {
+      assert.ok(inDiff.has(target.path),
+        `${target.id}: ${target.path} 가 diff 밖이다 — 리뷰가 볼 수 없는 결함은 재현율을 잴 수 없다`)
+    }
+  })
 }

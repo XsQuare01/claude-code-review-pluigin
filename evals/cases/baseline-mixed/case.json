@@ -1,0 +1,31 @@
+{
+  "name": "baseline-mixed",
+  "command": "/react-code-review-plugin:code-review",
+  "isolates": "재현율·오탐·커버리지 깊이. 서로 다른 6개 모듈(02·03·04·06·12·15)에 논쟁 여지 없는 결함을 하나씩 심어, 통합 1-pass가 실제로 몇 개 모듈군에 닿는지를 숫자로 만든다. 대조군 5개가 오탐을 측정한다 — location-trap의 mustNotFlag는 비어 있어서 그 축이 지금까지 한 번도 측정된 적이 없다.",
+  "notes": [
+    "features 슬라이스 이름이 browse-orders인 이유: 01-9가 features/* 이름을 동사구로 강제한다. order-list 같은 명사형은 그 자체로 🔴이 되어 의도하지 않은 지적을 만든다.",
+    "레이어를 shared/entities/features/widgets 4개 둔 이유: 모듈 01은 fsd 프로파일을 요구하고, location-trap은 레이어가 2개뿐이라 SKIPPED된다. 대조군 constant-following-established-convention이 01-6을 검사하려면 01이 실제로 로드돼야 한다.",
+    "src/shared/lib/parse-legacy.ts는 before/after가 바이트 단위로 동일하다. 의도된 함정이므로 이 파일을 수정하면 오탐 측정이 무너진다."
+  ],
+  "changedFiles": {
+    "added": [
+      "src/features/browse-orders/lib/join-customers.ts",
+      "src/features/browse-orders/ui/customer-tags.tsx",
+      "src/features/browse-orders/ui/order-list.test.tsx",
+      "src/features/browse-orders/ui/sort-toggle.tsx",
+      "src/widgets/dashboard/ui/clock.tsx"
+    ],
+    "removed": [],
+    "modified": [
+      "src/entities/order/api/fetch-orders.ts",
+      "src/features/browse-orders/index.ts",
+      "src/features/browse-orders/ui/order-list.tsx",
+      "src/shared/lib/constants.ts",
+      "src/widgets/dashboard/hooks/use-viewport.ts",
+      "src/widgets/dashboard/index.ts",
+      "src/widgets/dashboard/ui/summary.tsx"
+    ]
+  },
+  "runs": 3,
+  "timeoutMinutes": 15
+}
