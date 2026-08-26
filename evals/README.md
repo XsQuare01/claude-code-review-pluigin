@@ -109,26 +109,52 @@ timing이 아니라 디버그 로그로 확인했다.)
 루트를 쓰거나, 이 hook들이 없는 머신에서 돌리는 방법이 있다. **이건 검증하지
 않았다** — 검증된 레시피로 오인하지 않도록 명시해 둔다.
 
-## `scriptRan: {ran:false}`가 이 harness에서는 항상 나온다 — 워크플로우 탓이 아니다
+## 권한 모드 — `bypassPermissions`를 쓴다. `--plugin-dir`에 복사본을 넘길 것
 
-`runClaude`가 붙이는 `--permission-mode acceptEdits`는 **Bash를 자동 승인하지
-않는다.** 두 팔의 커밋된 baseline이 이미 그 증거를 담고 있다 — `main`은 Bash
-`find`/`cat` 호출이 거부됐고, `pr52`는 `prepare-verification.mjs` 실행 시도가
-두 번 다 거부됐다(리포트 본문도 "비대화형 세션이라 승인을 받을 수 없었다"고
-직접 적었다). `prepare-verification.mjs`는 Bash로만 돌 수 있으므로, 이
-harness가 도는 한 그 스크립트는 **절대 실행될 수 없다** — 워크플로우가 무엇을
-하든 상관없다.
+A1은 `--permission-mode acceptEdits`로 돌았고, 그것이 **Bash를 자동 승인하지
+않았다.** 커밋된 A1 baseline이 그 증거를 담고 있다 — `main`은 `find`/`cat`
+호출이 거부됐고, `pr52`는 `prepare-verification.mjs` 실행이 두 번 다 거부됐다
+(리포트 본문도 "비대화형 세션이라 승인을 받을 수 없었다"고 직접 적었다).
 
-그 결과로 `scriptRan.ran`은 이 harness의 모든 run에서 구조적으로 `false`이고,
-`## 도구 실행 결과` 섹션도 항상 비어 있다. 이 값을 그냥 읽으면 "워크플로우가
-위치 대조를 건너뛰었다"로 보이지만, 실제 원인은 "harness 자신이 그 도구를 쓸
-권한을 안 줬다"이다 — **측정 대상의 결함이 아니라 측정 장치의 한계를 측정
-대상의 결함으로 오독하는 것.** `checkScriptRan`이 `declaredSkipped`를 따로
-남기는 이유도 여기 있다: 워크플로우가 이 한계를 알고 정직하게 "미실행"이라고
-적었는지는 `scriptRan.ran`이 아니라 `declaredSkipped`로 봐야 한다. 이 제약을
-없애려면 harness가 Bash까지 승인하는 권한 모드로 바꿔야 하고, 그건 이
-harness가 fixture 밖으로 나가는 임의 명령을 실제로 승인하게 된다는 별개의
-트레이드오프라 여기서 바꾸지 않는다.
+그래서 `scriptRan.ran`이 **모든 run에서 구조적으로 `false`**였다. 그 값을 그냥
+읽으면 "워크플로우가 위치 대조를 건너뛰었다"로 보이지만 실제 원인은 "harness
+자신이 그 도구를 쓸 권한을 안 줬다"였다 — **측정 대상의 결함이 아니라 측정
+장치의 한계를 측정 대상의 결함으로 오독하는 것.**
+
+**A2에서 `bypassPermissions`로 바꿨다.** `--allowedTools`로 좁히지 않은 이유는
+같은 함정 때문이다: 좁히면 다른 종류의 거부가 나타나고 harness는 다시
+워크플로우가 아니라 자기 설정을 재게 된다. 사용자가 실제로 리뷰를 돌리는
+조건에 가장 가까운 것이 이 모드다.
+
+### 대가 — 살아 있는 저장소를 `--plugin-dir`에 넘기지 않는다
+
+`bypassPermissions`는 리뷰가 허용 디렉터리 안에서 임의 명령을 돌릴 수 있다는
+뜻이다. fixture는 매 실행 새로 만드는 임시 디렉터리라 그 자체는 문제가 아니지만,
+**`pluginDir`도 `--add-dir`에 들어간다.** 그것이 이 저장소의 워킹 트리면 리뷰가
+저장소에 쓸 수 있다.
+
+기준선을 뜰 때는 팔을 복사해서 넘긴다.
+
+    git worktree add ../eval-arm-main main
+    node scripts/eval-review.mjs --case location-trap --plugin-dir ../eval-arm-main --label main
+
+`--plugin-dir`이 이 저장소의 워킹 트리면 runner가 **경고를 출력한다.** 차단하지는
+않는다 — 개발 중에 `--plugin-dir .`은 가장 흔한 사용법이고, 막으면 우회 경로가
+생긴다. 우회 가능한 차단보다 보이는 경고가 낫다.
+
+### `scriptRan.ran`을 읽을 때
+
+권한이 열렸으므로 이제 `ran: false`는 **측정 결과**다. 다만 세 가지를 계속
+구분한다.
+
+| 값 | 의미 |
+|---|---|
+| `ran: true` | 스크립트가 실제로 돌았다 |
+| `ran: false`, `declaredSkipped: true` | 워크플로우가 안 돌리기로 하고 그렇게 적었다 |
+| `ran: false`, `declaredSkipped: false` | 워크플로우가 대조를 언급조차 하지 않았다 |
+
+`permissionDenials`가 비어 있는지 함께 본다. 거부가 남아 있으면 여전히 harness
+쪽 한계이지 측정 결과가 아니다.
 
 ## 읽는 방법
 
@@ -142,7 +168,7 @@ harness가 fixture 밖으로 나가는 임의 명령을 실제로 승인하게 �
 | `unclassified` | 어느 목록에도 없는 지적. **오탐이 아니다** — 심지 않은 진짜 문제일 수 있다 |
 | `locationsInRange` | 인용한 경로·줄이 파일 안에 실재하는가 |
 | `locationsOnTarget` | 심은 결함을 tolerance 안에서 가리켰는가 |
-| `scriptRan` | 위치 대조 스크립트가 실제로 돌았는가 (이슈 #50) — 이 harness에서는 항상 `ran:false`다, 위 절 참고 |
+| `scriptRan` | 위치 대조 스크립트가 실제로 돌았는가 (이슈 #50). `ran`/`declaredSkipped` 조합을 함께 읽는다 — 위 절 참고 |
 | `skeletonOk` | C-7 섹션 이름과 순서 |
 | `summaryArithmetic` | 요약 표 합계가 상세 지적과 맞는가 |
 | `fixtureDirty` | run 뒤 fixture의 `git status --porcelain` (`review-reports/` 제외). 비어 있어야 정상 — 리뷰가 파일을 고쳤다는 뜻이면 그 자체가 회귀다 |

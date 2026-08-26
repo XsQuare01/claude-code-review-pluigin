@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { classifyExit, parseEnvelope } from '../scripts/lib/eval-run.mjs'
+import { buildClaudeArgs, classifyExit, parseEnvelope, summarizeOpFailures } from '../scripts/lib/eval-run.mjs'
 
 // Windows에는 POSIX 시그널이 없어서, harness가 .kill('SIGKILL')로 죽인 프로세스도
 // close 이벤트의 signal이 null로 온다. killedByTimeout 플래그가 아니라 signal로
@@ -46,4 +46,71 @@ test('result가 없는 JSON도 파싱은 되고 result만 undefined다', () => {
   const envelope = parseEnvelope(raw)
   assert.equal(envelope.is_error, true)
   assert.equal(envelope.result, undefined)
+})
+
+// claude에 넘기는 인자 배열. A1에서 --permission-mode acceptEdits가 Bash를
+// 거부해 두 팔 모두 scriptRan.ran이 구조적으로 false가 됐고, 그것을 잡은 것은
+// 테스트가 아니라 실행 결과였다. 배열을 순수 함수로 꺼낸 이유가 이것이다.
+
+test('buildClaudeArgs는 Bash를 거부하는 acceptEdits를 쓰지 않는다', () => {
+  const args = buildClaudeArgs({
+    command: '/x', pluginDir: 'p', fixtureRoot: 'f', permissionMode: 'bypassPermissions',
+  })
+  assert.ok(!args.includes('acceptEdits'))
+  assert.ok(args.includes('bypassPermissions'))
+})
+
+test('buildClaudeArgs는 fixture와 pluginDir을 둘 다 허용 디렉터리로 넣는다', () => {
+  // pluginDir이 빠지면 스킬이 자기 규칙 모듈을 읽지 못하고, 리뷰가 조용히
+  // "규칙 미확인" 판단으로 줄어든다 — A1 첫 실행이 실제로 그랬다.
+  const args = buildClaudeArgs({
+    command: '/x', pluginDir: 'p', fixtureRoot: 'f', permissionMode: 'bypassPermissions',
+  })
+  const dirs = args.filter((value, at) => args[at - 1] === '--add-dir')
+  assert.deepEqual(dirs.sort(), ['f', 'p'])
+  assert.equal(args[args.indexOf('--plugin-dir') + 1], 'p')
+})
+
+test('buildClaudeArgs는 -p 뒤에 명령을 그대로 넘긴다', () => {
+  const args = buildClaudeArgs({
+    command: '/react-code-review-plugin:code-review', pluginDir: 'p', fixtureRoot: 'f', permissionMode: 'auto',
+  })
+  assert.equal(args[args.indexOf('-p') + 1], '/react-code-review-plugin:code-review')
+  assert.equal(args[args.indexOf('--permission-mode') + 1], 'auto')
+})
+
+// 운영 실패 요약. 2.6.0은 타임아웃 3회로 죽었고 /code-review-full은 타임아웃
+// 4회를 겪고도 완주했다 — completed만 세면 그 차이가 사라진다.
+
+test('subagent_stats가 없으면 0이 아니라 null이다', () => {
+  // "실패가 없었다"와 "측정되지 않았다"는 다른 명제다. 0으로 접으면 sub-agent가
+  // 아예 뜨지 않은 run이 무사고 run으로 읽힌다.
+  assert.equal(summarizeOpFailures(undefined), null)
+  assert.equal(summarizeOpFailures(null), null)
+})
+
+test('전부 0인 봉투는 total 0을 낸다', () => {
+  const summary = summarizeOpFailures({
+    spawned: 4, completed: 4, failed: 0,
+    killed: { parent: 0, user: 0, system: 0 },
+    refused: { depth_limit: 0, concurrency_limit: 0, budget: 0 },
+  })
+  assert.deepEqual(summary, { spawned: 4, failed: 0, killed: 0, refused: 0, total: 0 })
+})
+
+test('killed와 refused는 하위 키를 합산한다', () => {
+  // truthy 검사로 접으면 "몇 번 죽었나"가 아니라 "죽은 종류가 있나"를 세게 된다.
+  const summary = summarizeOpFailures({
+    spawned: 9, completed: 5, failed: 2,
+    killed: { parent: 1, user: 0, system: 3 },
+    refused: { depth_limit: 2, concurrency_limit: 1, budget: 0 },
+  })
+  assert.equal(summary.killed, 4)
+  assert.equal(summary.refused, 3)
+  assert.equal(summary.total, 9)
+})
+
+test('하위 키가 빠져 있어도 던지지 않는다', () => {
+  const summary = summarizeOpFailures({ spawned: 1 })
+  assert.deepEqual(summary, { spawned: 1, failed: 0, killed: 0, refused: 0, total: 0 })
 })

@@ -33,3 +33,54 @@ export const parseEnvelope = stdout => {
     return null
   }
 }
+
+/**
+ * claude에 넘길 인자 배열을 조립한다.
+ *
+ * runClaude 안에 인라인으로 두면 검사할 방법이 없다. A1에서 이 배열의
+ * --permission-mode 값 하나 때문에 모든 실행에서 Bash가 거부됐고,
+ * scriptRan.ran이 구조적으로 false가 됐다 — 그런데 그것을 잡아낸 것은
+ * 테스트가 아니라 실행 결과의 permissionDenials였다. 배열을 밖으로 꺼내야
+ * 그 종류의 실수를 리뷰 실행 없이 고정할 수 있다.
+ *
+ * pluginDir이 --add-dir에도 들어가는 이유는 runClaude 쪽 주석에 있다.
+ * 스킬이 자기 규칙 모듈을 읽으려면 그 경로가 허용 작업 디렉터리여야 한다.
+ */
+export const buildClaudeArgs = ({ command, pluginDir, fixtureRoot, permissionMode }) => [
+  '-p', command,
+  '--plugin-dir', pluginDir,
+  '--add-dir', fixtureRoot,
+  '--add-dir', pluginDir,
+  '--permission-mode', permissionMode,
+  '--output-format', 'json',
+]
+
+/**
+ * 봉투의 subagent_stats를 운영 실패 요약으로 접는다.
+ *
+ * 왜 세는가: 2.6.0(통합 pass)은 타임아웃 3회로 죽었고, /code-review-full
+ * (fan-out)은 타임아웃 4회를 겪고도 완주했다. completed만 보면 둘 다
+ * 성공/실패의 이분법으로 뭉개져 그 차이가 사라진다. 워크플로우 형태를
+ * 바꾸는 B의 판정에는 "완주했는가"만이 아니라 "몇 번 휘청였는가"가 필요하다.
+ *
+ * killed와 refused는 하위 키를 가진 객체다({parent,user,system} /
+ * {depth_limit,concurrency_limit,budget}). 합산하지 않고 truthy만 보면
+ * 실패 횟수가 아니라 "실패 종류가 있었나"를 세게 된다.
+ *
+ * stats가 없으면 0이 아니라 null을 낸다. "실패가 없었다"와 "측정되지
+ * 않았다"는 다른 명제이고, 이 저장소는 그 둘을 섞어서 이미 여러 번 틀렸다.
+ */
+export const summarizeOpFailures = stats => {
+  if (!stats) return null
+  const sum = counts => Object.values(counts ?? {}).reduce((total, n) => total + n, 0)
+  const killed = sum(stats.killed)
+  const refused = sum(stats.refused)
+  const failed = stats.failed ?? 0
+  return {
+    spawned: stats.spawned ?? 0,
+    failed,
+    killed,
+    refused,
+    total: failed + killed + refused,
+  }
+}
