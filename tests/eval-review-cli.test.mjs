@@ -1,6 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
+import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 
@@ -71,4 +72,35 @@ test('0 이하의 --timeout-minutes 값은 사유를 낸다', () => {
       return true
     },
   )
+})
+
+// executionShape는 두 곳에 나타나야 한다: --dry-run 출력과 **저장되는 결과
+// 파일의 provenance**. 처음 추가했을 때 dry-run 쪽에만 들어가고 결과 파일에는
+// 빠졌는데, dry-run 출력만 보면 정상으로 보였다 — 리뷰 실행 두 번을 치르고
+// 나서야 저장된 파일에 값이 없다는 것을 알았다.
+//
+// 값은 있는데 무엇이 그 값을 냈는지 모르는 것이 이 저장소의 단골 실패다.
+// 결과 파일을 만들려면 리뷰를 실제로 돌려야 하므로, 여기서는 소스에서
+// provenance 리터럴을 잘라 그 안에 필드가 있는지 확인한다. 거친 방법이지만
+// "파일 어딘가에 있다"와 "저장되는 객체에 있다"를 구분하는 유일한 값싼 방법이다.
+
+test('executionShape가 --dry-run 출력에 들어간다', () => {
+  const output = run('--case', 'location-trap', '--dry-run')
+  assert.match(output, /"executionShape": "as-experienced"/)
+})
+
+test('--dispatch는 executionShape를 as-designed로 바꾼다', () => {
+  const output = run('--case', 'location-trap', '--dry-run', '--dispatch')
+  assert.match(output, /"executionShape": "as-designed"/)
+})
+
+test('executionShape가 저장되는 결과 파일의 provenance에도 들어간다', () => {
+  const source = readFileSync(SCRIPT, 'utf8')
+  const at = source.indexOf('writeFileSync(outPath')
+  assert.ok(at !== -1, 'writeResults를 찾지 못했다 — 이 테스트가 낡았다')
+  const literal = source.slice(at, source.indexOf('}, null, 2)', at))
+  for (const field of ['executionShape', 'pluginRef', 'pluginVersion']) {
+    assert.ok(literal.includes(field),
+      `결과 파일 provenance에 ${field}가 없다. dry-run 출력에만 넣으면 저장된 숫자가 무엇에서 나왔는지 복원할 수 없다`)
+  }
 })

@@ -295,6 +295,10 @@ const writeResults = () => writeFileSync(outPath, JSON.stringify({
   pluginDir,
   pluginRef,
   pluginVersion,
+  // 이 숫자가 as-experienced(통합 pass)에서 나온 것인지 as-designed(워크플로우
+  // 정의대로의 dispatch)에서 나온 것인지. 둘은 서로 다른 명제라, 값만 있고
+  // 이것이 없으면 나중에 어느 쪽인지 복원할 방법이 없다.
+  executionShape,
   timestamp: startedAt,
   runs,
   results,
