@@ -10,14 +10,14 @@
 //   node scripts/eval-review.mjs --case location-trap --plugin-dir . --label main --runs 1
 
 import { execFileSync, spawn } from 'node:child_process'
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { buildFixture, readBlobLines } from './lib/eval-fixture.mjs'
 import { assertNoPathOverlap, grade, parseFindings } from './lib/eval-grade.mjs'
-import { DISPATCH_REQUEST, buildClaudeArgs, classifyExit, parseEnvelope, summarizeOpFailures } from './lib/eval-run.mjs'
+import { DISPATCH_REQUEST, buildClaudeArgs, classifyExit, parseEnvelope, resolveStoredReport, storeReport, summarizeOpFailures } from './lib/eval-run.mjs'
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)))
 
@@ -303,12 +303,11 @@ const outPath = join(outDir, `${caseName}-${label}.json`)
 // 파일을 사람이 읽을 수 없게 된다. 파일로 두고 경로만 남긴다.
 const reportsDir = join(outDir, 'reports')
 mkdirSync(reportsDir, { recursive: true })
-const keepReport = (index, sourcePath) => {
-  if (!sourcePath) return null
-  const name = `${caseName}-${label}-run${index + 1}.md`
-  copyFileSync(sourcePath, join(reportsDir, name))
-  return `reports/${name}`
-}
+const keepReport = (index, text) => storeReport({
+  text,
+  name: `${caseName}-${label}-run${index + 1}.md`,
+  write: (name, contents) => writeFileSync(join(reportsDir, name), contents, 'utf8'),
+})
 
 // 채점기나 expected.json을 고칠 때마다 실행을 다시 사야 한다면, 채점기를
 // 고치는 것 자체가 비싸져서 안 고치게 된다. A2의 오탐 결함이 그 증거다 —
@@ -337,11 +336,13 @@ if (has('regrade')) {
     // keptReport는 리포트 보관이 들어간 뒤의 run에만 있다. 그 전 run도 관례
     // 경로에 리포트가 손으로 구조돼 있을 수 있으므로 거기까지 찾아본다 —
     // A2의 첫 6회가 정확히 그 상태다.
-    const conventional = `reports/${previous.case}-${sourceLabel}-run${previousRun.run}.md`
-    const relative = previousRun.keptReport
-      ?? (existsSync(join(outDir, conventional)) ? conventional : null)
+    const { relative, tried } = resolveStoredReport({
+      keptReport: previousRun.keptReport,
+      conventional: `reports/${previous.case}-${sourceLabel}-run${previousRun.run}.md`,
+      exists: candidate => existsSync(join(outDir, candidate)),
+    })
     if (!relative) {
-      skipped.push({ run: previousRun.run, why: `리포트를 찾지 못했다 (기대 경로: ${conventional})` })
+      skipped.push({ run: previousRun.run, why: `리포트를 찾지 못했다 (시도: ${tried.join(', ') || '후보 없음'})` })
       continue
     }
     const reportText = readFileSync(join(outDir, relative), 'utf8')
@@ -469,7 +470,10 @@ for (let index = 0; index < runs; index += 1) {
     durationSec: execution.durationSec,
     reportFound: Boolean(reportPath),
     reportSource,
-    keptReport: keepReport(index, reportPath),
+    // 경로가 아니라 채점기가 실제로 읽은 본문을 넘긴다. stdout 봉투에서 건진
+    // 리포트는 reportPath가 없지만 채점은 정상적으로 되므로, 경로 기준으로
+    // 보관하면 비용을 치른 성공 run이 재채점 불가가 된다.
+    keptReport: keepReport(index, reportText),
     fixtureRoot: fixture.root,
     fixtureDirty,
     // 봉투에서 나오는 진단 정보. permissionDenials가 특히 중요하다 — 리뷰가

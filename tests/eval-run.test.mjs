@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { DISPATCH_REQUEST, buildClaudeArgs, classifyExit, parseEnvelope, summarizeOpFailures } from '../scripts/lib/eval-run.mjs'
+import { DISPATCH_REQUEST, buildClaudeArgs, classifyExit, parseEnvelope, resolveStoredReport, storeReport, summarizeOpFailures } from '../scripts/lib/eval-run.mjs'
 
 // Windows에는 POSIX 시그널이 없어서, harness가 .kill('SIGKILL')로 죽인 프로세스도
 // close 이벤트의 signal이 null로 온다. killedByTimeout 플래그가 아니라 signal로
@@ -175,4 +175,72 @@ test('모델이나 effort가 없으면 플래그를 붙이지 않는다', () => 
   })
   assert.ok(!args.includes('--model'))
   assert.ok(!args.includes('--effort'))
+})
+
+// ---------------------------------------------------------------------------
+// 재채점이 쓸 리포트를 찾는다.
+//
+// keptReport가 있다는 것과 그 파일이 아직 있다는 것은 다른 명제다. 값만 보고
+// 건너뛰면, 파일이 지워졌을 때 readFileSync가 던져 **재채점 배치 전체가**
+// 죽는다 — 리포트를 못 찾은 run만 skipped로 남긴다는 의도와 정반대다.
+// 관례 경로에 손으로 구조한 사본이 있어도 거기까지 가지 못한다.
+
+test('keptReport가 있고 파일도 있으면 그것을 쓴다', () => {
+  const r = resolveStoredReport({
+    keptReport: 'reports/a.md', conventional: 'reports/b.md',
+    exists: p => p === 'reports/a.md',
+  })
+  assert.equal(r.relative, 'reports/a.md')
+})
+
+test('keptReport가 가리키는 파일이 없으면 관례 경로로 넘어간다', () => {
+  const r = resolveStoredReport({
+    keptReport: 'reports/gone.md', conventional: 'reports/b.md',
+    exists: p => p === 'reports/b.md',
+  })
+  assert.equal(r.relative, 'reports/b.md', '값이 있다고 존재를 가정하면 배치 전체가 죽는다')
+})
+
+test('keptReport가 없으면 관례 경로를 쓴다', () => {
+  const r = resolveStoredReport({
+    keptReport: undefined, conventional: 'reports/b.md',
+    exists: () => true,
+  })
+  assert.equal(r.relative, 'reports/b.md')
+})
+
+test('둘 다 없으면 null과 함께 시도한 경로를 남긴다', () => {
+  // 사유에 무엇을 찾아봤는지가 없으면 skipped 줄을 보고도 어디를 봐야 할지
+  // 알 수 없다.
+  const r = resolveStoredReport({
+    keptReport: 'reports/gone.md', conventional: 'reports/b.md',
+    exists: () => false,
+  })
+  assert.equal(r.relative, null)
+  assert.deepEqual(r.tried, ['reports/gone.md', 'reports/b.md'])
+})
+
+// ---------------------------------------------------------------------------
+// 리포트 보관.
+//
+// 리포트는 파일에서 올 수도 있고(C-7 계약대로 저장한 경우) stdout 봉투에서
+// 건질 수도 있다. 후자도 정상적으로 채점되므로, 경로를 기준으로 보관하면
+// **비용을 치른 성공 run이 재채점 불가가 된다.** 채점기가 실제로 읽은 본문을
+// 보관해야 보관본과 채점 대상이 같다는 것이 보장된다.
+
+test('본문이 있으면 보관하고 상대 경로를 돌려준다', () => {
+  const written = []
+  const r = storeReport({ text: '## 판정\n', name: 'x-run1.md', write: (n, t) => written.push([n, t]) })
+  assert.equal(r, 'reports/x-run1.md')
+  assert.deepEqual(written, [['x-run1.md', '## 판정\n']])
+})
+
+test('본문이 없으면 쓰지 않고 null을 돌려준다', () => {
+  // 리포트를 못 얻은 run까지 빈 파일을 만들면, 재채점이 그 빈 파일을 읽어
+  // findings 0건짜리 정상 결과처럼 채점한다.
+  const written = []
+  for (const empty of ['', null, undefined]) {
+    assert.equal(storeReport({ text: empty, name: 'x-run1.md', write: (n, t) => written.push([n, t]) }), null)
+  }
+  assert.equal(written.length, 0)
 })

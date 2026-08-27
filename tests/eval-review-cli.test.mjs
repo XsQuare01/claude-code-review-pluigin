@@ -122,3 +122,18 @@ test('--regrade 대상 케이스가 다르면 사유를 낸다', () => {
     },
   )
 })
+
+test('보관하는 것은 리포트 경로가 아니라 채점기가 읽은 본문이다', () => {
+  // 리포트는 파일에서 올 수도(C-7 계약대로 저장) stdout 봉투에서 건질 수도
+  // 있고, 후자도 정상적으로 채점된다. 경로를 기준으로 보관하면 stdout에서
+  // 건진 run은 보관되지 않아 **비용을 치른 성공 run이 재채점 불가**가 된다.
+  //
+  // 이 경로를 실제로 타려면 리뷰를 한 번 돌려야 하므로, 여기서는 호출부가
+  // 무엇을 넘기는지를 소스에서 확인한다. 거친 방법이지만 reportPath로 되돌아가는
+  // 회귀를 값싸게 막는 유일한 방법이다.
+  const source = readFileSync(SCRIPT, 'utf8')
+  assert.match(source, /keptReport: keepReport\(index, reportText\)/,
+    'keepReport에 reportText가 아닌 것을 넘기면 stdout에서 건진 run이 보관되지 않는다')
+  assert.ok(!/keepReport\(index, reportPath\)/.test(source),
+    'reportPath로 되돌아갔다')
+})

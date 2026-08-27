@@ -112,3 +112,42 @@ export const summarizeOpFailures = stats => {
     total: failed + killed + refused,
   }
 }
+
+/**
+ * 재채점이 읽을 리포트를 고른다.
+ *
+ * `keptReport`에 값이 있다는 것과 그 파일이 아직 있다는 것은 다른 명제다.
+ * 값만 보고 건너뛰면 파일이 지워졌을 때 읽기가 던져 **재채점 배치 전체가**
+ * 죽는다 — 리포트를 못 찾은 run만 건너뛴다는 의도와 정반대이고, 관례 경로에
+ * 손으로 구조한 사본이 있어도 거기까지 가지 못한다.
+ *
+ * 존재 확인을 주입받는 이유는 이 판정을 파일시스템 없이 고정하기 위해서다.
+ * 못 찾았을 때 시도한 경로를 함께 돌려준다 — 사유에 그것이 없으면 건너뛴
+ * 줄을 보고도 어디를 봐야 할지 알 수 없다.
+ */
+export const resolveStoredReport = ({ keptReport, conventional, exists }) => {
+  const tried = [keptReport, conventional].filter(Boolean)
+  for (const candidate of tried) {
+    if (exists(candidate)) return { relative: candidate, tried }
+  }
+  return { relative: null, tried }
+}
+
+/**
+ * 리포트를 결과 파일 옆에 보관한다.
+ *
+ * 경로가 아니라 **본문**을 받는다. 리포트는 파일에서 올 수도 있고(C-7 계약대로
+ * 저장한 경우) stdout 봉투에서 건질 수도 있는데, 후자도 정상적으로 채점된다.
+ * 경로를 기준으로 보관하면 stdout에서 건진 run은 보관되지 않아 **비용을 치른
+ * 성공 run이 재채점 불가**가 된다.
+ *
+ * 본문을 받으면 보관본이 채점기가 실제로 읽은 것과 같다는 것도 함께 보장된다.
+ *
+ * 본문이 비었으면 쓰지 않는다. 빈 파일을 남기면 재채점이 그것을 읽어 findings
+ * 0건짜리 정상 결과처럼 채점한다.
+ */
+export const storeReport = ({ text, name, write }) => {
+  if (!text) return null
+  write(name, text)
+  return `reports/${name}`
+}
