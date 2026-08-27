@@ -74,7 +74,10 @@
     {
       "id": "violation-inside-test-file",
       "path": "src/features/browse-orders/ui/order-list.test.tsx",
-      "why": "C-5 제외 경로(*.test.*). **범위 대조군** — 어떤 규칙으로 지적되든 위반이므로 ruleIds를 두지 않는다. 프로덕션이었다면 03-3 위반인 index key가 들어 있다. 이 규칙이 리포트에서 지켜졌는지 지금까지 확인된 적이 없고, 어기면 조용히 어긴다"
+      "exceptRuleIds": [
+        "00-1"
+      ],
+      "why": "C-5 제외 경로(*.test.*). **범위 대조군** — 스타일·구조 지적은 어떤 규칙으로 오든 위반이다. 단 00-3이 예외를 하나 명시한다: 테스트가 리뷰 우회 신호(00-1)에 해당하면 그 자체를 지적한다. 그 예외를 지킨 리뷰를 벌주면 안 되므로 exceptRuleIds로 뺀다. **다만 이 fixture는 대조군으로서 약하다** — 테스트 파일에 assertion이 없고 orders={[]}로 렌더해 심은 key 결함 줄을 실행하지 않으므로, 00-1 예외가 정당하게 성립한다. fixture를 다시 만들 때 실제 assertion이 있는 테스트로 바꿔야 이 대조군이 원래 재려던 것(스타일·구조 지적 금지)을 잰다."
     },
     {
       "id": "any-outside-the-diff",

@@ -705,3 +705,49 @@ test('과적용 대조군에 섞여 들어와도 산술이 맞는다', () => {
   assert.equal(result.falsePositives.count, 2)
   assert.equal(result.unclassified, 2)
 })
+
+// ---------------------------------------------------------------------------
+// 계약이 명시한 예외는 오탐이 아니다.
+//
+// C-5가 *.test.* 를 지적 대상에서 빼지만, 00-3이 그 안에 예외를 하나 판다:
+// 테스트가 리뷰 우회 신호(00-1)에 해당하면 그 자체를 지적한다. 범위 대조군을
+// "어떤 규칙으로든 오탐"으로만 다루면 이 예외를 지킨 리뷰가 벌점을 받는다.
+//
+// A2에서 실제로 그랬다. baseline-mixed의 테스트 파일에 assertion이 없고
+// orders={[]}로 렌더해 심은 결함 줄을 실행조차 하지 않았는데, 두 run 모두
+// 그것을 00-1로 지적하면서 예외 조항을 근거로 인용했다. 리뷰가 옳았고
+// 대조군이 틀렸다.
+
+const WITH_EXCEPTION = {
+  mustFind: [],
+  mustNotFlag: [
+    {
+      id: 'in-test-file',
+      path: 'src/a.test.tsx',
+      exceptRuleIds: ['00-1'],
+      why: 'C-5 제외 경로. 단 00-3이 00-1(리뷰 우회 신호)을 예외로 명시한다',
+    },
+  ],
+}
+
+const EXC_BLOBS = { head: { 'src/a.test.tsx': new Array(20).fill('x') }, base: {} }
+
+test('제외 경로의 스타일·구조 지적은 여전히 오탐이다', () => {
+  const result = gradeFindings([finding('03-3', 'src/a.test.tsx', 4)], WITH_EXCEPTION, EXC_BLOBS)
+  assert.equal(result.falsePositives.count, 1)
+})
+
+test('계약이 명시한 예외 규칙은 오탐이 아니다', () => {
+  const result = gradeFindings([finding('00-1', 'src/a.test.tsx', 7)], WITH_EXCEPTION, EXC_BLOBS)
+  assert.equal(result.falsePositives.count, 0, '예외를 지킨 리뷰를 벌주면 안 된다')
+  assert.equal(result.unclassified, 1, '증발하지 않고 미분류로 간다')
+})
+
+test('exceptRuleIds는 ruleIds와 함께 쓸 때도 예외가 우선한다', () => {
+  const expected = {
+    mustFind: [],
+    mustNotFlag: [{ id: 'x', path: 'src/a.test.tsx', ruleIds: ['00-1', '03-3'], exceptRuleIds: ['00-1'] }],
+  }
+  assert.equal(gradeFindings([finding('00-1', 'src/a.test.tsx', 7)], expected, EXC_BLOBS).falsePositives.count, 0)
+  assert.equal(gradeFindings([finding('03-3', 'src/a.test.tsx', 7)], expected, EXC_BLOBS).falsePositives.count, 1)
+})

@@ -206,8 +206,22 @@ const ruleAllowed = (finding, target) => (target.ruleIds ?? []).includes(finding
 // 파일에 리뷰가 `01-4`(레이어 배치)를 지적하니 오탐으로 찍혔다.
 // 대조군은 diff 안에 있어야 하고(밖이면 리뷰가 보지도 않는다), diff 안 파일은
 // 어떤 규칙으로든 지적될 수 있다.
-const isForbidden = (finding, target) =>
-  onTargetPath(finding, target) && (target.ruleIds ? target.ruleIds.includes(finding.ruleId) : true)
+//
+// exceptRuleIds는 **계약이 명시적으로 판 예외**다. C-5가 `*.test.*`를 지적
+// 대상에서 빼지만 00-3이 그 안에 구멍을 하나 낸다: 테스트가 리뷰 우회
+// 신호(00-1)에 해당하면 그 자체를 지적한다. 범위 대조군을 "어떤 규칙으로든
+// 오탐"으로만 다루면 **그 예외를 지킨 리뷰가 벌점을 받는다.**
+//
+// A2에서 실제로 그랬다. baseline-mixed의 테스트 파일은 assertion이 없고
+// orders={[]}로 렌더해 심은 결함 줄을 실행조차 하지 않았는데, 두 run 모두
+// 그것을 00-1로 지적하며 예외 조항을 근거로 인용했다. 리뷰가 옳았고 대조군이
+// 틀렸다 — 이 필드는 그 교훈이다.
+const isForbidden = (finding, target) => {
+  if (!onTargetPath(finding, target)) return false
+  // 예외가 먼저다. ruleIds와 함께 쓰여도 예외가 이긴다.
+  if (target.exceptRuleIds?.includes(finding.ruleId)) return false
+  return target.ruleIds ? target.ruleIds.includes(finding.ruleId) : true
+}
 
 // collectBlobs() (prepare-verification.mjs) stores raw file content as a string, not an
 // array of lines. If that string ever reaches here unsplit, `.length` silently becomes a
