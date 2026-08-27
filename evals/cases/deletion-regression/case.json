@@ -1,0 +1,25 @@
+{
+  "name": "deletion-regression",
+  "command": "/react-code-review-plugin:code-review",
+  "isolates": "merge-base / 삭제된 blob 경로. 결함이 삭제된 파일 안에 있어, 채점기와 위치 대조 스크립트가 working tree가 아니라 merge base에서 내용을 읽어야만 검증된다. prepare-verification.mjs의 readers.base는 단위 테스트는 있으나 실사용 노출이 가장 적은 코드 경로다.",
+  "notes": [
+    "호출부 src/widgets/header/ui/header.tsx는 세 트리 전부에서 바이트 단위로 동일하다. 삭제가 깨뜨리는 참조가 diff 밖에 남아야 20-3의 targeted reference check가 실제로 검사된다. 이 파일을 수정하면 그 검사가 무너진다.",
+    "header.tsx를 mustNotFlag에 넣지 않은 것은 의도다. 20-3은 삭제된 심볼에 한해 diff 밖 참조를 확인하라고 명시하므로, 리뷰가 그 파일을 근거로 인용하는 것은 올바른 동작이다. 오탐으로 세면 옳게 한 리뷰를 벌주게 된다.",
+    "mustNotFlag가 비어 있으므로 이 케이스의 falsePositives 0은 '오탐이 없었다'가 아니라 '오탐 목표가 정의되지 않았다'는 뜻이다. 오탐은 baseline-mixed에서 측정한다.",
+    "mid/의 session-logger.ts는 mid에만 있고 after에서 사라진다. before에도 after에도 없으므로 merge-base..HEAD diff에 나타나지 않는다 — 리뷰가 diff만 읽으면 이 파일을 볼 수 없다.",
+    "그래서 이 파일은 mustFind도 mustNotFlag도 아니다. 관측 항목이다: producer가 커밋을 훑어 이 파일을 인용하면 unclassified로 잡히고, 그것이 '실사용 리포트에서 producer가 검증기에 없는 파일을 인용한' 현상이 여기서 재현됐다는 뜻이다. 인용하지 않으면 그 현상이 이 조건에서는 재현되지 않는다는 뜻이고, 둘 다 답이다.",
+    "실사용 리포트에서 왜 트리가 갈렸는지는 확정되지 않았다. 리포트가 'producer 확인 당시'라고만 적고 기제를 남기지 않았다. 이 fixture는 기제가 아니라 효과만 만든다."
+  ],
+  "changedFiles": {
+    "added": [],
+    "removed": [
+      "src/entities/session/lib/guard.ts"
+    ],
+    "modified": [
+      "src/entities/session/index.ts",
+      "src/features/renew-session/ui/renew-button.tsx"
+    ]
+  },
+  "runs": 3,
+  "timeoutMinutes": 15
+}

@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { mkdirSync, readdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs'
 import { join, relative, dirname } from 'node:path'
 
 import { resolveWithinRoot } from '../prepare-verification.mjs'
@@ -70,6 +70,17 @@ export function changedPaths(beforeTree, afterTree) {
   return { added: added.sort(), removed: removed.sort(), modified: modified.sort() }
 }
 
+// 이전 트리의 파일을 먼저 지우고 새 트리를 쓴다. 각 트리는 패치가 아니라
+// 완전한 트리이므로, 이렇게 해야 "다음 트리에 없는 파일"이 삭제로 표현된다.
+// CLAUDE.md와 .gitignore는 어느 트리 소속도 아니라 살아남고 diff에 안 나온다.
+const commitTree = (root, previousTree, tree, message) => {
+  for (const path of previousTree.keys()) rmSync(join(root, path), { force: true })
+  writeTree(root, tree)
+  git(root, 'add', '-A')
+  git(root, 'commit', '-m', message)
+  return git(root, 'rev-parse', 'HEAD')
+}
+
 const writeTree = (root, tree) => {
   for (const [path, contents] of tree) {
     const target = join(root, path)
@@ -78,8 +89,26 @@ const writeTree = (root, tree) => {
   }
 }
 
+/**
+ * 케이스 디렉터리에서 2커밋 또는 3커밋 저장소를 만든다.
+ *
+ * `mid/`가 있으면 `before` → `mid` → `after` 3커밋이 된다. `mid`에만 있는
+ * 파일은 HEAD에도 merge base에도 없다 — **producer가 본 트리와 검증기가 본
+ * 트리가 다른 상황**이 그 모양이고, 실사용 리포트에서 관측된 것이 바로
+ * 그것이다. 2커밋 fixture는 리뷰가 도는 동안 트리가 고정돼 이 상황을 만들 수
+ * 없다.
+ *
+ * 왜 효과만 재현하는가: 실제로 왜 트리가 갈렸는지는 확정되지 않았다. 리포트가
+ * "producer 확인 당시"라고만 적고 기제를 남기지 않았다. 이 생성기는 기제를
+ * 흉내내지 않고 결과 상태만 만든다.
+ *
+ * `changed`는 계속 `before`→`after`다. 그것이 리뷰가 보는 merge-base..HEAD
+ * diff이고, `mid`는 그 diff에 나타나지 않는 것이 이 케이스의 요점이다.
+ */
 export function buildFixture(caseDir, targetDir) {
   const beforeTree = readTree(join(caseDir, 'before'))
+  const midDir = join(caseDir, 'mid')
+  const midTree = existsSync(midDir) ? readTree(midDir) : null
   const afterTree = readTree(join(caseDir, 'after'))
 
   mkdirSync(targetDir, { recursive: true })
@@ -101,16 +130,10 @@ export function buildFixture(caseDir, targetDir) {
   git(targetDir, 'commit', '-m', 'before')
   const mergeBase = git(targetDir, 'rev-parse', 'HEAD')
 
-  // before 트리에서 온 파일을 먼저 지운다. after가 완전한 트리이므로 이렇게
-  // 하면 after에 없는 파일이 삭제로 표현된다. CLAUDE.md와 .gitignore는
-  // before 트리 소속이 아니므로 살아남고, 따라서 diff에 나타나지 않는다.
-  for (const path of beforeTree.keys()) rmSync(join(targetDir, path), { force: true })
-  writeTree(targetDir, afterTree)
-  git(targetDir, 'add', '-A')
-  git(targetDir, 'commit', '-m', 'after')
-  const head = git(targetDir, 'rev-parse', 'HEAD')
+  const mid = midTree ? commitTree(targetDir, beforeTree, midTree, 'mid') : null
+  const head = commitTree(targetDir, midTree ?? beforeTree, afterTree, 'after')
 
-  return { root: targetDir, mergeBase, head, changed: changedPaths(beforeTree, afterTree) }
+  return { root: targetDir, mergeBase, mid, head, changed: changedPaths(beforeTree, afterTree) }
 }
 
 /**
@@ -133,7 +156,7 @@ export function buildFixture(caseDir, targetDir) {
  * 이미 있고 테스트도 돼 있다 — 여기서 같은 검사를 다시 쓰면 두 번째 구현이
  * 갈라질 위험만 생기므로 새로 만들지 않고 그 함수를 그대로 가져다 쓴다.
  */
-export function readBlobLines(root, mergeBase, paths) {
+export function readBlobLines(root, mergeBase, paths, extraRefs = []) {
   const head = {}
   const base = {}
 
@@ -160,12 +183,20 @@ export function readBlobLines(root, mergeBase, paths) {
       head[path] = toLines(workingTreeText)
       continue
     }
-    try {
-      base[path] = toLines(gitRaw(root, 'show', `${mergeBase}:${path}`))
-    } catch {
-      // mergeBase는 위에서 이미 검증했으므로 여기서 남는 유일한 실패 원인은
-      // "이 경로가 그 커밋에 없다"뿐이다 — 양쪽 어디에도 없는 합법적인 경로이고,
-      // grader가 `path not in fixture`로 기록한다.
+    // extraRefs를 mergeBase보다 먼저 본다. 3커밋 케이스에서 producer가 본
+    // 것은 mid이고, 같은 경로가 양쪽에 있다면 producer가 인용한 줄은 mid의
+    // 것일 가능성이 높다. extraRefs가 비어 있으면(기존 2커밋 케이스 전부)
+    // 동작은 이전과 완전히 같다.
+    for (const ref of [...extraRefs, mergeBase]) {
+      if (!ref) continue
+      try {
+        base[path] = toLines(gitRaw(root, 'show', `${ref}:${path}`))
+        break
+      } catch {
+        // mergeBase는 위에서 검증했으므로 여기서 남는 실패 원인은 "이 경로가
+        // 그 커밋에 없다"뿐이다 — 어느 ref에도 없는 합법적인 경로이고, grader가
+        // `path not in fixture`로 기록한다.
+      }
     }
   }
   return { head, base }

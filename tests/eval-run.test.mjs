@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { classifyExit, parseEnvelope } from '../scripts/lib/eval-run.mjs'
+import { DISPATCH_REQUEST, buildClaudeArgs, classifyExit, parseEnvelope, resolveStoredReport, storeReport, summarizeOpFailures } from '../scripts/lib/eval-run.mjs'
 
 // Windows에는 POSIX 시그널이 없어서, harness가 .kill('SIGKILL')로 죽인 프로세스도
 // close 이벤트의 signal이 null로 온다. killedByTimeout 플래그가 아니라 signal로
@@ -46,4 +46,201 @@ test('result가 없는 JSON도 파싱은 되고 result만 undefined다', () => {
   const envelope = parseEnvelope(raw)
   assert.equal(envelope.is_error, true)
   assert.equal(envelope.result, undefined)
+})
+
+// claude에 넘기는 인자 배열. A1에서 --permission-mode acceptEdits가 Bash를
+// 거부해 두 팔 모두 scriptRan.ran이 구조적으로 false가 됐고, 그것을 잡은 것은
+// 테스트가 아니라 실행 결과였다. 배열을 순수 함수로 꺼낸 이유가 이것이다.
+
+test('buildClaudeArgs는 Bash를 거부하는 acceptEdits를 쓰지 않는다', () => {
+  const args = buildClaudeArgs({
+    command: '/x', pluginDir: 'p', fixtureRoot: 'f', permissionMode: 'bypassPermissions',
+  })
+  assert.ok(!args.includes('acceptEdits'))
+  assert.ok(args.includes('bypassPermissions'))
+})
+
+test('buildClaudeArgs는 fixture와 pluginDir을 둘 다 허용 디렉터리로 넣는다', () => {
+  // pluginDir이 빠지면 스킬이 자기 규칙 모듈을 읽지 못하고, 리뷰가 조용히
+  // "규칙 미확인" 판단으로 줄어든다 — A1 첫 실행이 실제로 그랬다.
+  const args = buildClaudeArgs({
+    command: '/x', pluginDir: 'p', fixtureRoot: 'f', permissionMode: 'bypassPermissions',
+  })
+  const dirs = args.filter((value, at) => args[at - 1] === '--add-dir')
+  assert.deepEqual(dirs.sort(), ['f', 'p'])
+  assert.equal(args[args.indexOf('--plugin-dir') + 1], 'p')
+})
+
+test('buildClaudeArgs는 -p 뒤에 명령을 그대로 넘긴다', () => {
+  const args = buildClaudeArgs({
+    command: '/react-code-review-plugin:code-review', pluginDir: 'p', fixtureRoot: 'f', permissionMode: 'auto',
+  })
+  assert.equal(args[args.indexOf('-p') + 1], '/react-code-review-plugin:code-review')
+  assert.equal(args[args.indexOf('--permission-mode') + 1], 'auto')
+})
+
+// 운영 실패 요약. 2.6.0은 타임아웃 3회로 죽었고 /code-review-full은 타임아웃
+// 4회를 겪고도 완주했다 — completed만 세면 그 차이가 사라진다.
+
+test('subagent_stats가 없으면 0이 아니라 null이다', () => {
+  // "실패가 없었다"와 "측정되지 않았다"는 다른 명제다. 0으로 접으면 sub-agent가
+  // 아예 뜨지 않은 run이 무사고 run으로 읽힌다.
+  assert.equal(summarizeOpFailures(undefined), null)
+  assert.equal(summarizeOpFailures(null), null)
+})
+
+test('전부 0인 봉투는 total 0을 낸다', () => {
+  const summary = summarizeOpFailures({
+    spawned: 4, completed: 4, failed: 0,
+    killed: { parent: 0, user: 0, system: 0 },
+    refused: { depth_limit: 0, concurrency_limit: 0, budget: 0 },
+  })
+  assert.deepEqual(summary, { spawned: 4, failed: 0, killed: 0, refused: 0, total: 0 })
+})
+
+test('killed와 refused는 하위 키를 합산한다', () => {
+  // truthy 검사로 접으면 "몇 번 죽었나"가 아니라 "죽은 종류가 있나"를 세게 된다.
+  const summary = summarizeOpFailures({
+    spawned: 9, completed: 5, failed: 2,
+    killed: { parent: 1, user: 0, system: 3 },
+    refused: { depth_limit: 2, concurrency_limit: 1, budget: 0 },
+  })
+  assert.equal(summary.killed, 4)
+  assert.equal(summary.refused, 3)
+  assert.equal(summary.total, 9)
+})
+
+test('하위 키가 빠져 있어도 던지지 않는다', () => {
+  const summary = summarizeOpFailures({ spawned: 1 })
+  assert.deepEqual(summary, { spawned: 1, failed: 0, killed: 0, refused: 0, total: 0 })
+})
+
+// 실행 shape. /code-review는 모듈 fan-out으로 설계돼 있지만, 이 머신의 세션
+// 시스템 프롬프트에 "Do not call the AgentTool unless the user requested it"이
+// 있어서 harness가 띄우는 모든 run이 sub-agent 없이 통합 pass로 돈다.
+// 그래서 무엇을 기준선으로 삼는지가 선택이 되고, 그 선택은 결과에 남아야 한다.
+
+test('appendSystemPrompt를 주지 않으면 --append-system-prompt가 붙지 않는다', () => {
+  const args = buildClaudeArgs({
+    command: '/x', pluginDir: 'p', fixtureRoot: 'f', permissionMode: 'bypassPermissions',
+  })
+  assert.ok(!args.includes('--append-system-prompt'))
+})
+
+test('appendSystemPrompt를 주면 값과 함께 붙는다', () => {
+  const args = buildClaudeArgs({
+    command: '/x', pluginDir: 'p', fixtureRoot: 'f', permissionMode: 'bypassPermissions',
+    appendSystemPrompt: 'dispatch를 요청한다',
+  })
+  assert.equal(args[args.indexOf('--append-system-prompt') + 1], 'dispatch를 요청한다')
+})
+
+test('빈 문자열은 플래그를 붙이지 않는다', () => {
+  // 빈 값을 넘기면 claude가 다음 인자를 값으로 삼켜 조용히 틀린 명령이 된다.
+  const args = buildClaudeArgs({
+    command: '/x', pluginDir: 'p', fixtureRoot: 'f', permissionMode: 'bypassPermissions',
+    appendSystemPrompt: '',
+  })
+  assert.ok(!args.includes('--append-system-prompt'))
+})
+
+test('DISPATCH_REQUEST는 dispatch만 요청하고 리뷰 내용은 건드리지 않는다', () => {
+  // 이 문장이 커버리지나 판정 기준을 건드리면 harness가 워크플로우가 아니라
+  // 자기 프롬프트를 재게 된다. 지시 범위를 테스트로 못박는다.
+  assert.match(DISPATCH_REQUEST, /sub-agent|dispatch/)
+  for (const forbidden of ['철저', '자세', '모두 찾', '빠짐없이', '심각도', '더 많']) {
+    assert.ok(!DISPATCH_REQUEST.includes(forbidden),
+      `DISPATCH_REQUEST가 리뷰 품질을 유도하는 표현을 담고 있다: ${forbidden}`)
+  }
+})
+
+// 모델과 effort는 harness가 명시적으로 정해야 한다. A2의 6회 실행은 둘 다
+// 지정하지 않아 세션 기본값(`opus[1m]`, `xhigh`)을 상속받았다 — 즉 사용자가
+// /config에서 모델을 바꾸면 기준선이 조용히 다른 조건에서 나온 숫자가 된다.
+// 무엇으로 쟀는지 모르는 숫자는 나중에 비교할 수 없다.
+
+test('buildClaudeArgs는 모델과 effort를 항상 명시한다', () => {
+  const args = buildClaudeArgs({
+    command: '/x', pluginDir: 'p', fixtureRoot: 'f', permissionMode: 'bypassPermissions',
+    model: 'opus', effort: 'xhigh',
+  })
+  assert.equal(args[args.indexOf('--model') + 1], 'opus')
+  assert.equal(args[args.indexOf('--effort') + 1], 'xhigh')
+})
+
+test('모델이나 effort가 없으면 플래그를 붙이지 않는다', () => {
+  // 빈 값으로 붙이면 claude가 다음 인자를 값으로 삼켜 조용히 다른 명령이 된다.
+  const args = buildClaudeArgs({
+    command: '/x', pluginDir: 'p', fixtureRoot: 'f', permissionMode: 'bypassPermissions',
+  })
+  assert.ok(!args.includes('--model'))
+  assert.ok(!args.includes('--effort'))
+})
+
+// ---------------------------------------------------------------------------
+// 재채점이 쓸 리포트를 찾는다.
+//
+// keptReport가 있다는 것과 그 파일이 아직 있다는 것은 다른 명제다. 값만 보고
+// 건너뛰면, 파일이 지워졌을 때 readFileSync가 던져 **재채점 배치 전체가**
+// 죽는다 — 리포트를 못 찾은 run만 skipped로 남긴다는 의도와 정반대다.
+// 관례 경로에 손으로 구조한 사본이 있어도 거기까지 가지 못한다.
+
+test('keptReport가 있고 파일도 있으면 그것을 쓴다', () => {
+  const r = resolveStoredReport({
+    keptReport: 'reports/a.md', conventional: 'reports/b.md',
+    exists: p => p === 'reports/a.md',
+  })
+  assert.equal(r.relative, 'reports/a.md')
+})
+
+test('keptReport가 가리키는 파일이 없으면 관례 경로로 넘어간다', () => {
+  const r = resolveStoredReport({
+    keptReport: 'reports/gone.md', conventional: 'reports/b.md',
+    exists: p => p === 'reports/b.md',
+  })
+  assert.equal(r.relative, 'reports/b.md', '값이 있다고 존재를 가정하면 배치 전체가 죽는다')
+})
+
+test('keptReport가 없으면 관례 경로를 쓴다', () => {
+  const r = resolveStoredReport({
+    keptReport: undefined, conventional: 'reports/b.md',
+    exists: () => true,
+  })
+  assert.equal(r.relative, 'reports/b.md')
+})
+
+test('둘 다 없으면 null과 함께 시도한 경로를 남긴다', () => {
+  // 사유에 무엇을 찾아봤는지가 없으면 skipped 줄을 보고도 어디를 봐야 할지
+  // 알 수 없다.
+  const r = resolveStoredReport({
+    keptReport: 'reports/gone.md', conventional: 'reports/b.md',
+    exists: () => false,
+  })
+  assert.equal(r.relative, null)
+  assert.deepEqual(r.tried, ['reports/gone.md', 'reports/b.md'])
+})
+
+// ---------------------------------------------------------------------------
+// 리포트 보관.
+//
+// 리포트는 파일에서 올 수도 있고(C-7 계약대로 저장한 경우) stdout 봉투에서
+// 건질 수도 있다. 후자도 정상적으로 채점되므로, 경로를 기준으로 보관하면
+// **비용을 치른 성공 run이 재채점 불가가 된다.** 채점기가 실제로 읽은 본문을
+// 보관해야 보관본과 채점 대상이 같다는 것이 보장된다.
+
+test('본문이 있으면 보관하고 상대 경로를 돌려준다', () => {
+  const written = []
+  const r = storeReport({ text: '## 판정\n', name: 'x-run1.md', write: (n, t) => written.push([n, t]) })
+  assert.equal(r, 'reports/x-run1.md')
+  assert.deepEqual(written, [['x-run1.md', '## 판정\n']])
+})
+
+test('본문이 없으면 쓰지 않고 null을 돌려준다', () => {
+  // 리포트를 못 얻은 run까지 빈 파일을 만들면, 재채점이 그 빈 파일을 읽어
+  // findings 0건짜리 정상 결과처럼 채점한다.
+  const written = []
+  for (const empty of ['', null, undefined]) {
+    assert.equal(storeReport({ text: empty, name: 'x-run1.md', write: (n, t) => written.push([n, t]) }), null)
+  }
+  assert.equal(written.length, 0)
 })

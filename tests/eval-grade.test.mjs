@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { extractDetailSection, parseLocation, parseFindings } from '../scripts/lib/eval-grade.mjs'
+import { countUnverifiable, extractDetailSection, parseLocation, parseFindings } from '../scripts/lib/eval-grade.mjs'
 
 // 리포트 골격은 workflow-contract C-7이 고정한다. 파서는 그 골격만 신뢰하고,
 // 셀 내용은 신뢰하지 않는다 — 이슈/개선 제안 칸에는 `a || b` 같은 코드 인용이 들어온다.
@@ -545,4 +545,209 @@ test('블록에 위치 백틱 줄이 없으면 위치를 못 찾은 것으로 �
   const findings = parseFindings(report)
   assert.equal(findings.length, 1)
   assert.equal(findings[0].location.unverified, true)
+})
+
+// ---------------------------------------------------------------------------
+// unverifiable — "확인할 수 없어 보류했다"를 "못 찾았다"와 구분하는 축.
+//
+// 실사용 리포트(/code-review-full @ 2.5.7)에서 4건이 "대상 파일이 현재 HEAD에
+// 없어 검증된 삭제 위치조차 잡지 못함"으로 보류됐다. 리포트는 그것을 정직하게
+// 신고했고 산술도 맞았다(후보 27 = 12+4+1+4+6). 담을 칸이 없던 것은 채점기
+// 쪽이었다. 이 축이 없으면 보류를 늘려 실패를 감추는 변화와 진짜 개선이 같은
+// 점수를 받는다.
+//
+// 표지는 발명하지 않는다. workflow-contract가 전체 워크플로우 공통으로 이미
+// 정의한 세 가지를 그대로 센다.
+
+const withSections = ({ detail = '없음.', tools = '없음.', open = '없음.' }) => [
+  '## 리뷰 기준', '', '> **기준**: abc123 | **대상**: HEAD', '',
+  '## 판정', '', '머지 보류.', '',
+  '## 실행 계획', '', '없음.', '',
+  '## 상세 지적', '', detail, '',
+  '## 요약', '', '없음.', '',
+  '## 도구 실행 결과', '', tools, '',
+  '## 미해결 / 후속 확인', '', open, '',
+].join('\n')
+
+test('표지가 하나도 없는 리포트는 전부 0이다', () => {
+  // 이 채점기가 다섯 번 틀린 방식이 전부 "표지가 없는데 있다고 세거나, 있는데
+  // 안 셈"이었다. 0을 내는 쪽을 먼저 고정한다.
+  const counts = countUnverifiable(withSections({
+    detail: '| 심각도 | 규칙 | 위치 | 이슈 | 개선 제안 |\n| 🔴 | 03-3 | src/a.tsx:31 | index key | id를 쓴다 |',
+  }))
+  assert.deepEqual(counts, { locationUnverified: 0, openQuestions: 0, scopeOpen: 0, total: 0 })
+})
+
+test('상세 지적의 `위치 미확인 사유:`를 센다', () => {
+  const counts = countUnverifiable(withSections({
+    detail: [
+      '#### 🟡 `07-1` 약어가 의미를 감춘다',
+      '위치 미확인 사유: 현재 HEAD에 해당 파일과 formatter가 없다.',
+      '',
+      '#### 🟡 `08-1` 임계값이 매직 넘버다',
+      '위치 미확인 사유: 현재 HEAD에 threshold expression이 없다.',
+    ].join('\n'),
+  }))
+  assert.equal(counts.locationUnverified, 2)
+  assert.equal(counts.total, 2)
+})
+
+test('미해결 섹션의 `추가 확인 이유:`를 센다', () => {
+  const counts = countUnverifiable(withSections({
+    open: [
+      '- `07-1#4` boolean 이름에 상태 접두어가 없음: 추가 확인 이유: 파일이 없다.',
+      '- `14-4#1` 진단 로거의 프레임 비용: 추가 확인 이유: callback이 없다.',
+    ].join('\n'),
+  }))
+  assert.equal(counts.openQuestions, 2)
+})
+
+test('섹션 밖의 표지는 그 섹션의 축으로 세지 않는다', () => {
+  // `추가 확인 이유:`가 상세 지적에 나와도 openQuestions가 아니다. 섹션 경계를
+  // 신뢰하지 않으면 이 축은 문서 전체 grep이 되고, 그 순간 "어느 결말이었나"를
+  // 구분하는 능력이 사라진다 — 세 결말을 구분하려고 만든 축이므로 치명적이다.
+  const counts = countUnverifiable(withSections({
+    detail: '#### 🟡 `05-1` 무언가\n추가 확인 이유: 여기 있으면 안 센다.',
+  }))
+  assert.equal(counts.openQuestions, 0)
+  assert.equal(counts.locationUnverified, 0)
+})
+
+test('`범위 미확정`은 문서 어디에 있어도 센다', () => {
+  // C-6B의 disposition 토큰이라 실행 계획에도 상세 지적에도 나올 수 있다.
+  const counts = countUnverifiable(withSections({
+    detail: '#### 🟡 `02-1` 무언가\n영향: 낮음 · 확신: 높음 · 교차검증: `범위 미확정`',
+  }))
+  assert.equal(counts.scopeOpen, 1)
+})
+
+test('total은 세 축의 합이다', () => {
+  const counts = countUnverifiable(withSections({
+    detail: '위치 미확인 사유: 없다.\n교차검증: `범위 미확정`',
+    open: '추가 확인 이유: 없다.',
+  }))
+  assert.deepEqual(counts, { locationUnverified: 1, openQuestions: 1, scopeOpen: 1, total: 3 })
+})
+
+test('섹션 자체가 없는 리포트에도 던지지 않는다', () => {
+  // 리포트가 잘려서 왔거나 골격이 깨진 run이 A1에서 실제로 있었다. 그 경우 이
+  // 축은 0이어야 하고, 골격이 깨졌다는 사실은 skeletonOk가 따로 말한다.
+  const zero = { locationUnverified: 0, openQuestions: 0, scopeOpen: 0, total: 0 }
+  assert.deepEqual(countUnverifiable(''), zero)
+  assert.deepEqual(countUnverifiable(undefined), zero)
+})
+
+// ---------------------------------------------------------------------------
+// 대조군은 두 종류이고, 둘을 같은 규칙으로 다루면 오탐 축이 리뷰의 규율이
+// 아니라 fixture의 우연을 잰다.
+//
+// A2 첫 실행에서 baseline-mixed가 오탐 6건을 냈는데 그중 5건이 이 문제였다.
+// `customer-tags.tsx`는 "03-3을 과적용하지 마라"고 둔 대조군인데, 리뷰가
+// 거기서 01-4(레이어 배치)를 지적하니 오탐으로 찍혔다. 대조군은 diff 안에
+// 있어야 하고(밖이면 리뷰가 보지도 않는다), diff 안 파일은 어떤 규칙으로든
+// 지적될 수 있다.
+//
+//   범위 대조군   — 이 파일은 어떤 규칙으로도 지적되면 안 된다 (ruleIds 없음)
+//   과적용 대조군 — 이 파일이 이 규칙으로 지적되면 안 된다 (ruleIds 있음)
+
+const SCOPED = {
+  mustFind: [],
+  mustNotFlag: [
+    // 범위 대조군: C-5 제외 경로. 어떤 규칙이든 지적 자체가 위반이다.
+    { id: 'in-test-file', path: 'src/a.test.tsx', why: 'C-5 제외 경로' },
+    // 과적용 대조군: 올바른 key를 쓴 리스트. 03-3으로만 오탐이다.
+    { id: 'correct-key', path: 'src/tags.tsx', ruleIds: ['03-3'], why: '03-3 과적용 검사' },
+  ],
+}
+
+const SCOPED_BLOBS = {
+  head: {
+    'src/a.test.tsx': new Array(20).fill('x'),
+    'src/tags.tsx': new Array(20).fill('x'),
+  },
+  base: {},
+}
+
+test('ruleIds가 없는 대조군은 어떤 규칙으로 지적돼도 오탐이다', () => {
+  // 기존 동작 회귀 고정. 범위 대조군에 규칙 필터가 붙으면 C-5 위반을 놓친다.
+  for (const ruleId of ['03-3', '00-1', '19-3']) {
+    const result = gradeFindings([finding(ruleId, 'src/a.test.tsx', 4)], SCOPED, SCOPED_BLOBS)
+    assert.equal(result.falsePositives.count, 1, `${ruleId}이 오탐으로 잡혀야 한다`)
+  }
+})
+
+test('ruleIds가 있는 대조군은 그 규칙으로 지적될 때만 오탐이다', () => {
+  const result = gradeFindings([finding('03-3', 'src/tags.tsx', 7)], SCOPED, SCOPED_BLOBS)
+  assert.equal(result.falsePositives.count, 1)
+  assert.equal(result.falsePositives.hits[0].target, 'correct-key')
+})
+
+test('ruleIds 밖의 규칙은 오탐이 아니라 unclassified로 간다', () => {
+  // 여기서 증발하면 산술이 깨진다 — findings = matched + fp + unclassified가
+  // 성립해야 벡터를 서로 대조할 수 있다.
+  const result = gradeFindings([finding('01-4', 'src/tags.tsx', 7)], SCOPED, SCOPED_BLOBS)
+  assert.equal(result.falsePositives.count, 0, '설계된 규칙이 아니므로 오탐이 아니다')
+  assert.equal(result.unclassified, 1, '어디로도 안 가고 사라지면 안 된다')
+  assert.equal(result.findings, 1)
+})
+
+test('과적용 대조군에 섞여 들어와도 산술이 맞는다', () => {
+  const result = gradeFindings(
+    [
+      finding('03-3', 'src/tags.tsx', 7),   // 오탐
+      finding('01-4', 'src/tags.tsx', 3),   // unclassified
+      finding('08-1', 'src/tags.tsx', 9),   // unclassified
+      finding('00-1', 'src/a.test.tsx', 2), // 오탐 (범위 대조군)
+    ],
+    SCOPED, SCOPED_BLOBS,
+  )
+  assert.equal(result.findings, 4)
+  assert.equal(result.falsePositives.count, 2)
+  assert.equal(result.unclassified, 2)
+})
+
+// ---------------------------------------------------------------------------
+// 계약이 명시한 예외는 오탐이 아니다.
+//
+// C-5가 *.test.* 를 지적 대상에서 빼지만, 00-3이 그 안에 예외를 하나 판다:
+// 테스트가 리뷰 우회 신호(00-1)에 해당하면 그 자체를 지적한다. 범위 대조군을
+// "어떤 규칙으로든 오탐"으로만 다루면 이 예외를 지킨 리뷰가 벌점을 받는다.
+//
+// A2에서 실제로 그랬다. baseline-mixed의 테스트 파일에 assertion이 없고
+// orders={[]}로 렌더해 심은 결함 줄을 실행조차 하지 않았는데, 두 run 모두
+// 그것을 00-1로 지적하면서 예외 조항을 근거로 인용했다. 리뷰가 옳았고
+// 대조군이 틀렸다.
+
+const WITH_EXCEPTION = {
+  mustFind: [],
+  mustNotFlag: [
+    {
+      id: 'in-test-file',
+      path: 'src/a.test.tsx',
+      exceptRuleIds: ['00-1'],
+      why: 'C-5 제외 경로. 단 00-3이 00-1(리뷰 우회 신호)을 예외로 명시한다',
+    },
+  ],
+}
+
+const EXC_BLOBS = { head: { 'src/a.test.tsx': new Array(20).fill('x') }, base: {} }
+
+test('제외 경로의 스타일·구조 지적은 여전히 오탐이다', () => {
+  const result = gradeFindings([finding('03-3', 'src/a.test.tsx', 4)], WITH_EXCEPTION, EXC_BLOBS)
+  assert.equal(result.falsePositives.count, 1)
+})
+
+test('계약이 명시한 예외 규칙은 오탐이 아니다', () => {
+  const result = gradeFindings([finding('00-1', 'src/a.test.tsx', 7)], WITH_EXCEPTION, EXC_BLOBS)
+  assert.equal(result.falsePositives.count, 0, '예외를 지킨 리뷰를 벌주면 안 된다')
+  assert.equal(result.unclassified, 1, '증발하지 않고 미분류로 간다')
+})
+
+test('exceptRuleIds는 ruleIds와 함께 쓸 때도 예외가 우선한다', () => {
+  const expected = {
+    mustFind: [],
+    mustNotFlag: [{ id: 'x', path: 'src/a.test.tsx', ruleIds: ['00-1', '03-3'], exceptRuleIds: ['00-1'] }],
+  }
+  assert.equal(gradeFindings([finding('00-1', 'src/a.test.tsx', 7)], expected, EXC_BLOBS).falsePositives.count, 0)
+  assert.equal(gradeFindings([finding('03-3', 'src/a.test.tsx', 7)], expected, EXC_BLOBS).falsePositives.count, 1)
 })

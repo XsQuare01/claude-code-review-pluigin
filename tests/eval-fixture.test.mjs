@@ -149,3 +149,102 @@ test('mergeBase가 유효하지 않으면 조용히 빈 값을 주지 않고 던
   // 고정한다.
   assert.throws(() => readBlobLines(fixture.root, 'not-a-real-sha', ['src/gone.ts']), /not-a-real-sha/)
 })
+
+// ---------------------------------------------------------------------------
+// 중간 커밋 — producer가 본 트리와 검증기가 본 트리가 다른 상황.
+//
+// 실사용 리포트(/code-review-full @ 2.5.7)에서 producer가 확인한 파일이
+// 교차검증 시점의 HEAD에는 없었고, 그 파일에 걸린 지적 전부가 위치를 잡지
+// 못했다. 2커밋 fixture는 리뷰가 도는 동안 트리가 고정돼 이 상황을 아예
+// 만들 수 없다. `mid/`는 결함이 중간 상태에만 존재하게 해서 그 효과를
+// 재현한다.
+//
+// 왜 효과만인가: 실제로 왜 트리가 갈렸는지는 확정되지 않았다. 리포트가
+// "producer 확인 당시"라고만 적고 기제를 남기지 않았다.
+
+const makeThreeCommitCase = () => {
+  const dir = scratch()
+  write(dir, 'before/src/keep.ts', 'export const keep = 1\n')
+  // mid에만 존재한다 — before에도 after에도 없다. producer가 보고 검증기가
+  // 못 보는 파일이 정확히 이 모양이다.
+  write(dir, 'mid/src/keep.ts', 'export const keep = 1\n')
+  write(dir, 'mid/src/logger.ts', 'export const fmt = (v) => `${v}`\nexport const log = () => fmt(1)\n')
+  write(dir, 'after/src/keep.ts', 'export const keep = 1\n')
+  return dir
+}
+
+test('mid/가 있으면 3커밋이 되고, mid에만 있는 파일은 HEAD에 없다', t => {
+  const dir = makeThreeCommitCase()
+  const outer = scratch()
+  // 단언이 던져도 정리되도록 t.after()로 등록한다. 본문 끝에 두면 RED
+  // 단계에서 매번 임시 디렉터리가 남는다 — 실제로 남았다.
+  t.after(() => { rmSync(dir, { recursive: true, force: true }); rmSync(outer, { recursive: true, force: true }) })
+  const target = join(outer, 'repo')
+  const fixture = buildFixture(dir, target)
+
+  assert.ok(fixture.mid, 'mid 커밋 해시가 반환돼야 한다')
+  assert.notEqual(fixture.mid, fixture.mergeBase)
+  assert.notEqual(fixture.mid, fixture.head)
+
+  // 검증기가 보는 상태: 없다.
+  assert.equal(existsSync(join(fixture.root, 'src/logger.ts')), false)
+  // producer가 본 상태: 있다.
+  const atMid = execFileSync('git', ['show', `${fixture.mid}:src/logger.ts`], { cwd: fixture.root, encoding: 'utf8' })
+  assert.match(atMid, /export const fmt/)
+
+})
+
+test('mid/가 없으면 기존 2커밋 동작이 그대로다', t => {
+  // location-trap이 mid/ 없이 계속 돌아야 한다. 회귀를 여기서 고정한다.
+  const dir = makeCase()
+  const outer = scratch()
+  // 단언이 던져도 정리되도록 t.after()로 등록한다. 본문 끝에 두면 RED
+  // 단계에서 매번 임시 디렉터리가 남는다 — 실제로 남았다.
+  t.after(() => { rmSync(dir, { recursive: true, force: true }); rmSync(outer, { recursive: true, force: true }) })
+  const target = join(outer, 'repo')
+  const fixture = buildFixture(dir, target)
+
+  assert.equal(fixture.mid, null)
+  const log = execFileSync('git', ['log', '--oneline'], { cwd: fixture.root, encoding: 'utf8' })
+  assert.equal(log.trim().split('\n').length, 2)
+  assert.deepEqual(fixture.changed.added, ['src/added.ts'])
+  assert.deepEqual(fixture.changed.removed, ['src/gone.ts'])
+
+})
+
+test('mid에만 있던 파일은 extraRefs를 줘야 읽힌다', t => {
+  const dir = makeThreeCommitCase()
+  const outer = scratch()
+  // 단언이 던져도 정리되도록 t.after()로 등록한다. 본문 끝에 두면 RED
+  // 단계에서 매번 임시 디렉터리가 남는다 — 실제로 남았다.
+  t.after(() => { rmSync(dir, { recursive: true, force: true }); rmSync(outer, { recursive: true, force: true }) })
+  const target = join(outer, 'repo')
+  const fixture = buildFixture(dir, target)
+
+  // extraRefs 없이는 어디에도 없다 — working tree에도 mergeBase에도.
+  const without = readBlobLines(fixture.root, fixture.mergeBase, ['src/logger.ts'])
+  assert.equal(without.head['src/logger.ts'], undefined)
+  assert.equal(without.base['src/logger.ts'], undefined)
+
+  // mid를 주면 읽힌다. 이것이 없으면 deletion-regression의 기대 위치를
+  // 검증할 방법이 없다.
+  const withMid = readBlobLines(fixture.root, fixture.mergeBase, ['src/logger.ts'], [fixture.mid])
+  assert.equal(withMid.base['src/logger.ts'].length, 2)
+  assert.match(withMid.base['src/logger.ts'][0], /export const fmt/)
+
+})
+
+test('살아 있는 파일은 extraRefs가 있어도 working tree에서 읽는다', t => {
+  const dir = makeThreeCommitCase()
+  const outer = scratch()
+  // 단언이 던져도 정리되도록 t.after()로 등록한다. 본문 끝에 두면 RED
+  // 단계에서 매번 임시 디렉터리가 남는다 — 실제로 남았다.
+  t.after(() => { rmSync(dir, { recursive: true, force: true }); rmSync(outer, { recursive: true, force: true }) })
+  const target = join(outer, 'repo')
+  const fixture = buildFixture(dir, target)
+
+  const blobs = readBlobLines(fixture.root, fixture.mergeBase, ['src/keep.ts'], [fixture.mid])
+  assert.ok(blobs.head['src/keep.ts'], 'working tree 우선순위가 깨지면 안 된다')
+  assert.equal(blobs.base['src/keep.ts'], undefined)
+
+})

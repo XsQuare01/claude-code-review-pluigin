@@ -1,0 +1,24 @@
+{
+  "$comment": "규칙 ID는 review-rules/20-deletion-regression.md에서 확인했다. 20-2(아직 필요할 수 있는 production 코드 삭제)와 20-3(참조 확인)이 둘 다 🔴이고 이 두 결함 모두에 성립한다. 20-4는 넣지 않는다 — React 고유 삭제 목록에 cleanup·deps·key는 있지만 임의 prop 제거는 없다. 모듈 20은 trigger 조건이 없어 항상 로드된다.",
+  "mustFind": [
+    {
+      "id": "deleted-null-guard",
+      "ruleIds": ["20-2", "20-3"],
+      "path": "src/entities/session/lib/guard.ts",
+      "line": 5,
+      "anchor": "export function assertSession",
+      "lineTolerance": 3,
+      "why": "null 가드가 파일째 삭제됐고 대체 경로가 diff 안에 없다. 이 결함의 위치는 삭제된 파일 안이므로, 채점기가 working tree가 아니라 merge base blob에서 내용을 읽어야만 검증된다 — prepare-verification.mjs의 삭제 경로가 실사용에 가장 덜 노출된 코드 경로이고, 이 케이스가 그것을 실행한다"
+    },
+    {
+      "id": "dropped-onexpire-prop",
+      "ruleIds": ["20-2", "20-3"],
+      "path": "src/features/renew-session/ui/renew-button.tsx",
+      "line": 8,
+      "anchor": "export function RenewButton({ session, onRenew }",
+      "lineTolerance": 4,
+      "why": "onExpire prop과 만료 통지 동작이 함께 사라졌는데 호출부 header.tsx는 여전히 onExpire를 넘긴다. 호출부가 세 트리 전부에서 바이트 단위로 동일해 diff 밖에 있으므로, 20-3의 targeted reference check가 실제로 수행돼야만 잡힌다. interface 선언과 함수 시그니처 중 어디를 인용해도 되게 tolerance를 4로 둔다"
+    }
+  ],
+  "mustNotFlag": []
+}

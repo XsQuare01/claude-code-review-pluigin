@@ -109,26 +109,171 @@ timing이 아니라 디버그 로그로 확인했다.)
 루트를 쓰거나, 이 hook들이 없는 머신에서 돌리는 방법이 있다. **이건 검증하지
 않았다** — 검증된 레시피로 오인하지 않도록 명시해 둔다.
 
-## `scriptRan: {ran:false}`가 이 harness에서는 항상 나온다 — 워크플로우 탓이 아니다
+## 대조군은 두 종류다 — 새 케이스를 만들 때 반드시 분류한다
 
-`runClaude`가 붙이는 `--permission-mode acceptEdits`는 **Bash를 자동 승인하지
-않는다.** 두 팔의 커밋된 baseline이 이미 그 증거를 담고 있다 — `main`은 Bash
-`find`/`cat` 호출이 거부됐고, `pr52`는 `prepare-verification.mjs` 실행 시도가
-두 번 다 거부됐다(리포트 본문도 "비대화형 세션이라 승인을 받을 수 없었다"고
-직접 적었다). `prepare-verification.mjs`는 Bash로만 돌 수 있으므로, 이
-harness가 도는 한 그 스크립트는 **절대 실행될 수 없다** — 워크플로우가 무엇을
-하든 상관없다.
+`mustNotFlag` 항목은 두 가지 중 하나이고, 잘못 쓰면 오탐 축이 **리뷰의 규율이
+아니라 fixture의 우연을 잰다.**
 
-그 결과로 `scriptRan.ran`은 이 harness의 모든 run에서 구조적으로 `false`이고,
-`## 도구 실행 결과` 섹션도 항상 비어 있다. 이 값을 그냥 읽으면 "워크플로우가
-위치 대조를 건너뛰었다"로 보이지만, 실제 원인은 "harness 자신이 그 도구를 쓸
-권한을 안 줬다"이다 — **측정 대상의 결함이 아니라 측정 장치의 한계를 측정
-대상의 결함으로 오독하는 것.** `checkScriptRan`이 `declaredSkipped`를 따로
-남기는 이유도 여기 있다: 워크플로우가 이 한계를 알고 정직하게 "미실행"이라고
-적었는지는 `scriptRan.ran`이 아니라 `declaredSkipped`로 봐야 한다. 이 제약을
-없애려면 harness가 Bash까지 승인하는 권한 모드로 바꿔야 하고, 그건 이
-harness가 fixture 밖으로 나가는 임의 명령을 실제로 승인하게 된다는 별개의
-트레이드오프라 여기서 바꾸지 않는다.
+| 종류 | 뜻 | `expected.json` |
+|---|---|---|
+| **범위 대조군** | 이 경로는 **어떤 규칙으로도** 지적되면 안 된다 | `ruleIds` 없음 |
+| **과적용 대조군** | 이 경로가 **이 규칙으로** 지적되면 안 된다 | `ruleIds: [...]` |
+
+범위 대조군은 C-5 제외 경로(`*.test.*`)나 diff 밖 파일처럼, 지적이 존재한다는
+사실 자체가 위반인 경우다. 과적용 대조군은 올바르게 쓴 코드가 특정 규칙에
+잘못 걸리는지 보는 경우다.
+
+### 왜 필요한가 — 실제로 틀렸던 사례
+
+A2 첫 실행에서 `baseline-mixed`가 오탐 6건을 냈는데 **5건이 fixture 잘못**이었다.
+
+| 규칙 | 대조군 | 실제 |
+|---|---|---|
+| `00-1` | 테스트 파일 안 위반 | ✅ 진짜 오탐 |
+| `01-4` ×2 | customer-tags, clock | ❌ FSD 레이어 배치 지적 |
+| `08-1` | clock (`1000` 매직넘버) | ❌ 정당한 지적으로 보임 |
+| `19-3` ×2 | constants, clock | ❌ 의도·근거 지적 |
+
+`customer-tags.tsx`는 "`03-3`을 과적용하지 마라"고 둔 대조군인데, 리뷰가 거기서
+`01-4`(레이어 배치)를 지적하니 오탐으로 찍혔다.
+
+**대조군은 diff 안에 있어야 한다** — 밖이면 리뷰가 보지도 않으므로 아무것도
+측정하지 못한다. 그런데 diff 안 파일은 **어떤 규칙으로든 지적될 수 있다.** 그래서
+대조군은 자기가 검사하려는 규칙에 대해서만 발언권을 가져야 한다.
+
+규칙 필터를 넣고 다시 채점하니 **6 → 1**이 됐고, 남은 1건은 두 run에서 바이트
+단위로 같은 것이었다(테스트 파일 안 위반 = C-5 위반). 그것이 원래 재려던 것이다.
+
+### 계약이 예외를 판 자리 — `exceptRuleIds`
+
+규칙이 규칙을 예외로 두는 경우가 있다. C-5가 `*.test.*`를 지적 대상에서 빼지만,
+`00-3`이 그 안에 구멍을 하나 낸다.
+
+> 예외: 테스트가 리뷰 우회 신호에 해당하면(`00-1`) 그 자체를 지적한다
+
+범위 대조군을 "어떤 규칙으로든 오탐"으로만 다루면 **그 예외를 지킨 리뷰가 벌점을
+받는다.** `exceptRuleIds`에 적힌 규칙은 오탐에서 빠지고 미분류로 간다.
+
+**A2에서 실제로 그랬다.** `baseline-mixed`의 테스트 파일은 assertion이 없고
+`orders={[]}`로 렌더해 심은 key 결함 줄을 실행조차 하지 않는다. 두 run 모두 그것을
+`00-1`로 지적하면서 예외 조항을 근거로 인용했고, 채점기는 그것을 오탐 1건으로
+셌다. **리뷰가 옳았고 대조군이 틀렸다.**
+
+교훈은 필드 하나가 아니라 순서다 — 오탐으로 판정하기 전에 **계약이 그 지적을
+허용하는지 먼저 읽는다.** 대조군을 만들 때 그 규칙의 예외 조항까지 확인하지 않으면,
+계측기가 규칙을 지킨 쪽을 벌주게 된다.
+
+### 필터 밖 지적은 어디로 가나
+
+`unclassified`로 간다. 증발하지 않는다 — `findings = matched + falsePositives +
+unclassified` 산술이 유지돼야 벡터를 서로 대조할 수 있다.
+
+## 재채점 — `--regrade`
+
+채점기나 `expected.json`을 고쳤을 때, **리뷰를 다시 돌리지 않고** 저장된 리포트로
+다시 채점한다.
+
+    node scripts/eval-review.mjs --case baseline-mixed --regrade evals/results/baseline-mixed-a2.json
+
+- 리포트는 실행할 때마다 `evals/results/reports/`에 보관된다
+- fixture는 새로 만들어도 같다 — 케이스 트리가 커밋돼 있어 파일 내용이 동일하고,
+  `readBlobLines`는 경로별 내용만 쓴다
+- `durationSec`, `totalCostUsd`, `numTurns`, `opFailures` 같은 **실행 관련 값은
+  그대로 보존**된다. 재채점이 만들 수 없는 값이다
+- 결과는 `{case}-{label}-regraded.json`에 따로 쓰고 `regradedFrom`/`regradedAt`을
+  남긴다 — 재채점된 숫자를 실행에서 나온 숫자와 구분할 수 없으면 안 된다
+
+이것이 없으면 **채점기를 고치는 것 자체가 비싸져서 안 고치게 된다.** A2의 오탐
+결함이 그 증거다 — 재채점 경로가 없었다면 "실행을 더 사서 다시 재기"와 "틀린
+숫자를 그냥 쓰기" 중에 골라야 했다.
+
+## 권한 모드 — `bypassPermissions`를 쓴다. `--plugin-dir`에 복사본을 넘길 것
+
+A1은 `--permission-mode acceptEdits`로 돌았고, 그것이 **Bash를 자동 승인하지
+않았다.** 커밋된 A1 baseline이 그 증거를 담고 있다 — `main`은 `find`/`cat`
+호출이 거부됐고, `pr52`는 `prepare-verification.mjs` 실행이 두 번 다 거부됐다
+(리포트 본문도 "비대화형 세션이라 승인을 받을 수 없었다"고 직접 적었다).
+
+그래서 `scriptRan.ran`이 **모든 run에서 구조적으로 `false`**였다. 그 값을 그냥
+읽으면 "워크플로우가 위치 대조를 건너뛰었다"로 보이지만 실제 원인은 "harness
+자신이 그 도구를 쓸 권한을 안 줬다"였다 — **측정 대상의 결함이 아니라 측정
+장치의 한계를 측정 대상의 결함으로 오독하는 것.**
+
+**A2에서 `bypassPermissions`로 바꿨다.** `--allowedTools`로 좁히지 않은 이유는
+같은 함정 때문이다: 좁히면 다른 종류의 거부가 나타나고 harness는 다시
+워크플로우가 아니라 자기 설정을 재게 된다. 사용자가 실제로 리뷰를 돌리는
+조건에 가장 가까운 것이 이 모드다.
+
+### 대가 — 살아 있는 저장소를 `--plugin-dir`에 넘기지 않는다
+
+`bypassPermissions`는 리뷰가 허용 디렉터리 안에서 임의 명령을 돌릴 수 있다는
+뜻이다. fixture는 매 실행 새로 만드는 임시 디렉터리라 그 자체는 문제가 아니지만,
+**`pluginDir`도 `--add-dir`에 들어간다.** 그것이 이 저장소의 워킹 트리면 리뷰가
+저장소에 쓸 수 있다.
+
+기준선을 뜰 때는 팔을 복사해서 넘긴다.
+
+    git worktree add ../eval-arm-main main
+    node scripts/eval-review.mjs --case location-trap --plugin-dir ../eval-arm-main --label main
+
+`--plugin-dir`이 이 저장소의 워킹 트리면 runner가 **경고를 출력한다.** 차단하지는
+않는다 — 개발 중에 `--plugin-dir .`은 가장 흔한 사용법이고, 막으면 우회 경로가
+생긴다. 우회 가능한 차단보다 보이는 경고가 낫다.
+
+## sub-agent가 뜨지 않는다 — harness는 fan-out이 아니라 통합 pass를 재고 있다
+
+`/code-review`는 모듈 fan-out으로 설계돼 있는데, 이 harness가 띄우는 모든 run에서
+sub-agent가 **하나도 뜨지 않는다.** 봉투의 `subagent_stats.spawned`가 0이고,
+리뷰 자신이 리포트에 이유를 적는다.
+
+> 세션 지시상 Agent 도구를 쓰지 않아, bounded 통합 pass를 sub-agent 대신 직접 수행했습니다.
+
+### 출처는 시스템 프롬프트다 — 설정으로 끌 수 없다
+
+이 머신에서 뜨는 claude 세션의 시스템 프롬프트에 다음 두 줄이 들어 있다.
+
+    Do not call the AgentTool unless the user requested it
+    Do not use workflows or deep-research unless the user requested it
+
+`~/.claude/settings.json`에도 `~/.claude/CLAUDE.md`에도 없다 — headless 세션에
+직접 물어 확인했다. 훅은 전부 `conhost.exe`(터미널 깜빡임 억제)라 텍스트를
+주입하지 않는다. Agent 도구 자체는 headless에서도 **사용 가능하다**(별도 프로브로
+확인). 모델이 쓰지 않기로 선택하는 것이다.
+
+### 그래서 두 개의 서로 다른 기준선이 가능하다
+
+| | 무엇을 재는가 | 어떻게 |
+|---|---|---|
+| **as-experienced** | 이 머신에서 사용자가 실제로 받는 것 | 지금 그대로. sub-agent 없음 |
+| **as-designed** | 워크플로우 정의대로의 fan-out | `--append-system-prompt`로 dispatch를 명시적으로 요청 |
+
+**둘 중 무엇을 기준선으로 삼는지는 B의 판정을 바꾼다.** B의 후보가 묶음
+fan-out이므로, as-experienced 기준선과 비교하면 "fan-out 대 통합"이 아니라
+"fan-out 대 통합"을 재게 되는데 — 그 통합은 현재 *설계*가 아니라 현재 *실행*이다.
+반대로 as-designed 기준선은 이 사용자가 실제로 받지 않는 동작을 잰다.
+
+두 기준선의 비용도 다르다. 통합 pass는 실측 $3.4~4.0/run이고, 21개 모듈로
+fan-out하면 에이전트당 출력이 곱해져 그보다 크다 — 2.6.0을 죽인 것이 정확히
+그 곱셈이었다.
+
+### `opFailures`를 읽을 때
+
+`spawned: 0`인 run에서 `opFailures.total: 0`은 **"실패가 없었다"가 아니라
+"fan-out이 재현되지 않았다"**이다. 이 축은 as-designed 기준선에서만 의미를 갖는다.
+
+### `scriptRan.ran`을 읽을 때
+
+권한이 열렸으므로 이제 `ran: false`는 **측정 결과**다. 다만 세 가지를 계속
+구분한다.
+
+| 값 | 의미 |
+|---|---|
+| `ran: true` | 스크립트가 실제로 돌았다 |
+| `ran: false`, `declaredSkipped: true` | 워크플로우가 안 돌리기로 하고 그렇게 적었다 |
+| `ran: false`, `declaredSkipped: false` | 워크플로우가 대조를 언급조차 하지 않았다 |
+
+`permissionDenials`가 비어 있는지 함께 본다. 거부가 남아 있으면 여전히 harness
+쪽 한계이지 측정 결과가 아니다.
 
 ## 읽는 방법
 
@@ -142,10 +287,12 @@ harness가 fixture 밖으로 나가는 임의 명령을 실제로 승인하게 �
 | `unclassified` | 어느 목록에도 없는 지적. **오탐이 아니다** — 심지 않은 진짜 문제일 수 있다 |
 | `locationsInRange` | 인용한 경로·줄이 파일 안에 실재하는가 |
 | `locationsOnTarget` | 심은 결함을 tolerance 안에서 가리켰는가 |
-| `scriptRan` | 위치 대조 스크립트가 실제로 돌았는가 (이슈 #50) — 이 harness에서는 항상 `ran:false`다, 위 절 참고 |
+| `scriptRan` | 위치 대조 스크립트가 실제로 돌았는가 (이슈 #50). `ran`/`declaredSkipped` 조합을 함께 읽는다 — 위 절 참고 |
 | `skeletonOk` | C-7 섹션 이름과 순서 |
 | `summaryArithmetic` | 요약 표 합계가 상세 지적과 맞는가 |
 | `fixtureDirty` | run 뒤 fixture의 `git status --porcelain` (`review-reports/` 제외). 비어 있어야 정상 — 리뷰가 파일을 고쳤다는 뜻이면 그 자체가 회귀다 |
+| `unverifiable` | 리뷰가 **확인할 수 없어 판단을 보류한** 건수. `위치 미확인 사유:`(상세 지적 안) + `추가 확인 이유:`(미해결 섹션 안) + `범위 미확정`(문서 전체). **탐지 실패가 아니다** — 이 축이 없으면 보류를 늘려 실패를 감추는 변화와 진짜 개선이 같은 점수를 받는다. `recall`의 분모에서 빼지 않는다 |
+| `opFailures` | sub-agent 실패·kill·거부의 합(봉투의 `subagent_stats`). 2.6.0은 타임아웃 3회로 죽었고 `-full`은 4회를 겪고도 완주했다 — `completed`만 세면 그 차이가 사라진다. **`spawned: 0`이면 이 값의 0은 "실패 없음"이 아니라 "fan-out이 재현되지 않음"이다.** 봉투에 stats가 없으면 0이 아니라 `null` |
 
 ## 주의
 

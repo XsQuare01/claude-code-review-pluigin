@@ -1,195 +1,306 @@
 {
-  "recordedAt": "2026-08-24",
-  "stage": "A1",
-  "note": "harness 검증 실행. 케이스 1개, 팔당 1회. 기준선이 아니라 harness가 산다는 증거다. 실행 중 harness 자체의 결함 4개(JSON 봉투 미파싱, --plugin-dir 스킬명 충돌, 규칙 모듈 미접근, 리포트 파서가 표/#### 두 레이아웃 중 하나만 인식)를 고치고 나서야 이 값이 나왔다 — 그 전 실행은 report=false 또는 findings=0으로 harness의 결함을 그대로 보여줬다. 두 캐비어트: (1) 두 팔 모두 `--permission-mode acceptEdits`가 Bash를 거부한다(main: `find`/`cat` 거부, pr52: `prepare-verification.mjs` 실행 두 번 거부) — 그래서 `scriptRan: {ran:false}`가 이 harness가 도는 모든 run에서 구조적으로 불가피하고, `## 도구 실행 결과`는 늘 비어 있다. 이 값을 읽을 때 \"워크플로우가 대조를 건너뛰었다\"와 \"harness가 도구 실행을 막았다\"를 구분해야 한다 — 후자를 전자로 읽으면 harness 자신의 권한 설정을 워크플로우의 결함으로 오독한다. (2) 두 팔의 `falsePositives.count`가 0인 것은 이 케이스의 `expected.json`이 `mustNotFlag: []`이기 때문이다 — 오탐 목표 자체가 정의돼 있지 않아 0이 나오는 것이고, 두 팔이 실제로 오탐을 내지 않았다는 증거가 아니다.",
-  "exitConditions": {
-    "1_unitTestsPassWithoutReview": {
-      "met": true,
-      "evidence": "`node --test tests/*.test.mjs` -> 128 pass, 0 fail, duration ~2.0s, 리뷰 프로세스(claude) 미실행."
+  "recordedAt": "2026-08-26",
+  "stage": "A2 (부분)",
+  "headline": "/code-review가 서로 다른 6개 모듈에 심은 결함을 두 run 모두 6/6으로, 줄 번호까지 정확히 잡았다. 도달 모듈은 12와 10 — 이 숫자가 지금까지 존재한 적이 없고, B가 넘어야 할 선이다. 반면 삭제 회귀는 1/2과 0/2로 놓쳤다(이슈 #58). 오탐은 여섯 run 전부 0건이다 — 정의된 모든 대조군에 대해.",
+  "conditions": {
+    "$comment": "이 조건들이 없으면 아래 숫자를 나중에 쓸 수 없다. B는 같은 조건에서 재야 비교가 성립한다.",
+    "executionShape": "as-designed",
+    "executionShapeNote": "spawned: 1 — /code-review는 모듈 fan-out이 아니라 통합 pass를 sub-agent 하나에 맡긴다. 21개로 쪼개는 것은 /code-review-full이다. 기본값(as-experienced)으로 돌리면 이 머신의 세션 시스템 프롬프트가 Agent 도구를 막아 sub-agent가 0개가 되므로, --dispatch로 워크플로우 정의대로 돌렸다.",
+    "model": "opus[1m] (세션 기본값 상속 — 이 배치는 모델 지정 기능이 들어가기 전에 실행됐다)",
+    "effort": "xhigh (세션 기본값 상속 — 위와 같음)",
+    "concurrency": "3-동시 실행 (케이스별로 한 프로세스씩)",
+    "timeoutMinutes": 25,
+    "timeoutNote": "동시 실행 경합으로 15분 상한을 넘겨 가짜 타임아웃이 찍히는 것을 막으려고 25분으로 올렸다. A1은 15분이었으므로 completed 축을 A1과 직접 비교하지 않는다.",
+    "pluginRef": "113875ae6743af895c55e51dd2aa1b9ced9496f9",
+    "pluginVersion": "2.6.1"
+  },
+  "caveats": [
+    "**케이스당 2회다. 계획은 3회였으나 사용량 문제로 중단했다.** 중앙값이 두 값의 평균이므로 3회보다 약하다.",
+    "durationSec에는 두 가지가 섞여 있다: (1) 억제 불가능한 사용자 hook 오버헤드(A1에서 확인), (2) 3-동시 실행 경합. 같은 location-trap이 695초와 1051초로 갈렸다. 절대값을 B와 비교하려면 B도 3-동시로 재야 한다.",
+    "opFailures는 전 run 0이다. spawned: 1인 shape에서 나온 값이므로 \"실패가 없었다\"에 가깝지만, fan-out을 재현한 값은 아니다.",
+    "location-trap과 deletion-regression은 mustNotFlag가 비어 있다. 그 두 케이스의 falsePositives: 0은 \"오탐 목표가 정의되지 않았다\"이지 \"오탐이 없었다\"가 아니다. 오탐은 baseline-mixed에서만 측정된다.",
+    "unclassified는 감점이 아니다. 심지 않은 진짜 문제일 수 있고, 실제로 baseline-mixed run1의 9건 중 상당수가 정당한 지적으로 보인다.",
+    "모든 숫자는 실행이 아니라 저장된 리포트를 다시 채점한 값이다(regradedFrom 참고). 실행에서만 나오는 값(소요 시간·사용량·턴 수·opFailures)은 원본 그대로다.",
+    "unverifiable은 전 run 0이다. 이 세 케이스에서 리뷰가 판단을 보류한 적이 없다는 뜻이며, 축이 작동하지 않는다는 뜻이 아니다 — 단위 테스트가 세 표지를 각각 검증한다.",
+    "**오탐 0은 대조군 다섯 개에 한정된 값이고, 그중 하나는 약하다.** violation-inside-test-file은 테스트 파일의 스타일·구조 지적을 금지하는지 보려던 것인데, fixture의 테스트 파일에 assertion이 없고 orders={[]}로 렌더해 심은 결함 줄을 실행하지 않는다. 그래서 00-3이 명시한 00-1(리뷰 우회 신호) 예외가 정당하게 성립하고, 두 run 모두 그 예외를 근거로 인용하며 지적했다 — 리뷰가 옳았다. 이 대조군이 원래 재려던 것을 재려면 fixture의 테스트 파일을 실제 assertion이 있는 테스트로 바꿔야 하고, 그것은 실행을 다시 사야 하는 변경이다.",
+    "한 차례 오탐 6건과 2건으로 채점된 적이 있으나 전부 채점기 결함이었다. 대조군을 경로만으로 매칭해 다른 규칙 지적까지 셌고(규칙 필터로 수정), 계약이 명시한 예외를 벌점으로 셌다(예외 목록으로 수정). 두 수정 모두 재채점으로 확인했고 오탐 외의 축은 바뀌지 않았다."
+  ],
+  "regradedFrom": [
+    "evals/results/baseline-mixed-a2.json",
+    "evals/results/location-trap-a2.json",
+    "evals/results/deletion-regression-a2.json"
+  ],
+  "reports": [
+    "evals/results/reports/baseline-mixed-a2-run1.md",
+    "evals/results/reports/baseline-mixed-a2-run2.md",
+    "evals/results/reports/location-trap-a2-run1.md",
+    "evals/results/reports/location-trap-a2-run2.md",
+    "evals/results/reports/deletion-regression-a2-run1.md",
+    "evals/results/reports/deletion-regression-a2-run2.md"
+  ],
+  "arms": {
+    "baseline-mixed": {
+      "runs": 2,
+      "plannedRuns": 3,
+      "perRun": [
+        {
+          "run": 1,
+          "completed": true,
+          "durationSec": 981,
+          "totalCostUsd": 4.900643250000001,
+          "numTurns": 26,
+          "spawned": 1,
+          "opFailuresTotal": 0,
+          "findings": 16,
+          "recall": {
+            "found": 6,
+            "of": 6,
+            "ruleOnly": 0,
+            "missed": []
+          },
+          "falsePositives": 0,
+          "falsePositiveHits": [],
+          "unclassified": 10,
+          "locationsInRange": "16/16",
+          "locationsOnTarget": "6/6",
+          "unverifiable": 0,
+          "skeletonOk": true,
+          "scriptRan": true,
+          "modulesWithFindings": 12,
+          "fixtureDirty": 0
+        },
+        {
+          "run": 2,
+          "completed": true,
+          "durationSec": 1020,
+          "totalCostUsd": 5.606494999999999,
+          "numTurns": 30,
+          "spawned": 1,
+          "opFailuresTotal": 0,
+          "findings": 12,
+          "recall": {
+            "found": 6,
+            "of": 6,
+            "ruleOnly": 0,
+            "missed": []
+          },
+          "falsePositives": 0,
+          "falsePositiveHits": [],
+          "unclassified": 6,
+          "locationsInRange": "12/12",
+          "locationsOnTarget": "6/6",
+          "unverifiable": 0,
+          "skeletonOk": true,
+          "scriptRan": true,
+          "modulesWithFindings": 10,
+          "fixtureDirty": 0
+        }
+      ],
+      "median": {
+        "recallFound": 6,
+        "recallOf": 6,
+        "falsePositives": 0,
+        "unclassified": 8,
+        "modulesWithFindings": 11,
+        "unverifiable": 0,
+        "durationSec": 1000.5,
+        "totalCostUsd": 5.25
+      },
+      "counted": {
+        "completed": "2회 중 2회",
+        "scriptRan": "2회 중 2회",
+        "skeletonOk": "2회 중 2회",
+        "summaryArithmetic": "2회 중 2회",
+        "fixtureClean": "2회 중 2회"
+      }
     },
-    "2_bothArmsCompletedWithReport": {
-      "met": true,
-      "evidence": "main: completed=true, reportSource=file (430s, 35 turns). pr52: completed=true, reportSource=file (483s, 37 turns)."
+    "location-trap": {
+      "runs": 2,
+      "plannedRuns": 3,
+      "perRun": [
+        {
+          "run": 1,
+          "completed": true,
+          "durationSec": 1051,
+          "totalCostUsd": 5.09467775,
+          "numTurns": 32,
+          "spawned": 1,
+          "opFailuresTotal": 0,
+          "findings": 7,
+          "recall": {
+            "found": 1,
+            "of": 1,
+            "ruleOnly": 0,
+            "missed": []
+          },
+          "falsePositives": 0,
+          "falsePositiveHits": [],
+          "unclassified": 6,
+          "locationsInRange": "7/7",
+          "locationsOnTarget": "1/1",
+          "unverifiable": 0,
+          "skeletonOk": true,
+          "scriptRan": true,
+          "modulesWithFindings": 6,
+          "fixtureDirty": 0
+        },
+        {
+          "run": 2,
+          "completed": true,
+          "durationSec": 695,
+          "totalCostUsd": 3.6882945,
+          "numTurns": 29,
+          "spawned": 1,
+          "opFailuresTotal": 0,
+          "findings": 7,
+          "recall": {
+            "found": 1,
+            "of": 1,
+            "ruleOnly": 0,
+            "missed": []
+          },
+          "falsePositives": 0,
+          "falsePositiveHits": [],
+          "unclassified": 6,
+          "locationsInRange": "7/7",
+          "locationsOnTarget": "1/1",
+          "unverifiable": 0,
+          "skeletonOk": true,
+          "scriptRan": true,
+          "modulesWithFindings": 6,
+          "fixtureDirty": 0
+        }
+      ],
+      "median": {
+        "recallFound": 1,
+        "recallOf": 1,
+        "falsePositives": 0,
+        "unclassified": 6,
+        "modulesWithFindings": 6,
+        "unverifiable": 0,
+        "durationSec": 873,
+        "totalCostUsd": 4.39
+      },
+      "counted": {
+        "completed": "2회 중 2회",
+        "scriptRan": "2회 중 2회",
+        "skeletonOk": "2회 중 2회",
+        "summaryArithmetic": "2회 중 2회",
+        "fixtureClean": "2회 중 2회"
+      }
     },
-    "3_pluginDirResolvesRulesDirToGivenTree": {
-      "met": true,
-      "evidence": "코디네이터가 사전에 확인: 저장소에 심은 sentinel 규칙 파일을 넣고 `claude -p \"/code-review --module zzz-does-not-exist\" --plugin-dir .`을 실행하자 플러그인의 모듈 해석 경로가 그 sentinel을 나열하고 저장소 안의 SKILL 경로를 인용했다. `--plugin-dir`은 설치된 캐시가 아니라 주어진 워킹 트리를 로드한다."
-    },
-    "4_scriptRanOrLocationsOnTargetDiffersBetweenArms": {
-      "met": true,
-      "evidence": "scriptRan이 갈린다: main={ran:false, countsAttributed:false, declaredSkipped:false} (위치 대조를 언급조차 하지 않음) vs pr52={ran:false, countsAttributed:true, declaredSkipped:true} (\"대조 미실행\"을 스스로 선언). locationsOnTarget은 이번 표본에서는 1/1로 양쪽이 같았다 — 판별축은 scriptRan이다."
+    "deletion-regression": {
+      "runs": 2,
+      "plannedRuns": 3,
+      "perRun": [
+        {
+          "run": 1,
+          "completed": true,
+          "durationSec": 513,
+          "totalCostUsd": 3.2792037499999998,
+          "numTurns": 25,
+          "spawned": 1,
+          "opFailuresTotal": 0,
+          "findings": 2,
+          "recall": {
+            "found": 1,
+            "of": 2,
+            "ruleOnly": 0,
+            "missed": [
+              "deleted-null-guard"
+            ]
+          },
+          "falsePositives": 0,
+          "falsePositiveHits": [],
+          "unclassified": 1,
+          "locationsInRange": "2/2",
+          "locationsOnTarget": "1/1",
+          "unverifiable": 0,
+          "skeletonOk": true,
+          "scriptRan": true,
+          "modulesWithFindings": 1,
+          "fixtureDirty": 0
+        },
+        {
+          "run": 2,
+          "completed": true,
+          "durationSec": 743,
+          "totalCostUsd": 3.9291309999999995,
+          "numTurns": 24,
+          "spawned": 1,
+          "opFailuresTotal": 0,
+          "findings": 5,
+          "recall": {
+            "found": 0,
+            "of": 2,
+            "ruleOnly": 0,
+            "missed": [
+              "deleted-null-guard",
+              "dropped-onexpire-prop"
+            ]
+          },
+          "falsePositives": 0,
+          "falsePositiveHits": [],
+          "unclassified": 5,
+          "locationsInRange": "5/5",
+          "locationsOnTarget": "0/0",
+          "unverifiable": 0,
+          "skeletonOk": true,
+          "scriptRan": true,
+          "modulesWithFindings": 3,
+          "fixtureDirty": 0
+        }
+      ],
+      "median": {
+        "recallFound": 0.5,
+        "recallOf": 2,
+        "falsePositives": 0,
+        "unclassified": 3,
+        "modulesWithFindings": 2,
+        "unverifiable": 0,
+        "durationSec": 628,
+        "totalCostUsd": 3.6
+      },
+      "counted": {
+        "completed": "2회 중 2회",
+        "scriptRan": "2회 중 2회",
+        "skeletonOk": "2회 중 2회",
+        "summaryArithmetic": "2회 중 2회",
+        "fixtureClean": "2회 중 2회"
+      }
     }
   },
-  "variance": "동일한 두 팔로 이번 표본 전에 한 차례 더 돈 표본에서는 findings가 main 5 / pr52 5로 나왔다(이번 표본은 3 / 4). recall과 locationsOnTarget은 두 표본 모두 1/1로 안정적이었다. findings와 unclassified가 실행마다 흔들리는 것은 비결정적 리뷰의 정상 범위이고, 이것이 A2에서 케이스당 1회가 아니라 3회를 돌려야 하는 구체적 근거다 — 수치축은 중앙값, 불리언축은 \"n회 중 m회\"로 집계한다.",
-  "arms": {
-    "main": {
-      "pluginVersion": "2.5.6",
-      "pluginRef": "6443be70f72e4b269e601bd39c0285fc06bbe2a1",
-      "timestamp": "2026-08-24T04:09:47.728Z",
-      "cases": {
-        "location-trap": {
-          "run": 1,
-          "completed": true,
-          "exitCode": 0,
-          "durationSec": 430,
-          "reportFound": true,
-          "reportSource": "file",
-          "fixtureRoot": "C:\\Users\\bhmun\\AppData\\Local\\Temp\\eval-location-trap-7mHh8Q\\repo",
-          "numTurns": 35,
-          "isError": false,
-          "stopReason": "end_turn",
-          "permissionDenials": [
-            {
-              "tool_name": "Bash",
-              "tool_use_id": "toolu_01VQXhegzmEDqXrj2gZ8uTCc",
-              "tool_input": {
-                "command": "cd \"C:/Users/bhmun/AppData/Local/Temp/eval-location-trap-7mHh8Q/repo\" && find src -type f | sort && echo \"===ENTITIES===\" && cat src/entities/order/index.ts 2>/dev/null || find src -path \"*entities*\" -type f -exec sh -c 'echo \"--- $1\"; cat \"$1\"' _ {} \\;",
-                "description": "List src tree and read order entity"
-              }
-            }
-          ],
-          "totalCostUsd": 3.116936,
-          "stdoutTail": "{\"is_error\":false,\"duration_api_ms\":420846,\"num_turns\":35,\"stop_reason\":\"end_turn\",\"session_id\":\"58c470fe-70a9-4d89-8a35-de765e024831\",\"total_cost_usd\":3.116936,\"usage\":{\"input_tokens\":30,\"cache_creation_input_tokens\":163778,\"cache_read_input_tokens\":1493962,\"output_tokens\":29281,\"output_tokens_details\":{\"thinking_tokens\":16753},\"server_tool_use\":{\"web_search_requests\":0,\"web_fetch_requests\":0},\"service_tier\":\"standard\",\"cache_creation\":{\"ephemeral_1h_input_tokens\":163778,\"ephemeral_5m_input_tokens\":0},\"inference_geo\":\"not_available\",\"iterations\":[{\"input_tokens\":2,\"output_tokens\":1358,\"cache_read_input_tokens\":171823,\"cache_creation_input_tokens\":13768,\"cache_creation\":{\"ephemeral_5m_input_tokens\":0,\"ephemeral_1h_input_tokens\":13768},\"type\":\"message\"}],\"speed\":\"standard\"},\"modelUsage\":{\"claude-opus-5[1m]\":{\"inputTokens\":30,\"outputTokens\":29281,\"cacheReadInputTokens\":1493962,\"cacheCreationInputTokens\":163778,\"webSearchRequests\":0,\"costUSD\":3.116936,\"contextWindow\":1000000,\"maxOutputTokens\":64000,\"canonicalModel\":\"claude-opus-5\",\"provider\":\"firstParty\"}},\"permission_denials\":[{\"tool_name\":\"Bash\",\"tool_use_id\":\"toolu_01VQXhegzmEDqXrj2gZ8uTCc\",\"tool_input\":{\"command\":\"cd \\\"C:/Users/bhmun/AppData/Local/Temp/eval-location-trap-7mHh8Q/repo\\\" && find src -type f | sort && echo \\\"===ENTITIES===\\\" && cat src/entities/order/index.ts 2>/dev/null || find src -path \\\"*entities*\\\" -type f -exec sh -c 'echo \\\"--- $1\\\"; cat \\\"$1\\\"' _ {} \\\\;\",\"description\":\"List src tree and read order entity\"}}],\"terminal_reason\":\"completed\",\"fast_mode_state\":\"off\",\"fast_mode_disabled_reason\":\"sdk_opt_in_required\",\"subagent_stats\":{\"spawned\":0,\"requested\":{\"background\":0,\"foreground\":0,\"unset\":0},\"started_in_background\":0,\"max_depth\":0,\"spawned_by_subagents\":0,\"completed\":0,\"failed\":0,\"killed\":{\"parent\":0,\"user\":0,\"system\":0},\"refused\":{\"depth_limit\":0,\"concurrency_limit\":0,\"budget\":0},\"by_type\":{}},\"subtype\":\"success\",\"api_error_status\":null,\"result\":\"코드 리뷰 완료했습니다.\\n\\n**저장 경로**: `C:\\\\Users\\\\bhmun\\\\AppData\\\\Local\\\\Temp\\\\eval-location-trap-7mHh8Q\\\\repo\\\\review-reports\\\\code-review-default-main-2026-08-24.md`\\n\\n저장 위치는 프로젝트 `CLAUDE.md`(\\\"리뷰 리포트는 반드시 이 저장소의 `./review-reports/`에 저장한다\\\")를 따랐습니다. 전역 설정의 기본 문서 경로(OneDrive `Docs`)는 \\\"별도 경로 명시 지시가 없는 한\\\" 적용되는 기본값이고, 여기서는 저장소 지시가 그 예외에 해당합니다. `workflow-contract.md` C-7도 프로젝트 설정이 저장 위치를 지정하면 그쪽이 우선한다고 명시합니다. 코드는 수정하지 않았습니다.\\n\\n## 판정\\n🔴 0건 — 머지 차단 사유 없음. 🟡 3건.\\n\\n| 심각도 | 규칙 | 위치 | 요지 |\\n|---|---|---|---|\\n| 🟡 | `03-3` | `order-list.tsx:31` | 안정 key `order.id` → `key={index}`. 정렬·필터가 걸린 리스트라 인덱스가 항목이 아니라 위치를 식별한다. `<li>`에 로컬 state·포커스가 없어 지금 화면은 멀쩡하지만, 원복 비용이 0이라 되돌리는 걸 권합니다 |\\n| 🟡 | `14-3` | `order-list.tsx:21-24` | `useMemo` 의존성에 `query`가 들어가 검색어 한 글자마다 `sortOrders`가 재실행됨. memo 경계를 정렬/필터 2단계로 쪼개면 해결 |\\n| 🟡 | `02-3` | `order-list.tsx:7`, `:10` | `'date' \\\\| 'total'` 인라인 유니온이 두 곳에 복제. named 타입으로 단일 출처화 |\\n\\n## 짚어둘 것\\n- **범위 가정**: 브랜치가 `main`이고 `merge-base == HEAD`라 계약(C-4)대로면 \\\"변경 없음\\\"으로 종료됩니다. `before`/`after` 두 커밋만 있어 의도가 명확하므로 `845474e..48637b0`으로 리뷰했고, 리포트에 가정으로 명시했습니다.\\n- **SKIPPED 6개**: `01`(FSD 레이어 디렉터리 2/3 미달), `11`(Tailwind 신호 없음), `21`(RSC 신호 없음), `16`·`17`·`18`(trigger 미충족). 조용히 빼지 않고 사유를 남겼습니다.\\n- **도구 미실행**: `package.json`에 `scripts`가 없고 lint 설정·`typescript`·`node_modules`가 모두 없어 lint/typecheck/test를 실행할 수 없었습니다. 자동 수정은 시도하지 않았습니다.\\n- **`확인 필요` 1건**: `right.date.localeCompare(left.date)`의 정확성이 `Order.date`(`string`, 형식 제약 없음)의 실제 포맷에 달려 있습니다. `orders` 공급 경로가 저장소에 없어 확인 불가 — 00-11에 따라 지적 대신 확인 요청으로 남겼습니다.\\n- `<li onClick>`의 키보드 접근성 문제는 변경 전에도 있던 것이고 이번 diff가 악화시키지 않아 `12-SCOPE`에 따라 지적하지 않고 메모로만 남겼습니다.\",\"ttft_ms\":6679,\"ttft_stream_ms\":1718,\"time_to_request_ms\":82,\"type\":\"result\",\"duration_ms\":423067,\"uuid\":\"6b17d4b9-42c0-41a4-9cc9-46a2caf9d0d2\"}\n",
-          "findings": 3,
-          "recall": {
-            "found": 1,
-            "of": 1,
-            "ruleOnly": 0,
-            "missed": []
-          },
-          "falsePositives": {
-            "count": 0,
-            "hits": []
-          },
-          "unclassified": 2,
-          "locationsInRange": {
-            "ok": 3,
-            "of": 3,
-            "bad": []
-          },
-          "locationsOnTarget": {
-            "ok": 1,
-            "of": 1
-          },
-          "modulesWithFindings": [
-            "02 타입 안전성",
-            "03 React 규칙 위반",
-            "14 React 성능"
-          ],
-          "scriptRan": {
-            "ran": false,
-            "manifestBlock": false,
-            "countsAttributed": false,
-            "declaredSkipped": false
-          },
-          "skeletonOk": {
-            "ok": true,
-            "problems": []
-          },
-          "summaryArithmetic": {
-            "ok": true,
-            "summary": {
-              "red": 0,
-              "yellow": 3,
-              "blue": 0
-            },
-            "detail": {
-              "red": 0,
-              "yellow": 3,
-              "blue": 0
-            }
-          }
-        }
-      }
+  "bPassingLine": {
+    "$comment": "B(묶음 fan-out)가 넘어야 할 선. B는 sub-agent 1개에서 3~4개로 가는 변화이므로, 아래 값은 같은 조건(as-designed, 3-동시, 25분 상한, 같은 모델·effort)에서 재야 의미가 있다.",
+    "baseline-mixed.recall": {
+      "baseline": "6/6 (2회 모두)",
+      "require": "내려가지 않는다",
+      "why": "현재가 만점이므로 유지가 조건이다. 형태를 바꿔 탐지가 줄면 개선이 아니다."
     },
-    "pr52": {
-      "pluginVersion": "2.6.1",
-      "pluginRef": "240fec5d8a58e2a4f3d17ef4430ce469819e44e2",
-      "timestamp": "2026-08-24T04:16:58.112Z",
-      "cases": {
-        "location-trap": {
-          "run": 1,
-          "completed": true,
-          "exitCode": 0,
-          "durationSec": 483,
-          "reportFound": true,
-          "reportSource": "file",
-          "fixtureRoot": "C:\\Users\\bhmun\\AppData\\Local\\Temp\\eval-location-trap-v6RPRg\\repo",
-          "numTurns": 37,
-          "isError": false,
-          "stopReason": "end_turn",
-          "permissionDenials": [
-            {
-              "tool_name": "Bash",
-              "tool_use_id": "toolu_013F7BhxTo2hvDvzpPa6wg3o",
-              "tool_input": {
-                "command": "cd \"C:/Users/bhmun/AppData/Local/Temp/eval-location-trap-v6RPRg/repo\" && echo '{\"locations\": [\n  {\"ruleId\": \"03-3\", \"path\": \"src/features/order-list/ui/order-list.tsx\", \"line\": 31, \"quote\": \"          <li key={index} onClick={() => onSelect(order.id)}>\"},\n  {\"ruleId\": \"14-3\", \"path\": \"src/features/order-list/ui/order-list.tsx\", \"line\": 22, \"quote\": \"    () => sortOrders(orders, sortBy).filter(order => order.customer.includes(query)),\"},\n  {\"ruleId\": \"19-3\", \"path\": \"src/features/order-list/ui/order-list.tsx\", \"line\": 13, \"quote\": \"    sortBy === '\"'\"'total'\"'\"' ? right.total - left.total : right.date.localeCompare(left.date),\"},\n  {\"ruleId\": \"02-3\", \"path\": \"src/features/order-list/ui/order-list.tsx\", \"line\": 10, \"quote\": \"function sortOrders(orders: Order[], sortBy: '\"'\"'date'\"'\"' | '\"'\"'total'\"'\"'): Order[] {\"}\n]}' | node \"C:/Users/bhmun/AppData/Local/Temp/claude/C--Users-bhmun-claude-code-review-pluigin/92a61afe-d3c7-4a4d-a574-aafd32b00186/scripts/prepare-verification.mjs\" --merge-base a323b9c --locations-only",
-                "description": "Run location verification script"
-              }
-            },
-            {
-              "tool_name": "Bash",
-              "tool_use_id": "toolu_019bpjeoUZ5QKztrLb4SMQvS",
-              "tool_input": {
-                "command": "node \"C:/Users/bhmun/AppData/Local/Temp/claude/C--Users-bhmun-claude-code-review-pluigin/92a61afe-d3c7-4a4d-a574-aafd32b00186/scratchpad/arm-pr52/scripts/prepare-verification.mjs\" --merge-base a323b9c --locations-only < \"C:/Users/bhmun/AppData/Local/Temp/claude/C--Users-bhmun-claude-code-review-pluigin/92a61afe-d3c7-4a4d-a574-aafd32b00186/scratchpad/arm-pr52/locations-input.json\"",
-                "description": "Run location verification script"
-              }
-            }
-          ],
-          "totalCostUsd": 3.6937430000000004,
-          "stdoutTail": "al/Temp/eval-location-trap-v6RPRg/repo\\\" && echo '{\\\"locations\\\": [\\n  {\\\"ruleId\\\": \\\"03-3\\\", \\\"path\\\": \\\"src/features/order-list/ui/order-list.tsx\\\", \\\"line\\\": 31, \\\"quote\\\": \\\"          <li key={index} onClick={() => onSelect(order.id)}>\\\"},\\n  {\\\"ruleId\\\": \\\"14-3\\\", \\\"path\\\": \\\"src/features/order-list/ui/order-list.tsx\\\", \\\"line\\\": 22, \\\"quote\\\": \\\"    () => sortOrders(orders, sortBy).filter(order => order.customer.includes(query)),\\\"},\\n  {\\\"ruleId\\\": \\\"19-3\\\", \\\"path\\\": \\\"src/features/order-list/ui/order-list.tsx\\\", \\\"line\\\": 13, \\\"quote\\\": \\\"    sortBy === '\\\"'\\\"'total'\\\"'\\\"' ? right.total - left.total : right.date.localeCompare(left.date),\\\"},\\n  {\\\"ruleId\\\": \\\"02-3\\\", \\\"path\\\": \\\"src/features/order-list/ui/order-list.tsx\\\", \\\"line\\\": 10, \\\"quote\\\": \\\"function sortOrders(orders: Order[], sortBy: '\\\"'\\\"'date'\\\"'\\\"' | '\\\"'\\\"'total'\\\"'\\\"'): Order[] {\\\"}\\n]}' | node \\\"C:/Users/bhmun/AppData/Local/Temp/claude/C--Users-bhmun-claude-code-review-pluigin/92a61afe-d3c7-4a4d-a574-aafd32b00186/scripts/prepare-verification.mjs\\\" --merge-base a323b9c --locations-only\",\"description\":\"Run location verification script\"}},{\"tool_name\":\"Bash\",\"tool_use_id\":\"toolu_019bpjeoUZ5QKztrLb4SMQvS\",\"tool_input\":{\"command\":\"node \\\"C:/Users/bhmun/AppData/Local/Temp/claude/C--Users-bhmun-claude-code-review-pluigin/92a61afe-d3c7-4a4d-a574-aafd32b00186/scratchpad/arm-pr52/scripts/prepare-verification.mjs\\\" --merge-base a323b9c --locations-only < \\\"C:/Users/bhmun/AppData/Local/Temp/claude/C--Users-bhmun-claude-code-review-pluigin/92a61afe-d3c7-4a4d-a574-aafd32b00186/scratchpad/arm-pr52/locations-input.json\\\"\",\"description\":\"Run location verification script\"}}],\"terminal_reason\":\"completed\",\"fast_mode_state\":\"off\",\"fast_mode_disabled_reason\":\"sdk_opt_in_required\",\"subagent_stats\":{\"spawned\":0,\"requested\":{\"background\":0,\"foreground\":0,\"unset\":0},\"started_in_background\":0,\"max_depth\":0,\"spawned_by_subagents\":0,\"completed\":0,\"failed\":0,\"killed\":{\"parent\":0,\"user\":0,\"system\":0},\"refused\":{\"depth_limit\":0,\"concurrency_limit\":0,\"budget\":0},\"by_type\":{}},\"subtype\":\"success\",\"api_error_status\":null,\"result\":\"리뷰 완료했습니다.\\n\\n**저장 위치**: `review-reports/code-review-default-main-2026-08-24.md`\\n(프로젝트 `CLAUDE.md`가 이 저장소의 `./review-reports/`를 지정하므로 전역 기본 경로 대신 여기에 저장했습니다. 코드는 수정하지 않았습니다.)\\n\\n## 판정\\n\\n🔴 0건 · 🟡 4건 — 형식적 차단 사유는 없지만 `03-3`은 머지 전 되돌리기를 권합니다.\\n\\n| 규칙 | 위치 | 요지 |\\n|---|---|---|\\n| `03-3` | `order-list.tsx:31` | 안정 key `order.id` → 배열 인덱스로 교체. 이 리스트는 정렬(`sortOrders`)과 필터(`query`)가 모두 일어나 인덱스가 매 입력마다 달라진다. 얻는 것 없이 정확한 key를 부정확한 key로 바꾼 회귀 |\\n| `14-3` | `order-list.tsx:22` | 정렬+필터를 한 `useMemo`에 묶고 deps에 `query`를 넣어, memo가 정렬 비용을 전혀 막지 못한다 — 추가한 목적과 실제 효과가 어긋남 |\\n| `19-3` | `order-list.tsx:13` | 날짜 정렬이 \\\"`date` 문자열이 사전순=시간순\\\"이라는 전제에 의존하는데 `Order.date`는 그냥 `string` (형식 계약 없음). `localeCompare`는 기계 포맷 비교에 맞는 도구도 아님 |\\n| `02-3` | `order-list.tsx:10` | `'date' \\\\| 'total'` 유니온이 Props(`:7`)와 함수 시그니처 두 곳에 복제 |\\n\\n`03-3`을 🔴이 아닌 🟡로 둔 이유: `<li>` 서브트리(`:30`–`:34`)를 읽어 로컬 state·uncontrolled input·focus 대상이 없음을 확인했고, 그래서 **오늘 당장의 사용자 오동작이 닫히지 않기** 때문입니다(영향 낮음 × 확신 높음). 모듈 `03-3` 자신도 이 케이스를 🟡로 규정하고 있습니다.\\n\\n## 짚어둘 실행상의 이탈 3가지\\n\\n1. **base** — HEAD가 `main` 자체라 `merge-base main HEAD == HEAD`입니다. 계약대로면 \\\"변경 없음\\\"으로 종료해야 하지만 `before`/`after` 커밋 쌍이 실제 리뷰 대상이므로 `HEAD~1`(`a323b9c`)을 base로 썼습니다. 다른 base가 의도였다면 지정해 다시 돌려주세요.\\n2. **위치 대조 미실행** — `prepare-verification.mjs`가 실행 승인을 요구하는데 비대화형 세션이라 받을 수 없었습니다. 4건의 줄 번호·인용은 `00-10`대로 **변경 후 파일을 직접 읽어** 확인한 값이지 hunk 헤더 계산이 아니지만, 스크립트에 의한 결정적 대조는 하지 않았습니다.\\n3. **sub-agent 미사용** — 세션 지시(\\\"요청 없이 Agent 도구 사용 금지\\\")에 따라 Step 4의 dispatch 대신 동일한 규칙 집합·출력 계약으로 인라인 통합 pass를 수행했습니다. 범위 축소는 없습니다.\\n\\nlint/typecheck는 둘 다 **미실행**입니다 — `package.json`에 `scripts`가 없고 lint 설정 파일도, `node_modules`도 없습니다.\\n\\n`SKIPPED` 3개(`01` fsd, `11` tailwind, `21` rsc)와 트리거 미충족 3개(`12`, `17`, `18`)는 \\\"통과\\\"와 구분해 사유와 함께 리포트에 적었습니다.\",\"ttft_ms\":2001,\"ttft_stream_ms\":1251,\"time_to_request_ms\":84,\"type\":\"result\",\"duration_ms\":476082,\"uuid\":\"36291545-0649-4660-9e72-0ff4f04cd04e\"}\n",
-          "findings": 4,
-          "recall": {
-            "found": 1,
-            "of": 1,
-            "ruleOnly": 0,
-            "missed": []
-          },
-          "falsePositives": {
-            "count": 0,
-            "hits": []
-          },
-          "unclassified": 3,
-          "locationsInRange": {
-            "ok": 4,
-            "of": 4,
-            "bad": []
-          },
-          "locationsOnTarget": {
-            "ok": 1,
-            "of": 1
-          },
-          "modulesWithFindings": [
-            "02 타입 안전성",
-            "03 React 규칙 위반",
-            "14 React 성능",
-            "19 의도 & 선택 근거"
-          ],
-          "scriptRan": {
-            "ran": false,
-            "manifestBlock": false,
-            "countsAttributed": true,
-            "declaredSkipped": true
-          },
-          "skeletonOk": {
-            "ok": true,
-            "problems": []
-          },
-          "summaryArithmetic": {
-            "ok": true,
-            "summary": {
-              "red": 0,
-              "yellow": 4,
-              "blue": 0
-            },
-            "detail": {
-              "red": 0,
-              "yellow": 4,
-              "blue": 0
-            }
-          }
-        }
-      }
+    "baseline-mixed.modulesWithFindings": {
+      "baseline": "중앙값 11 (run1 12, run2 10)",
+      "require": "**커져야 한다**",
+      "why": "B의 존재 이유가 이것이다. 이 숫자가 안 오르면 B는 형태만 바꾼 것이다."
+    },
+    "baseline-mixed.falsePositives": {
+      "baseline": "0 (2회 모두)",
+      "require": "0을 유지한다",
+      "why": "커버리지가 아니라 소음이 는 것이다. 기준선이 0이므로 B는 어떤 오탐도 새로 만들면 안 된다."
+    },
+    "deletion-regression.recall": {
+      "baseline": "run1 1/2, run2 0/2",
+      "require": "**올라가야 한다**",
+      "why": "기준선이 낮다. B와 무관하게 고쳐야 할 결함이기도 하다 — 이슈 #58."
+    },
+    "completed": {
+      "baseline": "6회 중 6회",
+      "require": "유지한다",
+      "why": "2.6.0이 죽은 축이다. 커버리지를 신뢰성과 맞바꾸지 않는다."
+    },
+    "opFailures": {
+      "baseline": "전 run 0 (spawned 1)",
+      "require": "fan-out에서 늘어나는 것은 정상이나, completed를 깨뜨리면 안 된다",
+      "why": "/code-review-full은 운영 실패 9건을 겪고도 완주했다. 실패 자체가 아니라 완주 여부가 판정 기준이다."
     }
   }
 }

@@ -1,0 +1,113 @@
+{
+  "$comment": "규칙 ID는 전부 review-rules 카탈로그에서 확인한 것이다. 설계 초안이 제안한 ID 중 셋을 카탈로그가 고쳤다 — 03-3의 index key는 🔴이 아니라 🟡이라 🔴 형태(Math.random)로 바꿨고, as any는 02-1과 02-9 둘 다 성립하며, 루프 안 선형 탐색은 15-1과 15-2 둘 다 성립한다. 06-3은 넣지 않는다: 06-jsx.md가 key 선택 규칙을 03-3에 명시적으로 위임한다. | mustNotFlag는 두 종류다: ruleIds가 없으면 범위 대조군(어떤 규칙으로도 지적 불가), 있으면 과적용 대조군(그 규칙으로만 오탐). A2 첫 실행에서 오탐 6건이 나왔으나 5건은 대조군이 검사하려던 규칙이 아닌 다른 규칙 지적이었다 — 경로만으로 매칭한 탓이다.",
+  "mustFind": [
+    {
+      "id": "unstable-key",
+      "ruleIds": [
+        "03-3"
+      ],
+      "path": "src/features/browse-orders/ui/order-list.tsx",
+      "line": 11,
+      "anchor": "key={Math.random()}",
+      "lineTolerance": 1,
+      "why": "렌더 중 생성한 Math.random()을 key로 써서 매 렌더 언마운트/재마운트가 일어난다. 03-3이 🔴로 못박은 형태다 (index key는 같은 규칙의 🟡이라 판정이 갈릴 수 있어 쓰지 않았다)"
+    },
+    {
+      "id": "falsy-render",
+      "ruleIds": [
+        "06-1"
+      ],
+      "path": "src/widgets/dashboard/ui/summary.tsx",
+      "line": 8,
+      "anchor": "{count && <Badge",
+      "lineTolerance": 1,
+      "why": "count가 0이면 Badge 대신 숫자 0이 화면에 렌더된다. 눈에 보이는 오작동이라 판정이 갈리지 않는다"
+    },
+    {
+      "id": "missing-effect-cleanup",
+      "ruleIds": [
+        "04-1"
+      ],
+      "path": "src/widgets/dashboard/hooks/use-viewport.ts",
+      "line": 8,
+      "anchor": "addEventListener('resize'",
+      "lineTolerance": 2,
+      "why": "resize 구독을 걸고 정리하지 않는다. before에는 removeEventListener가 있었으므로 이 diff가 만든 회귀다. useEffect 줄과 구독 줄 중 어디를 인용해도 되게 tolerance를 2로 둔다"
+    },
+    {
+      "id": "any-escapes-trust-boundary",
+      "ruleIds": [
+        "02-1",
+        "02-9"
+      ],
+      "path": "src/entities/order/api/fetch-orders.ts",
+      "line": 6,
+      "anchor": "payload as any",
+      "lineTolerance": 1,
+      "why": "검증 없이 as any가 Order[]로 전파된다. 02-1은 우회의 범위(앱 내부 전파 🔴), 02-9는 신뢰 경계의 런타임 검증 부재를 본다 — 둘 다 방어 가능한 분류다. before에 있던 필드별 검증을 걷어낸 회귀다"
+    },
+    {
+      "id": "no-keyboard-activation",
+      "ruleIds": [
+        "12-2"
+      ],
+      "path": "src/features/browse-orders/ui/sort-toggle.tsx",
+      "line": 7,
+      "anchor": "role=\"button\"",
+      "lineTolerance": 1,
+      "why": "role·tabIndex·aria-label을 모두 갖췄고 키보드 활성화만 없다. 12-1(semantic HTML)과 12-4(accessible name)가 함께 걸리지 않도록 일부러 그 둘을 충족시켜, 이 결함이 12-2 하나로만 판정되게 만들었다"
+    },
+    {
+      "id": "linear-search-in-loop",
+      "ruleIds": [
+        "15-1",
+        "15-2"
+      ],
+      "path": "src/features/browse-orders/lib/join-customers.ts",
+      "line": 13,
+      "anchor": "customers.find(",
+      "lineTolerance": 2,
+      "why": "루프마다 customers.find를 돌려 O(n²)이 된다. 15-1(중첩 루프에서 선형 탐색)과 15-2(반복 선형 탐색) 둘 다 성립한다. for 줄과 find 줄 중 어디를 인용해도 되게 tolerance를 2로 둔다"
+    }
+  ],
+  "mustNotFlag": [
+    {
+      "id": "violation-inside-test-file",
+      "path": "src/features/browse-orders/ui/order-list.test.tsx",
+      "exceptRuleIds": [
+        "00-1"
+      ],
+      "why": "C-5 제외 경로(*.test.*). **범위 대조군** — 스타일·구조 지적은 어떤 규칙으로 오든 위반이다. 단 00-3이 예외를 하나 명시한다: 테스트가 리뷰 우회 신호(00-1)에 해당하면 그 자체를 지적한다. 그 예외를 지킨 리뷰를 벌주면 안 되므로 exceptRuleIds로 뺀다. **다만 이 fixture는 대조군으로서 약하다** — 테스트 파일에 assertion이 없고 orders={[]}로 렌더해 심은 key 결함 줄을 실행하지 않으므로, 00-1 예외가 정당하게 성립한다. fixture를 다시 만들 때 실제 assertion이 있는 테스트로 바꿔야 이 대조군이 원래 재려던 것(스타일·구조 지적 금지)을 잰다."
+    },
+    {
+      "id": "any-outside-the-diff",
+      "path": "src/shared/lib/parse-legacy.ts",
+      "why": "diff 범위 한정. **범위 대조군** — 이 파일은 before/after가 바이트 단위로 동일해 diff에 없으므로, 어떤 규칙으로든 지적되면 리뷰가 범위를 넘은 것이다. DEFECT any-escapes-trust-boundary와 형태가 같은 as any 전파라, 같은 패턴이 위치만으로 갈린다"
+    },
+    {
+      "id": "constant-following-established-convention",
+      "path": "src/shared/lib/constants.ts",
+      "ruleIds": [
+        "01-6"
+      ],
+      "why": "01-6의 관례 존중 조항 회귀 테스트. **과적용 대조군** — before가 이미 상수를 여기 모으는 관례를 보여주므로 01-6으로 지적하면 오탐이다. 다른 규칙(예: 19-3 의도·근거)으로 지적하는 것은 이 대조군이 검사하는 대상이 아니며 unclassified로 간다"
+    },
+    {
+      "id": "correct-key-next-door",
+      "path": "src/features/browse-orders/ui/customer-tags.tsx",
+      "ruleIds": [
+        "03-3"
+      ],
+      "why": "03-3 과적용 검사. **과적용 대조군** — 같은 슬라이스 안 바로 옆 리스트가 도메인 식별자를 key로 올바르게 쓴다. 03-3으로 지적하면 오탐이고, 다른 규칙 지적은 unclassified다"
+    },
+    {
+      "id": "legitimately-empty-deps",
+      "path": "src/widgets/dashboard/ui/clock.tsx",
+      "ruleIds": [
+        "04-2",
+        "04-1"
+      ],
+      "why": "04-2·04-1 과적용 검사. **과적용 대조군** — reactive value를 읽지 않아 빈 deps가 정당하고 clearInterval로 정리도 한다. 이 두 규칙으로 지적하면 오탐이고, 다른 규칙 지적은 unclassified다"
+    }
+  ]
+}

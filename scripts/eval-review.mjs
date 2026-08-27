@@ -17,7 +17,7 @@ import { fileURLToPath } from 'node:url'
 
 import { buildFixture, readBlobLines } from './lib/eval-fixture.mjs'
 import { assertNoPathOverlap, grade, parseFindings } from './lib/eval-grade.mjs'
-import { classifyExit, parseEnvelope } from './lib/eval-run.mjs'
+import { DISPATCH_REQUEST, buildClaudeArgs, classifyExit, parseEnvelope, resolveStoredReport, storeReport, summarizeOpFailures } from './lib/eval-run.mjs'
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)))
 
@@ -69,6 +69,33 @@ const timeoutMs = numberFlag('timeout-minutes', meta.timeoutMinutes ?? 15) * 60_
 // 그럴듯한데 엉뚱한 트리에 귀속된다. 여기서 한 번만 절대 경로로 고정해 두 소비자가
 // 같은 값을 보게 한다.
 const pluginDir = resolve(flag('plugin-dir', ROOT))
+// bypassPermissions로 도는 이상 리뷰는 허용 디렉터리 안에서 임의 명령을 돌릴
+// 수 있고, pluginDir은 --add-dir에 들어간다. fixture는 매번 버리는 임시
+// 디렉터리라 상관없지만 pluginDir이 살아 있는 저장소면 리뷰가 거기에 쓸 수
+// 있다. A1은 팔을 scratchpad로 복사해 돌렸다 — 그 관행을 여기서 상기시킨다.
+//
+// 차단하지 않고 경고만 하는 이유: 개발 중에 --plugin-dir .은 가장 흔한
+// 사용법이고, 막으면 우회 경로가 생긴다. 우회 가능한 차단보다 보이는 경고가
+// 낫다.
+if (pluginDir === ROOT) {
+  process.stderr.write(
+    'warning: --plugin-dir이 이 저장소의 워킹 트리입니다. bypassPermissions로 도는 리뷰가\n' +
+    '         이 트리에 쓸 수 있습니다. 기준선을 뜰 때는 복사본을 넘기세요.\n',
+  )
+}
+
+// 무엇을 기준선으로 삼는지의 선택이다. 기본값(as-experienced)은 이 머신에서
+// 사용자가 실제로 받는 것 — sub-agent 없는 통합 pass — 을 재고, --dispatch는
+// 워크플로우가 정의한 fan-out(as-designed)을 잰다. 둘은 서로 다른 명제이고
+// 비용도 다르므로, 어느 쪽으로 잰 숫자인지가 결과 파일에 남아야 한다.
+const executionShape = has('dispatch') ? 'as-designed' : 'as-experienced'
+
+// A2의 첫 6회가 쓴 값을 기본값으로 둔다. 세션 설정을 따라가게 두면 /config에서
+// 모델을 바꾸는 것만으로 기준선이 다른 조건의 숫자로 바뀌고, 결과 파일만 봐서는
+// 그것을 알 수 없다. 비용을 줄이려면 여기를 바꾸되 그 값이 provenance에 남는다.
+const model = flag('model', 'opus')
+const effort = flag('effort', 'xhigh')
+
 const label = flag('label', 'local')
 if (!/^[\w.-]+$/.test(label)) die(`--label must match /^[\\w.-]+$/, got ${JSON.stringify(label)}`)
 
@@ -131,14 +158,30 @@ const runClaude = (fixtureRoot, command) => new Promise(resolve => {
   // 디렉터리 안에 있어야 한다. fixture만 허용하면 스킬이 자기 규칙을 Glob도
   // Read도 못 해서, 리뷰가 조용히 규칙 없는 판단으로 줄어든다 — 실제로 첫
   // 실행에서 "규칙 미확인"만 나온 이유가 이것이었다.
-  const args = [
-    '-p', command,
-    '--plugin-dir', pluginDir,
-    '--add-dir', fixtureRoot,
-    '--add-dir', pluginDir,
-    '--permission-mode', 'acceptEdits',
-    '--output-format', 'json',
-  ]
+  // bypassPermissions를 쓰는 이유: acceptEdits는 Bash를 거부한다. A1의 두 팔
+  // 모두에서 관측됐고(find/cat 거부, prepare-verification.mjs 실행 거부),
+  // 그래서 scriptRan.ran이 모든 실행에서 구조적으로 false였다. 그 상태에서는
+  // "워크플로우가 위치 대조를 건너뛰었다"와 "harness가 도구 실행을 막았다"가
+  // 구분되지 않는다 — harness가 자기 권한 설정을 워크플로우의 결함으로
+  // 오독하게 만든다.
+  //
+  // --allowedTools로 좁히지 않는 이유도 같다. 좁히면 다른 종류의 거부가
+  // 나타나고, harness는 다시 워크플로우가 아니라 자기 설정을 재게 된다.
+  // 사용자가 실제로 리뷰를 돌리는 조건에 가장 가까운 것이 이 모드다.
+  //
+  // 대가는 리뷰가 fixture 안에서 임의 명령을 돌릴 수 있다는 것이다. fixture는
+  // 매 실행 새로 만드는 임시 디렉터리이므로 그 자체는 문제가 아니지만,
+  // pluginDir도 --add-dir에 들어간다. 살아 있는 저장소를 넘기지 말 것 —
+  // 시작 지점에서 경고한다.
+  const args = buildClaudeArgs({
+    command,
+    pluginDir,
+    fixtureRoot,
+    permissionMode: 'bypassPermissions',
+    appendSystemPrompt: executionShape === 'as-designed' ? DISPATCH_REQUEST : undefined,
+    model,
+    effort,
+  })
   const started = Date.now()
   const child = spawn(CLAUDE.command, args, { cwd: fixtureRoot, shell: CLAUDE.shell })
   let stdout = ''
@@ -214,7 +257,11 @@ if (has('dry-run')) {
   process.stdout.write(JSON.stringify({
     case: caseName,
     root: fixture.root,
+    executionShape,
+    model,
+    effort,
     mergeBase: fixture.mergeBase,
+    mid: fixture.mid,
     head: fixture.head,
     changed: fixture.changed,
   }, null, 2) + '\n')
@@ -246,6 +293,91 @@ const startedAt = new Date().toISOString()
 const outDir = join(ROOT, 'evals', 'results')
 mkdirSync(outDir, { recursive: true })
 const outPath = join(outDir, `${caseName}-${label}.json`)
+
+// 리포트를 결과 파일 옆에 복사한다. fixture는 임시 디렉터리라 OS가 언제든
+// 지우고, 그러면 채점기를 고쳐도 다시 채점할 방법이 없어 이미 치른 실행 비용이
+// 통째로 날아간다. A2에서 실제로 그 직전까지 갔다 — 6회분 리포트가 살아 있던
+// 것은 운이었다.
+//
+// 본문을 결과 JSON에 넣지 않는 이유: 리포트가 20KB를 넘고 run이 늘면 결과
+// 파일을 사람이 읽을 수 없게 된다. 파일로 두고 경로만 남긴다.
+const reportsDir = join(outDir, 'reports')
+mkdirSync(reportsDir, { recursive: true })
+const keepReport = (index, text) => storeReport({
+  text,
+  name: `${caseName}-${label}-run${index + 1}.md`,
+  write: (name, contents) => writeFileSync(join(reportsDir, name), contents, 'utf8'),
+})
+
+// 채점기나 expected.json을 고칠 때마다 실행을 다시 사야 한다면, 채점기를
+// 고치는 것 자체가 비싸져서 안 고치게 된다. A2의 오탐 결함이 그 증거다 —
+// 재채점 경로가 없었다면 "9회를 더 사서 다시 재기"와 "틀린 숫자를 그냥 쓰기"
+// 중에 골라야 했다.
+//
+// fixture를 새로 만들어도 결과가 같은 이유: 케이스 트리가 저장소에 커밋돼
+// 있으므로 buildFixture가 같은 파일 내용을 만들고, readBlobLines는 경로별
+// 내용만 쓰므로 커밋 해시가 달라도 무관하다. 실측으로 확인했다.
+if (has('regrade')) {
+  const source = flag('regrade')
+  const previous = JSON.parse(readFileSync(resolve(source), 'utf8'))
+  if (previous.case !== caseName) {
+    die(`--regrade 대상이 ${previous.case}인데 --case는 ${caseName}이다`)
+  }
+  // 라벨은 원본이 갖고 있다. --label 기본값을 쓰면 다른 배치의 이름으로 저장돼
+  // 어느 실행을 다시 채점한 것인지 파일명이 거짓말하게 된다.
+  const sourceLabel = previous.label ?? label
+
+  const fixture = makeFixture()
+  const regraded = []
+  const skipped = []
+  for (const previousRun of previous.results) {
+    // 리포트가 없는 run은 조용히 빼지 않는다. 조용히 빠지면 재채점 결과가
+    // 원본보다 run이 적은데 그 이유가 어디에도 남지 않는다.
+    // keptReport는 리포트 보관이 들어간 뒤의 run에만 있다. 그 전 run도 관례
+    // 경로에 리포트가 손으로 구조돼 있을 수 있으므로 거기까지 찾아본다 —
+    // A2의 첫 6회가 정확히 그 상태다.
+    const { relative, tried } = resolveStoredReport({
+      keptReport: previousRun.keptReport,
+      conventional: `reports/${previous.case}-${sourceLabel}-run${previousRun.run}.md`,
+      exists: candidate => existsSync(join(outDir, candidate)),
+    })
+    if (!relative) {
+      skipped.push({ run: previousRun.run, why: `리포트를 찾지 못했다 (시도: ${tried.join(', ') || '후보 없음'})` })
+      continue
+    }
+    const reportText = readFileSync(join(outDir, relative), 'utf8')
+    const mentioned = new Set(
+      parseFindings(reportText).filter(f => !f.location.unverified).map(f => f.location.path),
+    )
+    const blobLines = readBlobLines(fixture.root, fixture.mergeBase, [...mentioned], [fixture.mid])
+    regraded.push({
+      ...previousRun,
+      keptReport: relative,
+      // 실행에서 나온 값은 재채점이 만들 수 없다. 그대로 보존한다.
+      ...grade(reportText, expected, blobLines),
+    })
+  }
+
+  const regradedPath = join(outDir, `${caseName}-${sourceLabel}-regraded.json`)
+  writeFileSync(regradedPath, JSON.stringify({
+    ...previous,
+    // 재채점된 숫자를 실행에서 나온 숫자와 구분할 수 없으면 안 된다.
+    regradedFrom: source,
+    regradedAt: new Date().toISOString(),
+    skipped,
+    results: regraded,
+  }, null, 2), 'utf8')
+
+  process.stdout.write(`regraded ${regraded.length} run(s)${skipped.length ? `, skipped ${skipped.length}` : ''} -> ${regradedPath}\n`)
+  for (const run of regraded) {
+    process.stdout.write(
+      `  run ${run.run}: recall ${run.recall.found}/${run.recall.of}` +
+      ` fp ${run.falsePositives.count} unclassified ${run.unclassified}` +
+      ` modules ${run.modulesWithFindings.length}\n`,
+    )
+  }
+  process.exit(0)
+}
 // run 1이 8분·3.5달러를 치르고 끝난 뒤 run 3에서 던지면(readFileSync,
 // readBlobLines, grade — 모두 의도적으로 loud하게 던진다), 결과 파일을 루프가
 // 끝난 뒤 한 번만 쓰면 이미 낸 돈에 해당하는 run 1·2 결과까지 예외와 함께
@@ -258,6 +390,12 @@ const writeResults = () => writeFileSync(outPath, JSON.stringify({
   pluginDir,
   pluginRef,
   pluginVersion,
+  // 이 숫자가 as-experienced(통합 pass)에서 나온 것인지 as-designed(워크플로우
+  // 정의대로의 dispatch)에서 나온 것인지. 둘은 서로 다른 명제라, 값만 있고
+  // 이것이 없으면 나중에 어느 쪽인지 복원할 방법이 없다.
+  executionShape,
+  model,
+  effort,
   timestamp: startedAt,
   runs,
   results,
@@ -294,14 +432,17 @@ for (let index = 0; index < runs; index += 1) {
     ...findings.map(finding => finding.location.path).filter(Boolean),
   ])
 
-  const blobLines = readBlobLines(fixture.root, fixture.mergeBase, [...mentioned])
+  // 3커밋 케이스에서는 mid도 넘긴다. mid에만 있던 파일은 working tree에도
+  // merge base에도 없어서, 이것 없이는 지적이 인용한 위치를 검증할 방법이 없다 —
+  // 그리고 그 검증 불가 상태를 재현하는 것이 deletion-regression의 목적이다.
+  const blobLines = readBlobLines(fixture.root, fixture.mergeBase, [...mentioned], [fixture.mid])
   // completed와 reportSource를 둘 다 요구한다 — 파일이든 stdout이든 실제
   // 리포트 텍스트가 있어야 채점한다. 둘 다 없으면 grade('', ...)가 "찾은 게
   // 0개"라는 멀쩡해 보이는 결과를 내놓는데, 이는 타임아웃과 똑같은 부류의
   // 실패다 — 정직한 미완료 대신 오해를 주는 0.
   const scored = execution.completed === true && reportSource ? grade(reportText, expected, blobLines) : null
 
-  // 리뷰가 fixture를 실제로 건드렸는지 본다. `--permission-mode acceptEdits`가
+  // 리뷰가 fixture를 실제로 건드렸는지 본다. `--permission-mode bypassPermissions`가
   // 편집 권한을 주고, `readBlobLines`는 살아있는 파일을 working tree에서
   // 읽는다 — 오늘의 SKILL은 자동 수정을 금지하지만 그 계약이 깨지는 순간을
   // 잡는 것이 이 harness의 목적이므로, "안 건드렸다"를 가정이 아니라 축으로
@@ -329,14 +470,23 @@ for (let index = 0; index < runs; index += 1) {
     durationSec: execution.durationSec,
     reportFound: Boolean(reportPath),
     reportSource,
+    // 경로가 아니라 채점기가 실제로 읽은 본문을 넘긴다. stdout 봉투에서 건진
+    // 리포트는 reportPath가 없지만 채점은 정상적으로 되므로, 경로 기준으로
+    // 보관하면 비용을 치른 성공 run이 재채점 불가가 된다.
+    keptReport: keepReport(index, reportText),
     fixtureRoot: fixture.root,
     fixtureDirty,
     // 봉투에서 나오는 진단 정보. permissionDenials가 특히 중요하다 — 리뷰가
-    // 리포트를 쓰려다가 --permission-mode acceptEdits에 막혔다면 여기 남는다.
+    // 리포트를 쓰려다가 권한에 막혔다면 여기 남는다. bypassPermissions로
+    // 바꾼 뒤로는 비어 있어야 정상이고, 비어 있지 않으면 scriptRan을 측정
+    // 결과로 읽으면 안 된다는 신호다.
     numTurns: envelope?.num_turns,
     isError: envelope?.is_error,
     stopReason: envelope?.stop_reason,
     permissionDenials: envelope?.permission_denials,
+    // sub-agent가 실제로 뜬 run에서만 의미가 있다. spawned가 0이면 이 값이
+    // 0인 것은 "실패가 없었다"가 아니라 "fan-out이 재현되지 않았다"이다.
+    opFailures: summarizeOpFailures(envelope?.subagent_stats),
     totalCostUsd: envelope?.total_cost_usd,
     stdoutTail: execution.stdoutTail,
     stderrTail: execution.completed === true ? undefined : execution.stderr,

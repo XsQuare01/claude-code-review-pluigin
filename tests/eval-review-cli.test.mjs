@@ -1,6 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
+import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 
@@ -71,4 +72,68 @@ test('0 이하의 --timeout-minutes 값은 사유를 낸다', () => {
       return true
     },
   )
+})
+
+// executionShape는 두 곳에 나타나야 한다: --dry-run 출력과 **저장되는 결과
+// 파일의 provenance**. 처음 추가했을 때 dry-run 쪽에만 들어가고 결과 파일에는
+// 빠졌는데, dry-run 출력만 보면 정상으로 보였다 — 리뷰 실행 두 번을 치르고
+// 나서야 저장된 파일에 값이 없다는 것을 알았다.
+//
+// 값은 있는데 무엇이 그 값을 냈는지 모르는 것이 이 저장소의 단골 실패다.
+// 결과 파일을 만들려면 리뷰를 실제로 돌려야 하므로, 여기서는 소스에서
+// provenance 리터럴을 잘라 그 안에 필드가 있는지 확인한다. 거친 방법이지만
+// "파일 어딘가에 있다"와 "저장되는 객체에 있다"를 구분하는 유일한 값싼 방법이다.
+
+test('executionShape가 --dry-run 출력에 들어간다', () => {
+  const output = run('--case', 'location-trap', '--dry-run')
+  assert.match(output, /"executionShape": "as-experienced"/)
+})
+
+test('--dispatch는 executionShape를 as-designed로 바꾼다', () => {
+  const output = run('--case', 'location-trap', '--dry-run', '--dispatch')
+  assert.match(output, /"executionShape": "as-designed"/)
+})
+
+test('executionShape가 저장되는 결과 파일의 provenance에도 들어간다', () => {
+  const source = readFileSync(SCRIPT, 'utf8')
+  const at = source.indexOf('writeFileSync(outPath')
+  assert.ok(at !== -1, 'writeResults를 찾지 못했다 — 이 테스트가 낡았다')
+  const literal = source.slice(at, source.indexOf('}, null, 2)', at))
+  for (const field of ['executionShape', 'model', 'effort', 'pluginRef', 'pluginVersion']) {
+    assert.ok(literal.includes(field),
+      `결과 파일 provenance에 ${field}가 없다. dry-run 출력에만 넣으면 저장된 숫자가 무엇에서 나왔는지 복원할 수 없다`)
+  }
+})
+
+test('--dry-run이 무엇으로 잴지 미리 보여준다', () => {
+  // 실행 전에 조건을 확인할 수 있어야 한다. A2의 첫 6회는 모델과 effort가
+  // 세션 기본값이었고, 결과 파일을 열기 전까지 그것을 알 방법이 없었다.
+  const output = run('--case', 'location-trap', '--dry-run')
+  assert.match(output, /"model": "opus"/)
+  assert.match(output, /"effort": "xhigh"/)
+})
+
+test('--regrade 대상 케이스가 다르면 사유를 낸다', () => {
+  assert.throws(
+    () => run('--case', 'location-trap', '--regrade', 'evals/results/baseline-mixed-a2.json'),
+    error => {
+      assert.match(String(error.stderr), /baseline-mixed/)
+      return true
+    },
+  )
+})
+
+test('보관하는 것은 리포트 경로가 아니라 채점기가 읽은 본문이다', () => {
+  // 리포트는 파일에서 올 수도(C-7 계약대로 저장) stdout 봉투에서 건질 수도
+  // 있고, 후자도 정상적으로 채점된다. 경로를 기준으로 보관하면 stdout에서
+  // 건진 run은 보관되지 않아 **비용을 치른 성공 run이 재채점 불가**가 된다.
+  //
+  // 이 경로를 실제로 타려면 리뷰를 한 번 돌려야 하므로, 여기서는 호출부가
+  // 무엇을 넘기는지를 소스에서 확인한다. 거친 방법이지만 reportPath로 되돌아가는
+  // 회귀를 값싸게 막는 유일한 방법이다.
+  const source = readFileSync(SCRIPT, 'utf8')
+  assert.match(source, /keptReport: keepReport\(index, reportText\)/,
+    'keepReport에 reportText가 아닌 것을 넘기면 stdout에서 건진 run이 보관되지 않는다')
+  assert.ok(!/keepReport\(index, reportPath\)/.test(source),
+    'reportPath로 되돌아갔다')
 })
