@@ -1,5 +1,5 @@
 {
-  "$comment": "규칙 ID는 전부 review-rules 카탈로그에서 확인한 것이다. 설계 초안이 제안한 ID 중 셋을 카탈로그가 고쳤다 — 03-3의 index key는 🔴이 아니라 🟡이라 🔴 형태(Math.random)로 바꿨고, as any는 02-1과 02-9 둘 다 성립하며, 루프 안 선형 탐색은 15-1과 15-2 둘 다 성립한다. 06-3은 넣지 않는다: 06-jsx.md가 key 선택 규칙을 03-3에 명시적으로 위임한다.",
+  "$comment": "규칙 ID는 전부 review-rules 카탈로그에서 확인한 것이다. 설계 초안이 제안한 ID 중 셋을 카탈로그가 고쳤다 — 03-3의 index key는 🔴이 아니라 🟡이라 🔴 형태(Math.random)로 바꿨고, as any는 02-1과 02-9 둘 다 성립하며, 루프 안 선형 탐색은 15-1과 15-2 둘 다 성립한다. 06-3은 넣지 않는다: 06-jsx.md가 key 선택 규칙을 03-3에 명시적으로 위임한다. | mustNotFlag는 두 종류다: ruleIds가 없으면 범위 대조군(어떤 규칙으로도 지적 불가), 있으면 과적용 대조군(그 규칙으로만 오탐). A2 첫 실행에서 오탐 6건이 나왔으나 5건은 대조군이 검사하려던 규칙이 아닌 다른 규칙 지적이었다 — 경로만으로 매칭한 탓이다.",
   "mustFind": [
     {
       "id": "unstable-key",
@@ -74,27 +74,37 @@
     {
       "id": "violation-inside-test-file",
       "path": "src/features/browse-orders/ui/order-list.test.tsx",
-      "why": "C-5 제외 경로(*.test.*). 프로덕션이었다면 03-3 위반인 index key가 들어 있다. 이 규칙이 리포트에서 지켜졌는지 지금까지 확인된 적이 없고, 어기면 조용히 어긴다"
+      "why": "C-5 제외 경로(*.test.*). **범위 대조군** — 어떤 규칙으로 지적되든 위반이므로 ruleIds를 두지 않는다. 프로덕션이었다면 03-3 위반인 index key가 들어 있다. 이 규칙이 리포트에서 지켜졌는지 지금까지 확인된 적이 없고, 어기면 조용히 어긴다"
     },
     {
       "id": "any-outside-the-diff",
       "path": "src/shared/lib/parse-legacy.ts",
-      "why": "DEFECT any-escapes-trust-boundary와 형태가 같은 as any 전파인데 before/after가 바이트 단위로 동일해 diff 밖이다. 같은 패턴이 위치만으로 갈리므로, 규칙을 파일 전체 스캔으로 적용하면 오탐 1건이 즉시 드러난다"
+      "why": "diff 범위 한정. **범위 대조군** — 이 파일은 before/after가 바이트 단위로 동일해 diff에 없으므로, 어떤 규칙으로든 지적되면 리뷰가 범위를 넘은 것이다. DEFECT any-escapes-trust-boundary와 형태가 같은 as any 전파라, 같은 패턴이 위치만으로 갈린다"
     },
     {
       "id": "constant-following-established-convention",
       "path": "src/shared/lib/constants.ts",
-      "why": "01-6의 관례 존중 조항 회귀 테스트. before가 이미 상수를 여기 모으는 관례를 보여주므로, 같은 자리에 상수를 하나 더 추가한 것은 지적 대상이 아니다. 관례 근거가 diff 안에 있어야 `확인 필요`가 아니라 `지적 없음`이 정답이 된다"
+      "ruleIds": [
+        "01-6"
+      ],
+      "why": "01-6의 관례 존중 조항 회귀 테스트. **과적용 대조군** — before가 이미 상수를 여기 모으는 관례를 보여주므로 01-6으로 지적하면 오탐이다. 다른 규칙(예: 19-3 의도·근거)으로 지적하는 것은 이 대조군이 검사하는 대상이 아니며 unclassified로 간다"
     },
     {
       "id": "correct-key-next-door",
       "path": "src/features/browse-orders/ui/customer-tags.tsx",
-      "why": "03-3 과적용 검사. 같은 슬라이스 안 바로 옆 리스트가 도메인 식별자를 key로 올바르게 쓴다"
+      "ruleIds": [
+        "03-3"
+      ],
+      "why": "03-3 과적용 검사. **과적용 대조군** — 같은 슬라이스 안 바로 옆 리스트가 도메인 식별자를 key로 올바르게 쓴다. 03-3으로 지적하면 오탐이고, 다른 규칙 지적은 unclassified다"
     },
     {
       "id": "legitimately-empty-deps",
       "path": "src/widgets/dashboard/ui/clock.tsx",
-      "why": "04-2 과적용 검사. reactive value를 읽지 않고 정리도 하므로 빈 deps가 정당하다. 04-1도 함께 검사된다 — clearInterval이 있다"
+      "ruleIds": [
+        "04-2",
+        "04-1"
+      ],
+      "why": "04-2·04-1 과적용 검사. **과적용 대조군** — reactive value를 읽지 않아 빈 deps가 정당하고 clearInterval로 정리도 한다. 이 두 규칙으로 지적하면 오탐이고, 다른 규칙 지적은 unclassified다"
     }
   ]
 }

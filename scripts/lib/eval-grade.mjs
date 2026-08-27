@@ -195,6 +195,20 @@ const onTargetPath = (finding, target) => {
 
 const ruleAllowed = (finding, target) => (target.ruleIds ?? []).includes(finding.ruleId)
 
+// mustNotFlag는 두 종류이고, 기본값이 ruleAllowed와 반대라 따로 둔다.
+//
+//   ruleIds 없음 — 범위 대조군. 이 경로는 **어떤 규칙으로도** 지적되면 안 된다
+//                  (C-5 제외 경로, diff 밖 파일). 이것이 원래 의미다.
+//   ruleIds 있음 — 과적용 대조군. **그 규칙으로** 지적될 때만 오탐이다.
+//
+// 이 구분이 없으면 오탐 축이 리뷰의 규율이 아니라 fixture의 우연을 잰다.
+// A2 첫 실행의 오탐 6건 중 5건이 그것이었다: `03-3` 과적용 금지로 둔 대조군
+// 파일에 리뷰가 `01-4`(레이어 배치)를 지적하니 오탐으로 찍혔다.
+// 대조군은 diff 안에 있어야 하고(밖이면 리뷰가 보지도 않는다), diff 안 파일은
+// 어떤 규칙으로든 지적될 수 있다.
+const isForbidden = (finding, target) =>
+  onTargetPath(finding, target) && (target.ruleIds ? target.ruleIds.includes(finding.ruleId) : true)
+
 // collectBlobs() (prepare-verification.mjs) stores raw file content as a string, not an
 // array of lines. If that string ever reaches here unsplit, `.length` silently becomes a
 // character count instead of a line count, and locationsInRange stops catching anything —
@@ -245,7 +259,7 @@ export function gradeFindings(findings, expected, blobLines) {
   const falsePositiveHits = []
   const flaggedForbidden = new Set()
   findings.forEach((finding, index) => {
-    const hit = (expected?.mustNotFlag ?? []).find(target => onTargetPath(finding, target))
+    const hit = (expected?.mustNotFlag ?? []).find(target => isForbidden(finding, target))
     if (!hit) return
     flaggedForbidden.add(index)
     falsePositiveHits.push({ target: hit.id, ruleId: finding.ruleId, location: finding.location })

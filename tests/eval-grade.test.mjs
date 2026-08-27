@@ -636,3 +636,72 @@ test('섹션 자체가 없는 리포트에도 던지지 않는다', () => {
   assert.deepEqual(countUnverifiable(''), zero)
   assert.deepEqual(countUnverifiable(undefined), zero)
 })
+
+// ---------------------------------------------------------------------------
+// 대조군은 두 종류이고, 둘을 같은 규칙으로 다루면 오탐 축이 리뷰의 규율이
+// 아니라 fixture의 우연을 잰다.
+//
+// A2 첫 실행에서 baseline-mixed가 오탐 6건을 냈는데 그중 5건이 이 문제였다.
+// `customer-tags.tsx`는 "03-3을 과적용하지 마라"고 둔 대조군인데, 리뷰가
+// 거기서 01-4(레이어 배치)를 지적하니 오탐으로 찍혔다. 대조군은 diff 안에
+// 있어야 하고(밖이면 리뷰가 보지도 않는다), diff 안 파일은 어떤 규칙으로든
+// 지적될 수 있다.
+//
+//   범위 대조군   — 이 파일은 어떤 규칙으로도 지적되면 안 된다 (ruleIds 없음)
+//   과적용 대조군 — 이 파일이 이 규칙으로 지적되면 안 된다 (ruleIds 있음)
+
+const SCOPED = {
+  mustFind: [],
+  mustNotFlag: [
+    // 범위 대조군: C-5 제외 경로. 어떤 규칙이든 지적 자체가 위반이다.
+    { id: 'in-test-file', path: 'src/a.test.tsx', why: 'C-5 제외 경로' },
+    // 과적용 대조군: 올바른 key를 쓴 리스트. 03-3으로만 오탐이다.
+    { id: 'correct-key', path: 'src/tags.tsx', ruleIds: ['03-3'], why: '03-3 과적용 검사' },
+  ],
+}
+
+const SCOPED_BLOBS = {
+  head: {
+    'src/a.test.tsx': new Array(20).fill('x'),
+    'src/tags.tsx': new Array(20).fill('x'),
+  },
+  base: {},
+}
+
+test('ruleIds가 없는 대조군은 어떤 규칙으로 지적돼도 오탐이다', () => {
+  // 기존 동작 회귀 고정. 범위 대조군에 규칙 필터가 붙으면 C-5 위반을 놓친다.
+  for (const ruleId of ['03-3', '00-1', '19-3']) {
+    const result = gradeFindings([finding(ruleId, 'src/a.test.tsx', 4)], SCOPED, SCOPED_BLOBS)
+    assert.equal(result.falsePositives.count, 1, `${ruleId}이 오탐으로 잡혀야 한다`)
+  }
+})
+
+test('ruleIds가 있는 대조군은 그 규칙으로 지적될 때만 오탐이다', () => {
+  const result = gradeFindings([finding('03-3', 'src/tags.tsx', 7)], SCOPED, SCOPED_BLOBS)
+  assert.equal(result.falsePositives.count, 1)
+  assert.equal(result.falsePositives.hits[0].target, 'correct-key')
+})
+
+test('ruleIds 밖의 규칙은 오탐이 아니라 unclassified로 간다', () => {
+  // 여기서 증발하면 산술이 깨진다 — findings = matched + fp + unclassified가
+  // 성립해야 벡터를 서로 대조할 수 있다.
+  const result = gradeFindings([finding('01-4', 'src/tags.tsx', 7)], SCOPED, SCOPED_BLOBS)
+  assert.equal(result.falsePositives.count, 0, '설계된 규칙이 아니므로 오탐이 아니다')
+  assert.equal(result.unclassified, 1, '어디로도 안 가고 사라지면 안 된다')
+  assert.equal(result.findings, 1)
+})
+
+test('과적용 대조군에 섞여 들어와도 산술이 맞는다', () => {
+  const result = gradeFindings(
+    [
+      finding('03-3', 'src/tags.tsx', 7),   // 오탐
+      finding('01-4', 'src/tags.tsx', 3),   // unclassified
+      finding('08-1', 'src/tags.tsx', 9),   // unclassified
+      finding('00-1', 'src/a.test.tsx', 2), // 오탐 (범위 대조군)
+    ],
+    SCOPED, SCOPED_BLOBS,
+  )
+  assert.equal(result.findings, 4)
+  assert.equal(result.falsePositives.count, 2)
+  assert.equal(result.unclassified, 2)
+})
