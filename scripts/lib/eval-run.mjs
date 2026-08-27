@@ -46,13 +46,21 @@ export const parseEnvelope = stdout => {
  * pluginDir이 --add-dir에도 들어가는 이유는 runClaude 쪽 주석에 있다.
  * 스킬이 자기 규칙 모듈을 읽으려면 그 경로가 허용 작업 디렉터리여야 한다.
  */
-export const buildClaudeArgs = ({ command, pluginDir, fixtureRoot, permissionMode, appendSystemPrompt }) => [
+export const buildClaudeArgs = ({
+  command, pluginDir, fixtureRoot, permissionMode, appendSystemPrompt, model, effort,
+}) => [
   '-p', command,
   '--plugin-dir', pluginDir,
   '--add-dir', fixtureRoot,
   '--add-dir', pluginDir,
   '--permission-mode', permissionMode,
   '--output-format', 'json',
+  // 모델과 effort를 harness가 직접 정한다. A2의 첫 6회는 둘 다 지정하지 않아
+  // 세션 기본값을 상속받았고(`opus[1m]`, `xhigh`), 그것은 사용자가 /config에서
+  // 모델을 바꾸면 기준선이 조용히 다른 조건의 숫자가 된다는 뜻이다. 값은
+  // provenance에 남는다.
+  ...(model ? ['--model', model] : []),
+  ...(effort ? ['--effort', effort] : []),
   // 빈 문자열이면 붙이지 않는다. 값 없는 플래그는 claude가 다음 인자를 값으로
   // 삼켜 조용히 다른 명령이 된다.
   ...(appendSystemPrompt ? ['--append-system-prompt', appendSystemPrompt] : []),

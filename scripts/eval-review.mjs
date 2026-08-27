@@ -10,7 +10,7 @@
 //   node scripts/eval-review.mjs --case location-trap --plugin-dir . --label main --runs 1
 
 import { execFileSync, spawn } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -89,6 +89,12 @@ if (pluginDir === ROOT) {
 // 워크플로우가 정의한 fan-out(as-designed)을 잰다. 둘은 서로 다른 명제이고
 // 비용도 다르므로, 어느 쪽으로 잰 숫자인지가 결과 파일에 남아야 한다.
 const executionShape = has('dispatch') ? 'as-designed' : 'as-experienced'
+
+// A2의 첫 6회가 쓴 값을 기본값으로 둔다. 세션 설정을 따라가게 두면 /config에서
+// 모델을 바꾸는 것만으로 기준선이 다른 조건의 숫자로 바뀌고, 결과 파일만 봐서는
+// 그것을 알 수 없다. 비용을 줄이려면 여기를 바꾸되 그 값이 provenance에 남는다.
+const model = flag('model', 'opus')
+const effort = flag('effort', 'xhigh')
 
 const label = flag('label', 'local')
 if (!/^[\w.-]+$/.test(label)) die(`--label must match /^[\\w.-]+$/, got ${JSON.stringify(label)}`)
@@ -173,6 +179,8 @@ const runClaude = (fixtureRoot, command) => new Promise(resolve => {
     fixtureRoot,
     permissionMode: 'bypassPermissions',
     appendSystemPrompt: executionShape === 'as-designed' ? DISPATCH_REQUEST : undefined,
+    model,
+    effort,
   })
   const started = Date.now()
   const child = spawn(CLAUDE.command, args, { cwd: fixtureRoot, shell: CLAUDE.shell })
@@ -250,6 +258,8 @@ if (has('dry-run')) {
     case: caseName,
     root: fixture.root,
     executionShape,
+    model,
+    effort,
     mergeBase: fixture.mergeBase,
     mid: fixture.mid,
     head: fixture.head,
@@ -283,6 +293,90 @@ const startedAt = new Date().toISOString()
 const outDir = join(ROOT, 'evals', 'results')
 mkdirSync(outDir, { recursive: true })
 const outPath = join(outDir, `${caseName}-${label}.json`)
+
+// 리포트를 결과 파일 옆에 복사한다. fixture는 임시 디렉터리라 OS가 언제든
+// 지우고, 그러면 채점기를 고쳐도 다시 채점할 방법이 없어 이미 치른 실행 비용이
+// 통째로 날아간다. A2에서 실제로 그 직전까지 갔다 — 6회분 리포트가 살아 있던
+// 것은 운이었다.
+//
+// 본문을 결과 JSON에 넣지 않는 이유: 리포트가 20KB를 넘고 run이 늘면 결과
+// 파일을 사람이 읽을 수 없게 된다. 파일로 두고 경로만 남긴다.
+const reportsDir = join(outDir, 'reports')
+mkdirSync(reportsDir, { recursive: true })
+const keepReport = (index, sourcePath) => {
+  if (!sourcePath) return null
+  const name = `${caseName}-${label}-run${index + 1}.md`
+  copyFileSync(sourcePath, join(reportsDir, name))
+  return `reports/${name}`
+}
+
+// 채점기나 expected.json을 고칠 때마다 실행을 다시 사야 한다면, 채점기를
+// 고치는 것 자체가 비싸져서 안 고치게 된다. A2의 오탐 결함이 그 증거다 —
+// 재채점 경로가 없었다면 "9회를 더 사서 다시 재기"와 "틀린 숫자를 그냥 쓰기"
+// 중에 골라야 했다.
+//
+// fixture를 새로 만들어도 결과가 같은 이유: 케이스 트리가 저장소에 커밋돼
+// 있으므로 buildFixture가 같은 파일 내용을 만들고, readBlobLines는 경로별
+// 내용만 쓰므로 커밋 해시가 달라도 무관하다. 실측으로 확인했다.
+if (has('regrade')) {
+  const source = flag('regrade')
+  const previous = JSON.parse(readFileSync(resolve(source), 'utf8'))
+  if (previous.case !== caseName) {
+    die(`--regrade 대상이 ${previous.case}인데 --case는 ${caseName}이다`)
+  }
+  // 라벨은 원본이 갖고 있다. --label 기본값을 쓰면 다른 배치의 이름으로 저장돼
+  // 어느 실행을 다시 채점한 것인지 파일명이 거짓말하게 된다.
+  const sourceLabel = previous.label ?? label
+
+  const fixture = makeFixture()
+  const regraded = []
+  const skipped = []
+  for (const previousRun of previous.results) {
+    // 리포트가 없는 run은 조용히 빼지 않는다. 조용히 빠지면 재채점 결과가
+    // 원본보다 run이 적은데 그 이유가 어디에도 남지 않는다.
+    // keptReport는 리포트 보관이 들어간 뒤의 run에만 있다. 그 전 run도 관례
+    // 경로에 리포트가 손으로 구조돼 있을 수 있으므로 거기까지 찾아본다 —
+    // A2의 첫 6회가 정확히 그 상태다.
+    const conventional = `reports/${previous.case}-${sourceLabel}-run${previousRun.run}.md`
+    const relative = previousRun.keptReport
+      ?? (existsSync(join(outDir, conventional)) ? conventional : null)
+    if (!relative) {
+      skipped.push({ run: previousRun.run, why: `리포트를 찾지 못했다 (기대 경로: ${conventional})` })
+      continue
+    }
+    const reportText = readFileSync(join(outDir, relative), 'utf8')
+    const mentioned = new Set(
+      parseFindings(reportText).filter(f => !f.location.unverified).map(f => f.location.path),
+    )
+    const blobLines = readBlobLines(fixture.root, fixture.mergeBase, [...mentioned], [fixture.mid])
+    regraded.push({
+      ...previousRun,
+      keptReport: relative,
+      // 실행에서 나온 값은 재채점이 만들 수 없다. 그대로 보존한다.
+      ...grade(reportText, expected, blobLines),
+    })
+  }
+
+  const regradedPath = join(outDir, `${caseName}-${sourceLabel}-regraded.json`)
+  writeFileSync(regradedPath, JSON.stringify({
+    ...previous,
+    // 재채점된 숫자를 실행에서 나온 숫자와 구분할 수 없으면 안 된다.
+    regradedFrom: source,
+    regradedAt: new Date().toISOString(),
+    skipped,
+    results: regraded,
+  }, null, 2), 'utf8')
+
+  process.stdout.write(`regraded ${regraded.length} run(s)${skipped.length ? `, skipped ${skipped.length}` : ''} -> ${regradedPath}\n`)
+  for (const run of regraded) {
+    process.stdout.write(
+      `  run ${run.run}: recall ${run.recall.found}/${run.recall.of}` +
+      ` fp ${run.falsePositives.count} unclassified ${run.unclassified}` +
+      ` modules ${run.modulesWithFindings.length}\n`,
+    )
+  }
+  process.exit(0)
+}
 // run 1이 8분·3.5달러를 치르고 끝난 뒤 run 3에서 던지면(readFileSync,
 // readBlobLines, grade — 모두 의도적으로 loud하게 던진다), 결과 파일을 루프가
 // 끝난 뒤 한 번만 쓰면 이미 낸 돈에 해당하는 run 1·2 결과까지 예외와 함께
@@ -299,6 +393,8 @@ const writeResults = () => writeFileSync(outPath, JSON.stringify({
   // 정의대로의 dispatch)에서 나온 것인지. 둘은 서로 다른 명제라, 값만 있고
   // 이것이 없으면 나중에 어느 쪽인지 복원할 방법이 없다.
   executionShape,
+  model,
+  effort,
   timestamp: startedAt,
   runs,
   results,
@@ -373,6 +469,7 @@ for (let index = 0; index < runs; index += 1) {
     durationSec: execution.durationSec,
     reportFound: Boolean(reportPath),
     reportSource,
+    keptReport: keepReport(index, reportPath),
     fixtureRoot: fixture.root,
     fixtureDirty,
     // 봉투에서 나오는 진단 정보. permissionDenials가 특히 중요하다 — 리뷰가

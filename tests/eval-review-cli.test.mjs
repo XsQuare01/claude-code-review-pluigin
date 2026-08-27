@@ -99,8 +99,26 @@ test('executionShape가 저장되는 결과 파일의 provenance에도 들어간
   const at = source.indexOf('writeFileSync(outPath')
   assert.ok(at !== -1, 'writeResults를 찾지 못했다 — 이 테스트가 낡았다')
   const literal = source.slice(at, source.indexOf('}, null, 2)', at))
-  for (const field of ['executionShape', 'pluginRef', 'pluginVersion']) {
+  for (const field of ['executionShape', 'model', 'effort', 'pluginRef', 'pluginVersion']) {
     assert.ok(literal.includes(field),
       `결과 파일 provenance에 ${field}가 없다. dry-run 출력에만 넣으면 저장된 숫자가 무엇에서 나왔는지 복원할 수 없다`)
   }
+})
+
+test('--dry-run이 무엇으로 잴지 미리 보여준다', () => {
+  // 실행 전에 조건을 확인할 수 있어야 한다. A2의 첫 6회는 모델과 effort가
+  // 세션 기본값이었고, 결과 파일을 열기 전까지 그것을 알 방법이 없었다.
+  const output = run('--case', 'location-trap', '--dry-run')
+  assert.match(output, /"model": "opus"/)
+  assert.match(output, /"effort": "xhigh"/)
+})
+
+test('--regrade 대상 케이스가 다르면 사유를 낸다', () => {
+  assert.throws(
+    () => run('--case', 'location-trap', '--regrade', 'evals/results/baseline-mixed-a2.json'),
+    error => {
+      assert.match(String(error.stderr), /baseline-mixed/)
+      return true
+    },
+  )
 })

@@ -153,3 +153,26 @@ test('DISPATCH_REQUEST는 dispatch만 요청하고 리뷰 내용은 건드리지
       `DISPATCH_REQUEST가 리뷰 품질을 유도하는 표현을 담고 있다: ${forbidden}`)
   }
 })
+
+// 모델과 effort는 harness가 명시적으로 정해야 한다. A2의 6회 실행은 둘 다
+// 지정하지 않아 세션 기본값(`opus[1m]`, `xhigh`)을 상속받았다 — 즉 사용자가
+// /config에서 모델을 바꾸면 기준선이 조용히 다른 조건에서 나온 숫자가 된다.
+// 무엇으로 쟀는지 모르는 숫자는 나중에 비교할 수 없다.
+
+test('buildClaudeArgs는 모델과 effort를 항상 명시한다', () => {
+  const args = buildClaudeArgs({
+    command: '/x', pluginDir: 'p', fixtureRoot: 'f', permissionMode: 'bypassPermissions',
+    model: 'opus', effort: 'xhigh',
+  })
+  assert.equal(args[args.indexOf('--model') + 1], 'opus')
+  assert.equal(args[args.indexOf('--effort') + 1], 'xhigh')
+})
+
+test('모델이나 effort가 없으면 플래그를 붙이지 않는다', () => {
+  // 빈 값으로 붙이면 claude가 다음 인자를 값으로 삼켜 조용히 다른 명령이 된다.
+  const args = buildClaudeArgs({
+    command: '/x', pluginDir: 'p', fixtureRoot: 'f', permissionMode: 'bypassPermissions',
+  })
+  assert.ok(!args.includes('--model'))
+  assert.ok(!args.includes('--effort'))
+})
