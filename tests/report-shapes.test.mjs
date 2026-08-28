@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 
 import {
+  checkSectionContent,
   checkSkeleton,
   checkSummaryArithmetic,
   parseFindings,
@@ -16,9 +17,9 @@ import {
 // 우연히 한 형식만 썼기 때문이고, 2.6.2로 돌린 실사용 리포트 두 건에서 처음
 // 갈렸다. 계측기가 자기 fixture에만 맞춰져 있었던 것이다.
 //
-// **이 파일의 일부 단언은 현재의 틀린 동작을 고정한다.** 고치기 전에 무엇이
-// 깨지는지 못박아야, 고친 뒤에 무엇이 나아졌는지 diff로 말할 수 있다.
-// 고쳐야 할 자리는 DEFECT로 표시했다.
+// 이 파일은 한때 현재의 틀린 동작을 DEFECT로 고정했다. 세 결함이 전부
+// 고쳐졌으므로 지금은 고쳐진 동작을 지킨다 — 어떤 형식으로 써도 집계를 읽고,
+// 없는 것과 틀린 것을 구분하고, 섹션이 자리만 지키는 것을 가른다.
 
 const SHAPES = join(dirname(fileURLToPath(import.meta.url)), 'fixtures', 'report-shapes')
 const shape = name => readFileSync(join(SHAPES, `${name}.md`), 'utf8')
@@ -79,25 +80,20 @@ test('집계가 없는 것과 집계가 맞는 것이 구분된다', () => {
 // ---------------------------------------------------------------------------
 // 섹션 내용 — 실행 계획
 
-test('DEFECT: 실행 계획이 렌더링 절차를 담아도 채점기가 알아채지 못한다', () => {
+test('실행 계획이 렌더링 절차를 담으면 sectionContent가 가른다', () => {
   // C-7은 실행 계획에 "후보 N / 적용 M / SKIPPED·UNKNOWN 목록과 사유 /
   // 실패 클래스별 건수"를 요구한다. plan-renders-itself는 그 대신
-  // 오케스트레이터의 내부 렌더링 절차를 적는다 — 실물 리포트에서 관측된 형태다.
-  //
-  // checkSkeleton은 `## ` 헤딩의 이름과 순서만 본다. 섹션이 자리만 지키고
-  // 역할을 안 해도 통과한다.
-  //
-  // 고친 뒤 기대: 새 축 sectionContent가 두 fixture를 가른다
+  // 오케스트레이터의 내부 렌더링 절차를 적는다 — 실물에서 관측된 형태다.
   const contractShaped = shape('plan-contract-shaped')
   const rendersItself = shape('plan-renders-itself')
 
-  assert.deepEqual(
-    checkSkeleton(contractShaped),
-    checkSkeleton(rendersItself),
-    '지금은 두 리포트가 구조적으로 구분되지 않는다',
-  )
+  // 이름과 순서로는 여전히 구분되지 않는다. 그것이 skeletonOk의 일이 아니기
+  // 때문이고, 두 축을 나눠 둔 이유가 그것이다.
+  assert.deepEqual(checkSkeleton(contractShaped), checkSkeleton(rendersItself))
 
-  // 내용은 실제로 다르다 — 계측기가 못 보는 것이지 없는 것이 아니다.
-  assert.match(contractShaped, /후보: `N=20`|numbered 후보/)
-  assert.ok(!/후보: `N=|numbered 후보/.test(rendersItself))
+  const good = checkSectionContent(contractShaped, parseFindings(contractShaped))
+  const bad = checkSectionContent(rendersItself, parseFindings(rendersItself))
+  assert.equal(good.ok, true)
+  assert.equal(bad.sections['실행 계획'].ok, false)
+  assert.match(bad.sections['실행 계획'].why, /후보|적용/)
 })

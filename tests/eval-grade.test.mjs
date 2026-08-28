@@ -266,7 +266,7 @@ test('collectBlobs()의 원시 문자열을 그대로 넘기면 채점 대신 �
   )
 })
 
-import { checkSkeleton, checkScriptRan, checkSummaryArithmetic, grade } from '../scripts/lib/eval-grade.mjs'
+import { checkSectionContent, checkSkeleton, checkScriptRan, checkSummaryArithmetic, grade } from '../scripts/lib/eval-grade.mjs'
 
 test('C-7 골격에서 빠진 섹션을 잡아낸다', () => {
   assert.equal(checkSkeleton(REPORT).ok, false, '샘플 리포트에는 뒤쪽 섹션이 없다')
@@ -840,4 +840,119 @@ test('두 출처가 서로 어긋나면 그 자체가 결함이다', () => {
   assert.equal(r.present, true)
   assert.equal(r.ok, false)
   assert.match(r.why ?? '', /출처/)
+})
+
+// ---------------------------------------------------------------------------
+// 섹션이 자기 역할을 하는지 본다.
+//
+// checkSkeleton은 `## ` 헤딩의 **이름과 순서만** 본다. 그래서 실물 리포트가
+// `## 실행 계획`에 오케스트레이터의 내부 렌더링 절차를 적고, `## 요약`에
+// 지적을 하나도 안 담아도 통과했다. **섹션이 자리만 지키고 역할을 안 하는
+// 상태**를 계측기가 초록불로 읽은 것이다.
+//
+// 별도 축으로 두는 이유: "섹션 이름이 맞다"와 "섹션이 제 역할을 한다"는 다른
+// 명제다. 하나로 뭉개면 실패했을 때 어느 쪽인지 알 수 없다.
+
+const withSection = (name, body) => {
+  const base = {
+    '리뷰 기준': ['- 플러그인 버전: `2.6.2`', '- 규칙 디렉터리: `/x/2.6.2/review-rules`'],
+    '판정': ['머지 보류.'],
+    '실행 계획': ['- numbered 후보: `N=20`', '- 적용: `M=18`', '- `16` `SKIPPED`: 계약 변경 없음'],
+    '상세 지적': ['#### 🔴 `03-3` 무언가', '`src/a.tsx:11` — `x`'],
+    '요약': ['| 구분 | 🔴 | 🟡 | 🔵 |', '|---|---|---|---|', '| 합계 | 1 | 0 | 0 |'],
+    '도구 실행 결과': ['없음.'],
+    '미해결 / 후속 확인': ['없음.'],
+  }
+  if (name) base[name] = body
+  return Object.entries(base).flatMap(([k, v]) => [`## ${k}`, '', ...v, '']).join('\n')
+}
+
+const sectionsOf = text => checkSectionContent(text, parseFindings(text))
+
+test('계약대로 쓴 리포트는 모든 섹션을 통과한다', () => {
+  const result = sectionsOf(withSection())
+  assert.equal(result.ok, true, JSON.stringify(result.sections))
+})
+
+// --- 리뷰 기준
+
+test('리뷰 기준에 버전과 규칙 디렉터리가 있으면 통과한다 — 라벨 문구는 보지 않는다', () => {
+  // 실물 리포트 하나는 한국어 라벨(`플러그인 버전:`)을, 다른 하나는 영어
+  // (`plugin version 2.6.2`, `RULES_DIR = ...`)를 쓴다. 계약은 정보를 요구하지
+  // 표기를 정하지 않으므로 둘 다 통과해야 한다.
+  for (const body of [
+    ['- 플러그인 버전: `2.6.2`', '- 규칙 디렉터리: `/x/2.6.2/review-rules`'],
+    ['- RULES_DIR = `/x/2.6.2/review-rules`; plugin version 2.6.2.'],
+  ]) {
+    assert.equal(sectionsOf(withSection('리뷰 기준', body)).sections['리뷰 기준'].ok, true)
+  }
+})
+
+test('버전이 없으면 리뷰 기준이 실패한다', () => {
+  // 버전을 적는 이유는 severity 눈금이 버전마다 다르기 때문이다(C-7).
+  const result = sectionsOf(withSection('리뷰 기준', ['- 규칙 디렉터리: `/x/review-rules`']))
+  assert.equal(result.sections['리뷰 기준'].ok, false)
+  assert.match(result.sections['리뷰 기준'].why, /버전/)
+})
+
+// --- 실행 계획
+
+test('실행 계획이 렌더링 절차만 담으면 실패한다', () => {
+  // 실물에서 관측된 형태. 계약이 요구한 후보/적용/SKIPPED는 이 섹션에 없다.
+  const result = sectionsOf(withSection('실행 계획', [
+    '- `full-review-results.json`을 읽어 결정적 Markdown 리포트를 생성했습니다.',
+    '- 표시 순서는 입력 JSON의 순서를 유지했습니다.',
+  ]))
+  assert.equal(result.sections['실행 계획'].ok, false)
+  assert.equal(result.ok, false)
+})
+
+test('실물이 쓰는 여러 표기를 전부 받는다 — 숫자를 뽑지 않고 존재만 본다', () => {
+  // 처음 구현은 "후보 뒤 12자 안의 숫자"를 찾다가 첫 번째 형태를 놓쳤다.
+  // 코드 인용이 끼어 있고 그 안의 [0-9]가 먼저 걸린다. 계약을 지킨 리포트가
+  // 실패했고, 그것이 이 축의 가장 큰 위험이다.
+  for (const body of [
+    ['- **모덈 후보**: `ls "$RULES_DIR"/[0-9]*.md` 결과 22개 → non-00 21개', '- **적용**: 18개'],
+    ['**모듈 집합** — numbered non-00 후보 21개 중 19개 적용.'],
+    ['- numbered 후보: `N=20`', '- 적용: `M=18`'],
+  ]) {
+    const result = sectionsOf(withSection('실행 계획', body))
+    assert.equal(result.sections['실행 계획'].ok, true, JSON.stringify(body))
+  }
+})
+
+test('후보나 적용 중 하나만 있으면 실패한다', () => {
+  const result = sectionsOf(withSection('실행 계획', ['- 후보 20개']))
+  assert.equal(result.sections['실행 계획'].ok, false)
+  assert.match(result.sections['실행 계획'].why, /적용 수/)
+})
+
+// --- 요약
+
+test('요약에 severity 집계가 없으면 실패한다', () => {
+  // 클러스터 ID만 나열한 실물 형태. 규칙 ID는 있지만 지적 목록이 아니다.
+  const result = sectionsOf(withSection('요약', [
+    '- 출력 포트 클러스터: `04-3#1`, `12-2#1`',
+    '- 공유 API 클러스터: `02-3#1`',
+  ]))
+  assert.equal(result.sections['요약'].ok, false)
+  assert.match(result.sections['요약'].why, /집계|지적/)
+})
+
+test('요약이 finding별 표여도 통과한다 — 형식을 강제하지 않는다', () => {
+  const result = sectionsOf(withSection('요약', [
+    '| Severity | 규칙 ID |', '|---|---|', '| 🔴 | `03-3` |',
+  ]))
+  assert.equal(result.sections['요약'].ok, true)
+})
+
+// --- 검사하지 않는 것
+
+test('도구 실행 결과와 미해결은 검사하지 않는다', () => {
+  // 도구가 없어 실행하지 못하는 것도, 후속 확인이 비어 있는 것도 정상이다.
+  // 근거 없는 검사를 넣으면 정직한 리포트를 벌준다.
+  const result = sectionsOf(withSection('도구 실행 결과', ['없음.']))
+  assert.equal(result.ok, true)
+  assert.equal(result.sections['도구 실행 결과'], undefined)
+  assert.equal(result.sections['미해결 / 후속 확인'], undefined)
 })

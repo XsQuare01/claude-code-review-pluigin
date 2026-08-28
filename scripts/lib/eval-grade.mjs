@@ -535,6 +535,85 @@ export function countUnverifiable(reportText) {
 }
 
 /**
+ * 섹션이 자기 역할을 하는지 본다.
+ *
+ * `checkSkeleton`은 `## ` 헤딩의 **이름과 순서만** 본다. 그래서 실물 리포트가
+ * `## 실행 계획`에 오케스트레이터의 내부 렌더링 절차를 적고 `## 요약`에 지적을
+ * 하나도 담지 않아도 통과했다 — 섹션이 자리만 지키고 역할을 안 하는 상태를
+ * 계측기가 초록불로 읽었다.
+ *
+ * **`skeletonOk`에 합치지 않는 이유:** "섹션 이름이 맞다"와 "섹션이 제 역할을
+ * 한다"는 다른 명제다. 하나로 뭉개면 실패했을 때 어느 쪽인지 알 수 없고,
+ * 그것이 이 계측기가 반복해서 틀린 방식이다.
+ *
+ * **형식이 아니라 정보를 본다.** C-7은 각 섹션에 무엇이 있어야 하는지를 정하지
+ * 어떻게 렌더할지는 정하지 않는다. 라벨 문구(`플러그인 버전:` / `plugin
+ * version`)나 표 구성은 보지 않는다 — 특정 레이아웃을 강제하면 계약을
+ * 지키면서 다르게 쓴 리포트가 실패하고, 계측기가 규칙을 지킨 쪽을 벌준다.
+ *
+ * **`도구 실행 결과`와 `미해결 / 후속 확인`은 검사하지 않는다.** 전자는 C-7이
+ * `00-rule.md` 00-9로 넘기는데 00-9는 read-only 실행 안전 계약이지 리포트 내용
+ * 요구가 아니고, 도구가 없어 실행하지 못하는 것도 정상이다. 후자는 비어 있는
+ * 것이 정상이다. 근거 없는 검사를 넣으면 정직한 리포트를 벌준다.
+ */
+export function checkSectionContent(reportText, findings) {
+  const sections = {}
+  const check = (name, verdict) => { sections[name] = verdict }
+  const text = name => sectionBetween(reportText, `## ${name}`).join('\n')
+
+  // 리뷰 기준 — 버전과 규칙 디렉터리. C-7이 버전을 요구하는 이유는 severity의
+  // 눈금이 버전마다 다르기 때문이다. 어느 눈금으로 판정된 리포트인지 리포트만
+  // 보고 알 수 있어야 한다.
+  {
+    const body = text('리뷰 기준')
+    const hasVersion = /\d+\.\d+\.\d+/.test(body)
+    const hasRulesDir = /review-rules/.test(body)
+    const missing = [!hasVersion && '플러그인 버전', !hasRulesDir && '규칙 디렉터리'].filter(Boolean)
+    check('리뷰 기준', missing.length
+      ? { ok: false, why: `${missing.join('과 ')}가 없다` }
+      : { ok: true })
+  }
+
+  // 실행 계획 — 모듈 후보 수와 적용 수를 보고하는가.
+  //
+  // 숫자를 뽑지 않고 **줄 단위로 존재만** 본다. 실물 리포트가 이 값을 쓰는
+  // 방식이 제각각이기 때문이다.
+  //
+  //   - **모듈 후보**: `ls "$RULES_DIR"/[0-9]*.md` 결과 22개 → … non-00 21개
+  //   - numbered non-00 후보 21개 중 19개 적용
+  //   - numbered 후보: `N=20`
+  //
+  // 처음 시도한 "후보 뒤 12자 안의 숫자" 규칙은 첫 번째 형태를 놓쳤다. 사이에
+  // 코드 인용이 끼어 있고, 거기 들어 있는 `[0-9]`가 먼저 걸리기 때문이다.
+  // **계약을 지킨 리포트가 실패했다** — 형식을 강제하면 계측기가 규칙을 지킨
+  // 쪽을 벌준다는 것이 이 축을 만들며 배운 것이고, 여기서 바로 밟았다.
+  //
+  // SKIPPED 목록의 완결성은 검사하지 않는다. 후보와 적용 수를 어느 숫자로
+  // 읽어야 하는지가 형태마다 달라 신뢰할 수 없고(위 첫 형태는 22와 21이 함께
+  // 나온다), **믿을 수 없는 검사는 검사가 없는 것보다 나쁘다.**
+  {
+    const lines = sectionBetween(reportText, '## 실행 계획')
+    const reports = label => lines.some(line => line.includes(label) && /\d/.test(line))
+    const missing = [!reports('후보') && '후보 수', !reports('적용') && '적용 수'].filter(Boolean)
+    check('실행 계획', missing.length
+      ? { ok: false, why: `${missing.join('와 ')}가 없다` }
+      : { ok: true })
+  }
+
+  // 요약 — 중복 제거된 지적을 severity 순으로. severity 집계가 어떤 형식으로든
+  // 읽히면 지적이 나열된 것으로 본다. 규칙 ID만 나열한 클러스터 목록은
+  // severity가 없으므로 걸린다.
+  {
+    const counts = checkSummaryArithmetic(reportText, findings)
+    check('요약', counts.present
+      ? { ok: true }
+      : { ok: false, why: '지적이 severity와 함께 나열돼 있지 않다 (집계를 읽을 수 없다)' })
+  }
+
+  return { ok: Object.values(sections).every(verdict => verdict.ok), sections }
+}
+
+/**
  * runner가 부르는 유일한 함수. 축을 하나의 점수로 접지 않는다 —
  * 어느 축이 움직였는지가 이 계측의 전부다.
  */
@@ -546,5 +625,6 @@ export function grade(reportText, expected, blobLines) {
     skeletonOk: checkSkeleton(reportText),
     summaryArithmetic: checkSummaryArithmetic(reportText, findings),
     unverifiable: countUnverifiable(reportText),
+    sectionContent: checkSectionContent(reportText, findings),
   }
 }
