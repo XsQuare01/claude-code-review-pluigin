@@ -382,24 +382,117 @@ export function checkScriptRan(reportText) {
 
 const SEVERITY_KEY = { '🔴': 'red', '🟡': 'yellow', '🔵': 'blue' }
 
+/**
+ * 요약의 severity 집계가 상세 지적과 맞는지 본다.
+ *
+ * 계약(C-7)은 요약에 "중복 제거된 지적을 severity 순으로"를 요구하지 **어떻게
+ * 렌더할지는 정하지 않는다.** 그래서 이 검사도 형식이 아니라 정보를 읽는다.
+ * 특정 레이아웃을 강제하면 계약을 지키면서 다르게 쓴 리포트가 실패하고,
+ * 그러면 계측기가 규칙을 지킨 쪽을 벌준다.
+ *
+ * 실물에서 관측된 형식 세 가지를 전부 받는다.
+ *
+ *   numeric-table      | 합계 | 1 | 1 | 0 |          숫자가 열에 있는 표
+ *   per-finding-table  | 🔴 | `03-3` | … |           finding 한 줄에 severity 셀
+ *   prose-total        총 14건: 🔴 3건, 🟡 11건        산문 총계
+ *
+ * `present`와 `ok`를 나누는 이유: **집계가 없는 것과 집계가 틀린 것은 다른
+ * 결함이다.** 앞은 리포트가 요약을 안 쓴 것이고 뒤는 숫자가 어긋난 것인데,
+ * 하나의 false로 뭉개면 리포트를 고쳐야 할지 파서를 고쳐야 할지 알 수 없다.
+ * 0을 잘못 읽는 것이 이 저장소의 단골 실패다.
+ *
+ * `sources`는 어느 형식에서 읽었는지를 남긴다. 값이 어디서 왔는지 모르면
+ * 나중에 이 축을 못 읽는다 — provenance에 `executionShape`를 남긴 것과 같다.
+ */
 export function checkSummaryArithmetic(reportText, findings) {
-  const summary = { red: 0, yellow: 0, blue: 0 }
-  for (const line of sectionBetween(reportText, '## 요약')) {
+  const lines = sectionBetween(reportText, '## 요약')
+  const zero = () => ({ red: 0, yellow: 0, blue: 0 })
+
+  // 형식 1 — 숫자가 열에 있는 표.
+  let numeric = null
+  for (const line of lines) {
     const cells = splitRow(line)
     if (!cells || cells.length < 4) continue
     const [, red, yellow, blue] = cells
     if (!/^\d+$/.test(red) || !/^\d+$/.test(yellow) || !/^\d+$/.test(blue)) continue
-    summary.red += Number(red)
-    summary.yellow += Number(yellow)
-    summary.blue += Number(blue)
+    numeric ??= zero()
+    numeric.red += Number(red)
+    numeric.yellow += Number(yellow)
+    numeric.blue += Number(blue)
   }
-  const detail = { red: 0, yellow: 0, blue: 0 }
+
+  // 형식 2 — finding 한 줄에 severity 셀이 있는 표.
+  //
+  // 숫자 열 표가 있으면 세지 않는다. 그 형식의 헤더(`| 구분 | 🔴 | 🟡 | 🔵 |`)는
+  // **열 이름이지 지적이 아니고**, 그것을 세면 두 출처가 어긋난 것처럼 보여
+  // 멀쩡한 리포트가 실패한다.
+  let perFinding = null
+  if (!numeric) {
+    for (const line of lines) {
+      const cells = splitRow(line)
+      if (!cells) continue
+      for (const cell of cells) {
+        const key = SEVERITY_KEY[cell]
+        if (!key) continue
+        perFinding ??= zero()
+        perFinding[key] += 1
+      }
+    }
+  }
+
+  // 형식 3 — 산문 총계. `건` 접미사가 표 셀(`| 🔴 |`)과 구분해 준다.
+  let prose = null
+  const proseText = lines.join('\n')
+  for (const [emoji, key] of Object.entries(SEVERITY_KEY)) {
+    const match = new RegExp(`${emoji}\\s*(\\d+)\\s*건`).exec(proseText)
+    if (!match) continue
+    prose ??= zero()
+    prose[key] = Number(match[1])
+  }
+
+  const found = [
+    ['numeric-table', numeric],
+    ['per-finding-table', perFinding],
+    ['prose-total', prose],
+  ].filter(([, counts]) => counts !== null)
+
+  const detail = zero()
   for (const finding of findings) {
     const key = SEVERITY_KEY[finding.severity]
     if (key) detail[key] += 1
   }
-  const ok = summary.red === detail.red && summary.yellow === detail.yellow && summary.blue === detail.blue
-  return { ok, summary, detail }
+
+  const sources = found.map(([name]) => name)
+  if (found.length === 0) {
+    // 틀린 것이 아니라 **없는 것**이다. 계약이 요구한 지적 목록이 없으므로
+    // 통과는 아니지만, 원인이 다르므로 present로 구분한다.
+    return { present: false, ok: false, why: '요약에 severity 집계가 없다', summary: zero(), detail, sources }
+  }
+
+  const same = (a, b) => a.red === b.red && a.yellow === b.yellow && a.blue === b.blue
+  const [, first] = found[0]
+  const disagreeing = found.find(([, counts]) => !same(counts, first))
+  if (disagreeing) {
+    // 리포트 안에서 이미 모순이다. 상세와 대조하기 전에 이것부터 결함이다.
+    return {
+      present: true,
+      ok: false,
+      why: `요약 안의 두 출처가 어긋난다 (${sources.join(', ')})`,
+      summary: first,
+      detail,
+      sources,
+    }
+  }
+
+  const ok = same(first, detail)
+  return {
+    present: true,
+    ok,
+    ...(ok ? {} : { why: '요약 집계가 상세 지적과 다르다' }),
+    summary: first,
+    detail,
+    sources,
+  }
 }
 
 /**

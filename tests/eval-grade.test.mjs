@@ -751,3 +751,93 @@ test('exceptRuleIds는 ruleIds와 함께 쓸 때도 예외가 우선한다', () 
   assert.equal(gradeFindings([finding('00-1', 'src/a.test.tsx', 7)], expected, EXC_BLOBS).falsePositives.count, 0)
   assert.equal(gradeFindings([finding('03-3', 'src/a.test.tsx', 7)], expected, EXC_BLOBS).falsePositives.count, 1)
 })
+
+// ---------------------------------------------------------------------------
+// 요약 집계 — 형식이 아니라 정보를 읽는다.
+//
+// 계약(C-7)은 요약에 "중복 제거된 지적을 severity 순으로"를 요구하지 **어떻게
+// 렌더할지는 정하지 않는다.** 실물 리포트는 최소 세 형식을 쓰는데 파서가 하나만
+// 알아서, 산술이 맞는 리포트를 불일치로 판정했다.
+//
+// 그리고 **없는 것과 틀린 것을 구분한다.** 앞은 파서를 고쳐야 하고 뒤는 리포트를
+// 고쳐야 하는데, 하나의 false로 뭉개면 어느 쪽인지 알 수 없다.
+
+const summarySection = body => [
+  '## 리뷰 기준', '', '- 플러그인 버전: `2.6.2`', '',
+  '## 판정', '', '머지 보류.', '',
+  '## 실행 계획', '', '- 후보: `N=20`', '',
+  '## 상세 지적', '',
+  '#### 🔴 `03-3` 무언가', '`src/a.tsx:11` — `x`', '',
+  '#### 🟡 `06-1` 무언가', '`src/b.tsx:8` — `y`', '',
+  '## 요약', '', body, '',
+  '## 도구 실행 결과', '', '없음.', '',
+  '## 미해결 / 후속 확인', '', '없음.',
+].join('\n')
+
+const gradeSummary = body => {
+  const text = summarySection(body)
+  return checkSummaryArithmetic(text, parseFindings(text))
+}
+
+test('숫자 열 표를 읽는다 (기존 형식 회귀 고정)', () => {
+  const r = gradeSummary(['| 구분 | 🔴 | 🟡 | 🔵 |', '|---|---|---|---|', '| 합계 | 1 | 1 | 0 |'].join('\n'))
+  assert.equal(r.present, true)
+  assert.equal(r.ok, true)
+  assert.deepEqual(r.summary, { red: 1, yellow: 1, blue: 0 })
+  assert.deepEqual(r.sources, ['numeric-table'])
+})
+
+test('finding별 표의 severity 셀을 센다', () => {
+  const r = gradeSummary([
+    '| Severity | 규칙 ID | 요약 |', '|---|---|---|',
+    '| 🔴 | `03-3` | 무언가 |', '| 🟡 | `06-1` | 무언가 |',
+  ].join('\n'))
+  assert.equal(r.present, true)
+  assert.equal(r.ok, true)
+  assert.deepEqual(r.sources, ['per-finding-table'])
+})
+
+test('산문 총계를 읽는다', () => {
+  // 실물 리포트가 쓰는 형식: "총 14건: 🔴 3건, 🟡 11건."
+  const r = gradeSummary([
+    '| Severity | 규칙 ID |', '|---|---|',
+    '| 🔴 | `03-3` |', '| 🟡 | `06-1` |', '',
+    '총 2건: 🔴 1건, 🟡 1건. 관찰 단계 정책은 그대로다.',
+  ].join('\n'))
+  assert.equal(r.ok, true)
+  assert.deepEqual(r.sources, ['per-finding-table', 'prose-total'])
+})
+
+test('숫자 열 표가 있으면 헤더의 severity 이모지를 지적으로 세지 않는다', () => {
+  // `| 구분 | 🔴 | 🟡 | 🔵 |`는 열 이름이지 지적이 아니다. 이것을 세면
+  // 두 출처가 어긋난 것처럼 보여 멀쩡한 리포트가 실패한다.
+  const r = gradeSummary(['| 구분 | 🔴 | 🟡 | 🔵 |', '|---|---|---|---|', '| 합계 | 1 | 1 | 0 |'].join('\n'))
+  assert.deepEqual(r.summary, { red: 1, yellow: 1, blue: 0 })
+  assert.ok(!r.sources.includes('per-finding-table'))
+})
+
+test('집계가 없으면 present: false — 틀린 것이 아니라 없는 것이다', () => {
+  const r = gradeSummary(['- 출력 포트 클러스터: `03-3#1`', '- 공유 API 클러스터: `06-1#1`'].join('\n'))
+  assert.equal(r.present, false)
+  assert.deepEqual(r.sources, [])
+  assert.equal(r.ok, false, '계약이 요구한 지적 목록이 없으므로 통과는 아니다')
+})
+
+test('집계가 상세와 어긋나면 present: true, ok: false', () => {
+  const r = gradeSummary(['| 구분 | 🔴 | 🟡 | 🔵 |', '|---|---|---|---|', '| 합계 | 5 | 5 | 0 |'].join('\n'))
+  assert.equal(r.present, true, '숫자는 있다')
+  assert.equal(r.ok, false, '상세와 다르다')
+  assert.deepEqual(r.detail, { red: 1, yellow: 1, blue: 0 })
+})
+
+test('두 출처가 서로 어긋나면 그 자체가 결함이다', () => {
+  // 표는 2건인데 산문은 3건이라고 한다. 리포트 안에서 이미 모순이다.
+  const r = gradeSummary([
+    '| Severity | 규칙 ID |', '|---|---|',
+    '| 🔴 | `03-3` |', '| 🟡 | `06-1` |', '',
+    '총 3건: 🔴 2건, 🟡 1건.',
+  ].join('\n'))
+  assert.equal(r.present, true)
+  assert.equal(r.ok, false)
+  assert.match(r.why ?? '', /출처/)
+})

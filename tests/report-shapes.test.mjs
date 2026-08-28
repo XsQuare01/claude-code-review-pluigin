@@ -53,29 +53,27 @@ test('숫자 열 표는 읽는다', () => {
   assert.deepEqual(result.summary, { red: 1, yellow: 1, blue: 0 })
 })
 
-test('DEFECT: finding별 표 + 산문 총계를 못 읽어 거짓 경보를 낸다', () => {
-  // 이 fixture의 요약에는 "총 2건: 🔴 1건, 🟡 1건"이 적혀 있고 표에도 severity
-  // 셀이 있다. 산술은 맞는다. 그런데 파서가 숫자 열 표만 알아서 0으로 읽고
-  // 불일치로 판정한다 — 계약을 지킨 리포트를 벌주는 것이다.
-  //
-  // 고친 뒤 기대: ok === true, summary === { red: 1, yellow: 1, blue: 0 }
+test('finding별 표 + 산문 총계를 읽는다', () => {
+  // 한때 이 fixture가 거짓 경보를 냈다. 파서가 숫자 열 표만 알아서 요약을
+  // 0으로 읽고 불일치로 판정했고, 계약을 지킨 리포트가 벌점을 받았다.
   const result = summaryOf('summary-per-finding-table')
-  assert.equal(result.ok, false, '지금은 오판한다')
-  assert.deepEqual(result.summary, { red: 0, yellow: 0, blue: 0 })
+  assert.equal(result.present, true)
+  assert.equal(result.ok, true)
+  assert.deepEqual(result.summary, { red: 1, yellow: 1, blue: 0 })
+  assert.deepEqual(result.sources, ['per-finding-table', 'prose-total'])
 })
 
-test('DEFECT: 집계가 없는 것과 집계가 틀린 것이 같은 값으로 나온다', () => {
-  // 이 fixture의 요약에는 severity 집계가 아예 없다. 위 테스트의 fixture는
-  // 집계가 있고 맞는다. **원인이 정반대인데 출력이 똑같다.**
-  //
-  // 0을 잘못 읽는 것이 이 저장소의 단골 실패다. "없다"와 "틀렸다"를 하나의
-  // false로 뭉개면 리포트를 고쳐야 할지 파서를 고쳐야 할지 알 수 없다.
-  //
-  // 고친 뒤 기대: present === false (ok만으로 판정하지 않는다)
+test('집계가 없는 것과 집계가 맞는 것이 구분된다', () => {
+  // 한때 이 둘이 같은 값을 냈다. 원인이 정반대인데 — 하나는 요약이 없는 것이고
+  // 하나는 파서가 못 읽은 것인데 — 출력이 똑같아서, 리포트를 고쳐야 할지
+  // 파서를 고쳐야 할지 알 수 없었다. 0을 잘못 읽는 것이 이 저장소의 단골
+  // 실패이고 여기서 또 나왔다.
   const missing = summaryOf('summary-no-counts')
-  const misread = summaryOf('summary-per-finding-table')
-  assert.deepEqual(missing.summary, misread.summary, '지금은 구분되지 않는다')
-  assert.equal(missing.ok, misread.ok)
+  const sound = summaryOf('summary-per-finding-table')
+
+  assert.equal(missing.present, false, '집계가 없다')
+  assert.equal(sound.present, true, '집계가 있고 맞는다')
+  assert.match(missing.why, /집계가 없다/)
 })
 
 // ---------------------------------------------------------------------------
