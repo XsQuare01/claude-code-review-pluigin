@@ -921,6 +921,35 @@ test('실물이 쓰는 여러 표기를 전부 받는다 — 숫자를 뽑지 �
   }
 })
 
+test('숫자가 있어도 개수 표현이 아니면 실패한다', () => {
+  // 첫 구현은 "후보 뒤 12자 안의 숫자"를 찾다가 코드 인용 안의 [0-9]에 걸려
+  // 계약을 지킨 리포트를 실패시켰다. 그것을 피하려고 "그 줄에 숫자가 있나"로
+  // 완화했더니 **반대 방향 false positive**가 생겼다 — 개수를 보고하지 않은
+  // 문장이 통과한다. 좁힌 쪽과 넓힌 쪽 양쪽에 반례를 둔다.
+  const result = sectionsOf(withSection('실행 계획', [
+    '- 후보 패턴은 [0-9]*.md지만 개수는 기록하지 않았다',
+    '- 적용 여부는 2단계에서 설명한다',
+  ]))
+  assert.equal(result.sections['실행 계획'].ok, false)
+  assert.match(result.sections['실행 계획'].why, /후보 수|적용 수/)
+})
+
+test('개수 표현 하나만 있으면 나머지 하나가 없다고 말한다', () => {
+  const result = sectionsOf(withSection('실행 계획', [
+    '- 후보 20개',
+    '- 적용 여부는 2단계에서 설명한다',
+  ]))
+  assert.equal(result.sections['실행 계획'].ok, false)
+  assert.match(result.sections['실행 계획'].why, /적용 수/)
+})
+
+test('라벨 바로 뒤의 맨 숫자도 개수로 받는다', () => {
+  // `후보 20`처럼 단위 없이 쓰는 것도 계약이 금지하지 않는다. 라벨에 붙어
+  // 있는지로 가른다 — `적용 여부는 2단계`는 라벨과 숫자 사이가 멀다.
+  const result = sectionsOf(withSection('실행 계획', ['- 후보 20, 적용 18']))
+  assert.equal(result.sections['실행 계획'].ok, true)
+})
+
 test('후보나 적용 중 하나만 있으면 실패한다', () => {
   const result = sectionsOf(withSection('실행 계획', ['- 후보 20개']))
   assert.equal(result.sections['실행 계획'].ok, false)
