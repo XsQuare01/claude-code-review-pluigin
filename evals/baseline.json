@@ -1,7 +1,7 @@
 {
-  "recordedAt": "2026-08-26",
-  "stage": "A2 (부분)",
-  "headline": "/code-review가 서로 다른 6개 모듈에 심은 결함을 두 run 모두 6/6으로, 줄 번호까지 정확히 잡았다. 도달 모듈은 12와 10 — 이 숫자가 지금까지 존재한 적이 없고, B가 넘어야 할 선이다. 반면 삭제 회귀는 1/2과 0/2로 놓쳤다(이슈 #58). 오탐은 여섯 run 전부 0건이다 — 정의된 모든 대조군에 대해.",
+  "recordedAt": "2026-08-28",
+  "stage": "A2 (부분) — 구조 축 보정 반영",
+  "headline": "/code-review가 서로 다른 6개 모듈에 심은 결함을 두 run 모두 6/6으로, 줄 번호까지 정확히 잡았다. 도달 모듈은 12와 10 — 이 숫자가 지금까지 존재한 적이 없고, B가 넘어야 할 선이다. 반면 삭제 회귀는 1/2과 0/2로 놓쳤다(이슈 #58). 오탐은 여섯 run 전부 0건이다 — 정의된 모든 대조군에 대해. 구조 축 둘을 뒤에 고쳤다: 요약 집계를 세 형식 전부 읽게 했고, 섹션이 자리만 지키는 것을 잡는 sectionContent를 넣었다. 기준선 6회는 두 축 모두 전부 통과이며, 다른 축은 재채점에서 하나도 움직이지 않았다.",
   "conditions": {
     "$comment": "이 조건들이 없으면 아래 숫자를 나중에 쓸 수 없다. B는 같은 조건에서 재야 비교가 성립한다.",
     "executionShape": "as-designed",
@@ -23,7 +23,10 @@
     "모든 숫자는 실행이 아니라 저장된 리포트를 다시 채점한 값이다(regradedFrom 참고). 실행에서만 나오는 값(소요 시간·사용량·턴 수·opFailures)은 원본 그대로다.",
     "unverifiable은 전 run 0이다. 이 세 케이스에서 리뷰가 판단을 보류한 적이 없다는 뜻이며, 축이 작동하지 않는다는 뜻이 아니다 — 단위 테스트가 세 표지를 각각 검증한다.",
     "**오탐 0은 대조군 다섯 개에 한정된 값이고, 그중 하나는 약하다.** violation-inside-test-file은 테스트 파일의 스타일·구조 지적을 금지하는지 보려던 것인데, fixture의 테스트 파일에 assertion이 없고 orders={[]}로 렌더해 심은 결함 줄을 실행하지 않는다. 그래서 00-3이 명시한 00-1(리뷰 우회 신호) 예외가 정당하게 성립하고, 두 run 모두 그 예외를 근거로 인용하며 지적했다 — 리뷰가 옳았다. 이 대조군이 원래 재려던 것을 재려면 fixture의 테스트 파일을 실제 assertion이 있는 테스트로 바꿔야 하고, 그것은 실행을 다시 사야 하는 변경이다.",
-    "한 차례 오탐 6건과 2건으로 채점된 적이 있으나 전부 채점기 결함이었다. 대조군을 경로만으로 매칭해 다른 규칙 지적까지 셌고(규칙 필터로 수정), 계약이 명시한 예외를 벌점으로 셌다(예외 목록으로 수정). 두 수정 모두 재채점으로 확인했고 오탐 외의 축은 바뀌지 않았다."
+    "한 차례 오탐 6건과 2건으로 채점된 적이 있으나 전부 채점기 결함이었다. 대조군을 경로만으로 매칭해 다른 규칙 지적까지 셌고(규칙 필터로 수정), 계약이 명시한 예외를 벌점으로 셌다(예외 목록으로 수정). 두 수정 모두 재채점으로 확인했고 오탐 외의 축은 바뀌지 않았다.",
+    "**`summaryArithmetic`의 `2회 중 2회 OK`는 한때 아무것도 뜻하지 않았다.** 파서가 숫자 열 표 한 형식만 읽었고 fixture가 우연히 그 형식을 썼기 때문이다. 실물 리포트(2.6.2)에서 처음 갈렸다 — 산술이 맞는 리포트가 불일치로 판정됐다. 지금은 세 형식(숫자 열 표 / finding별 표 / 산문 총계)을 읽고 `sources`에 어디서 읽었는지 남긴다. 기준선 6회는 전부 `numeric-table`에서 읽혔으므로, **이 기준선은 나머지 두 형식을 한 번도 밟지 않았다.**",
+    "**`sectionContent`는 A2 실행 뒤에 생긴 축이다.** 6회 전부 통과지만 그 실행들이 이 검사를 통과하려고 쓰인 것은 아니다. 실물 리포트 2건 중 하나는 `실행 계획`과 `요약`에서 실패했고(이슈 #61), 같은 명령·같은 버전·같은 날의 다른 리포트는 전 섹션을 통과했다 — **계약 준수도가 실행마다 갈린다.**",
+    "**`도구 실행 결과`와 `미해결 / 후속 확인`은 `sectionContent`가 검사하지 않는다.** 전자는 C-7이 `00-9`로 넘기는데 그것은 read-only 실행 안전 계약이지 리포트 내용 요구가 아니고, 도구가 없어 실행하지 못하는 것도 정상이다. 후자는 비어 있는 것이 정상이다. 근거 없는 검사는 정직한 리포트를 벌준다."
   ],
   "regradedFrom": [
     "evals/results/baseline-mixed-a2.json",
@@ -67,7 +70,18 @@
           "skeletonOk": true,
           "scriptRan": true,
           "modulesWithFindings": 12,
-          "fixtureDirty": 0
+          "fixtureDirty": 0,
+          "summaryArithmetic": {
+            "present": true,
+            "ok": true,
+            "sources": [
+              "numeric-table"
+            ]
+          },
+          "sectionContent": {
+            "ok": true,
+            "failed": []
+          }
         },
         {
           "run": 2,
@@ -93,7 +107,18 @@
           "skeletonOk": true,
           "scriptRan": true,
           "modulesWithFindings": 10,
-          "fixtureDirty": 0
+          "fixtureDirty": 0,
+          "summaryArithmetic": {
+            "present": true,
+            "ok": true,
+            "sources": [
+              "numeric-table"
+            ]
+          },
+          "sectionContent": {
+            "ok": true,
+            "failed": []
+          }
         }
       ],
       "median": {
@@ -111,7 +136,9 @@
         "scriptRan": "2회 중 2회",
         "skeletonOk": "2회 중 2회",
         "summaryArithmetic": "2회 중 2회",
-        "fixtureClean": "2회 중 2회"
+        "fixtureClean": "2회 중 2회",
+        "summarySound": "2회 중 2회",
+        "sectionContent": "2회 중 2회"
       }
     },
     "location-trap": {
@@ -142,7 +169,18 @@
           "skeletonOk": true,
           "scriptRan": true,
           "modulesWithFindings": 6,
-          "fixtureDirty": 0
+          "fixtureDirty": 0,
+          "summaryArithmetic": {
+            "present": true,
+            "ok": true,
+            "sources": [
+              "numeric-table"
+            ]
+          },
+          "sectionContent": {
+            "ok": true,
+            "failed": []
+          }
         },
         {
           "run": 2,
@@ -168,7 +206,18 @@
           "skeletonOk": true,
           "scriptRan": true,
           "modulesWithFindings": 6,
-          "fixtureDirty": 0
+          "fixtureDirty": 0,
+          "summaryArithmetic": {
+            "present": true,
+            "ok": true,
+            "sources": [
+              "numeric-table"
+            ]
+          },
+          "sectionContent": {
+            "ok": true,
+            "failed": []
+          }
         }
       ],
       "median": {
@@ -186,7 +235,9 @@
         "scriptRan": "2회 중 2회",
         "skeletonOk": "2회 중 2회",
         "summaryArithmetic": "2회 중 2회",
-        "fixtureClean": "2회 중 2회"
+        "fixtureClean": "2회 중 2회",
+        "summarySound": "2회 중 2회",
+        "sectionContent": "2회 중 2회"
       }
     },
     "deletion-regression": {
@@ -219,7 +270,18 @@
           "skeletonOk": true,
           "scriptRan": true,
           "modulesWithFindings": 1,
-          "fixtureDirty": 0
+          "fixtureDirty": 0,
+          "summaryArithmetic": {
+            "present": true,
+            "ok": true,
+            "sources": [
+              "numeric-table"
+            ]
+          },
+          "sectionContent": {
+            "ok": true,
+            "failed": []
+          }
         },
         {
           "run": 2,
@@ -248,7 +310,18 @@
           "skeletonOk": true,
           "scriptRan": true,
           "modulesWithFindings": 3,
-          "fixtureDirty": 0
+          "fixtureDirty": 0,
+          "summaryArithmetic": {
+            "present": true,
+            "ok": true,
+            "sources": [
+              "numeric-table"
+            ]
+          },
+          "sectionContent": {
+            "ok": true,
+            "failed": []
+          }
         }
       ],
       "median": {
@@ -266,7 +339,9 @@
         "scriptRan": "2회 중 2회",
         "skeletonOk": "2회 중 2회",
         "summaryArithmetic": "2회 중 2회",
-        "fixtureClean": "2회 중 2회"
+        "fixtureClean": "2회 중 2회",
+        "summarySound": "2회 중 2회",
+        "sectionContent": "2회 중 2회"
       }
     }
   },
@@ -301,6 +376,16 @@
       "baseline": "전 run 0 (spawned 1)",
       "require": "fan-out에서 늘어나는 것은 정상이나, completed를 깨뜨리면 안 된다",
       "why": "/code-review-full은 운영 실패 9건을 겪고도 완주했다. 실패 자체가 아니라 완주 여부가 판정 기준이다."
+    },
+    "sectionContent": {
+      "baseline": "6회 중 6회 통과 (리뷰 기준 / 실행 계획 / 요약)",
+      "require": "유지한다",
+      "why": "기준선이 만점이므로 유지가 조건이다. 형태를 바꾸면서 섹션이 자리만 지키게 되면 리포트를 읽는 사람이 먼저 잃는다."
+    },
+    "summaryArithmetic": {
+      "baseline": "6회 중 6회 `present: true, ok: true` (전부 `numeric-table`)",
+      "require": "`present: false`가 나오면 안 된다",
+      "why": "`ok: false`는 숫자가 어긋난 것이고 `present: false`는 요약에 지적이 없는 것이다. 후자는 리포트가 계약을 안 지킨 것이므로 형태 변경이 만들면 안 되는 결과다."
     }
   }
 }
