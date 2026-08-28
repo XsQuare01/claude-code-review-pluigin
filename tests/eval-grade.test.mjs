@@ -907,14 +907,18 @@ test('실행 계획이 렌더링 절차만 담으면 실패한다', () => {
   assert.equal(result.ok, false)
 })
 
-test('실물이 쓰는 여러 표기를 전부 받는다 — 숫자를 뽑지 않고 존재만 본다', () => {
+test('실물이 쓰는 여러 표기를 전부 받는다 — 라벨에 결합된 개수 표현을 찾는다', () => {
   // 처음 구현은 "후보 뒤 12자 안의 숫자"를 찾다가 첫 번째 형태를 놓쳤다.
-  // 코드 인용이 끼어 있고 그 안의 [0-9]가 먼저 걸린다. 계약을 지킨 리포트가
-  // 실패했고, 그것이 이 축의 가장 큰 위험이다.
+  // 코드 인용 속 문자 클래스 [0-9]가 먼저 걸린다. 계약을 지킨 리포트가
+  // 실패했고, 그것이 이 축의 가장 큰 위험이다. 지금은 문자 클래스를 지우고
+  // 라벨에 결합된 개수 표현을 찾는다 — 콜론이 붙으면 필드로 보고 창을 넓게,
+  // 아니면 산문으로 보고 붙어 있을 때만 인정한다.
   for (const body of [
     ['- **모덈 후보**: `ls "$RULES_DIR"/[0-9]*.md` 결과 22개 → non-00 21개', '- **적용**: 18개'],
     ['**모듈 집합** — numbered non-00 후보 21개 중 19개 적용.'],
     ['- numbered 후보: `N=20`', '- 적용: `M=18`'],
+    // 기준선 run이 쓰는 형태. 라벨과 수 사이에 한정어가 낀다.
+    ['- **후보 모듈** 21개(numbered non-00) / **적용** 19개 / `SKIPPED` 2개.'],
   ]) {
     const result = sectionsOf(withSection('실행 계획', body))
     assert.equal(result.sections['실행 계획'].ok, true, JSON.stringify(body))
@@ -947,6 +951,41 @@ test('라벨 바로 뒤의 맨 숫자도 개수로 받는다', () => {
   // `후보 20`처럼 단위 없이 쓰는 것도 계약이 금지하지 않는다. 라벨에 붙어
   // 있는지로 가른다 — `적용 여부는 2단계`는 라벨과 숫자 사이가 멀다.
   const result = sectionsOf(withSection('실행 계획', ['- 후보 20, 적용 18']))
+  assert.equal(result.sections['실행 계획'].ok, true)
+})
+
+test('단계 번호를 개수로 인정하지 않는다', () => {
+  // `2단계`는 순서지 개수가 아니다. 라벨에 붙어 있다는 것만으로 통과시키면
+  // 개수를 보고하지 않은 문장이 정상이 된다.
+  const result = sectionsOf(withSection('실행 계획', [
+    '- 후보는 2단계에서 추린다',
+    '- 적용은 2단계에서 설명한다',
+  ]))
+  assert.equal(result.sections['실행 계획'].ok, false)
+  assert.match(result.sections['실행 계획'].why, /후보 수|적용 수/)
+})
+
+test('같은 줄의 다른 명사에 붙은 건수를 라벨의 개수로 삼지 않는다', () => {
+  // `실패 2건`의 2는 실패 수이지 후보 수가 아니다. 줄 어디엔가 개수 표현이
+  // 있으면 통과시키는 검사는 "이 라벨의 개수를 보고했는가"를 재지 못한다.
+  const result = sectionsOf(withSection('실행 계획', [
+    '- 후보 수는 기록하지 않았고 실패 2건',
+    '- 적용 수는 기록하지 않았고 오류 3건',
+  ]))
+  assert.equal(result.sections['실행 계획'].ok, false)
+})
+
+test('버전·날짜가 라벨 근처에 있어도 개수가 아니다', () => {
+  const result = sectionsOf(withSection('실행 계획', [
+    '- 후보 산정은 2026-08-28 기준이다',
+    '- 적용 규칙은 v2 정책을 따른다',
+  ]))
+  assert.equal(result.sections['실행 계획'].ok, false)
+})
+
+test('개수가 라벨 앞에 와도 인정한다', () => {
+  // 실물이 쓰는 형태: `후보 21개 중 19개 적용`. 19는 적용 라벨 앞에 있다.
+  const result = sectionsOf(withSection('실행 계획', ['**모듈 집합** — numbered non-00 후보 21개 중 19개 적용.']))
   assert.equal(result.sections['실행 계획'].ok, true)
 })
 
