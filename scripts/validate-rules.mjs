@@ -904,6 +904,34 @@ for (const [owner, contextPaths] of Object.entries(STRUCTURED_OWNER_POLICY_BEARI
     }
   }
 
+  // finding 표기의 정본. 같은 명령이 같은 날 세 번 돌아 세 가지 표기를 냈고
+  // (`####` 블록 / `| Severity | Rule |` 표 / `Error`·`Warning` 영어 등급),
+  // 원인은 형식이 산문으로만 적혀 있고 실물 예시가 900줄짜리 계약 안쪽에
+  // 있었던 것이다. 보여주지 않은 형식은 지켜지지 않는다.
+  //
+  // 블록이 있기만 하고 속이 비면 주입해도 아무것도 고정되지 않으므로, 표기를
+  // 이루는 다섯 조각이 실제로 들어 있는지 함께 본다.
+  const renderShape = extractMarkedBlock(workflowContract, 'FINDING_RENDER_SHAPE', 'structured-contract', 'E_RENDER_SHAPE_BLOCK_COUNT')
+  if (renderShape) {
+    const required = [
+      ['####', 'finding 헤딩'],
+      ['영향:', '영향도 축'],
+      ['확신:', '확신도 축'],
+      ['본문:', '본문 줄'],
+      ['근거:', '근거 줄'],
+      ['개선 제안:', '개선 제안 줄'],
+    ]
+    const missing = required.filter(([token]) => !renderShape.includes(token)).map(([, name]) => name)
+    if (missing.length > 0) {
+      failCode('structured-contract', 'E_RENDER_SHAPE_INCOMPLETE',
+        `workflow-contract.md FINDING_RENDER_SHAPE block is missing: ${missing.join(', ')}`)
+    }
+    if (!/🔴|🟡|🔵/.test(renderShape)) {
+      failCode('structured-contract', 'E_RENDER_SHAPE_INCOMPLETE',
+        'workflow-contract.md FINDING_RENDER_SHAPE block must show an emoji severity')
+    }
+  }
+
   for (const relativePath of STRUCTURED_PRODUCER_FILES) {
     const text = read(join(ROOT, relativePath))
     validateMarkdownBlocks(relativePath, text, 'structured-producer')
@@ -913,6 +941,12 @@ for (const [owner, contextPaths] of Object.entries(STRUCTURED_OWNER_POLICY_BEARI
     }
     if (!text.includes(STRUCTURED_PRODUCER_MARKER)) {
       failCode('structured-producer', 'E_PRODUCER_MISSING_SENTINEL', `${relativePath} must include the stable marker ${STRUCTURED_PRODUCER_MARKER}`)
+    }
+    // 렌더 단계가 형식을 눈앞에 두게 한다. "C-7을 따르라"는 참조는 네 스킬에
+    // 이미 전부 있었고, 그래도 표기가 갈렸다 — 참조는 형식을 보여주지 않는다.
+    if (!text.includes('FINDING_RENDER_SHAPE')) {
+      failCode('structured-producer', 'E_RENDER_SHAPE_NOT_INJECTED',
+        `${relativePath} must inject the FINDING_RENDER_SHAPE block from workflow-contract.md at the render step`)
     }
     const anchor = text.indexOf('REVIEW_RESULT_CONTRACT_V1')
     const section = nearestHeadingSlice(text, anchor)

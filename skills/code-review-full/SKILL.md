@@ -290,6 +290,14 @@ bundle verifier와 isolated verifier는 **같은 prompt 계약**을 쓴다. 단�
 - 두 번째도 `malformed-output`이면 그 패스는 `FAILED malformed-output`으로 기록하고, 부분 보정이나 Markdown 해석으로 통과시키지 않는다. dispatch/result handling과 실패 기록은 이 skill이 책임진다.
 - aggregation은 **검증을 통과한 JSON만** 입력으로 받는다. 이 단계에서는 parsed finding/openQuestion을 패스 라벨과 함께 정렬·중복 제거·그룹화할 뿐, Markdown 헤딩이나 severity 문자열을 읽거나 재사용하지 않는다.
 - renderer가 구조화 필드에서 최종 문서를 생성한다. `####` 헤딩, 섹션 이름, 상태 표, `미해결 / 후속 확인` 항목, severity 이모지는 모두 renderer가 만든다.
+
+> `FINDING_RENDER_SHAPE`는 `workflow-contract.md`의 finding 표기 sentinel 블록 전문을 그대로 주입한 런타임 placeholder입니다. 산문 요약이나 "C-7을 따르세요"로 대체하지 말고, **블록을 눈앞에 두고 그 모양 그대로** 렌더링하세요.
+>
+> {FINDING_RENDER_SHAPE}
+>
+> 이 블록이 고정하는 다섯 가지는 선택지가 아닙니다: finding 하나당 `####` 헤딩 하나(표 행이 아님), severity는 `🔴`/`🟡`/`🔵`만, 헤딩 다음 줄은 `영향`·`확신` 축, 그다음 줄은 `경로:줄`과 코드 인용, 그리고 `본문`·`근거`·`개선 제안` 세 줄.
+>
+> **같은 명령이 같은 날 세 번 돌아 세 가지 다른 표기를 냈다** — `####` 블록, 그리고 `| Severity | Rule | Summary |` 표에 `Error`/`Warning` 영어 등급. 형식을 산문으로만 적어두면 매 실행이 모양을 재구성하고 매번 다른 답을 낸다.
 - severity는 renderer output 단계에서만 `impact × confidence`로 파생한다. producer나 aggregation 단계에는 severity source field가 없다.
 
 ### 상세 지적 작성 규칙
