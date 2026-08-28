@@ -102,6 +102,12 @@ sub-agent 응답을 받은 즉시 `workflow-contract.md` C-6A와 `REVIEW_RESULT_
 - 공개 섹션은 `## 리뷰 기준`, `## 판정`, `## 상세 지적`, `## 요약`, `## 도구 실행 결과`, `## 미해결 / 후속 확인`을 기본으로 하고, 빈 섹션은 생략한다.
 - `요약`은 historical `한눈에 보기` 의미를 유지하는 공개 summary slot이다. finding/pass 집계와 merge decision을 빠르게 볼 수 있어야 한다.
 - `상세 지적`에는 validated finding을 Markdown으로 렌더링한다. `body`, `evidence`, `recommendation`, `findingConfidenceReason`, `locationUnverifiedReason`은 `workflow-contract.md` manifest의 renderer slot/label/order를 따른다.
+
+> `FINDING_RENDER_SHAPE`는 `workflow-contract.md`의 finding 표기 sentinel 블록 전문을 그대로 주입한 런타임 placeholder입니다. 산문 요약이나 "C-7을 따르세요"로 대체하지 말고, **블록을 눈앞에 두고 그 모양 그대로** 렌더링하세요.
+>
+> {FINDING_RENDER_SHAPE}
+>
+> 이 블록이 고정하는 다섯 가지는 선택지가 아닙니다: finding 하나당 `####` 헤딩 하나(표 행이 아님), severity는 `🔴`/`🟡`/`🔵`만, 헤딩 다음 줄은 `영향`·`확신` 축, 그다음 줄은 `경로:줄`과 코드 인용, 그리고 `본문`·`근거`·`개선 제안` 세 줄.
 - `미해결 / 후속 확인`에는 validated `openQuestions`를 렌더링하고 `openQuestionReason` label을 사용한다.
 
 ### Step 5: 문서 저장
