@@ -52,6 +52,61 @@ fan-out에 특수 패스와 교차검증까지 붙어 run 비용이 크고, 타�
 (`RULES_DIR`이 설치된 캐시가 아니라 `--plugin-dir`로 준 트리로 해석된다는 것은
 sentinel 규칙 파일로 확인했다 — `baseline.json`의 exit condition 3 참고.)
 
+## 죽은 run이 남기는 것 — 스트림 캡처
+
+`--output-format stream-json`으로 받아 `evals/results/streams/`에 **흘려 쓴다.**
+기본으로 켜져 있고 `--no-stream`으로 끈다.
+
+### 왜
+
+`opFailures`·`numTurns`·`stopReason`·`totalCostUsd`는 전부 claude가 **정상
+종료할 때만** 뱉는 결과 봉투에서 나온다. harness가 타임아웃으로 kill한
+프로세스에는 그 봉투가 없다 — 즉 **타임아웃을 재는 데 성공한 순간 진단
+정보를 잃는다.** 2026-08-31 `render-throughput` run이 정확히 그랬다:
+`completed=timeout`, `durationSec=2400`, `reportFound=false`, 그리고 나머지는
+전부 null.
+
+스트림은 턴이 끝날 때마다 한 줄씩 파일에 쌓이므로 kill돼도 그 시점까지가
+남는다.
+
+### 무엇이 결과 파일에 더 실리나
+
+| 필드 | 뜻 |
+|---|---|
+| `envelopeSource` | 봉투를 어디서 건졌나 — `stream-result` / `stdout-json` / `null` |
+| `progress` | `dispatched`·`returned`·`producersDone`·`writesStarted`·`writesFinished`·`pending` |
+| `stall` | 병목 판정. **완주한 run에는 붙이지 않는다**(`null`) |
+| `streamPath`·`streamTruncated`·`streamMalformed` | 스트림 파일과 그 상태 |
+
+`pending`이 핵심이다 — 죽는 순간 결과를 기다리고 있던 tool_use가 그대로
+남고, 그것이 병목의 위치다.
+
+### 판정 규칙은 사후에 만들지 않았다
+
+`evals/cases/render-throughput/case.json`에 **실행 전에** 적어둔 문장을 값에
+적용할 뿐이다:
+
+> producer가 전부 끝났는데 리포트가 없으면 병목은 렌더 단계다.
+> producer 쪽에서 멈췄으면 병목은 fan-out이고 렌더러 처방은 헛다리다.
+
+근거가 없으면 판정하지 않는다. `Task` dispatch가 0회였던 run은 두 가설 중
+어느 쪽도 지지하지 않으므로 `unknown`이다 — 그것을 `render`로 접으면
+fan-out이 재현되지 않은 run을 렌더 병목의 증거로 쓰게 된다.
+
+### 실행 없이 검증한다
+
+`tests/eval-review-stream.test.mjs`가 claude 자리에 NDJSON만 흘리는 가짜를
+놓고 runner를 끝에서 끝까지 돌린다 — **모델 호출 0회.** 스폰·스트림 캡처·
+kill·판정까지의 배선이 여기서 지켜진다. 순수 함수 테스트로는 볼 수 없는
+것들이다(죽인 프로세스가 실제로 죽는가, 스트림이 정말 파일에 남는가).
+
+`tests/fixtures/streams/`는 같은 규칙을 파서 수준에서 고정한다.
+
+### 파일 크기
+
+긴 run의 `.ndjson`은 커질 수 있다. 죽은 run의 유일한 증거라 지우지 않지만,
+커밋 전에 크기를 한 번 보는 것이 좋다.
+
 ## `--add-dir`에 플러그인 디렉터리도 넣어야 하는 이유
 
 `runClaude`는 fixture 루트뿐 아니라 `pluginDir`도 `--add-dir`로 넘긴다.

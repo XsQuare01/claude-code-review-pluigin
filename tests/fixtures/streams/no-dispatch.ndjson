@@ -1,0 +1,6 @@
+{"type":"system","subtype":"init","session_id":"s1"}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"규칙 모듈을 읽는다"}]}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"r1","name":"Read","input":{"file_path":"review-rules/00-rule.md"}}]}}
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"r1","content":"..."}]}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"r2","name":"Read","input":{"file_path":"review-rules/02-types.md"}}]}}
+{"type":"u
