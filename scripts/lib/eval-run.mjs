@@ -308,7 +308,14 @@ export const summarizeProgress = events => {
  * 않은 run을 렌더 병목의 증거로 쓰게 된다. 완주한 run에는 아예 적용하지
  * 않는다(호출부가 completed !== true일 때만 부른다).
  */
-export const diagnoseStall = progress => {
+export const diagnoseStall = (progress, { completed, envelope } = {}) => {
+  if (completed === 'failed' && envelope?.is_error === true && (progress?.dispatched ?? 0) === 0) {
+    const detail = envelope.result || envelope.terminal_reason || '실행 오류'
+    return {
+      verdict: 'not-started',
+      why: `리뷰가 시작되기 전에 실행이 실패했다 — ${detail}`,
+    }
+  }
   if (!progress || progress.events === 0) {
     return { verdict: 'unknown', why: '스트림이 비었다 — stream 캡처가 꺼져 있었거나 프로세스가 첫 턴 전에 죽었다' }
   }

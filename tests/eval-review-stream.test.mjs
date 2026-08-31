@@ -31,6 +31,13 @@ const use = (id, name, input) => ({ type: 'tool_use', id, name, input })
 const done = (id, text) => ({ type: 'tool_result', tool_use_id: id, content: text })
 
 out({ type: 'system', subtype: 'init', session_id: 'fake' })
+if (process.env.SCENARIO === 'api-error') {
+  out({
+    type: 'result', subtype: 'success', is_error: true, num_turns: 1,
+    terminal_reason: 'api_error', result: 'API Error: Connection refused (ConnectionRefused)',
+  })
+  process.exitCode = 1
+} else {
 out(assistant(
   use('t1', 'Task', { description: '02' }),
   use('t2', 'Task', { description: '06' }),
@@ -51,6 +58,7 @@ if (process.env.SCENARIO === 'hang') {
     subagent_stats: { spawned: 3, failed: 0, killed: {}, refused: {} },
     result: '# fake report\\n',
   })
+}
 }
 `
 
@@ -76,7 +84,8 @@ const resultPath = label => join(ROOT, 'evals', 'results', `${CASE}-${label}.jso
 const runHarness = ({ scenario, label, timeoutMinutes }) => {
   const binDir = plantFakeClaude()
   try {
-    execFileSync(process.execPath, [
+    try {
+      execFileSync(process.execPath, [
       join(ROOT, 'scripts', 'eval-review.mjs'),
       '--case', CASE, '--label', label, '--runs', '1',
       '--timeout-minutes', String(timeoutMinutes),
@@ -89,7 +98,12 @@ const runHarness = ({ scenario, label, timeoutMinutes }) => {
       // 낫다 — 실제로 kill 순서가 틀렸을 때 정확히 이 증상이었다.
       timeout: 90_000,
       killSignal: 'SIGKILL',
-    })
+      })
+    } catch (error) {
+      // 실패 run을 포함한 배치는 의도적으로 non-zero다. 결과 파일이 생겼다면
+      // harness의 판정을 검증하고, 파일조차 없으면 진짜 실행 결함을 다시 던진다.
+      if (!existsSync(resultPath(label))) throw error
+    }
   } finally {
     rmSync(binDir, { recursive: true, force: true })
   }
@@ -167,4 +181,17 @@ test('죽기 직전까지의 스트림이 디스크에 남는다', t => {
   const lines = readFileSync(run.streamPath, 'utf8').split('\n').filter(Boolean)
   assert.equal(lines.length, 6)
   assert.equal(JSON.parse(lines[0]).type, 'system')
+})
+
+test('API 오류 문구를 리포트로 보관하지 않고 배치를 실패시킨다', t => {
+  const label = 'selftest-api-error'
+  t.after(() => cleanUp(label))
+  const saved = runHarness({ scenario: 'api-error', label, timeoutMinutes: 1 })
+  const run = saved.results[0]
+
+  assert.equal(run.completed, 'failed')
+  assert.equal(run.reportSource, null)
+  assert.equal(run.keptReport, null)
+  assert.equal(run.stall.verdict, 'not-started')
+  assert.match(run.stall.why, /Connection refused/)
 })

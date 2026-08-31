@@ -397,6 +397,12 @@ if (has('regrade')) {
   const regraded = []
   const skipped = []
   for (const previousRun of previous.results) {
+    // 실패/타임아웃 run의 result에는 API 오류 같은 진단 문구가 들어갈 수 있다.
+    // 과거 harness가 그것을 리포트로 보관했더라도 정상 리뷰로 재채점하지 않는다.
+    if (previousRun.completed !== true) {
+      skipped.push({ run: previousRun.run, why: `완주하지 않은 run은 재채점하지 않는다 (completed=${previousRun.completed})` })
+      continue
+    }
     // 리포트가 없는 run은 조용히 빼지 않는다. 조용히 빠지면 재채점 결과가
     // 원본보다 run이 적은데 그 이유가 어디에도 남지 않는다.
     // keptReport는 리포트 보관이 들어간 뒤의 run에만 있다. 그 전 run도 관례
@@ -485,7 +491,11 @@ for (let index = 0; index < runs; index += 1) {
   // reportSource는 "리포트를 어디서 얻었나(file/stdout/둘 다 없음)"를 뜻한다 —
   // 하나로 합치면 "계약대로 파일에 썼다"와 "stdout에서 겨우 건졌다"가
   // 구분되지 않는다.
-  const reportSource = reportPath ? 'file' : envelope?.result ? 'stdout' : null
+  // 실패 봉투의 result는 리뷰가 아니라 오류 진단이다. 성공한 실행의 result만
+  // stdout fallback 리포트로 인정해야 API Error 문구가 보관·재채점되지 않는다.
+  const reportSource = reportPath ? 'file'
+    : execution.completed === true && envelope?.is_error !== true && envelope?.result ? 'stdout'
+    : null
   const reportText = reportSource === 'file' ? readFileSync(reportPath, 'utf8')
     : reportSource === 'stdout' ? envelope.result
     : ''
@@ -543,7 +553,7 @@ for (let index = 0; index < runs; index += 1) {
     // 경로가 아니라 채점기가 실제로 읽은 본문을 넘긴다. stdout 봉투에서 건진
     // 리포트는 reportPath가 없지만 채점은 정상적으로 되므로, 경로 기준으로
     // 보관하면 비용을 치른 성공 run이 재채점 불가가 된다.
-    keptReport: keepReport(index, reportText),
+    keptReport: execution.completed === true ? keepReport(index, reportText) : null,
     fixtureRoot: fixture.root,
     fixtureDirty,
     // 봉투에서 나오는 진단 정보. permissionDenials가 특히 중요하다 — 리뷰가
@@ -570,11 +580,11 @@ for (let index = 0; index < runs; index += 1) {
     progress: execution.progress,
     // 완주한 run에는 붙이지 않는다. 멈춘 자리를 묻는 값이라, 멈추지 않은
     // run에 붙으면 판정처럼 보이는 무의미한 문자열이 남는다.
-    stall: execution.completed === true ? null : diagnoseStall(execution.progress),
+    stall: execution.completed === true ? null : diagnoseStall(execution.progress, execution),
     ...(scored ?? {}),
   })
   writeResults()
-  const stall = execution.completed === true ? null : diagnoseStall(execution.progress)
+  const stall = execution.completed === true ? null : diagnoseStall(execution.progress, execution)
   process.stdout.write(`run ${index + 1}/${runs}: completed=${execution.completed} ${execution.durationSec}s report=${reportSource ?? 'none'}\n`)
   if (stall) process.stdout.write(`  stall=${stall.verdict} — ${stall.why}\n`)
 }
@@ -594,3 +604,7 @@ for (const result of results) {
     process.stdout.write(`  run ${result.run}: not graded (completed=${result.completed} reportSource=${result.reportSource})\n`)
   }
 }
+
+// 결과 JSON은 먼저 온전히 쓴 뒤 자동화 호출자에게 배치 실패를 전달한다.
+// 일부 run이라도 미완주면 성공 배치로 취급할 수 없다.
+if (results.some(result => result.completed !== true)) process.exitCode = 1
