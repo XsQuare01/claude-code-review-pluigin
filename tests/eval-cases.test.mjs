@@ -84,6 +84,19 @@ for (const name of caseNames) {
   // 리뷰의 실패가 아니라 fixture의 낡음을 재게 된다 — 측정 장치의 결함을 측정
   // 대상의 결함으로 읽는 이 저장소의 단골 실패다. anchor는 그 줄에 실제로
   // 무엇이 있어야 하는지를 못박는다.
+  // mustFind가 비면 그 아래 검사들이 전부 **무증상으로 통과**한다. 빈 배열이
+  // 설계인 경우(처리량 측정)와 expected.json을 빠뜨린 경우가 같은 초록불로
+  // 보이면, 케이스를 추가하다 기대값을 잊은 것을 아무도 못 잡는다.
+  //
+  // 그래서 빈 mustFind는 case.json에 measures로 **선언해야만** 허용한다.
+  test(`${name}: mustFind가 비어 있으면 measures를 선언했다`, () => {
+    const expected = readJson('expected.json')
+    if (expected.mustFind.length > 0) return
+    const meta = readJson('case.json')
+    assert.ok(meta.measures,
+      `${name}: mustFind가 비어 있는데 case.json에 measures 선언이 없다 — 처리량 측정이면 선언하고, 아니면 기대값을 빠뜨린 것이다`)
+  })
+
   test(`${name}: mustFind의 anchor가 그 줄에 실제로 있다`, () => {
     const expected = readJson('expected.json')
     for (const target of expected.mustFind) {
