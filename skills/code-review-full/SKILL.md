@@ -17,7 +17,7 @@ description: Use when the user invokes /code-review-full or asks for a full code
 
 ## 공통 계약
 
-`RULES_DIR` 해석, 모듈 탐색, 적용 조건 판정, 범위 결정, 제외 경로, 실행 안전, 리포트 저장, 실패 보고는 **`$RULES_DIR/workflow-contract.md`** 를 따른다. 이 문서는 그 계약을 복제하지 않고 아래 차이만 선언한다.
+`RULES_DIR` 해석, 모듈 탐색, 적용 조건 판정, 범위 결정, 제외 경로, 실행 안전, 리포트 저장, 실행 타임라인(C-9), 실패 보고는 **`$RULES_DIR/workflow-contract.md`** 를 따른다. 이 문서는 그 계약을 복제하지 않고 아래 차이만 선언한다.
 
 | 항목 | 이 워크플로우 |
 |------|---------------|

@@ -16,7 +16,7 @@ description: Use when the user wants a faster, shorter code review that highligh
 
 ## 공통 계약
 
-`RULES_DIR` 해석, 범위 결정, 제외 경로, 실행 안전, 리포트 저장, 실패 보고는 **`$RULES_DIR/workflow-contract.md`** 를 따른다. 아래는 이 워크플로우의 차이다.
+`RULES_DIR` 해석, 범위 결정, 제외 경로, 실행 안전, 리포트 저장, 실행 타임라인(C-9), 실패 보고는 **`$RULES_DIR/workflow-contract.md`** 를 따른다. 아래는 이 워크플로우의 차이다.
 
 | 항목 | 이 워크플로우 |
 |------|---------------|

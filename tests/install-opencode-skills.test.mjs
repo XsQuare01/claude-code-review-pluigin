@@ -53,6 +53,15 @@ test('규칙 디렉터리를 스킬과 함께 놓는다', t => {
   assert.ok(existsSync(join(target, '.claude-plugin', 'plugin.json')))
 })
 
+test('스킬이 실행하는 헬퍼 스크립트를 함께 놓는다', t => {
+  // 스킬은 `$RULES_DIR/../scripts/*.mjs`를 **실행한다**. 이게 빠지면 위치
+  // 대조와 실행 타임라인이 조용히 건너뛰어지고, 리포트는 그 사실을 말하지 않는다.
+  const target = freshTarget(t)
+  assert.equal(run(['--target', target]).status, 0)
+  assert.ok(existsSync(join(target, 'scripts', 'prepare-verification.mjs')))
+  assert.ok(existsSync(join(target, 'scripts', 'review-timeline.mjs')))
+})
+
 test('규칙이 없으면 --check가 사유와 함께 실패한다', t => {
   const target = freshTarget(t)
   assert.equal(run(['--target', target]).status, 0)

@@ -50,6 +50,10 @@ const PARTS = [
   { from: 'skills', to: join('.opencode', 'skills'), why: 'opencode 프로젝트 스킬 경로' },
   { from: 'review-rules', to: 'review-rules', why: 'C-1의 2번 경로 — 없으면 홈의 낡은 사본으로 내려간다' },
   { from: '.claude-plugin', to: '.claude-plugin', why: '리포트에 적을 플러그인 버전(C-1)' },
+  // 스킬이 `$RULES_DIR/../scripts/*.mjs`를 **실행한다** — 위치 대조
+  // (prepare-verification.mjs)와 실행 타임라인(review-timeline.mjs)이 여기 있다.
+  // 빠뜨리면 둘 다 조용히 건너뛰어지고, 리포트는 그 사실을 말하지 않는다.
+  { from: 'scripts', to: 'scripts', why: '스킬이 실행하는 헬퍼 — 없으면 위치 대조와 타임라인이 조용히 빠진다' },
 ]
 
 const check = () => {

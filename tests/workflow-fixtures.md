@@ -540,6 +540,46 @@ These scenarios pin the behaviour that `review-rules/workflow-contract.md` promi
       ],
       "scenario": "The script returns fewer rows than the REVIEW_LOCATIONS block sent",
       "expected": "The whole check degrades to 대조 미실행 rather than reporting a partial result as complete"
+    },
+    {
+      "id": 71,
+      "clauses": [
+        "C-9"
+      ],
+      "scenario": "The render step is killed by a host timeout before the report file is written",
+      "expected": "The timeline sidecar survives with render.start as its last line, and the summary states that run.end is absent rather than implying the last phase succeeded"
+    },
+    {
+      "id": 72,
+      "clauses": [
+        "C-9"
+      ],
+      "scenario": "A run writes every timeline line at the end instead of at each boundary",
+      "expected": "This violates C-9 — batching leaves a run that dies mid-way with no timeline at all, which is the case the sidecar exists for"
+    },
+    {
+      "id": 73,
+      "clauses": [
+        "C-9"
+      ],
+      "scenario": "A run supplies its own at/seq/sinceStartSec values in --data",
+      "expected": "The script discards them and records its own, so a measured time is never confused with a claimed one"
+    },
+    {
+      "id": 74,
+      "clauses": [
+        "C-9"
+      ],
+      "scenario": "Fan-out dies partway through dispatching modules",
+      "expected": "The per-module module.done lines already written identify how far it got; a run that logged only dispatch.end would leave no evidence"
+    },
+    {
+      "id": 75,
+      "clauses": [
+        "C-9"
+      ],
+      "scenario": "The timeline sidecar cannot be written (read-only location, missing script)",
+      "expected": "The review continues and the report says the timeline was not recorded; a failed timeline write is not a failed review"
     }
   ],
   "defaultWorkflowOnlyCases": [
