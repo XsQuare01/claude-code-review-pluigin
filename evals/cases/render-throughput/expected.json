@@ -1,0 +1,5 @@
+{
+  "$comment": "**이 케이스는 탐지가 아니라 처리량을 잰다.** mustFind와 mustNotFlag가 비어 있는 것은 실수가 아니라 설계다 — 재는 축은 completed, durationSec, reportFound, opFailures이고 그 넷은 expected.json이 필요 없다. recall은 항상 0/0으로 나오며 그 값을 읽지 않는다. 결함을 정교하게 심는 대신 여러 규칙군에 걸친 위반을 넓게 깔아 지적 수를 늘린다.",
+  "mustFind": [],
+  "mustNotFlag": []
+}

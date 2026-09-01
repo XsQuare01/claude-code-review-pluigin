@@ -48,13 +48,20 @@ export const parseEnvelope = stdout => {
  */
 export const buildClaudeArgs = ({
   command, pluginDir, fixtureRoot, permissionMode, appendSystemPrompt, model, effort,
+  outputFormat = 'json',
 }) => [
   '-p', command,
   '--plugin-dir', pluginDir,
   '--add-dir', fixtureRoot,
   '--add-dir', pluginDir,
   '--permission-mode', permissionMode,
-  '--output-format', 'json',
+  '--output-format', outputFormat,
+  // stream-json은 -p와 함께 쓸 때 --verbose를 요구한다. 빠뜨리면 claude가
+  // 바로 종료하는데, 그 실패는 몇 초 만에 나므로 40분을 태우지는 않는다 —
+  // 그래도 붙여둔다. json 형식에는 붙이지 않는다: 이 플래그가 그쪽 stdout에
+  // 무엇을 더 얹는지가 봉투 파싱의 전제와 얽히고, 그 전제를 실행 없이
+  // 확인할 방법이 없다.
+  ...(outputFormat === 'stream-json' ? ['--verbose'] : []),
   // 모델과 effort를 harness가 직접 정한다. A2의 첫 6회는 둘 다 지정하지 않아
   // 세션 기본값을 상속받았고(`opus[1m]`, `xhigh`), 그것은 사용자가 /config에서
   // 모델을 바꾸면 기준선이 조용히 다른 조건의 숫자가 된다는 뜻이다. 값은
@@ -150,4 +157,179 @@ export const storeReport = ({ text, name, write }) => {
   if (!text) return null
   write(name, text)
   return `reports/${name}`
+}
+
+// ---------------------------------------------------------------------------
+// 죽은 프로세스에서 진행 상황을 읽는다.
+//
+// 왜 필요한가: 2026-08-31 render-throughput run은 타임아웃을 **재현하는 데는
+// 성공**했지만(completed=timeout, 2400s, reportFound=false) 원인을 가르지
+// 못했다. opFailures·numTurns·stopReason이 전부 비어 있었기 때문인데, 그
+// 값들은 전부 `--output-format json`이 프로세스 **정상 종료 시에만** 뱉는
+// 결과 봉투에서 나온다. harness가 kill한 프로세스는 그 봉투를 쓸 기회가 없다.
+//
+// 즉 **타임아웃을 재는 데 성공한 순간 진단 정보를 잃는 구조**였고, 그것은
+// 돌려보고 알아낸 것이 아니라 이 파일의 parseEnvelope와 classifyExit를 나란히
+// 읽었으면 실행 전에 알 수 있는 것이었다. 40분을 쓰고 채점 가능한 결과가 0건
+// 나온 뒤에야 봤다.
+//
+// stream-json은 턴이 끝날 때마다 NDJSON 한 줄을 흘린다. 그 줄들을 파일로
+// 받아두면 kill돼도 죽기 직전까지가 남고, case.json에 미리 등록해 둔 판별
+// 규칙("producer가 전부 끝났는데 리포트가 없으면 렌더 병목")을 그제서야 실제
+// 값으로 적용할 수 있다.
+// ---------------------------------------------------------------------------
+
+/**
+ * stream-json stdout(NDJSON)을 이벤트 배열로 읽는다.
+ *
+ * kill된 프로세스의 마지막 줄은 거의 항상 **쓰다 만 JSON**이다. 그것을 파싱
+ * 실패로 세면 "형식이 깨졌다"와 "중간에 죽었다"가 같은 숫자로 뭉개진다 —
+ * 후자는 정상이고 전자는 파서가 틀렸다는 뜻이라 대응이 정반대다. 그래서
+ * 마지막 줄의 실패만 truncated로 따로 센다.
+ *
+ * 던지지 않는다. 여기서 던지면 배치 전체가 한 run의 깨진 stdout 때문에 멈춘다.
+ */
+export const parseStreamEvents = text => {
+  const lines = String(text ?? '').split('\n')
+  const events = []
+  let malformed = 0
+  let truncated = false
+  lines.forEach((line, at) => {
+    const trimmed = line.trim()
+    if (!trimmed) return
+    try {
+      events.push(JSON.parse(trimmed))
+    } catch {
+      if (at === lines.length - 1) truncated = true
+      else malformed += 1
+    }
+  })
+  return { events, malformed, truncated }
+}
+
+/**
+ * 스트림에서 결과 봉투를 건진다.
+ *
+ * stream-json의 마지막 `type: "result"` 이벤트가 `--output-format json`의
+ * 봉투와 같은 자리다. 이것이 있으면 numTurns·subagent_stats·total_cost_usd가
+ * 종전과 똑같이 채워진다 — 즉 스트림으로 바꿔도 **완주한 run이 잃는 정보는
+ * 없다.**
+ *
+ * 뒤에서부터 찾는다. 스트림 중간에 result가 또 나오는 경우(재시도 등)에
+ * 앞엣것을 잡으면 이미 지난 상태를 최종 결과로 읽게 된다.
+ */
+export const envelopeFromStream = events => {
+  for (let at = events.length - 1; at >= 0; at -= 1) {
+    if (events[at]?.type === 'result') return events[at]
+  }
+  return null
+}
+
+// sub-agent를 띄우는 도구. 이 이름의 tool_use 하나가 producer 하나다.
+const DISPATCH_TOOL = 'Task'
+// 리포트를 실제로 디스크에 쓰는 도구들. 렌더 단계가 시작됐는지의 신호다.
+const WRITE_TOOLS = new Set(['Write', 'Edit', 'MultiEdit', 'NotebookEdit'])
+
+/**
+ * 이벤트에서 진행 상황을 센다.
+ *
+ * 핵심은 **tool_use와 tool_result의 짝**이다. 짝이 맞지 않고 남은 tool_use가
+ * 프로세스가 죽은 순간 기다리고 있던 일이고, 그것이 병목의 위치다.
+ *
+ * dispatched와 returned를 따로 센다. 합쳐서 "fan-out이 돌았다"로 접으면
+ * producer가 다 끝났는지 아직인지가 사라지는데, 그 구분이 이 함수를 만든
+ * 이유 전부다.
+ */
+export const summarizeProgress = events => {
+  const pending = new Map()
+  let assistantTurns = 0
+  let dispatched = 0
+  let returned = 0
+  let writesStarted = 0
+  let writesFinished = 0
+  let lastType = null
+
+  for (const event of events) {
+    if (!event || typeof event !== 'object') continue
+    lastType = event.type ?? lastType
+    if (event.type === 'assistant') assistantTurns += 1
+    const content = event.message?.content
+    if (!Array.isArray(content)) continue
+    for (const block of content) {
+      if (block?.type === 'tool_use') {
+        pending.set(block.id, {
+          name: block.name,
+          // 무엇을 하다 멈췄는지. 경로가 없는 도구(Task 등)는 description을
+          // 대신 남긴다 — 둘 다 없으면 도구 이름만으로는 어느 모듈이었는지
+          // 알 수 없다.
+          target: block.input?.file_path ?? block.input?.description ?? null,
+        })
+        if (block.name === DISPATCH_TOOL) dispatched += 1
+        if (WRITE_TOOLS.has(block.name)) writesStarted += 1
+      }
+      if (block?.type === 'tool_result') {
+        const started = pending.get(block.tool_use_id)
+        if (!started) continue
+        pending.delete(block.tool_use_id)
+        if (started.name === DISPATCH_TOOL) returned += 1
+        if (WRITE_TOOLS.has(started.name)) writesFinished += 1
+      }
+    }
+  }
+
+  return {
+    events: events.length,
+    assistantTurns,
+    dispatched,
+    returned,
+    // "producer가 전부 끝났다"는 dispatched > 0일 때만 참일 수 있다. 0/0을
+    // 참으로 접으면 fan-out이 아예 없었던 run이 "producer 완료"로 보인다.
+    producersDone: dispatched > 0 && returned === dispatched,
+    writesStarted,
+    writesFinished,
+    // 죽는 순간 기다리고 있던 일들. 병목의 위치가 여기 그대로 있다.
+    pending: [...pending.values()],
+    lastType,
+  }
+}
+
+/**
+ * case.json에 미리 등록해 둔 판별 규칙을 값에 적용한다.
+ *
+ *   producer가 전부 끝났는데 리포트가 없으면 병목은 렌더 단계다.
+ *   producer 쪽에서 멈췄으면 병목은 fan-out이고 렌더러 처방은 헛다리다.
+ *
+ * 사후 해석을 막으려고 실행 **전에** 적어둔 문장이고, 이 함수는 그것을 손으로
+ * 읽지 않아도 되게 옮긴 것뿐이다. 규칙을 여기서 바꾸면 사전 등록의 의미가
+ * 없어진다.
+ *
+ * 근거가 없으면 판정하지 않는다. dispatch가 한 번도 없었던 run은 두 가설 중
+ * 어느 쪽도 지지하지 않는다 — 그것을 'render'로 접으면 fan-out이 재현되지
+ * 않은 run을 렌더 병목의 증거로 쓰게 된다. 완주한 run에는 아예 적용하지
+ * 않는다(호출부가 completed !== true일 때만 부른다).
+ */
+export const diagnoseStall = (progress, { completed, envelope } = {}) => {
+  if (completed === 'failed' && envelope?.is_error === true && (progress?.dispatched ?? 0) === 0) {
+    const detail = envelope.result || envelope.terminal_reason || '실행 오류'
+    return {
+      verdict: 'not-started',
+      why: `리뷰가 시작되기 전에 실행이 실패했다 — ${detail}`,
+    }
+  }
+  if (!progress || progress.events === 0) {
+    return { verdict: 'unknown', why: '스트림이 비었다 — stream 캡처가 꺼져 있었거나 프로세스가 첫 턴 전에 죽었다' }
+  }
+  if (progress.dispatched === 0) {
+    return { verdict: 'unknown', why: `Task dispatch가 0회다(assistant 턴 ${progress.assistantTurns}) — fan-out이 재현되지 않은 run이라 렌더/fan-out을 가를 근거가 없다` }
+  }
+  if (progress.returned < progress.dispatched) {
+    return { verdict: 'fanout', why: `producer ${progress.dispatched}개 중 ${progress.returned}개만 돌아왔다 — 병목은 fan-out이고 렌더러 처방은 헛다리다` }
+  }
+  if (progress.writesFinished > 0) {
+    return { verdict: 'unknown', why: `producer도 쓰기(${progress.writesFinished}건)도 끝났는데 리포트가 없다 — 렌더 지연이 아니라 저장 경로/계약 쪽 문제다` }
+  }
+  return {
+    verdict: 'render',
+    why: `producer ${progress.dispatched}개가 전부 돌아왔는데 리포트 쓰기가 ${progress.writesStarted > 0 ? '시작만 되고 끝나지 않았다' : '시작조차 되지 않았다'} — 병목은 렌더 단계다`,
+  }
 }

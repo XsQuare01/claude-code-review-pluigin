@@ -1,0 +1,167 @@
+import { test } from 'node:test'
+import assert from 'node:assert/strict'
+import { spawnSync } from 'node:child_process'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+// 리뷰가 스스로 남기는 실행 타임라인(C-9)을 고정한다.
+//
+// 왜 있는가: 2026-06부터 3개월간 "30분 걸리고 파일이 생성되지 않음"이 반복됐는데,
+// 어느 단계에서 멈췄는지가 아무 데도 남지 않아 매번 처음부터 추측했다. 리포트
+// 안에 타임라인을 적으면 렌더가 죽는 순간 함께 사라지므로, 사이드카에 한 줄씩
+// append한다.
+
+const ROOT = dirname(dirname(fileURLToPath(import.meta.url)))
+const SCRIPT = join(ROOT, 'scripts', 'review-timeline.mjs')
+const RUN = 'code-review-full-feat-x-2026-09-01'
+
+const freshDir = t => {
+  const dir = mkdtempSync(join(tmpdir(), 'timeline-'))
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  return dir
+}
+
+const log = (dir, phase, data) => spawnSync(process.execPath, [
+  SCRIPT, '--dir', dir, '--run', RUN, '--phase', phase,
+  ...(data ? ['--data', JSON.stringify(data)] : []),
+], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+
+const summary = dir => spawnSync(process.execPath, [
+  SCRIPT, '--dir', dir, '--run', RUN, '--summary',
+], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+
+const linesOf = dir => readFileSync(join(dir, '.timing', `${RUN}.jsonl`), 'utf8')
+  .split('\n').filter(Boolean).map(line => JSON.parse(line))
+
+// 미리 만든 타임라인을 심는다. 경과 시간을 재려면 실제로 기다릴 수 없다.
+const plant = (dir, events) => {
+  mkdirSync(join(dir, '.timing'), { recursive: true })
+  writeFileSync(join(dir, '.timing', `${RUN}.jsonl`), events.map(e => JSON.stringify(e)).join('\n') + '\n', 'utf8')
+}
+
+test('단계마다 한 줄씩 append하고 순번을 매긴다', t => {
+  const dir = freshDir(t)
+  assert.equal(log(dir, 'run.start', { host: 'opencode' }).status, 0)
+  assert.equal(log(dir, 'dispatch.start', { modules: 21 }).status, 0)
+  assert.equal(log(dir, 'render.start', { findings: 47 }).status, 0)
+
+  const events = linesOf(dir)
+  assert.deepEqual(events.map(e => e.phase), ['run.start', 'dispatch.start', 'render.start'])
+  assert.deepEqual(events.map(e => e.seq), [1, 2, 3])
+  assert.equal(events[0].host, 'opencode')
+  assert.equal(events[2].findings, 47)
+})
+
+test('시각과 경과는 스크립트가 만든다 — 호출자가 넘긴 값은 버린다', t => {
+  // 모델에게는 시계가 없다. 타임스탬프를 문장으로 적게 하면 그것은 측정이
+  // 아니라 기억이고, 측정값과 주장값이 같은 자리에 있으면 나중에 읽는 사람이
+  // 둘을 구분할 방법이 없다.
+  const dir = freshDir(t)
+  log(dir, 'run.start')
+  assert.equal(log(dir, 'render.start', { at: '거짓말', seq: 999, sinceStartSec: 99999, phase: 'render.end', findings: 3 }).status, 0)
+
+  const last = linesOf(dir).at(-1)
+  assert.equal(last.phase, 'render.start')
+  assert.equal(last.seq, 2)
+  assert.notEqual(last.at, '거짓말')
+  assert.ok(Number.isFinite(Date.parse(last.at)))
+  assert.ok(last.sinceStartSec < 60)
+  // 측정값이 아닌 것은 그대로 남는다.
+  assert.equal(last.findings, 3)
+})
+
+test('경과 시간을 첫 줄 기준으로 센다', t => {
+  const dir = freshDir(t)
+  const base = new Date('2026-09-01T00:00:00.000Z')
+  plant(dir, [{ at: base.toISOString(), seq: 1, sinceStartSec: 0, phase: 'run.start' }])
+  log(dir, 'render.start')
+  const last = linesOf(dir).at(-1)
+  // 지금과 2026-09-01 사이만큼 벌어져야 한다 — 0이면 첫 줄을 안 읽은 것이다.
+  assert.ok(last.sinceStartSec > 1000, `sinceStartSec=${last.sinceStartSec}`)
+})
+
+// ── --summary ──────────────────────────────────────────────────────────────
+
+test('요약 표를 스크립트가 만든다', t => {
+  const dir = freshDir(t)
+  const base = Date.parse('2026-09-01T00:00:00.000Z')
+  plant(dir, [
+    { at: new Date(base).toISOString(), seq: 1, sinceStartSec: 0, phase: 'run.start' },
+    { at: new Date(base + 60_000).toISOString(), seq: 2, sinceStartSec: 60, phase: 'dispatch.end', ok: 19 },
+    { at: new Date(base + 1_860_000).toISOString(), seq: 3, sinceStartSec: 1860, phase: 'render.start', findings: 47 },
+  ])
+  const out = summary(dir)
+  assert.equal(out.status, 0, out.stderr)
+  assert.match(out.stdout, /\| 단계 \| 경과 \| 구간 \| 상세 \|/)
+  assert.match(out.stdout, /`render.start`/)
+  // 30분짜리 구간이 최장으로 표시된다 — 어디가 느렸는지를 눈으로 찾게 하지 않는다.
+  assert.match(out.stdout, /`render\.start` \*\*←최장\*\* \| 1860s \| 1800s/)
+})
+
+test('run.end가 없으면 그 사실을 적는다', t => {
+  // 마지막 단계가 성공했다는 뜻이 아니다. 없는 것과 0은 다르다.
+  const dir = freshDir(t)
+  log(dir, 'run.start')
+  log(dir, 'render.start')
+  const out = summary(dir)
+  assert.match(out.stdout, /`run\.end`가 없다/)
+  assert.match(out.stdout, /마지막으로 남은 단계는 `render\.start`/)
+})
+
+test('run.end가 있으면 없다고 하지 않는다', t => {
+  const dir = freshDir(t)
+  log(dir, 'run.start')
+  log(dir, 'run.end', { verdict: 'PASS' })
+  assert.doesNotMatch(summary(dir).stdout, /없다/)
+})
+
+test('깨진 줄은 세되 조용히 버리지 않는다', t => {
+  const dir = freshDir(t)
+  mkdirSync(join(dir, '.timing'), { recursive: true })
+  writeFileSync(join(dir, '.timing', `${RUN}.jsonl`),
+    `{"at":"2026-09-01T00:00:00.000Z","seq":1,"phase":"run.start"}\n{"at":"쓰다 만\n`, 'utf8')
+  const out = summary(dir)
+  assert.match(out.stdout, /읽지 못한 줄 1개/)
+})
+
+test('타임라인이 없으면 빈 표를 내지 않고 사유를 낸다', t => {
+  const dir = freshDir(t)
+  const out = summary(dir)
+  assert.equal(out.status, 2)
+  assert.match(out.stderr, /타임라인이 비었다/)
+})
+
+// ── 인자 검증 ──────────────────────────────────────────────────────────────
+
+test('run에 경로 구분자가 들어오면 거부한다', t => {
+  // 통과시키면 파일이 리포트 디렉터리 밖에 생긴다.
+  const dir = freshDir(t)
+  const out = spawnSync(process.execPath, [SCRIPT, '--dir', dir, '--run', '../escape', '--phase', 'run.start'],
+    { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+  assert.equal(out.status, 2)
+  assert.match(out.stderr, /bare basename/)
+  assert.ok(!existsSync(join(dir, '.timing')))
+})
+
+test('data가 JSON이 아니거나 객체가 아니면 거부한다', t => {
+  const dir = freshDir(t)
+  const bad = spawnSync(process.execPath, [SCRIPT, '--dir', dir, '--run', RUN, '--phase', 'x', '--data', 'findings=3'],
+    { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+  assert.equal(bad.status, 2)
+  assert.match(bad.stderr, /must be JSON/)
+
+  const array = spawnSync(process.execPath, [SCRIPT, '--dir', dir, '--run', RUN, '--phase', 'x', '--data', '[1,2]'],
+    { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+  assert.equal(array.status, 2)
+  assert.match(array.stderr, /JSON object/)
+})
+
+test('phase 없이 부르면 조용히 빈 줄을 쓰지 않는다', t => {
+  const dir = freshDir(t)
+  const out = spawnSync(process.execPath, [SCRIPT, '--dir', dir, '--run', RUN],
+    { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+  assert.equal(out.status, 2)
+  assert.match(out.stderr, /--phase is required/)
+})

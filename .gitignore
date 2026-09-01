@@ -27,3 +27,6 @@ evals/results/
 # directories.
 .omc/
 .sisyphus/
+
+# opencode 설치본 — scripts/install-opencode-skills.mjs가 생성한다
+.opencode/

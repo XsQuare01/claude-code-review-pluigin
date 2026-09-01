@@ -1,0 +1,46 @@
+{
+  "name": "render-throughput",
+  "command": "/react-code-review-plugin:code-review-full",
+  "isolates": "렌더 단계의 처리량. 지적 수를 늘려 마지막 통합 단계에 부하를 준다 — producer는 fan-out으로 출력이 나뉘지만 renderer는 한 에이전트가 문서 전체를 한 턴에 뱉는다. 2.6.0이 죽은 자리이고, 2.6.2 실사용에서 '리포트 작성이 30분 제한에 걸리고 파일이 생성되지 않음'이 재발한 자리다.",
+  "measures": "throughput",
+  "notes": [
+    "**이 케이스만 `/code-review-full`을 쓴다.** 다른 셋은 `/code-review`다. 렌더 단계에 부하가 걸리는 것은 모듈 fan-out에 특수 패스와 교차검증까지 붙는 full 워크플로우이고, 그것이 실물에서 실패한 워크플로우다.",
+    "mustFind와 mustNotFlag가 비어 있다. 재는 축은 completed·durationSec·reportFound·opFailures이고 그 넷은 기대값이 필요 없다. **recall 0/0을 결과로 읽지 않는다.**",
+    "진단 판별: producer가 전부 끝났는데(opFailures.spawned == completed, failed 0) reportFound가 false면 병목은 렌더 단계다. producer 쪽에서 실패가 나면 병목은 fan-out이고 렌더러 처방은 헛다리다.",
+    "**그 판별은 2026-08-31 run에서 쓸 수 없었다.** completed=timeout, durationSec=2400, reportFound=false로 재현은 됐지만 opFailures·numTurns·stopReason·cost가 전부 비었다 — 이 값들은 프로세스가 정상 종료하며 남기는 `--output-format json` 봉투에서 나오는데 40분에 강제 kill해서 봉투가 없다. **타임아웃을 재는 데 성공한 순간 진단 정보를 잃는다.** 판별을 되살리려면 (1) `--output-format stream-json`으로 죽기 직전 턴을 남기거나 (2) kill 이후 fixture에 부분 리포트 흔적이 있는지 읽어야 한다. — **2.6.6에서 메웠다.** 스트림 캡처가 기본으로 켜져 있어, 이제 kill된 run도 `progress`와 `stall`을 남긴다.",
+    "**이 케이스를 다시 돌리지 않는다.** 리뷰 실행은 사용자 지시(2026-08-31)로 금지됐다 — `evals/README.md`의 \"돌리지 않는다\" 절 참고. 위 (1)(2)는 합성 fixture로 실행 없이 만들고 검증할 수 있다.",
+    "timeoutMinutes를 40으로 둔 이유: 실물이 30분에 걸렸다. 15분 상한으로는 '30분에 걸리는 일'을 관측할 수 없고 harness 자신의 상한만 재게 된다.",
+    "변경 20파일(신규 16·삭제 1·수정 3)로 실물 실패 사례(48파일)보다 작다. 재현되지 않으면 규모가 부족한 것이지 문제가 없는 것이 아니다 — 그 경우 fixture를 키우고 다시 잰다.",
+    "위반을 여러 규칙군에 걸쳐 깔았다: 02 타입 우회·신뢰 경계, 03 key 안정성, 04 cleanup·deps, 05 책임 혼재, 06 falsy 렌더·props 스프레드, 07 약어, 08 매직 넘버, 09 진단 코드 잔존, 12 키보드·이름, 14 identity churn, 15 중첩 루프 선형 탐색, 17 경쟁 조건, 20 삭제 회귀."
+  ],
+  "changedFiles": {
+    "added": [
+      "src/entities/frame/api/decode-frame.ts",
+      "src/entities/frame/index.ts",
+      "src/entities/frame/model/types.ts",
+      "src/features/capture-frame/index.ts",
+      "src/features/capture-frame/lib/scale-frame.ts",
+      "src/features/capture-frame/ui/frame-preview.tsx",
+      "src/features/connect-stream/hooks/use-socket.ts",
+      "src/features/connect-stream/index.ts",
+      "src/features/connect-stream/lib/merge-frames.ts",
+      "src/features/connect-stream/ui/camera-panel.tsx",
+      "src/features/connect-stream/ui/stream-controls.tsx",
+      "src/shared/lib/fmt.ts",
+      "src/shared/ui/spinner.tsx",
+      "src/widgets/viewer/index.ts",
+      "src/widgets/viewer/ui/frame-legend.tsx",
+      "src/widgets/viewer/ui/stream-viewer.tsx"
+    ],
+    "removed": [
+      "src/shared/lib/assert-frame.ts"
+    ],
+    "modified": [
+      "src/entities/stream/api/fetch-cameras.ts",
+      "src/shared/hooks/use-poll.ts",
+      "src/shared/lib/parse-payload.ts"
+    ]
+  },
+  "runs": 1,
+  "timeoutMinutes": 40
+}

@@ -886,6 +886,69 @@ finding 헤딩 **바로 다음 줄**에 영향도와 확신도를 적는다. `00
 
 ---
 
+## C-9. 실행 타임라인
+
+리뷰는 **지나온 단계를 그때그때 파일에 남긴다.** 리포트가 아니라 사이드카에
+남기는 이유는, 리포트 안에 적으면 렌더 단계가 죽는 순간 타임라인도 같이
+사라지기 때문이다 — 정확히 알고 싶은 그 순간에.
+
+### 어떻게
+
+```bash
+node "$RULES_DIR/../scripts/review-timeline.mjs" \
+  --dir <리포트를 저장하는 디렉터리> --run <리포트 basename(확장자 없이)> \
+  --phase <단계> --data '<JSON 객체>'
+```
+
+파일은 `<리포트 디렉터리>/.timing/<run>.jsonl`이고 **append 전용**이다.
+
+- **시각을 문장으로 적지 않는다.** 모델에게는 시계가 없다. 타임스탬프·순번·
+  경과 시간은 스크립트가 만든다. `--data`로 같은 이름의 값을 넘겨도 버려진다
+- **단계를 지날 때마다 즉시 쓴다.** 끝에 몰아 쓰면 죽은 실행에서 아무것도
+  남지 않아, 이 계약의 목적이 통째로 사라진다
+- 이미 쓴 줄은 고치지 않는다. 고치면 마지막 줄이 무엇이었는지 믿을 수 없다
+- 타임라인 기록 실패는 리뷰 실패가 아니다. 남기지 못했으면 그 사실을 리포트에
+  적고 리뷰는 계속한다
+
+### 남기는 단계
+
+| `--phase` | 시점 | `--data`에 담는 것 |
+|---|---|---|
+| `run.start` | 가장 먼저 | `host`, `rules`(해석된 RULES_DIR), `version`, `branch`, `changedFiles` |
+| `scope.done` | 범위 확정(C-4) | `files`, `excluded` |
+| `modules.planned` | 적용 모듈 확정(C-3) | `candidates`, `applied`, `skipped` |
+| `dispatch.start` | fan-out 시작 | `modules`, `inflight` |
+| `module.done` | **모듈 하나가 끝날 때마다** | `module`, `status`(ok/failed), `findings`, `failureClass` |
+| `dispatch.end` | 전부 수집 후 | `ok`, `failed`, `failureClasses` |
+| `script.done` | `prepare-verification.mjs` 실행 후 | `ran`, `counts` |
+| `crossverify.start` / `.end` | 교차검증 패스 | `targets` / `upheld`, `rejected` |
+| `synthesis.start` / `.end` | synthesis 패스 | `clusters` |
+| `render.start` | **문서를 쓰기 직전** | `findings`(중복 제거 후) |
+| `render.wrote` | 파일을 쓴 직후 | `path`, `lines` |
+| `run.end` | 마지막 | `verdict` |
+
+`module.done`을 모듈마다 쓰는 것이 fan-out의 유일한 증거다. `dispatch.end`
+하나로 합치면, fan-out 도중에 죽은 실행은 아무 줄도 남기지 못한다.
+
+### 리포트에 싣는 요약
+
+리포트를 쓸 때 표를 **직접 만들지 않는다.** 산술을 모델이 눈으로 세지 않는다는
+C-6A의 원칙이 여기에도 그대로 적용된다.
+
+```bash
+node "$RULES_DIR/../scripts/review-timeline.mjs" --dir <같은 값> --run <같은 값> --summary
+```
+
+출력한 Markdown 표를 리포트의 `실행 타임라인` 섹션에 그대로 붙인다.
+
+### 없는 줄과 0인 줄은 다르다
+
+`run.end`가 없는 타임라인은 **실행이 거기서 끝나지 않았다**는 뜻이지, 마지막
+단계가 성공했다는 뜻이 아니다. `--summary`가 그 사실을 표 아래에 적는다.
+
+같은 이유로, 실행되지 않은 단계의 줄을 사후에 채워 넣지 않는다. 빠진 줄은
+그 자체가 관측 결과다.
+
 ## 워크플로우별 차이 선언
 
 각 SKILL 문서는 이 계약을 참조한 뒤 아래 항목 중 자기 모드에서 달라지는 것만 적는다.

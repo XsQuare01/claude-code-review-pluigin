@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { DISPATCH_REQUEST, buildClaudeArgs, classifyExit, parseEnvelope, resolveStoredReport, storeReport, summarizeOpFailures } from '../scripts/lib/eval-run.mjs'
+import { DISPATCH_REQUEST, buildClaudeArgs, classifyExit, diagnoseStall, parseEnvelope, resolveStoredReport, storeReport, summarizeOpFailures } from '../scripts/lib/eval-run.mjs'
 
 // Windows에는 POSIX 시그널이 없어서, harness가 .kill('SIGKILL')로 죽인 프로세스도
 // close 이벤트의 signal이 null로 온다. killedByTimeout 플래그가 아니라 signal로
@@ -243,4 +243,17 @@ test('본문이 없으면 쓰지 않고 null을 돌려준다', () => {
     assert.equal(storeReport({ text: empty, name: 'x-run1.md', write: (n, t) => written.push([n, t]) }), null)
   }
   assert.equal(written.length, 0)
+})
+
+test('모델 호출 전 API 오류는 fan-out 미재현이 아니라 not-started로 분류한다', () => {
+  const stall = diagnoseStall(
+    { events: 19, assistantTurns: 1, dispatched: 0, returned: 0 },
+    {
+      completed: 'failed',
+      envelope: { is_error: true, result: 'API Error: Connection refused (ConnectionRefused)' },
+    },
+  )
+  assert.equal(stall.verdict, 'not-started')
+  assert.match(stall.why, /Connection refused/)
+  assert.doesNotMatch(stall.why, /fan-out/)
 })

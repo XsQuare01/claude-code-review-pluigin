@@ -132,8 +132,8 @@ test('보관하는 것은 리포트 경로가 아니라 채점기가 읽은 본�
   // 무엇을 넘기는지를 소스에서 확인한다. 거친 방법이지만 reportPath로 되돌아가는
   // 회귀를 값싸게 막는 유일한 방법이다.
   const source = readFileSync(SCRIPT, 'utf8')
-  assert.match(source, /keptReport: keepReport\(index, reportText\)/,
-    'keepReport에 reportText가 아닌 것을 넘기면 stdout에서 건진 run이 보관되지 않는다')
+  assert.match(source, /keptReport: execution\.completed === true \? keepReport\(index, reportText\) : null/,
+    '완주한 stdout 리포트 본문만 보관해야 한다')
   assert.ok(!/keepReport\(index, reportPath\)/.test(source),
     'reportPath로 되돌아갔다')
 })

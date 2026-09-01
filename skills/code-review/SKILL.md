@@ -11,7 +11,7 @@ React 전용 모듈러 코드 리뷰 시스템. 리뷰 규칙 폴더에서 **숫
 
 ## 공통 계약
 
-`RULES_DIR` 해석, 모듈 탐색, 적용 조건 판정, 범위 결정, 제외 경로, 실행 안전, 리포트 저장, 실패 보고는 **`$RULES_DIR/workflow-contract.md`** 를 따른다. 이 문서는 그 계약을 복제하지 않고, 아래 "이 워크플로우의 차이"만 선언한다.
+`RULES_DIR` 해석, 모듈 탐색, 적용 조건 판정, 범위 결정, 제외 경로, 실행 안전, 리포트 저장, 실행 타임라인(C-9), 실패 보고는 **`$RULES_DIR/workflow-contract.md`** 를 따른다. 이 문서는 그 계약을 복제하지 않고, 아래 "이 워크플로우의 차이"만 선언한다.
 
 리뷰를 시작하기 전에 `workflow-contract.md`에서 이 워크플로우에 필요한 orchestration/public report skeleton만 확인한다. legacy workflow이므로 effective reviewer prompt에는 structured manifest나 structured producer instruction을 주입하지 않는다.
 

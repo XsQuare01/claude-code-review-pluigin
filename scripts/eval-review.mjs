@@ -10,14 +10,14 @@
 //   node scripts/eval-review.mjs --case location-trap --plugin-dir . --label main --runs 1
 
 import { execFileSync, spawn } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs'
+import { createWriteStream, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { buildFixture, readBlobLines } from './lib/eval-fixture.mjs'
 import { assertNoPathOverlap, grade, parseFindings } from './lib/eval-grade.mjs'
-import { DISPATCH_REQUEST, buildClaudeArgs, classifyExit, parseEnvelope, resolveStoredReport, storeReport, summarizeOpFailures } from './lib/eval-run.mjs'
+import { DISPATCH_REQUEST, buildClaudeArgs, classifyExit, diagnoseStall, envelopeFromStream, parseEnvelope, parseStreamEvents, resolveStoredReport, storeReport, summarizeOpFailures, summarizeProgress } from './lib/eval-run.mjs'
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)))
 
@@ -93,6 +93,12 @@ const executionShape = has('dispatch') ? 'as-designed' : 'as-experienced'
 // A2의 첫 6회가 쓴 값을 기본값으로 둔다. 세션 설정을 따라가게 두면 /config에서
 // 모델을 바꾸는 것만으로 기준선이 다른 조건의 숫자로 바뀌고, 결과 파일만 봐서는
 // 그것을 알 수 없다. 비용을 줄이려면 여기를 바꾸되 그 값이 provenance에 남는다.
+// 기본값을 켜둔다. 스트림 캡처는 완주한 run에서 잃는 것이 없고(마지막
+// result 이벤트가 종전 봉투와 같은 자리다), 죽은 run에서만 정보를 더한다.
+// 끄는 쪽에 플래그를 둔 이유는 2026-08-31의 교훈이다 — 정보를 남기는 것이
+// 기본이어야 하고, 40분을 태운 뒤에 "그때 켰어야 했다"가 되면 안 된다.
+const streamMode = !has('no-stream')
+
 const model = flag('model', 'opus')
 const effort = flag('effort', 'xhigh')
 
@@ -151,7 +157,7 @@ const CLAUDE = has('dry-run') ? null : resolveClaude()
  * claude 쪽 판단에 맡기지 않는다 — "끝나지 않았다"가 2.6.0을 잡았을 유일한
  * 항목이고, 그 항목만은 harness가 직접 들고 있어야 한다.
  */
-const runClaude = (fixtureRoot, command) => new Promise(resolve => {
+const runClaude = (fixtureRoot, command, streamPath) => new Promise(resolve => {
   // pluginDir도 allowed 디렉터리로 넣는다. --plugin-dir는 플러그인을 로드만
   // 하고, 스킬이 자기 규칙 모듈(00-rule.md, 번호 모듈들)과
   // prepare-verification.mjs를 읽으려면 그 경로 자체가 이 세션의 허용 작업
@@ -181,6 +187,7 @@ const runClaude = (fixtureRoot, command) => new Promise(resolve => {
     appendSystemPrompt: executionShape === 'as-designed' ? DISPATCH_REQUEST : undefined,
     model,
     effort,
+    outputFormat: streamPath ? 'stream-json' : 'json',
   })
   const started = Date.now()
   const child = spawn(CLAUDE.command, args, { cwd: fixtureRoot, shell: CLAUDE.shell })
@@ -193,20 +200,49 @@ const runClaude = (fixtureRoot, command) => new Promise(resolve => {
   // 판단하는 이유가 그것이다.
   let killedByTimeout = false
   let settled = false
+  // kill한 뒤에도 close가 오지 않을 때 결과를 강제로 확정하는 타이머.
+  let graceTimer = null
   const finish = result => {
     if (settled) return
     settled = true
     clearTimeout(timer)
+    clearTimeout(graceTimer)
+    streamOut?.end()
     resolve(result)
   }
-  child.stdout.on('data', chunk => { stdout += chunk })
+  // 메모리와 디스크에 **동시에** 쌓는다. 메모리만 쓰면 harness 자신이
+  // 죽는 순간 전부 사라지고, 디스크만 쓰면 완주 경로가 파일을 다시 읽어야
+  // 한다. 흘려 쓰는 것이 요점이다 — 프로세스가 kill돼도 그 시점까지가 이미
+  // 파일에 있다.
+  const streamOut = streamPath ? createWriteStream(streamPath, { flags: 'w' }) : null
+  child.stdout.on('data', chunk => {
+    stdout += chunk
+    streamOut?.write(chunk)
+  })
   child.stderr.on('data', chunk => { stderr += chunk })
   // --output-format json이 stdout에 남기는 결과 봉투. error/close 두 종료
   // 경로가 같은 값을 쓰도록 한 번만 계산하는 자리에 둔다. stdoutTail은
   // 진단용으로 항상 남긴다 — 성공한 run도 예외가 아니다. 이전 리뷰가 이
   // stdout이 파싱도 저장도 안 된 채로 버려진다고 짚었고, 그게 리포트가
   // 없는 run이 블랙박스가 되는 이유였다.
-  const envelopeOf = () => parseEnvelope(stdout)
+  //
+  // envelopeSource를 함께 남기는 이유: 스트림에서 건졌는지 stdout JSON에서
+  // 건졌는지가 다른 명제다. 하나로 접으면 stream-json의 result 이벤트 모양이
+  // 예상과 달라 봉투가 비었을 때, 그것이 "형식이 바뀌었다"인지 "그냥 죽어서
+  // 없다"인지 구분되지 않는다.
+  const diagnostics = () => {
+    const parsed = streamPath ? parseStreamEvents(stdout) : null
+    const fromStream = parsed ? envelopeFromStream(parsed.events) : null
+    const fallback = fromStream ? null : parseEnvelope(stdout)
+    return {
+      envelope: fromStream ?? fallback,
+      envelopeSource: fromStream ? 'stream-result' : fallback ? 'stdout-json' : null,
+      progress: parsed ? summarizeProgress(parsed.events) : null,
+      streamPath,
+      streamMalformed: parsed?.malformed ?? null,
+      streamTruncated: parsed?.truncated ?? null,
+    }
+  }
   // spawn 자체가 실패하면(바이너리를 못 찾는 등) close 이벤트는 절대 오지
   // 않는다. 여기서 받지 않으면 처리되지 않은 예외로 프로세스 전체가 죽고,
   // writeFileSync가 for 루프가 끝난 뒤에만 돌기 때문에 이미 끝낸 run들의
@@ -216,28 +252,49 @@ const runClaude = (fixtureRoot, command) => new Promise(resolve => {
       completed: 'failed',
       exitCode: null,
       durationSec: Math.round((Date.now() - started) / 1000),
-      envelope: envelopeOf(),
+      ...diagnostics(),
       stdoutTail: stdout.slice(-4000),
       stderr: `${stderr}${err.message}`.slice(-4000),
     })
   })
+  // SIGKILL 뒤 close를 기다리는 시간. 이만큼 지나도 안 오면 가진 것으로 낸다.
+  const GRACE_MS = 10_000
   const timer = setTimeout(() => {
     killedByTimeout = true
-    child.kill('SIGKILL')
-    // shell 경로로 물러난 경우에만 여기 온다 — 그때는 child.pid가 cmd.exe의
-    // pid이고 SIGKILL은 그 shell만 끝낸다. /T로 그 pid가 뿌리인 프로세스
-    // 트리 전체를 끝내, shell로 물러나면서 다시 열린 고아 프로세스 위험을
-    // 닫는다.
+    // shell 경로로 물러난 경우에만 taskkill이 필요하다 — 그때는 child.pid가
+    // cmd.exe의 pid이고 SIGKILL은 그 shell만 끝낸다. /T로 그 pid가 뿌리인
+    // 프로세스 트리 전체를 끝낸다.
+    //
+    // **순서가 중요하다.** SIGKILL을 먼저 보내면 cmd.exe의 pid가 사라져
+    // taskkill이 대상을 잃고, 그 밑에서 실제로 일하던 프로세스가 고아로 남아
+    // stdout 파이프를 계속 붙든다 — close 이벤트가 영원히 오지 않고 타임아웃이
+    // "끝나지 않는 harness"가 된다. 가짜 claude로 스폰해 재현했다.
     if (CLAUDE.shell && process.platform === 'win32' && child.pid) {
       try { execFileSync('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore' }) } catch {}
     }
+    child.kill('SIGKILL')
+    // 그래도 close가 오지 않는 경우를 닫는다. 죽인 뒤 GRACE_MS를 더 기다렸는데도
+    // 조용하면 가진 것만으로 결과를 낸다 — harness가 매달려 있는 것보다 항상
+    // 낫고, 스트림 파일에는 이미 죽기 직전까지가 들어 있다.
+    graceTimer = setTimeout(() => {
+      child.stdout?.destroy()
+      child.stderr?.destroy()
+      finish({
+        completed: classifyExit({ killedByTimeout: true, code: null, signal: null }),
+        exitCode: null,
+        durationSec: Math.round((Date.now() - started) / 1000),
+        ...diagnostics(),
+        stdoutTail: stdout.slice(-4000),
+        stderr: `${stderr}\n[harness] SIGKILL 후 ${GRACE_MS}ms 동안 close가 오지 않아 결과를 강제로 확정했다`.slice(-4000),
+      })
+    }, GRACE_MS)
   }, timeoutMs)
   child.on('close', (code, signal) => {
     finish({
       completed: classifyExit({ killedByTimeout, code, signal }),
       exitCode: code,
       durationSec: Math.round((Date.now() - started) / 1000),
-      envelope: envelopeOf(),
+      ...diagnostics(),
       stdoutTail: stdout.slice(-4000),
       stderr: stderr.slice(-4000),
     })
@@ -260,6 +317,7 @@ if (has('dry-run')) {
     executionShape,
     model,
     effort,
+    streamMode,
     mergeBase: fixture.mergeBase,
     mid: fixture.mid,
     head: fixture.head,
@@ -303,6 +361,14 @@ const outPath = join(outDir, `${caseName}-${label}.json`)
 // 파일을 사람이 읽을 수 없게 된다. 파일로 두고 경로만 남긴다.
 const reportsDir = join(outDir, 'reports')
 mkdirSync(reportsDir, { recursive: true })
+
+// 죽은 run의 유일한 증거가 여기 쌓인다. run별로 파일을 나눈다 — 한 파일에
+// 이어 쓰면 어느 run의 이벤트인지 사후에 가를 수 없다.
+const streamsDir = join(outDir, 'streams')
+if (streamMode) mkdirSync(streamsDir, { recursive: true })
+const streamPathFor = index => streamMode
+  ? join(streamsDir, `${caseName}-${label}-${index + 1}.ndjson`)
+  : null
 const keepReport = (index, text) => storeReport({
   text,
   name: `${caseName}-${label}-run${index + 1}.md`,
@@ -331,6 +397,12 @@ if (has('regrade')) {
   const regraded = []
   const skipped = []
   for (const previousRun of previous.results) {
+    // 실패/타임아웃 run의 result에는 API 오류 같은 진단 문구가 들어갈 수 있다.
+    // 과거 harness가 그것을 리포트로 보관했더라도 정상 리뷰로 재채점하지 않는다.
+    if (previousRun.completed !== true) {
+      skipped.push({ run: previousRun.run, why: `완주하지 않은 run은 재채점하지 않는다 (completed=${previousRun.completed})` })
+      continue
+    }
     // 리포트가 없는 run은 조용히 빼지 않는다. 조용히 빠지면 재채점 결과가
     // 원본보다 run이 적은데 그 이유가 어디에도 남지 않는다.
     // keptReport는 리포트 보관이 들어간 뒤의 run에만 있다. 그 전 run도 관례
@@ -396,6 +468,10 @@ const writeResults = () => writeFileSync(outPath, JSON.stringify({
   executionShape,
   model,
   effort,
+  // 스트림 캡처가 켜져 있었는지. 꺼진 채로 죽은 run은 progress가 null인데,
+  // 그것이 "진행이 없었다"가 아니라 "재지 않았다"임을 결과 파일만 보고
+  // 알 수 있어야 한다.
+  streamMode,
   timestamp: startedAt,
   runs,
   results,
@@ -404,7 +480,7 @@ const writeResults = () => writeFileSync(outPath, JSON.stringify({
 const results = []
 for (let index = 0; index < runs; index += 1) {
   const fixture = makeFixture()
-  const execution = await runClaude(fixture.root, meta.command)
+  const execution = await runClaude(fixture.root, meta.command, streamPathFor(index))
   const reportPath = newestReport(fixture.root)
   const envelope = execution.envelope
 
@@ -415,7 +491,11 @@ for (let index = 0; index < runs; index += 1) {
   // reportSource는 "리포트를 어디서 얻었나(file/stdout/둘 다 없음)"를 뜻한다 —
   // 하나로 합치면 "계약대로 파일에 썼다"와 "stdout에서 겨우 건졌다"가
   // 구분되지 않는다.
-  const reportSource = reportPath ? 'file' : envelope?.result ? 'stdout' : null
+  // 실패 봉투의 result는 리뷰가 아니라 오류 진단이다. 성공한 실행의 result만
+  // stdout fallback 리포트로 인정해야 API Error 문구가 보관·재채점되지 않는다.
+  const reportSource = reportPath ? 'file'
+    : execution.completed === true && envelope?.is_error !== true && envelope?.result ? 'stdout'
+    : null
   const reportText = reportSource === 'file' ? readFileSync(reportPath, 'utf8')
     : reportSource === 'stdout' ? envelope.result
     : ''
@@ -473,7 +553,7 @@ for (let index = 0; index < runs; index += 1) {
     // 경로가 아니라 채점기가 실제로 읽은 본문을 넘긴다. stdout 봉투에서 건진
     // 리포트는 reportPath가 없지만 채점은 정상적으로 되므로, 경로 기준으로
     // 보관하면 비용을 치른 성공 run이 재채점 불가가 된다.
-    keptReport: keepReport(index, reportText),
+    keptReport: execution.completed === true ? keepReport(index, reportText) : null,
     fixtureRoot: fixture.root,
     fixtureDirty,
     // 봉투에서 나오는 진단 정보. permissionDenials가 특히 중요하다 — 리뷰가
@@ -490,10 +570,23 @@ for (let index = 0; index < runs; index += 1) {
     totalCostUsd: envelope?.total_cost_usd,
     stdoutTail: execution.stdoutTail,
     stderrTail: execution.completed === true ? undefined : execution.stderr,
+    // 봉투를 어디서 건졌나. 값이 null인데 completed가 true면 stream-json의
+    // result 이벤트 모양이 예상과 다른 것이고, 그때는 numTurns·opFailures가
+    // 비는 것을 "실패가 없었다"로 읽으면 안 된다.
+    envelopeSource: execution.envelopeSource,
+    streamPath: execution.streamPath,
+    streamTruncated: execution.streamTruncated,
+    streamMalformed: execution.streamMalformed,
+    progress: execution.progress,
+    // 완주한 run에는 붙이지 않는다. 멈춘 자리를 묻는 값이라, 멈추지 않은
+    // run에 붙으면 판정처럼 보이는 무의미한 문자열이 남는다.
+    stall: execution.completed === true ? null : diagnoseStall(execution.progress, execution),
     ...(scored ?? {}),
   })
   writeResults()
+  const stall = execution.completed === true ? null : diagnoseStall(execution.progress, execution)
   process.stdout.write(`run ${index + 1}/${runs}: completed=${execution.completed} ${execution.durationSec}s report=${reportSource ?? 'none'}\n`)
+  if (stall) process.stdout.write(`  stall=${stall.verdict} — ${stall.why}\n`)
 }
 
 process.stdout.write(`\nwrote ${outPath}\n`)
@@ -511,3 +604,7 @@ for (const result of results) {
     process.stdout.write(`  run ${result.run}: not graded (completed=${result.completed} reportSource=${result.reportSource})\n`)
   }
 }
+
+// 결과 JSON은 먼저 온전히 쓴 뒤 자동화 호출자에게 배치 실패를 전달한다.
+// 일부 run이라도 미완주면 성공 배치로 취급할 수 없다.
+if (results.some(result => result.completed !== true)) process.exitCode = 1
