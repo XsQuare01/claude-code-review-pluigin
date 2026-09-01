@@ -9,6 +9,7 @@
 // No dependencies. Run: node scripts/validate-rules.mjs
 
 import { readFileSync, readdirSync, existsSync } from 'node:fs'
+import { checkProducerWriteAccess, parseAgentTools } from './lib/producer-tools.mjs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { validateEffectiveCommonContext } from './lib/effective-common-context-validator.mjs'
@@ -825,9 +826,17 @@ const agentFiles = existsSync(AGENTS) ? readdirSync(AGENTS).filter(f => f.endsWi
     }
 
     // a finding ID has to be traceable back to something; an unregistered prefix is not
+    //
+    // 자기 prefix를 만드는 것만이 추적 가능한 형태는 아니다. 규칙 모듈 하나를
+    // 받아 그 모듈로만 판정하는 에이전트는 **근거가 정확히 그 규칙 문서**여서,
+    // 별도 prefix를 붙이면 오히려 추적이 끊긴다(`20-2`를 `RM-1`로 바꾸면 독자가
+    // 규칙 문서에서 근거를 찾을 수 없다). 그래서 "모듈 규칙 ID를 그대로 쓴다"는
+    // 선언도 유효한 답으로 받는다 — 린터를 만족시키려고 가짜 prefix를 만드는
+    // 것이 이 검사가 막으려던 바로 그 상태다.
+    const reusesModuleIds = text.includes('규칙 ID를 그대로 쓴다')
     const prefixes = [...new Set([...text.matchAll(/\b([A-Z]{2,3})-\{/g)].map(m => m[1]))]
-    if (prefixes.length === 0) {
-      fail('agent', `${where}: declares no finding ID prefix`)
+    if (prefixes.length === 0 && !reusesModuleIds) {
+      fail('agent', `${where}: declares no finding ID prefix, and does not declare that it reuses the module rule IDs`)
     }
     for (const prefix of prefixes) {
       if (!commonRules.includes(`${prefix}-{`)) {
@@ -836,6 +845,26 @@ const agentFiles = existsSync(AGENTS) ? readdirSync(AGENTS).filter(f => f.endsWi
       if (!readmeText.includes(`${prefix}-{n}`)) {
         fail('agent', `${where}: ID prefix ${prefix}- is missing from the README rule-ID table`)
       }
+    }
+  }
+}
+
+// --------------------------------------------------- producers cannot write
+//
+// 판정은 `lib/producer-tools.mjs`가 한다. 여기서는 파일을 읽어 넘기기만 한다 —
+// 판정 로직이 이 스크립트 안에 있으면 저장소 트리 전체를 흉내 내야만 검증할 수
+// 있고, 그러면 검증이 붙지 않는다.
+{
+  const agents = new Map(agentFiles.map(file => {
+    const front = read(join(AGENTS, file)).split('---')[1] ?? ''
+    const name = front.match(/^\s*name:\s*(\S+)/m)?.[1] ?? file.replace(/\.md$/, '')
+    return [name, parseAgentTools(front)]
+  }))
+
+  for (const dir of skillDirs) {
+    const where = `skills/${dir}/SKILL.md`
+    for (const problem of checkProducerWriteAccess({ where, text: read(join(SKILLS, dir, 'SKILL.md')), agents })) {
+      fail('agent', problem)
     }
   }
 }

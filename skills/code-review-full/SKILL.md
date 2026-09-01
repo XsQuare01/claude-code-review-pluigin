@@ -140,10 +140,14 @@ Trigger 섹션이 있는 모듈(`12`, `14`, `16`, `17`, `18`, `21`)은 diff에 �
     - 일반 코드 리뷰 패스에서 테스트/목 전용 경로를 제외한다: `__test__/**`, `__tests__/**`, `*.test.*`, `*.spec.*`, `__mocks__/**`, `mock/**`, `mocks/**`, `*.mock.*`, 전용 fixture/mock-data 자산.
 
 ### 일반 모듈 실행 및 liveness failover 정책
-- 일반 패스의 모든 적용 대상 모듈은 initial dispatch부터 `subagent_type=general`, `run_in_background=true`로 실행한다. 동기 실행으로 시작한 뒤 background로 전환하지 않는다.
+- 일반 패스의 모든 적용 대상 모듈은 initial dispatch부터 `subagent_type=react-code-review-plugin:rule-module-reviewer`, `run_in_background=true`로 실행한다. 동기 실행으로 시작한 뒤 background로 전환하지 않는다.
+
+  **`general`로 띄우지 않는다.** 만능 에이전트는 편집 도구와 셸을 가지고 있어, 프롬프트에 읽기 전용이라고 적어도 실제로 파일을 고칠 수 있다 — 실제로 그렇게 사고가 났다. `rule-module-reviewer`는 `Read`·`Grep`·`Glob`만 가진다(C-6).
+
+  이 에이전트가 셸 없이 일할 수 있는 이유는 3a(3)에 있다. diff를 스스로 뜨지 않고 받아 쓰며, **삭제된 파일의 옛 내용도 그 diff의 `-` 줄에 전부 들어 있다.** 런타임이 도구 제한을 지원하지 않으면 C-6의 대체 경로를 따른다.
 - 적용 대상 모듈마다 별도의 sub-agent 하나를 반드시 유지한다. in-flight 상한은 정확히 4이며, fast review, generic summary, 또는 다른 모듈이 누락된 숫자 모듈을 대체할 수 없다. 특히 `01-fsd.md`와 `20-deletion-regression.md`는 다른 architecture/deletion-regression 요약으로 대체하지 않는다.
 - 각 모듈 상태는 `PENDING → DISPATCHED → COMPLETED or fresh retry → FAILED_ORCHESTRATION` 순서로 기록한다.
-- no-start, timeout, inactivity timeout, queue expiry, empty/missing result, `Task not found for session` 또는 session loss가 발생하면 해당 모듈은 죽은 세션으로 간주하고, fresh `general` background task로 최대 1회만 retry한다. dead/no-event/lost session은 `session_id`로 resume하지 않으며, synchronous task를 background task로 변환하지 않는다.
+- no-start, timeout, inactivity timeout, queue expiry, empty/missing result, `Task not found for session` 또는 session loss가 발생하면 해당 모듈은 죽은 세션으로 간주하고, fresh `rule-module-reviewer` background task로 최대 1회만 retry한다. dead/no-event/lost session은 `session_id`로 resume하지 않으며, synchronous task를 background task로 변환하지 않는다.
 - 정상 완료된 응답이 clarification만 요구하는 경우에는 live session을 재사용할 수 있다. 단, no-start, timeout, inactivity timeout, queue expiry, empty/missing result, `Task not found for session`, session loss 클래스는 live session으로 보지 않으며 재사용하지 않는다.
 - 런타임이 first-event 또는 heartbeat 관측을 지원하면 bounded startup window 안에서 첫 이벤트를 확인한다. 현재 task API처럼 completion/error notification만 노출되는 런타임에서는 첫 timeout, expiry, error에 반응하고 같은 session에 두 번째 long wait를 쓰지 않는다.
 - 각 숫자 모듈마다 가능한 경우 task ID, session ID, attempt count, last observed event/result, failure class를 기록한다. **failure class별 건수를 리포트에 남긴다** — in-flight 상한이 이 런타임에 맞는지 판단할 유일한 근거다.
