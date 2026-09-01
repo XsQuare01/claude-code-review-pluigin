@@ -612,6 +612,14 @@ These scenarios pin the behaviour that `review-rules/workflow-contract.md` promi
       ],
       "scenario": "The runtime cannot restrict a sub-agent's tools at all",
       "expected": "The review runs in an isolated copy, or the orchestrator reviews directly without producers, and the report records that tools could not be restricted"
+    },
+    {
+      "id": 80,
+      "clauses": [
+        "C-6"
+      ],
+      "scenario": "A cross-verification pass rebuts a finding, and its verifier holds edit tools",
+      "expected": "Still a violation — a verifier decides whether findings live or die, and looking for a counterexample is exactly when the fix becomes obvious, so it runs under the same reviewer that cannot write"
     }
   ],
   "defaultWorkflowOnlyCases": [
