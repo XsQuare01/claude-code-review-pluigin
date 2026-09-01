@@ -105,6 +105,7 @@
 | `props.md` | `P-{번호}` | `P-3` |
 | `math.md` | `A-{번호}` / `C-{번호}` | `A-1`, `C-4` |
 | `agents/correctness-reviewer.md` | `CR-{번호}` | `CR-1` |
+| `agents/rule-module-reviewer.md` | 담당 모듈의 규칙 ID를 그대로 | `20-2`, `06-3` |
 
 correctness 패스는 규칙 문서가 아니라 PR 의도를 근거로 지적하므로 **자기 namespace를 쓴다.** 규칙 모듈 ID를 빌려 쓰면 리포트를 읽는 사람이 규칙 문서에서 근거를 찾다가 실패한다.
 

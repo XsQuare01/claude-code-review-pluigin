@@ -580,6 +580,38 @@ These scenarios pin the behaviour that `review-rules/workflow-contract.md` promi
       ],
       "scenario": "The timeline sidecar cannot be written (read-only location, missing script)",
       "expected": "The review continues and the report says the timeline was not recorded; a failed timeline write is not a failed review"
+    },
+    {
+      "id": 76,
+      "clauses": [
+        "C-6"
+      ],
+      "scenario": "A producer sub-agent is told in its prompt that the review is read-only, but is dispatched to an agent type that owns edit tools",
+      "expected": "This violates C-6 — read-only is enforced by the tools the producer holds, not by the sentence telling it not to write"
+    },
+    {
+      "id": 77,
+      "clauses": [
+        "C-6"
+      ],
+      "scenario": "A producer is dispatched to an agent whose tools are Read and Bash",
+      "expected": "Still a violation — a shell writes through redirection and sed -i, so removing only the edit tools leaves the same gap open"
+    },
+    {
+      "id": 78,
+      "clauses": [
+        "C-6"
+      ],
+      "scenario": "A producer needs the previous contents of a file deleted in the reviewed range, and holds no shell",
+      "expected": "The deleted lines are already in the diff the orchestrator passed in; the producer cites them as (삭제 전) path:Ln without reaching for git"
+    },
+    {
+      "id": 79,
+      "clauses": [
+        "C-6"
+      ],
+      "scenario": "The runtime cannot restrict a sub-agent's tools at all",
+      "expected": "The review runs in an isolated copy, or the orchestrator reviews directly without producers, and the report records that tools could not be restricted"
     }
   ],
   "defaultWorkflowOnlyCases": [
