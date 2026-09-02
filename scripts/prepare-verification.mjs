@@ -15,6 +15,25 @@ import { pathToFileURL } from 'node:url'
 const HIGH_STAKES_CATEGORIES = new Set(['security-exposure', 'data-loss', 'external-breakage'])
 
 /**
+ * A rule id the report can trace back to a rule document.
+ *
+ * `00-rule.md` 00-2 fixes the shapes: `NN-n` for numbered modules, `10-{ABBREV}`
+ * for principles, and the `EX-`/`P-`/`A-`/`C-` namespaces for specialist docs
+ * and the correctness agent.
+ */
+const RULE_ID = /^(?:\d{2}-(?:\d+|[A-Za-z][A-Za-z0-9]*)|(?:EX|P|A|C|CR)-\d+)$/
+
+// A producer that finds one rule violated three times sometimes numbers the
+// instances into the id itself — `17-3 (1/3)`, `(2/3)`, `(3/3)`. Observed in a
+// 2.8.0 run. The damage is that the three stop being the same rule: they group
+// apart, dedup cannot see them as duplicates, and the ids reach the report as
+// `17-3 (1/3)#1`, which no rule document contains.
+//
+// Instance numbering already has a home — `candidateId` is `{ruleId}#{n}` and this
+// module assigns it. So the marker is stripped rather than honored.
+const INSTANCE_MARKER = /\s*\(\d+\s*\/\s*\d+\)\s*$/
+
+/**
  * Normalize a line or span before comparison.
  *
  * Line endings collapse to LF and the ends are trimmed, but **internal
@@ -215,6 +234,10 @@ export function prepareVerification(candidates, blobs, options = {}) {
     isolated: decided.filter(entry => entry.route === 'isolated').length,
     locationMismatch: decided.filter(entry => entry.locationCheck === 'location-mismatch').length,
     locationUnresolvable: decided.filter(entry => entry.locationCheck === 'location-unresolvable').length,
+    // 병합된 건수와 수리한 rule id를 숨기지 않는다. 후보 수가 줄어든 이유가
+    // 리포트에 보이지 않으면, 읽는 사람은 producer가 덜 찾은 것으로 읽는다.
+    dedupMerged: candidates?.dedupMerged ?? 0,
+    ruleIdRepairs: candidates?.ruleIdRepairs ?? [],
   }
 
   return { candidates: decided, bundles: buildBundles(decided), counts }
@@ -362,11 +385,106 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
  * The ordinal follows normalized location rather than the order producers happened to
  * finish in, so a slow module does not rename everyone else's candidates.
  */
+/**
+ * Strip an invented instance marker and report what was repaired.
+ *
+ * Repairs are surfaced rather than applied silently. A producer emitting ids the
+ * contract does not define is a contract violation, and swallowing it here means
+ * nobody ever fixes the producer.
+ */
+export function normalizeRuleId(raw) {
+  const id = String(raw ?? '').trim()
+  const stripped = id.replace(INSTANCE_MARKER, '')
+  if (stripped !== id && RULE_ID.test(stripped)) return { ruleId: stripped, repairedFrom: id }
+  return { ruleId: id || 'unknown', repairedFrom: null }
+}
+
+/**
+ * The dedup key from C-6A, or null when the contract forbids automatic merging.
+ *
+ * The contract requires **all** of these to match: rule id, a `verified` or
+ * `deleted` location, the normalized location, the same core claim, the same
+ * `impact` and `category`, the same `confidence`.
+ *
+ * "Same core claim" is a judgment, and this module does not make judgments — so
+ * it uses the strictest reading available to code: the title and body are
+ * byte-identical. Two findings that argue the same thing in different words stay
+ * separate here. That is the safe direction; merging them would delete a claim
+ * nobody compared.
+ *
+ * `unverified` locations return null. Without an anchor there is nothing to key
+ * on, and the contract says so explicitly.
+ */
+export function dedupKey(finding) {
+  const location = finding?.location ?? {}
+  if (location.kind !== 'verified' && location.kind !== 'deleted') return null
+  const line = location.kind === 'verified' ? location.line : location.lineBefore
+  if (location.path === undefined || line === undefined) return null
+  return JSON.stringify([
+    finding.ruleId ?? '',
+    location.kind,
+    location.path,
+    line,
+    finding.impact ?? '',
+    finding.category ?? '',
+    finding.confidence ?? '',
+    finding.title ?? '',
+    finding.body ?? '',
+  ])
+}
+
+/**
+ * Merge byte-identical findings, keeping every instance traceable.
+ *
+ * The contract requires the canonical candidate to preserve `memberInstanceIds`
+ * and every source label. Instance ids are positional here — producers do not
+ * carry them into this module — but positional ids still let a reader walk from
+ * a merged candidate back to the inputs that produced it.
+ */
+export function exactDedup(findings) {
+  const byKey = new Map()
+  const kept = []
+  let merged = 0
+  ;(findings ?? []).forEach((finding, index) => {
+    const instanceId = `i${index + 1}`
+    const key = dedupKey(finding)
+    if (key === null) {
+      kept.push({ ...finding, memberInstanceIds: [instanceId] })
+      return
+    }
+    const seen = byKey.get(key)
+    if (!seen) {
+      const entry = { ...finding, memberInstanceIds: [instanceId] }
+      byKey.set(key, entry)
+      kept.push(entry)
+      return
+    }
+    seen.memberInstanceIds.push(instanceId)
+    // 기여한 source label을 전부 보존한다 — 어느 패스가 같은 것을 봤는지가
+    // 병합으로 사라지면 커버리지를 되짚을 수 없다.
+    if (finding.source && !(seen.sources ?? []).includes(finding.source)) {
+      seen.sources = [...(seen.sources ?? [seen.source].filter(Boolean)), finding.source]
+    }
+    merged += 1
+  })
+  return { findings: kept, merged }
+}
+
 export function candidatesFromResults(results) {
-  const findings = []
+  const collected = []
+  const ruleIdRepairs = []
   for (const result of results ?? []) {
-    for (const finding of result?.findings ?? []) findings.push(finding)
+    for (const finding of result?.findings ?? []) {
+      const { ruleId, repairedFrom } = normalizeRuleId(finding?.ruleId)
+      if (repairedFrom) ruleIdRepairs.push({ from: repairedFrom, to: ruleId })
+      collected.push(ruleId === finding?.ruleId ? finding : { ...finding, ruleId })
+    }
   }
+
+  // 계약 순서: 위치 대조 → exact dedup → candidate ID. 위치 대조는 호출부에서
+  // 이미 끝났고, 여기서 dedup한 뒤에 ID를 붙인다. 순서를 바꾸면 같은 결함에
+  // 서로 다른 ID가 붙어 verifier가 같은 것을 두 번 반박한다.
+  const { findings, merged } = exactDedup(collected)
 
   const sortKey = finding => {
     const location = finding.location ?? {}
@@ -407,9 +525,14 @@ export function candidatesFromResults(results) {
         confidence: finding.confidence,
         category: finding.category,
         location: finding.location,
+        // 병합된 instance를 candidate에 붙여 보낸다. 이것이 없으면 canonical
+        // candidate 하나가 원래 몇 건이었는지 사후에 알 수 없다.
+        memberInstanceIds: finding.memberInstanceIds ?? [],
       })
     })
   }
+  candidates.dedupMerged = merged
+  candidates.ruleIdRepairs = ruleIdRepairs
   return candidates
 }
 

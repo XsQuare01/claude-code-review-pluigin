@@ -197,8 +197,8 @@ instanceId 부여
   → scripts/prepare-verification.mjs        추가 sub-agent 호출 0회
       위치 대조 · exact dedup + candidateId · ownerCollision
       eligibility 판정 · bundle/isolated 라우팅 · context bundle 구성
-  → bundle verifier      (in-flight 상한 공유)
-  → isolated verifier    (승격분 + bundle이 needs-context로 돌린 것)
+  → bundle verifier      (in-flight 최대 4, isolated와 공유)
+  → isolated verifier    (승격분 + bundle이 needs-context로 돌린 것 · 같은 상한)
   → disposition 적용
   → 10-principles synthesis
   → rendering
@@ -218,6 +218,26 @@ echo '{"results":[ <REVIEW_RESULT_CONTRACT_V1 객체들> ]}'   | node "$RULES_DI
 - **coverage 숫자는 이 `counts`를 그대로 옮긴다.** 직접 세지 않는다 — 손으로 센 수치는 `verify + skipVerify = total`을 깨뜨린다
 - **coverage 숫자의 출처를 함께 적는다.** 스크립트를 돌렸으면 `도구 실행 결과`에도 실행을 남기고, 돌리지 않았으면 미실행이라고 적는다. 숫자가 맞더라도 **결정적으로 판정했다고 서술하지 않는다**
 - 플러그인으로 설치된 경우 스크립트는 `RULES_DIR`의 상위에 있다. 경로를 찾지 못하면 그 사실을 `실행 계획`에 적는다
+
+### 디스패치
+
+**verifier도 in-flight 최대 4개다.** bundle verifier와 isolated verifier가 같은
+상한을 나눠 쓰며, 하나가 terminal 상태가 되면 즉시 다음을 그 슬롯에 넣는다.
+일반 모듈 fan-out과 같은 sliding window이고, 두 패스는 시간이 겹치지 않으므로
+같은 예산을 쓴다.
+
+**후보 전부를 한 번에 띄우지 않는다.** 2.8.0 실행에서 candidate 12건(bundle 1 ·
+isolated 11)을 동시에 background dispatch한 결과, 1건만 2분 25초에 완주하고
+나머지 11건이 inactivity timeout 또는 `timed out while queued (30 minutes)`로
+죽었다. **검증 실패가 아니라 스케줄링 실패다** — 실행 슬롯보다 많은 작업을 한꺼번에
+등록했을 때 나오는 증상이고, candidate 수가 늘어날수록 확실해진다.
+
+- 대기열 순서는 candidateId 순으로 하되, 순서 자체가 정확성 요건은 아니다
+- retry도 슬롯 하나를 차지하며 같은 상한을 따른다
+- **queue expiry는 검증 실패와 구분해 기록한다.** 둘 다 `verification-unavailable`로
+  가지만 원인이 다르다 — 하나는 이 런타임에 동시 실행이 과했다는 신호이고, 다른
+  하나는 그 candidate에 대해 판정을 얻지 못했다는 뜻이다. 실패 클래스별 건수를
+  남기지 않으면 다음 실행에서 상한을 조정할 근거가 사라진다
 
 ### `--verify` 모드
 
