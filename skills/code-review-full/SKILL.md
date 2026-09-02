@@ -103,6 +103,10 @@ Trigger 섹션이 있는 모듈(`12`, `14`, `16`, `17`, `18`, `21`)은 diff에 �
 
 위 지시는 이 skill이 structured-v1 owner로서 보유한다. numbered rule modules와 specialist rule docs는 workflow-neutral domain judgment docs일 뿐이며, producer schema나 lifecycle을 직접 소유하지 않는다. shared manifest와 retry/fail-closed 정책의 정본은 `workflow-contract.md` C-6A와 `REVIEW_RESULT_CONTRACT_V1`이다.
 
+**아래 producer는 전부 `subagent_type=react-code-review-plugin:rule-module-reviewer`로 띄운다.** 지적을 만드는 자리는 모두 쓰기 도구 없이 돈다(C-6). numbered module이든 특수 패스든 하는 일이 같다 — 규칙 문서 하나를 받아 diff를 판정하고 구조화된 결과를 돌려준다.
+
+**diff는 어느 producer도 스스로 뜨지 않는다.** 3a(3)에서 오케스트레이터가 한 번 수집한 것을 프롬프트에 담아 넘긴다. 아래 각 템플릿의 `diff/context`가 그것이고, 삭제된 파일의 옛 내용도 그 diff의 `-` 줄에 들어 있어 별도 조회가 필요 없다.
+
 #### Numbered module review producer prompt template
 
 - 입력: `{REVIEW_RESULT_CONTRACT_V1_MANIFEST}` + `00-rule.md` 전문 + 담당 numbered module 전문 + diff/context/profile 정보
@@ -228,6 +232,10 @@ echo '{"results":[ <REVIEW_RESULT_CONTRACT_V1 객체들> ]}'   | node "$RULES_DI
 ### verifier producer prompt
 
 bundle verifier와 isolated verifier는 **같은 prompt 계약**을 쓴다. 단계마다 다른 enum을 두면 호출자가 verifier 종류를 알아야 결과를 해석하게 된다.
+
+**둘 다 `subagent_type=react-code-review-plugin:rule-module-reviewer`로 띄운다.** verifier는 지적을 추가하지 않지만 지적의 생사를 판정하므로, 코드를 고칠 동기가 생기는 것은 producer와 같다.
+
+셸이 필요 없다. 입력은 오케스트레이터가 만들어 넘기는 context bundle이고, `scripts/prepare-verification.mjs`는 오케스트레이터가 돌린다. **merge-base 기준 `deleted` 인용도 그 스크립트가 base blob에서 읽어 bundle에 담는다** — verifier가 직접 조회할 일이 없다. anchor file 밖을 봐야 하는 경우(`usedCrossFileContext`)는 `Read`로 충분하다.
 
 에이전트에 주는 것과 주지 않는 것을 구분한다. **1차의 `impact`·`confidence`·`recommendation`·모듈 라벨은 주지 않는다** — "확신: 높음"을 보면 검증자가 그쪽으로 기운다. 규칙은 모듈 전문이 아니라 해당 `## NN-x` 조항 본문만 준다.
 
