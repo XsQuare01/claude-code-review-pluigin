@@ -989,7 +989,8 @@ UTF-16 파일도 읽는다 — PowerShell 5.1의 `Set-Content -Encoding UTF8`은
 | `render.wrote` | 파일을 쓴 직후 | `path`, `lines` |
 | `run.end` | 마지막 | `verdict`, `usageSource`, (있으면) `tokensIn`·`tokensOut`·`tokensCacheRead`·`costUsd` |
 
-**`module`에는 번호가 아니라 모듈 이름을 적는다** — `01-fsd`, `11-styling`처럼.
+**`module`에는 번호가 아니라 모듈 파일 이름을 적는다** — `review-rules/03-react-rules.md`면
+`03-react-rules`, `review-rules/20-deletion-regression.md`면 `20-deletion-regression`이다.
 번호만 적으면 같은 필드의 타입이 갈린다: `01`은 앞의 0 때문에 문자열로 남고 `11`은
 숫자가 되어, 나중에 모듈별로 묶거나 두 실행을 비교할 때 `"11"`과 `11`이 서로 다른
 것으로 읽힌다. 실제로 한 실행이 01~09는 문자열, 11~20은 숫자로 기록했다.
