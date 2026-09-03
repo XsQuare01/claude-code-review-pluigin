@@ -620,6 +620,55 @@ These scenarios pin the behaviour that `review-rules/workflow-contract.md` promi
       ],
       "scenario": "A cross-verification pass rebuts a finding, and its verifier holds edit tools",
       "expected": "Still a violation — a verifier decides whether findings live or die, and looking for a counterexample is exactly when the fix becomes obvious, so it runs under the same reviewer that cannot write"
+    },
+    {
+      "id": 81,
+      "clauses": [
+        "C-7"
+      ],
+      "scenario": "The report body is passed to a shell to be written, and the destination path contains non-ASCII characters",
+      "expected": "The save fails or silently corrupts; the contract requires writing the file directly with an explicit UTF-8 encoding rather than piping the body through a shell"
+    },
+    {
+      "id": 82,
+      "clauses": [
+        "C-7"
+      ],
+      "scenario": "A save appears to succeed but the written file contains mangled non-ASCII text",
+      "expected": "The run reads the file back and finds the damage before reporting a path; a save is not reported as done until it has been read back"
+    },
+    {
+      "id": 83,
+      "clauses": [
+        "C-7"
+      ],
+      "scenario": "Saving the report fails once",
+      "expected": "Only the save is retried — the document is already in hand, and regenerating it spends the whole render cost again"
+    },
+    {
+      "id": 84,
+      "clauses": [
+        "C-9"
+      ],
+      "scenario": "A run needs to record a step the phase table does not name",
+      "expected": "It records the fact as a field on the nearest listed phase rather than inventing a phase name, because a name that varies per run makes an absent phase indistinguishable from a renamed one"
+    },
+    {
+      "id": 85,
+      "clauses": [
+        "C-9"
+      ],
+      "scenario": "Writing a timeline line fails and a later line is written first",
+      "expected": "run.end is recorded again so it remains the final event; otherwise the reader cannot tell where the run actually ended"
+    },
+    {
+      "id": 86,
+      "clauses": [
+        "C-9",
+        "C-8"
+      ],
+      "scenario": "A step fails after the report file has already been written",
+      "expected": "The report is updated — 도구 실행 결과 and 미해결 / 후속 확인 — rather than leaving the failure visible only in the timeline, since the report is what a person reads"
     }
   ],
   "defaultWorkflowOnlyCases": [
