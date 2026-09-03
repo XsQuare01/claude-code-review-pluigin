@@ -133,6 +133,97 @@ test('타임라인이 없으면 빈 표를 내지 않고 사유를 낸다', t =>
   assert.match(out.stderr, /타임라인이 비었다/)
 })
 
+// ── 셸을 통과하지 않는 값 전달 ─────────────────────────────────────────────
+//
+// `--data`만 있던 때 실제 실행에서 두 번 연속 깨졌다. Windows 경로의 백슬래시와
+// 한글이 섞인 JSON이 PowerShell 명령줄을 지나면서 따옴표가 사라졌고, 기록을
+// 남기라고 만든 도구가 기록을 못 남겼다. 그 사이 다음 단계가 먼저 기록돼
+// 이벤트 순서까지 뒤집혔다.
+
+test('--set은 따옴표 없이 값을 싣는다', t => {
+  const dir = freshDir(t)
+  const out = spawnSync(process.execPath, [
+    SCRIPT, '--dir', dir, '--run', RUN, '--phase', 'report.saved',
+    '--set', 'lines=694', '--set', 'verdict=MERGE_BLOCKED',
+  ], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+
+  assert.equal(out.status, 0, out.stderr)
+  const last = linesOf(dir).at(-1)
+  assert.equal(last.lines, 694)
+  assert.equal(last.verdict, 'MERGE_BLOCKED')
+})
+
+test('--set의 숫자와 참거짓은 문자열로 남지 않는다', t => {
+  // "694"와 694가 섞이면 나중에 세는 쪽이 형을 맞추느라 또 틀린다.
+  const dir = freshDir(t)
+  spawnSync(process.execPath, [
+    SCRIPT, '--dir', dir, '--run', RUN, '--phase', 'x',
+    '--set', 'n=41', '--set', 'ok=true', '--set', 'missing=null', '--set', 'name=17-3',
+  ], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+
+  const last = linesOf(dir).at(-1)
+  assert.strictEqual(last.n, 41)
+  assert.strictEqual(last.ok, true)
+  assert.strictEqual(last.missing, null)
+  // 규칙 ID처럼 숫자로 안 읽히는 값은 문자열 그대로여야 한다.
+  assert.strictEqual(last.name, '17-3')
+})
+
+test('--set은 등호 없는 값을 거부한다', t => {
+  const dir = freshDir(t)
+  const out = spawnSync(process.execPath, [SCRIPT, '--dir', dir, '--run', RUN, '--phase', 'x', '--set', 'lines694'],
+    { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+  assert.equal(out.status, 2)
+  assert.match(out.stderr, /--set must be key=value/)
+})
+
+test('--data-file은 중첩 값을 싣는다', t => {
+  // failureClasses처럼 중첩이 필요한 값은 --set으로 못 쓴다.
+  const dir = freshDir(t)
+  const payload = join(dir, 'payload.json')
+  writeFileSync(payload, JSON.stringify({ failureClasses: { 'task-not-found': 5 }, ok: 18 }), 'utf8')
+
+  spawnSync(process.execPath, [SCRIPT, '--dir', dir, '--run', RUN, '--phase', 'dispatch.end', '--data-file', payload],
+    { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+
+  const last = linesOf(dir).at(-1)
+  assert.deepEqual(last.failureClasses, { 'task-not-found': 5 })
+  assert.equal(last.ok, 18)
+})
+
+test('--data-file이 없으면 조용히 빈 값으로 기록하지 않는다', t => {
+  const dir = freshDir(t)
+  const out = spawnSync(process.execPath, [SCRIPT, '--dir', dir, '--run', RUN, '--phase', 'x', '--data-file', join(dir, 'nope.json')],
+    { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+  assert.equal(out.status, 2)
+  assert.match(out.stderr, /--data-file not found/)
+})
+
+test('셋을 함께 주면 --set이 마지막으로 이긴다', t => {
+  // 급히 한 값만 바꿔 다시 돌리는 쪽이 파일을 고치는 쪽보다 흔하다.
+  const dir = freshDir(t)
+  const payload = join(dir, 'payload.json')
+  writeFileSync(payload, JSON.stringify({ lines: 2, from: 'file' }), 'utf8')
+
+  spawnSync(process.execPath, [
+    SCRIPT, '--dir', dir, '--run', RUN, '--phase', 'x',
+    '--data', '{"lines":1,"from":"data"}', '--data-file', payload, '--set', 'lines=3',
+  ], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+
+  const last = linesOf(dir).at(-1)
+  assert.equal(last.lines, 3)
+  assert.equal(last.from, 'file')
+})
+
+test('--set으로도 측정값은 덮어쓸 수 없다', t => {
+  const dir = freshDir(t)
+  spawnSync(process.execPath, [SCRIPT, '--dir', dir, '--run', RUN, '--phase', 'render.start', '--set', 'phase=거짓', '--set', 'seq=99'],
+    { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+  const last = linesOf(dir).at(-1)
+  assert.equal(last.phase, 'render.start')
+  assert.equal(last.seq, 1)
+})
+
 // ── 인자 검증 ──────────────────────────────────────────────────────────────
 
 test('run에 경로 구분자가 들어오면 거부한다', t => {
