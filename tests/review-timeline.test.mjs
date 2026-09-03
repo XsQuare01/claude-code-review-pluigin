@@ -224,6 +224,114 @@ test('--set으로도 측정값은 덮어쓸 수 없다', t => {
   assert.equal(last.seq, 1)
 })
 
+// ── 총량을 어디서 읽는가 ───────────────────────────────────────────────────
+
+test('run.end가 두 번이면 나중 것을 총량으로 쓴다', t => {
+  // 계약은 기록이 밀렸을 때 run.end를 다시 적도록 허용한다. 앞의 것을 집으면
+  // 오래된 값이 전체 총량으로 나간다.
+  const dir = freshDir(t)
+  log(dir, 'run.end', { tokensIn: 10, tokensOut: 1 })
+  log(dir, 'render.wrote', {})
+  log(dir, 'run.end', { tokensIn: 20, tokensOut: 2 })
+
+  const out = summary(dir).stdout
+  assert.match(out, /입력 20/)
+  assert.doesNotMatch(out, /입력 10/)
+})
+
+test('run.end가 마지막이 아니면 총량을 최종으로 내세우지 않는다', t => {
+  const dir = freshDir(t)
+  log(dir, 'run.end', { tokensIn: 10, tokensOut: 1 })
+  log(dir, 'render.wrote', {})
+
+  assert.match(summary(dir).stdout, /이 총량은 최종이 아닐 수 있다/)
+})
+
+test('측정된 0을 미측정과 구분한다', t => {
+  // truthy로 거르면 실제로 0을 쓴 실행이 재지 못한 실행과 같은 모습이 된다.
+  const dir = freshDir(t)
+  log(dir, 'run.end', { tokensIn: 0, tokensOut: 0, usageSource: 'envelope' })
+
+  const out = summary(dir).stdout
+  assert.match(out, /입력 0 · 출력 0/)
+  assert.doesNotMatch(out, /재지 못했다/)
+})
+
+test('한쪽만 측정된 값을 0으로 채우지 않는다', t => {
+  const dir = freshDir(t)
+  log(dir, 'run.end', { tokensIn: 500 })
+
+  assert.match(summary(dir).stdout, /입력 500 · 출력 미측정/)
+})
+
+test('음수나 소수 토큰은 값으로 보지 않는다', t => {
+  const dir = freshDir(t)
+  log(dir, 'module.done', { tokensIn: -5, tokensOut: 1.5 })
+  log(dir, 'run.end', {})
+
+  assert.doesNotMatch(summary(dir).stdout, /토큰/)
+})
+
+// ── 부분 합계를 전체로 내세우지 않는다 ─────────────────────────────────────
+
+test('일부 단계만 보고하면 부분 합계라고 부른다', t => {
+  // 덜 보고한 실행이 더 싸 보이면, 그 값으로 무엇을 덜어낼지 정할 수 없다.
+  const dir = freshDir(t)
+  log(dir, 'module.done', { module: '03-react-rules', tokensIn: 100, tokensOut: 10 })
+  log(dir, 'module.done', { module: '20-deletion-regression' })
+  log(dir, 'run.end', {})
+
+  const out = summary(dir).stdout
+  assert.match(out, /토큰\(부분 합계\)/)
+  assert.match(out, /전체 총량이 아니다/)
+  assert.match(out, /1개 단계만/)
+  assert.match(out, /비교하지 않는다/)
+})
+
+test('모듈 밖의 단계도 사용량을 낸다', t => {
+  // 교차검증이 값을 하는지 물으려면 그 단계의 몫이 따로 있어야 한다.
+  const dir = freshDir(t)
+  log(dir, 'crossverify.end', { upheld: 1, tokensIn: 700, tokensOut: 40 })
+  log(dir, 'synthesis.end', { clusters: 1, tokensIn: 200, tokensOut: 20 })
+  log(dir, 'run.end', {})
+
+  assert.match(summary(dir).stdout, /토큰\(부분 합계\)\*\* 입력 900 · 출력 60/)
+})
+
+test('총량이 있으면 단계 합계와 귀속되지 않은 몫을 함께 낸다', t => {
+  // 차이가 크면 단계별 값만 보고 판단하면 안 된다는 뜻이다.
+  const dir = freshDir(t)
+  log(dir, 'crossverify.end', { tokensIn: 700, tokensOut: 40 })
+  log(dir, 'run.end', { tokensIn: 1000, tokensOut: 60, usageSource: 'envelope' })
+
+  const out = summary(dir).stdout
+  assert.match(out, /입력 1,000/)
+  assert.match(out, /단계별 입력 합계 700/)
+  assert.match(out, /귀속되지 않은 300/)
+})
+
+// ── 두 실행이 한 파일에 섞이지 않는다 ──────────────────────────────────────
+
+test('끝난 타임라인에 새 실행을 이어붙이지 않는다', t => {
+  // 파일 이름이 날짜까지만 담으므로, 같은 날 같은 브랜치를 두 번 리뷰하면
+  // 두 실행이 한 파일에 섞인다. 반복 측정이 필요한 용도에서 가장 먼저 깨진다.
+  const dir = freshDir(t)
+  log(dir, 'run.start')
+  log(dir, 'run.end')
+
+  const again = log(dir, 'run.start')
+  assert.equal(again.status, 2)
+  assert.match(again.stderr, /이미 끝난 타임라인이다/)
+  assert.equal(linesOf(dir).length, 2)
+})
+
+test('끝나지 않은 타임라인에는 이어 쓴다', t => {
+  const dir = freshDir(t)
+  log(dir, 'run.start')
+  log(dir, 'module.done', {})
+  assert.equal(log(dir, 'render.wrote', {}).status, 0)
+})
+
 // ── 타입이 섞인 필드 ───────────────────────────────────────────────────────
 //
 // `--set`은 원문으로 되돌아오는 값만 숫자로 둔다. 그래서 `module=01`은 문자열,

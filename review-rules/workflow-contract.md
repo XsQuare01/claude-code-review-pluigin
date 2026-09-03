@@ -981,12 +981,12 @@ UTF-16 파일도 읽는다 — PowerShell 5.1의 `Set-Content -Encoding UTF8`은
 | `dispatch.start` | **첫 sub-agent를 실제로 띄운 직후** | `modules`, `inflight` |
 | `module.start` | **모듈 하나를 띄운 직후** | `module`, `taskId` |
 | `module.done` | **모듈 하나가 끝날 때마다** | `module`, `status`(ok/failed), `findings`, `failureClass`, `taskId`, (있으면) `tokensIn`·`tokensOut` |
-| `dispatch.end` | 전부 수집 후 | `ok`, `failed`, `failureClasses` |
+| `dispatch.end` | 전부 수집 후 | `ok`, `failed`, `failureClasses`, (있으면) `tokensIn`·`tokensOut` |
 | `script.done` | `prepare-verification.mjs` 실행 후 | `ran`, `counts` |
-| `crossverify.start` / `.end` | 교차검증 패스 | `targets` / `upheld`, `rejected` |
-| `synthesis.start` / `.end` | synthesis 패스 | `clusters` |
+| `crossverify.start` / `.end` | 교차검증 패스 | `targets` / `upheld`, `rejected`, (있으면) `tokensIn`·`tokensOut` |
+| `synthesis.start` / `.end` | synthesis 패스 | `clusters`, (있으면) `tokensIn`·`tokensOut` |
 | `render.start` | **문서를 쓰기 직전** | `findings`(중복 제거 후) |
-| `render.wrote` | 파일을 쓴 직후 | `path`, `lines` |
+| `render.wrote` | 파일을 쓴 직후 | `path`, `lines`, (있으면) `tokensIn`·`tokensOut` |
 | `run.end` | 마지막 | `verdict`, `usageSource`, (있으면) `tokensIn`·`tokensOut`·`tokensCacheRead`·`costUsd` |
 
 **`module`에는 번호가 아니라 모듈 파일 이름을 적는다** — `review-rules/03-react-rules.md`면
@@ -1014,7 +1014,14 @@ node "$RULES_DIR/../scripts/review-timeline.mjs" --dir <같은 값> --run <같�
 시간은 이미 남는데 **무엇을 얼마나 썼는지가 남지 않는다.** 그래서 "이 패스가 값을
 하는가" 같은 판단을 시간이라는 대리 지표로만 해야 한다. 토큰이 실제로 쓰는 자원이다.
 
-- `run.end`에 **전체 사용량**을 남긴다. 모듈별 값을 런타임이 알려주면 `module.done`에도 남긴다
+- `run.end`에 **전체 사용량**을 남긴다
+- **단계마다도 남긴다.** `module.done`뿐 아니라 `dispatch.end`·`crossverify.end`·
+  `synthesis.end`·`render.wrote`에도 그 단계의 몫을 적는다. 전체 총량만 있으면
+  **"이 패스가 값을 하는가"에 답할 수 없다** — 덜어낼 후보의 몫이 따로 있어야
+  덜어낸 효과를 계산할 수 있고, 그것이 이 기록을 남기는 이유다
+- 단계 합계가 전체 총량보다 작은 만큼은 **어느 단계에도 귀속되지 않은 몫**이다.
+  오케스트레이터 자신의 소비, 재시도, 기록되지 않은 호출이 거기 들어간다.
+  요약이 그 차이를 함께 낸다 — 차이가 크면 단계별 값만 보고 판단하면 안 된다는 뜻이다
 - **모델이 세지 않는다.** 시각과 같은 이유다 — 세어본 적 없는 수를 문장으로 적으면
   그것은 측정이 아니라 어림이다. 런타임이 보고한 값만 옮긴다
 - **어디서 얻었는지를 `usageSource`로 함께 적는다.** 결과 봉투의 `usage`인지, task
@@ -1022,6 +1029,11 @@ node "$RULES_DIR/../scripts/review-timeline.mjs" --dir <같은 값> --run <같�
   비교할 때 같은 기준인지 알 수 없다
 - **얻지 못했으면 `usageSource`를 `unavailable`로 적는다.** 필드를 통째로 빼면 "0이었다"와
   "재지 못했다"가 같은 모습이 된다 — 이 계약이 반복해서 가르는 그 구분이다
+
+**부분 합계를 전체로 쓰지 않는다.** 일부 단계만 사용량을 보고했는데 그 합을 실행의
+총량처럼 다루면, 덜 보고한 실행이 더 싸 보인다. 총량이 없으면 요약은 그것을 부분
+합계라고 부르고 몇 개 단계가 보고했는지 함께 낸다. **부분 합계로 두 실행을
+비교하지 않는다.**
 
 **`costUsd`는 청구액이 아니다.** 구독으로 도는 실행에서 그 값은 정가 환산이고, 실제로
 소모되는 것은 사용량 한도다. 그래서 토큰이 정본이고 금액은 있으면 함께 적는 부가
@@ -1059,6 +1071,20 @@ node "$RULES_DIR/../scripts/review-timeline.mjs" --dir <같은 값> --run <같�
   타임라인에만 적고 넘어가지 않는다
 - **가장 좋은 것은 그런 단계를 렌더 뒤에 두지 않는 것이다.** 리포트에 반영할 수
   없는 검증은 리포트가 확정된 뒤에 하면 결과를 쓸 곳이 없다
+
+### 사이드카가 정본이다
+
+리포트에 싣는 요약은 **렌더 시점까지의 기록**이다. `run.end`는 그 뒤에 오므로,
+리포트 안의 표에는 전체 사용량이 들어갈 수 없다. 순서를 뒤집어 `run.end`를 먼저
+적으면 이번에는 종료가 마지막 자리를 잃는다.
+
+그래서 둘을 다른 것으로 둔다.
+
+- **사이드카가 정본이다.** 사용량 분석과 실행 간 비교는 `.timing/*.jsonl`을 읽는다
+- **리포트의 표는 사람이 읽는 요약**이고, 렌더 시점까지를 보여준다. 그 이후 단계는
+  들어 있지 않다는 것을 전제로 읽는다
+- 리포트에 사용량을 꼭 실어야 하면, 렌더 시점까지의 단계 합계를 **부분 합계라고
+  밝혀** 적는다. 전체 총량이라고 적지 않는다
 
 ### 없는 줄과 0인 줄은 다르다
 
