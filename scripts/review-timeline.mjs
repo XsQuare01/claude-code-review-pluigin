@@ -46,6 +46,32 @@ const flagAll = name => process.argv
   .map((arg, at) => (arg === `--${name}` ? process.argv[at + 1] : null))
   .filter(value => value !== null && value !== undefined && !value.startsWith('--'))
 
+/**
+ * 소비되지 않은 인자를 거부한다.
+ *
+ * 값에 공백이 있으면 셸이 거기서 쪼갠다 — PowerShell에서 `--set note=검토 완료`는
+ * `["--set", "note=검토", "완료"]`가 되고, 남은 `완료`는 어디에도 안 쓰인다.
+ * 그것을 조용히 무시하면 **잘린 값이 기록되고 아무도 모른다.** 기록을 남기는
+ * 도구에서 가장 나쁜 실패 방식이라, 인용을 잊었으면 시끄럽게 실패시킨다.
+ */
+const VALUE_FLAGS = new Set(['dir', 'run', 'phase', 'data', 'data-file', 'set'])
+const BOOL_FLAGS = new Set(['summary'])
+{
+  const argv = process.argv.slice(2)
+  for (let at = 0; at < argv.length; at += 1) {
+    const arg = argv[at]
+    if (!arg.startsWith('--')) {
+      die(`unexpected argument ${JSON.stringify(arg)} — 값에 공백이 있으면 따옴표로 감싸라`)
+    }
+    const name = arg.slice(2)
+    if (BOOL_FLAGS.has(name)) continue
+    if (!VALUE_FLAGS.has(name)) die(`unknown flag ${arg}`)
+    const value = argv[at + 1]
+    if (value === undefined || value.startsWith('--')) die(`${arg} needs a value`)
+    at += 1
+  }
+}
+
 const dir = flag('dir', 'review-reports')
 const run = flag('run')
 if (!run) die('usage: review-timeline.mjs --dir <reports-dir> --run <basename> --phase <name> [--data <json>]')
@@ -97,9 +123,14 @@ if (has('summary')) {
     '|---|---:|---:|---|',
     ...rows.map(row => `| \`${row.phase}\`${row === slowest && row.step > 0 ? ' **←최장**' : ''} | ${row.elapsed}s | ${row.step}s | ${row.detail} |`),
   ]
-  // 끝 표시가 없으면 그 사실을 적는다. 없는 것과 0은 다르다.
-  if (!events.some(event => event.phase === 'run.end')) {
-    out.push('', `> **\`run.end\`가 없다.** 마지막으로 남은 단계는 \`${events[events.length - 1].phase}\`이고, 실행은 거기서 끝나지 않았다.`)
+  // 끝 표시를 **마지막 자리에서** 찾는다. 있기만 하면 통과시키면, 종료 뒤에
+  // 줄이 더 붙은 실행을 정상 종료로 읽는다 — 실제로 기록 실패 때문에 순서가
+  // 밀려 그런 타임라인이 만들어진 적이 있다. 없는 것과 자리에 없는 것은 다르다.
+  const finalPhase = events[events.length - 1].phase
+  if (finalPhase !== 'run.end') {
+    out.push('', events.some(event => event.phase === 'run.end')
+      ? `> **\`run.end\` 뒤에 줄이 더 있다.** 마지막 줄은 \`${finalPhase}\`다. 종료가 마지막 자리에 있지 않으므로 실행이 어디서 끝났는지 이 기록만으로는 알 수 없다.`
+      : `> **\`run.end\`가 없다.** 마지막으로 남은 단계는 \`${finalPhase}\`이고, 실행은 거기서 끝나지 않았다.`)
   }
   if (malformed) out.push('', `> 읽지 못한 줄 ${malformed}개.`)
   process.stdout.write(out.join('\n') + '\n')
@@ -132,6 +163,27 @@ if (!phase) die('--phase is required')
  * 쓴 것이 파일보다 뒤에 오는 이유는, 급히 한 값만 바꿔 다시 돌리는 쪽이
  * 파일을 고치는 쪽보다 흔하기 때문이다.
  */
+/**
+ * BOM과 UTF-16을 견디며 텍스트를 읽는다.
+ *
+ * 이 경로는 PowerShell의 JSON 인용 문제를 피하려고 만든 것인데, 정작 PowerShell
+ * 5.1이 만드는 파일을 못 읽으면 아무 소용이 없다. `Set-Content -Encoding UTF8`은
+ * **BOM을 붙이고**, 기본 `Out-File`은 **UTF-16LE**로 쓴다. 둘 다 JSON.parse가
+ * 첫 글자에서 실패한다.
+ *
+ * UTF-16BE는 Node 디코더가 없어 바이트를 뒤집어 LE로 읽는다.
+ */
+const readTextFile = path => {
+  const bytes = readFileSync(path)
+  if (bytes[0] === 0xff && bytes[1] === 0xfe) return bytes.toString('utf16le').replace(/^﻿/, '')
+  if (bytes[0] === 0xfe && bytes[1] === 0xff) {
+    const swapped = Buffer.from(bytes)
+    swapped.swap16()
+    return swapped.toString('utf16le').replace(/^﻿/, '')
+  }
+  return bytes.toString('utf8').replace(/^﻿/, '')
+}
+
 const parseObject = (raw, where) => {
   let parsed
   try {
@@ -154,7 +206,7 @@ const data = (() => {
   const dataFile = flag('data-file')
   if (dataFile) {
     if (!existsSync(dataFile)) die(`--data-file not found: ${dataFile}`)
-    Object.assign(merged, parseObject(readFileSync(dataFile, 'utf8'), '--data-file'))
+    Object.assign(merged, parseObject(readTextFile(dataFile), '--data-file'))
   }
 
   for (const pair of flagAll('set')) {
@@ -162,13 +214,19 @@ const data = (() => {
     if (at < 1) die(`--set must be key=value, got ${JSON.stringify(pair)}`)
     const key = pair.slice(0, at)
     const value = pair.slice(at + 1)
-    // 숫자로 읽히는 값은 숫자로 둔다. "694"와 694가 섞이면 나중에 세는 쪽이
-    // 형을 맞추느라 또 한 번 틀린다. true/false/null도 같은 이유로 되돌린다.
-    merged[key] = value === '' ? ''
-      : value === 'true' ? true
+    // 숫자로 **되돌아오는** 값만 숫자로 둔다. 왕복이 같지 않으면 문자열이다.
+    //
+    // 처음에는 Number()로 읽히기만 하면 숫자로 바꿨는데, 그것이 식별자를
+    // 망가뜨렸다: `module=01`이 `1`이 되고 `taskId=001`도 `1`이 됐다. 모듈
+    // 번호와 task ID는 세는 값이 아니라 가리키는 값이라, 앞의 0이 사라지면
+    // 무엇을 가리키는지가 사라진다. `1e3`·`0x10`도 원문과 다른 것으로 바뀐다.
+    //
+    // `String(Number(v)) === v`는 그 셋을 전부 걸러내면서 694·41·1.5는 통과시킨다.
+    const asNumber = Number(value)
+    merged[key] = value === 'true' ? true
       : value === 'false' ? false
       : value === 'null' ? null
-      : Number.isFinite(Number(value)) ? Number(value)
+      : value !== '' && Number.isFinite(asNumber) && String(asNumber) === value ? asNumber
       : value
   }
 

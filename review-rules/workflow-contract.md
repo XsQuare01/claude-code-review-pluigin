@@ -927,8 +927,22 @@ finding 헤딩 **바로 다음 줄**에 영향도와 확신도를 적는다. `00
 node <RULES_DIR>/../scripts/review-timeline.mjs --dir <리포트 디렉터리> --run <리포트 basename> --phase <단계> --set key=value --set key=value
 ```
 
-**`--set`을 쓴다.** 따옴표도 중괄호도 백슬래시도 지나가지 않으므로 어느 셸에서도 같다.
-중첩 값이 필요하면 `--data-file <경로>`로 JSON 파일을 넘긴다.
+**`--set`을 쓴다.** JSON 인용이 필요 없다 — 따옴표도 중괄호도 백슬래시도 값 안에
+들어가지 않으므로, 셸마다 다르게 깨지던 지점이 사라진다.
+
+**다만 셸의 인자 분리는 그대로다.** 값에 공백이 있으면 감싸야 한다.
+
+```
+--set note="검토 완료"        공백이 있으면 인용
+--dir "C:\Users\...\바탕 화면\Docs"    경로도 마찬가지
+```
+
+인용을 빠뜨리면 스크립트가 남은 토큰을 **거부한다.** 조용히 잘린 값을 기록하지
+않는다 — 기록이 잘린 채로 남으면 그것이 원래 값이었는지 알 방법이 없다.
+
+중첩 값이 필요하면 `--data-file <경로>`로 JSON 파일을 넘긴다. BOM이 붙은 UTF-8과
+UTF-16 파일도 읽는다 — PowerShell 5.1의 `Set-Content -Encoding UTF8`은 BOM을 붙이고
+기본 `Out-File`은 UTF-16LE로 쓰기 때문이다.
 
 `--data '<JSON>'`도 여전히 받지만 **PowerShell에서는 쓰지 않는다.** 실제로 Windows
 경로와 한글이 섞인 JSON이 명령줄을 지나며 두 번 연속 깨졌고, 그 사이 다음 단계가
@@ -965,6 +979,7 @@ node <RULES_DIR>/../scripts/review-timeline.mjs --dir <리포트 디렉터리> -
 | `scope.done` | 범위 확정(C-4) | `files`, `excluded` |
 | `modules.planned` | 적용 모듈 확정(C-3) | `candidates`, `applied`, `skipped` |
 | `dispatch.start` | **첫 sub-agent를 실제로 띄운 직후** | `modules`, `inflight` |
+| `module.start` | **모듈 하나를 띄운 직후** | `module`, `taskId` |
 | `module.done` | **모듈 하나가 끝날 때마다** | `module`, `status`(ok/failed), `findings`, `failureClass`, `taskId` |
 | `dispatch.end` | 전부 수집 후 | `ok`, `failed`, `failureClasses` |
 | `script.done` | `prepare-verification.mjs` 실행 후 | `ran`, `counts` |
@@ -993,8 +1008,16 @@ node "$RULES_DIR/../scripts/review-timeline.mjs" --dir <같은 값> --run <같�
 **`dispatch.start`는 실제로 띄운 직후에 적는다.** "이제 오케스트레이션을 시작한다"는
 뜻으로 미리 적으면, 계획보다 앞선 시각이 기록돼 나중에 **워크플로우 위반과 단순
 기록 순서 문제를 구분할 수 없게 된다.** 한 실행에서 정확히 그 상태가 됐고, 어느
-쪽인지 끝내 판정하지 못했다. `taskId`를 함께 적는 이유도 같다 — 식별자가 없으면
-어느 task가 언제 떴는지 사후에 물어도 답이 나오지 않는다.
+쪽인지 끝내 판정하지 못했다.
+
+**어느 task가 언제 떴는지는 `module.start`가 든다.** `dispatch.start`는 wave
+단위라 개별 식별자를 담을 자리가 없다 — 거기에 `taskId`를 얹으려 해도 여러 개 중
+하나만 적히거나 아예 못 적는다. task마다 한 줄이어야 `module.start` → `module.done`
+짝으로 각 모듈이 얼마나 걸렸는지, 어느 것이 돌아오지 않았는지가 복원된다.
+
+식별자가 없으면 사후에 물어도 답이 나오지 않는다. 실제로 한 실행에서 네 모듈이
+같은 시각에 사라졌는데, launch 기록이 없어 **첫 wave가 통째로 유실된 것인지 다른
+문제인지 끝내 가리지 못했다.**
 
 **`run.end`는 마지막 이벤트여야 한다.** 그 뒤에 줄이 더 붙으면 "끝난 뒤에 일어난
 일"이 되어, 읽는 쪽은 실행이 어디서 끝났는지 믿을 수 없다. 기록에 실패해 순서가
