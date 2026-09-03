@@ -980,14 +980,14 @@ UTF-16 파일도 읽는다 — PowerShell 5.1의 `Set-Content -Encoding UTF8`은
 | `modules.planned` | 적용 모듈 확정(C-3) | `candidates`, `applied`, `skipped` |
 | `dispatch.start` | **첫 sub-agent를 실제로 띄운 직후** | `modules`, `inflight` |
 | `module.start` | **모듈 하나를 띄운 직후** | `module`, `taskId` |
-| `module.done` | **모듈 하나가 끝날 때마다** | `module`, `status`(ok/failed), `findings`, `failureClass`, `taskId` |
+| `module.done` | **모듈 하나가 끝날 때마다** | `module`, `status`(ok/failed), `findings`, `failureClass`, `taskId`, (있으면) `tokensIn`·`tokensOut` |
 | `dispatch.end` | 전부 수집 후 | `ok`, `failed`, `failureClasses` |
 | `script.done` | `prepare-verification.mjs` 실행 후 | `ran`, `counts` |
 | `crossverify.start` / `.end` | 교차검증 패스 | `targets` / `upheld`, `rejected` |
 | `synthesis.start` / `.end` | synthesis 패스 | `clusters` |
 | `render.start` | **문서를 쓰기 직전** | `findings`(중복 제거 후) |
 | `render.wrote` | 파일을 쓴 직후 | `path`, `lines` |
-| `run.end` | 마지막 | `verdict` |
+| `run.end` | 마지막 | `verdict`, `usageSource`, (있으면) `tokensIn`·`tokensOut`·`tokensCacheRead`·`costUsd` |
 
 `module.done`을 모듈마다 쓰는 것이 fan-out의 유일한 증거다. `dispatch.end`
 하나로 합치면, fan-out 도중에 죽은 실행은 아무 줄도 남기지 못한다.
@@ -1002,6 +1002,24 @@ node "$RULES_DIR/../scripts/review-timeline.mjs" --dir <같은 값> --run <같�
 ```
 
 출력한 Markdown 표를 리포트의 `실행 타임라인` 섹션에 그대로 붙인다.
+
+### 사용량
+
+시간은 이미 남는데 **무엇을 얼마나 썼는지가 남지 않는다.** 그래서 "이 패스가 값을
+하는가" 같은 판단을 시간이라는 대리 지표로만 해야 한다. 토큰이 실제로 쓰는 자원이다.
+
+- `run.end`에 **전체 사용량**을 남긴다. 모듈별 값을 런타임이 알려주면 `module.done`에도 남긴다
+- **모델이 세지 않는다.** 시각과 같은 이유다 — 세어본 적 없는 수를 문장으로 적으면
+  그것은 측정이 아니라 어림이다. 런타임이 보고한 값만 옮긴다
+- **어디서 얻었는지를 `usageSource`로 함께 적는다.** 결과 봉투의 `usage`인지, task
+  완료 알림인지, 세션 export나 통계 명령인지. 출처가 없는 숫자는 나중에 두 실행을
+  비교할 때 같은 기준인지 알 수 없다
+- **얻지 못했으면 `usageSource`를 `unavailable`로 적는다.** 필드를 통째로 빼면 "0이었다"와
+  "재지 못했다"가 같은 모습이 된다 — 이 계약이 반복해서 가르는 그 구분이다
+
+**`costUsd`는 청구액이 아니다.** 구독으로 도는 실행에서 그 값은 정가 환산이고, 실제로
+소모되는 것은 사용량 한도다. 그래서 토큰이 정본이고 금액은 있으면 함께 적는 부가
+값이다. 리포트에 금액만 옮겨 적어 "이 리뷰의 비용"이라고 서술하지 않는다.
 
 ### 순서
 

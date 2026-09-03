@@ -132,6 +132,25 @@ if (has('summary')) {
       ? `> **\`run.end\` 뒤에 줄이 더 있다.** 마지막 줄은 \`${finalPhase}\`다. 종료가 마지막 자리에 있지 않으므로 실행이 어디서 끝났는지 이 기록만으로는 알 수 없다.`
       : `> **\`run.end\`가 없다.** 마지막으로 남은 단계는 \`${finalPhase}\`이고, 실행은 거기서 끝나지 않았다.`)
   }
+  // 사용량은 표 아래 한 줄로 따로 낸다. 상세 칸에만 두면 긴 JSON 사이에 묻혀
+  // 아무도 안 읽는다 — 기록해두고 읽히지 않는 것은 기록하지 않은 것과 같다.
+  {
+    const end = events.find(event => event.phase === 'run.end') ?? {}
+    const sum = key => events.reduce((total, event) => total + (typeof event[key] === 'number' ? event[key] : 0), 0)
+    const tokensIn = typeof end.tokensIn === 'number' ? end.tokensIn : sum('tokensIn')
+    const tokensOut = typeof end.tokensOut === 'number' ? end.tokensOut : sum('tokensOut')
+
+    if (tokensIn || tokensOut) {
+      const parts = [`입력 ${tokensIn.toLocaleString()}`, `출력 ${tokensOut.toLocaleString()}`]
+      if (typeof end.tokensCacheRead === 'number') parts.push(`캐시 읽기 ${end.tokensCacheRead.toLocaleString()}`)
+      // 금액은 구독 실행에서 청구액이 아니라 정가 환산이다. 그대로 "비용"이라
+      // 부르지 않도록 출처와 함께만 낸다.
+      if (typeof end.costUsd === 'number') parts.push(`정가 환산 $${end.costUsd}`)
+      out.push('', `**토큰** ${parts.join(' · ')}${end.usageSource ? ` (출처: ${end.usageSource})` : ''}`)
+    } else if (end.usageSource === 'unavailable') {
+      out.push('', '> **사용량을 재지 못했다.** 0이 아니라 관측되지 않았다는 뜻이다.')
+    }
+  }
   if (malformed) out.push('', `> 읽지 못한 줄 ${malformed}개.`)
   process.stdout.write(out.join('\n') + '\n')
   process.exit(0)

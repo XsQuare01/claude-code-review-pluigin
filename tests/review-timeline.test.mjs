@@ -224,6 +224,63 @@ test('--set으로도 측정값은 덮어쓸 수 없다', t => {
   assert.equal(last.seq, 1)
 })
 
+// ── 사용량 ─────────────────────────────────────────────────────────────────
+//
+// 시간은 남는데 무엇을 얼마나 썼는지가 남지 않았다. "이 패스가 값을 하는가"를
+// 시간이라는 대리 지표로만 판단해야 했다. 표 상세 칸에만 두면 긴 JSON 사이에
+// 묻히므로 따로 한 줄로 낸다.
+
+test('run.end의 총량을 표 아래 한 줄로 낸다', t => {
+  const dir = freshDir(t)
+  log(dir, 'run.start')
+  log(dir, 'run.end', { tokensIn: 1840000, tokensOut: 96000, tokensCacheRead: 1520000, usageSource: 'envelope' })
+
+  const out = summary(dir).stdout
+  assert.match(out, /\*\*토큰\*\* 입력 1,840,000/)
+  assert.match(out, /출력 96,000/)
+  assert.match(out, /캐시 읽기 1,520,000/)
+  assert.match(out, /출처: envelope/)
+})
+
+test('총량이 없으면 모듈별 값을 합산한다', t => {
+  const dir = freshDir(t)
+  log(dir, 'module.done', { tokensIn: 100, tokensOut: 10 })
+  log(dir, 'module.done', { tokensIn: 250, tokensOut: 30 })
+  log(dir, 'run.end', {})
+
+  const out = summary(dir).stdout
+  assert.match(out, /입력 350/)
+  assert.match(out, /출력 40/)
+})
+
+test('재지 못한 것과 0을 구분한다', t => {
+  // 필드를 통째로 빼면 "0이었다"와 "재지 못했다"가 같은 모습이 된다.
+  const dir = freshDir(t)
+  log(dir, 'run.end', { usageSource: 'unavailable' })
+
+  const out = summary(dir).stdout
+  assert.match(out, /사용량을 재지 못했다/)
+  assert.doesNotMatch(out, /\*\*토큰\*\*/)
+})
+
+test('사용량이 없으면 토큰 줄을 만들지 않는다', t => {
+  const dir = freshDir(t)
+  log(dir, 'run.start')
+  log(dir, 'run.end', { verdict: 'PASS' })
+
+  const out = summary(dir).stdout
+  assert.doesNotMatch(out, /\*\*토큰\*\*/)
+  assert.doesNotMatch(out, /재지 못했다/)
+})
+
+test('금액은 정가 환산이라고 적는다', t => {
+  // 구독 실행에서 이 값은 청구액이 아니다. "비용"으로 읽히면 안 된다.
+  const dir = freshDir(t)
+  log(dir, 'run.end', { tokensIn: 100, tokensOut: 10, costUsd: 12.4, usageSource: 'envelope' })
+
+  assert.match(summary(dir).stdout, /정가 환산 \$12\.4/)
+})
+
 // ── PowerShell이 만든 파일을 읽는다 ────────────────────────────────────────
 //
 // 이 경로는 PowerShell의 JSON 인용 문제를 피하려고 만든 것이다. 그런데 정작

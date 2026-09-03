@@ -669,6 +669,30 @@ These scenarios pin the behaviour that `review-rules/workflow-contract.md` promi
       ],
       "scenario": "A step fails after the report file has already been written",
       "expected": "The report is updated — 도구 실행 결과 and 미해결 / 후속 확인 — rather than leaving the failure visible only in the timeline, since the report is what a person reads"
+    },
+    {
+      "id": 87,
+      "clauses": [
+        "C-9"
+      ],
+      "scenario": "The runtime never reports token usage for the run",
+      "expected": "usageSource is recorded as unavailable rather than omitting the fields, so that not-measured stays distinguishable from zero"
+    },
+    {
+      "id": 88,
+      "clauses": [
+        "C-9"
+      ],
+      "scenario": "A run estimates its own token usage because the runtime did not report it",
+      "expected": "This violates C-9 — a number the model never counted is a guess, and it sits in the same field as measured numbers where nobody can tell them apart"
+    },
+    {
+      "id": 89,
+      "clauses": [
+        "C-9"
+      ],
+      "scenario": "A subscription run records costUsd from the result envelope",
+      "expected": "The tokens are the record and the amount is a list-price valuation carried alongside; the report does not describe it as what the review cost"
     }
   ],
   "defaultWorkflowOnlyCases": [
