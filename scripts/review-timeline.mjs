@@ -132,6 +132,87 @@ if (has('summary')) {
       ? `> **\`run.end\` 뒤에 줄이 더 있다.** 마지막 줄은 \`${finalPhase}\`다. 종료가 마지막 자리에 있지 않으므로 실행이 어디서 끝났는지 이 기록만으로는 알 수 없다.`
       : `> **\`run.end\`가 없다.** 마지막으로 남은 단계는 \`${finalPhase}\`이고, 실행은 거기서 끝나지 않았다.`)
   }
+  // 사용량. 표 상세 칸에만 두면 긴 JSON 사이에 묻혀 아무도 안 읽으므로 따로 낸다.
+  //
+  // 이 블록은 "숫자를 보여주는" 것이 아니라 **무엇을 근거로 그 숫자를 말하는지**를
+  // 함께 내는 것이 목적이다. 어떤 패스를 덜어낼지 정하는 데 쓰일 값이라, 부분
+  // 합계를 전체처럼 보이면 잘못된 것을 덜어내게 된다.
+  {
+    // 토큰은 음수도 소수도 아니다. 그렇지 않은 값은 없는 것으로 본다 —
+    // 조용히 0으로 더하면 부분 합계가 전체처럼 보이는 바로 그 문제가 된다.
+    const count = value => (Number.isInteger(value) && value >= 0 ? value : null)
+    const usageOf = event => {
+      const tokensIn = count(event.tokensIn)
+      const tokensOut = count(event.tokensOut)
+      return tokensIn === null && tokensOut === null ? null : { tokensIn, tokensOut, event }
+    }
+    const show = value => (value === null ? '미측정' : value.toLocaleString())
+
+    // 마지막 run.end를 쓴다. 기록이 밀려 다시 적힌 경우 **나중 것이 정본**이고,
+    // 앞의 것을 집으면 오래된 값을 전체 총량으로 내놓는다.
+    let lastEnd = null
+    for (let at = events.length - 1; at >= 0; at -= 1) {
+      if (events[at].phase === 'run.end') { lastEnd = events[at]; break }
+    }
+    const endIsFinal = events[events.length - 1].phase === 'run.end'
+    const total = lastEnd ? usageOf(lastEnd) : null
+
+    // 단계별 사용량. 모듈만이 아니라 덜어낼 후보가 되는 단계 전부를 본다 —
+    // 교차검증이 값을 하는지 물으려면 그 단계의 몫이 따로 있어야 한다.
+    const STAGES = ['module.done', 'dispatch.end', 'script.done', 'crossverify.end', 'synthesis.end', 'render.wrote']
+    const stages = events.filter(event => STAGES.includes(event.phase)).map(usageOf).filter(Boolean)
+    const stageTotal = key => stages.reduce((sum, item) => sum + (item[key] ?? 0), 0)
+    const stagesComplete = stages.length > 0 && stages.every(item => item.tokensIn !== null && item.tokensOut !== null)
+
+    const extras = []
+    if (lastEnd && Number.isFinite(lastEnd.tokensCacheRead)) extras.push(`캐시 읽기 ${lastEnd.tokensCacheRead.toLocaleString()}`)
+    // 금액은 구독 실행에서 청구액이 아니라 정가 환산이다. "비용"으로 읽히지
+    // 않도록 이름을 붙여서만 낸다.
+    if (lastEnd && Number.isFinite(lastEnd.costUsd)) extras.push(`정가 환산 $${lastEnd.costUsd}`)
+    const source = lastEnd?.usageSource ? ` (출처: ${lastEnd.usageSource})` : ''
+
+    if (total) {
+      // **필드가 있으면 낸다.** 0/0도 측정 결과다 — truthy로 거르면 실제로 0을
+      // 쓴 실행이 "재지 못한" 실행과 같은 모습이 된다.
+      out.push('', `**토큰** 입력 ${show(total.tokensIn)} · 출력 ${show(total.tokensOut)}${extras.length ? ` · ${extras.join(' · ')}` : ''}${source}`)
+      if (!endIsFinal) {
+        out.push('', '> **이 총량은 최종이 아닐 수 있다.** `run.end`가 마지막 줄이 아니므로 그 뒤의 사용량은 포함되지 않았다.')
+      }
+      if (stages.length) {
+        const attributedIn = stageTotal('tokensIn')
+        const unattributed = total.tokensIn === null ? null : total.tokensIn - attributedIn
+        out.push('', `단계별 입력 합계 ${attributedIn.toLocaleString()} (${stages.length}개 단계)${
+          unattributed === null ? '' : ` · 단계에 귀속되지 않은 ${unattributed.toLocaleString()}`}`)
+      }
+    } else if (stages.length) {
+      // 전체 총량이 없다. 단계 합계는 **부분 합계**이고, 그렇게 부른다.
+      out.push('', `**토큰(부분 합계)** 입력 ${stageTotal('tokensIn').toLocaleString()} · 출력 ${stageTotal('tokensOut').toLocaleString()}`)
+      out.push('', `> **전체 총량이 아니다.** ${stages.length}개 단계만 사용량을 보고했고 \`run.end\`에는 총량이 없다.${
+        stagesComplete ? '' : ' 보고한 단계 중에도 입력·출력 한쪽이 빠진 것이 있다.'} 이 값으로 두 실행을 비교하지 않는다.`)
+    } else if (lastEnd?.usageSource === 'unavailable') {
+      out.push('', '> **사용량을 재지 못했다.** 0이 아니라 관측되지 않았다는 뜻이다.')
+    }
+  }
+  // 같은 이름의 필드가 줄마다 다른 타입이면 짚는다.
+  //
+  // `--set`은 원문으로 되돌아오는 값만 숫자로 두므로 `module=01`은 문자열,
+  // `module=11`은 숫자가 된다. 그러면 모듈별로 묶거나 두 실행을 비교할 때
+  // `"11"`과 `11`이 서로 다른 것으로 읽힌다. 계약은 이름을 적으라고 하지만
+  // 지시는 지켜지지 않을 수 있어서, 섞인 결과를 여기서 보이게 한다.
+  {
+    const types = new Map()
+    for (const event of events) {
+      for (const [key, value] of Object.entries(event)) {
+        if (value === null) continue
+        if (!types.has(key)) types.set(key, new Set())
+        types.get(key).add(typeof value)
+      }
+    }
+    const mixed = [...types].filter(([, kinds]) => kinds.size > 1).map(([key, kinds]) => `\`${key}\`(${[...kinds].join('/')})`)
+    if (mixed.length) {
+      out.push('', `> **타입이 섞인 필드가 있다:** ${mixed.join(', ')}. 같은 필드를 줄마다 다른 형으로 적으면 묶거나 비교할 때 어긋난다.`)
+    }
+  }
   if (malformed) out.push('', `> 읽지 못한 줄 ${malformed}개.`)
   process.stdout.write(out.join('\n') + '\n')
   process.exit(0)
@@ -234,6 +315,18 @@ const data = (() => {
 })()
 
 const { events } = readLines()
+
+// 끝난 타임라인에 새 실행을 이어붙이지 않는다.
+//
+// 파일 이름은 리포트 basename이고 그것은 날짜까지만 담는다. 같은 날 같은
+// 브랜치를 두 번 리뷰하면 **두 실행이 한 파일에 섞인다** — 단계가 두 벌씩
+// 들어가고, 합계는 두 실행의 합이 되고, 어느 줄이 어느 실행인지 가릴 수 없다.
+// 토큰을 줄이려면 같은 대상을 반복해서 재야 하므로, 하필 그 용도에서 가장
+// 먼저 깨진다.
+if (phase === 'run.start' && events.length && events[events.length - 1].phase === 'run.end') {
+  die(`이미 끝난 타임라인이다(${path}). 새 실행은 다른 --run 이름으로 남겨라 — 같은 파일에 이어붙이면 두 실행이 섞인다`)
+}
+
 const at = new Date()
 const startedAt = events.length ? new Date(events[0].at) : at
 
