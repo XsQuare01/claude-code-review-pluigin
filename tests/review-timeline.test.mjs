@@ -224,6 +224,55 @@ test('--set으로도 측정값은 덮어쓸 수 없다', t => {
   assert.equal(last.seq, 1)
 })
 
+// ── 타입이 섞인 필드 ───────────────────────────────────────────────────────
+//
+// `--set`은 원문으로 되돌아오는 값만 숫자로 둔다. 그래서 `module=01`은 문자열,
+// `module=11`은 숫자가 된다 — 실제 실행이 01~09를 문자열로, 11~20을 숫자로
+// 기록했다. 계약은 번호가 아니라 이름을 적으라고 하지만 지시는 지켜지지 않을 수
+// 있어서, 섞인 결과를 요약에서 보이게 한다.
+
+test('같은 필드가 줄마다 다른 타입이면 짚는다', t => {
+  const dir = freshDir(t)
+  log(dir, 'module.start', { module: '01' })
+  log(dir, 'module.start', { module: 11 })
+  log(dir, 'run.end', {})
+
+  const out = summary(dir).stdout
+  assert.match(out, /타입이 섞인 필드가 있다/)
+  assert.match(out, /\`module\`\(string\/number\)/)
+})
+
+test('타입이 일관되면 짚지 않는다', t => {
+  const dir = freshDir(t)
+  log(dir, 'module.start', { module: '01-fsd' })
+  log(dir, 'module.start', { module: '11-styling' })
+  log(dir, 'run.end', {})
+
+  assert.doesNotMatch(summary(dir).stdout, /타입이 섞인/)
+})
+
+test('null은 타입 판정에서 빼고 센다', t => {
+  // 값이 없는 것은 다른 형이 아니다. 그것까지 섞였다고 하면 경고가 흔해져
+  // 진짜 섞임이 묻힌다.
+  const dir = freshDir(t)
+  log(dir, 'module.done', { findings: 3 })
+  log(dir, 'module.done', { findings: null })
+  log(dir, 'run.end', {})
+
+  assert.doesNotMatch(summary(dir).stdout, /타입이 섞인/)
+})
+
+test('섞인 필드를 여러 개면 여러 개 다 짚는다', t => {
+  const dir = freshDir(t)
+  log(dir, 'a', { module: '01', clusters: 'pending' })
+  log(dir, 'b', { module: 11, clusters: 1 })
+  log(dir, 'run.end', {})
+
+  const out = summary(dir).stdout
+  assert.match(out, /\`module\`/)
+  assert.match(out, /\`clusters\`/)
+})
+
 // ── 사용량 ─────────────────────────────────────────────────────────────────
 //
 // 시간은 남는데 무엇을 얼마나 썼는지가 남지 않았다. "이 패스가 값을 하는가"를

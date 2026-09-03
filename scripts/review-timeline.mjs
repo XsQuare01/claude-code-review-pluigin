@@ -151,6 +151,26 @@ if (has('summary')) {
       out.push('', '> **사용량을 재지 못했다.** 0이 아니라 관측되지 않았다는 뜻이다.')
     }
   }
+  // 같은 이름의 필드가 줄마다 다른 타입이면 짚는다.
+  //
+  // `--set`은 원문으로 되돌아오는 값만 숫자로 두므로 `module=01`은 문자열,
+  // `module=11`은 숫자가 된다. 그러면 모듈별로 묶거나 두 실행을 비교할 때
+  // `"11"`과 `11`이 서로 다른 것으로 읽힌다. 계약은 이름을 적으라고 하지만
+  // 지시는 지켜지지 않을 수 있어서, 섞인 결과를 여기서 보이게 한다.
+  {
+    const types = new Map()
+    for (const event of events) {
+      for (const [key, value] of Object.entries(event)) {
+        if (value === null) continue
+        if (!types.has(key)) types.set(key, new Set())
+        types.get(key).add(typeof value)
+      }
+    }
+    const mixed = [...types].filter(([, kinds]) => kinds.size > 1).map(([key, kinds]) => `\`${key}\`(${[...kinds].join('/')})`)
+    if (mixed.length) {
+      out.push('', `> **타입이 섞인 필드가 있다:** ${mixed.join(', ')}. 같은 필드를 줄마다 다른 형으로 적으면 묶거나 비교할 때 어긋난다.`)
+    }
+  }
   if (malformed) out.push('', `> 읽지 못한 줄 ${malformed}개.`)
   process.stdout.write(out.join('\n') + '\n')
   process.exit(0)
