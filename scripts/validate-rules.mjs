@@ -1045,7 +1045,7 @@ for (const [owner, contextPaths] of Object.entries(STRUCTURED_OWNER_POLICY_BEARI
     if (/검증을 통과한 JSON만 최종 결과로 전달/.test(text)) {
       failCode('structured-producer', 'E_STANDALONE_PUBLIC_JSON_LEAK', `${relativePath} still says validated producer JSON is the final result instead of a rendered public Markdown report`)
     }
-    const missingPublicContract = listMissing(text, ['판정', '요약', '도구 실행 결과', '미해결 / 후속 확인'])
+    const missingPublicContract = listMissing(text, ['판정', '요약', '도구 실행 결과', '실행 타임라인', '미해결 / 후속 확인'])
     if (missingPublicContract.length > 0) {
       failCode('structured-producer', 'E_STANDALONE_PUBLIC_MARKDOWN_CONTRACT_MISSING', `${relativePath} does not define the historical public Markdown surface for standalone specialist output; missing ${missingPublicContract.join(', ')}`)
     }
@@ -1059,7 +1059,7 @@ for (const [owner, contextPaths] of Object.entries(STRUCTURED_OWNER_POLICY_BEARI
     if (headingPattern.test(text)) {
       failCode('structured-producer', 'E_LEGACY_PUBLIC_H1_MISSING_TARGET', `${relativePath} still documents a public H1 without the C-7 target placeholder`)
     }
-    const missingSections = listMissing(text, ['## 리뷰 기준', '## 판정', '## 상세 지적', '## 도구 실행 결과', '## 미해결 / 후속 확인'])
+    const missingSections = listMissing(text, ['## 리뷰 기준', '## 판정', '## 상세 지적', '## 도구 실행 결과', '## 실행 타임라인', '## 미해결 / 후속 확인'])
     if (missingSections.length > 0) {
       failCode('structured-producer', 'E_LEGACY_PUBLIC_SKELETON_CONTRADICTION', `${relativePath} cites C-7 but its documented public template still omits ${missingSections.join(', ')}`)
     }
@@ -1457,14 +1457,28 @@ function validateVerdictOwnerSync() {
   // The closed lists live in the manifest. Guessing which words are contract tokens by
   // their shape misses the ones that look like ordinary prose, so read only the token the
   // owner actually attaches to each field name.
+  // Field names are not values. A required-field list reads `disposition`, `evidence` —
+  // taking the next token as disposition's value flags a correct sentence. The manifest
+  // says which strings are field names, so skip exactly those rather than loosening the
+  // shape heuristic, which exists because contract tokens can look like ordinary prose.
+  const FIELD_NAMES = new Set([
+    ...(manifest.topLevel?.allowed ?? []),
+    ...(manifest.verdictsItem?.allowed ?? []),
+    ...(manifest.rebuttal?.allowed ?? []),
+    ...(manifest.observedAxes?.fields ?? []),
+  ])
+
   const firstTokenAfter = (text, marker, limit = 40) => {
     const found = new Set()
     let at = text.indexOf(marker)
     while (at !== -1) {
       const window = text.slice(at + marker.length, at + marker.length + limit)
-      const hit = window.match(/`([a-z][a-z-]*)`/)
-      // The field name repeats near itself in prose; it is not a value.
-      if (hit && hit[1] !== marker.split('.').pop()) found.add(hit[1])
+      for (const hit of window.matchAll(/`([a-z][a-zA-Z-]*)`/g)) {
+        // The field name repeats near itself in prose; it is not a value.
+        if (hit[1] === marker.split('.').pop() || FIELD_NAMES.has(hit[1])) continue
+        found.add(hit[1])
+        break
+      }
       at = text.indexOf(marker, at + 1)
     }
     return found
@@ -1481,6 +1495,18 @@ function validateVerdictOwnerSync() {
   for (const token of firstTokenAfter(owner, 'disposition')) {
     if (dispositions.includes(token) || ORCHESTRATOR_ASSIGNED.has(token)) continue
     failCode('verdict-contract', 'E_VERDICT_OWNER_UNKNOWN_DISPOSITION', `${OWNER} names disposition "${token}" which is neither in the manifest enum nor orchestrator-assigned`)
+  }
+
+  // The prompt must name every required field, not just leave them in the injected JSON.
+  //
+  // 실제로 그러지 않은 실행에서 verifier verdict 18건 중 16건이 최초 schema를 위반했고,
+  // 같은 실행의 producer 22건은 전부 통과했다. 차이는 producer prompt가 필수 top-level
+  // 필드를 문장으로 못 박은 반면, verifier prompt는 `evidence`를 한 번도 말하지 않고
+  // `location`은 `rebuttal` 문맥에서만 언급한 것이었다. **manifest는 주입돼 있었다** —
+  // JSON은 보이는데 산문이 그 둘을 빠뜨리면 산문이 이긴다.
+  for (const field of manifest.verdictsItem?.required ?? []) {
+    if (owner.includes(`\`${field}\``)) continue
+    failCode('verdict-contract', 'E_VERDICT_OWNER_REQUIRED_FIELD_UNSTATED', `${OWNER} never names required verdict field "${field}" — injecting the manifest is not enough when the prose omits it`)
   }
 }
 

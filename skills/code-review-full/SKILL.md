@@ -45,6 +45,14 @@ description: Use when the user invokes /code-review-full or asks for a full code
 
 **적용 대상 선별과 컨텍스트 수집을 오케스트레이터가 먼저 끝낸다.** 이 두 가지를 각 sub-agent 안에서 하면 같은 일이 모듈 수만큼 반복되고, 적용도 되지 않을 모듈에 에이전트를 띄우게 된다.
 
+**(0) preflight — 리뷰의 첫 명령**
+
+```bash
+node "$RULES_DIR/../scripts/review-preflight.mjs" --dir "$REPORT_DIR" --run "$REPORT_BASENAME" --rules "$RULES_DIR" --workflow full --base "$BASE" --host <harness 이름>
+```
+
+C-9의 `run.start`를 이 스크립트가 쓴다. 동시에 `리뷰 기준`과 `실행 계획`에 적을 값을 낸다 — 플러그인 버전, 해석된 규칙 경로, 브랜치, merge-base, 변경 파일 수, **후보 모듈 수와 목록**. 그 값을 손으로 세지 않는다. 후보에서 빠진 `00-rule.md`와 synthesis 전용 모듈도 이유와 함께 출력되므로, 아래 (2)와 (4)는 이 목록에서 출발한다.
+
 **(1) 프로파일 판정 — 1회**
 
 C-3에 따라 프로젝트 프로파일(FSD, Electron, Tailwind, RSC, SSR, Three.js, TanStack Query, server-code, contract-provider)과 React/TypeScript 버전을 **한 번만** 판정한다. 결과를 모든 sub-agent prompt에 함께 넘겨, 각 에이전트가 다시 조사하지 않게 한다.
@@ -61,7 +69,7 @@ Trigger 섹션이 있는 모듈(`12`, `14`, `16`, `17`, `18`, `21`)은 diff에 �
 
 **(4) 실행 계획 기록**
 
-후보 N개 중 적용 대상 M개, `SKIPPED` 목록과 사유를 리포트에 남긴다. **M이 N보다 작다는 사실이 리포트에서 보여야 한다.** 보이지 않으면 전부 검토된 것으로 읽힌다.
+후보 N개 중 적용 대상 M개, `SKIPPED` 목록과 사유를 리포트에 남긴다. **N은 (0)이 낸 값을 그대로 쓴다** — 한 리포트가 여기서 synthesis 전용 모듈을 후보로 세어 20개를 21개로 적었다. **M이 N보다 작다는 사실이 리포트에서 보여야 한다.** 보이지 않으면 전부 검토된 것으로 읽힌다.
 
 ### 3b. 실행
 
@@ -70,7 +78,7 @@ Trigger 섹션이 있는 모듈(`12`, `14`, `16`, `17`, `18`, `21`)은 diff에 �
 
   **왜 4인가** — 이 값은 실측으로 정한 것이지 임의로 고른 것이 아니다. 처음에는 2였고, 그때는 모듈 하나가 2~5분씩 걸려 동시에 많이 띄우면 timeout과 큐 포화 위험이 컸다. 디스패치 전 준비(3a)로 각 에이전트가 diff와 프로파일을 다시 조사하지 않게 된 뒤 모듈당 평균 약 71초로 내려갔고(20개 모듈 실측, 합 23분 33초), 개별 에이전트가 짧아진 만큼 동시에 띄워도 한 세션이 오래 붙잡히지 않는다.
 
-  **되돌리는 조건** — timeout, inactivity timeout, queue expiry가 한 실행에서 두 건 이상 나오면 4가 이 런타임에 과했다는 신호다. 2로 내리고, 어떤 실패 클래스가 몇 번 나왔는지 기록한다. 실패 없이 느리기만 한 것은 되돌릴 근거가 아니다.
+  **되돌리는 조건** — timeout, inactivity timeout, queue expiry가 한 실행에서 두 건 이상 나오면 4가 이 런타임에 과했다는 신호다. 2로 내리고, 어떤 실패 클래스가 몇 번 나왔는지 기록한다 — 이름은 `workflow-contract.md` C-9의 닫힌 목록에서 고른다. 실패 없이 느리기만 한 것은 되돌릴 근거가 아니다.
 
   **관측 (2026-08-18, 교차검증 패스 도입 후 첫 실행)** — 이 조건이 실제로 발동했다. 한 실행에서 skill-injection validation 4건, inactivity timeout 4건, task-not-found 4건이 나와 in-flight를 4에서 2로 내렸고, fresh retry 1회로 전부 회복해 적용 모듈 19개를 모두 수집했다. **되돌리기 장치는 설계대로 동작했다.** 다만 관측이 1회뿐이므로 기본값 4는 그대로 둔다 — 71초/모듈 실측으로 정한 값을 표본 하나로 뒤집지 않는다. 같은 발동이 반복되면 그때 기본값을 다시 본다.
 - **배리어를 두지 않는다.** 어느 한 모듈이 terminal 상태(`COMPLETED` 또는 `FAILED_ORCHESTRATION`)가 되면 **즉시** 다음 대기 모듈을 그 슬롯에 넣는다. 두 모듈이 모두 끝나기를 기다리지 않는다 — 기다리면 빨리 끝난 슬롯이 느린 모듈이 끝날 때까지 놀고, 그 유휴 시간이 모듈 수만큼 누적된다.
@@ -209,7 +217,7 @@ instanceId 부여
 **입력을 새로 만들지 않는다.** 검증을 통과한 producer 결과를 그대로 파이프한다.
 
 ```bash
-echo '{"results":[ <REVIEW_RESULT_CONTRACT_V1 객체들> ]}'   | node "$RULES_DIR/../scripts/prepare-verification.mjs" --merge-base "$MERGE_BASE"
+echo '{"results":[ <REVIEW_RESULT_CONTRACT_V1 객체들> ]}'   | node "$RULES_DIR/../scripts/prepare-verification.mjs" --merge-base "$MERGE_BASE" --dir "$REPORT_DIR" --run "$REPORT_BASENAME"
 ```
 
 - `results[]`는 C-6A validation을 통과한 producer JSON **그대로**다. 필드를 골라 옮기거나 변환하지 않는다
@@ -267,6 +275,8 @@ bundle verifier와 isolated verifier는 **같은 prompt 계약**을 쓴다. 단�
 > 다른 문제를 새로 찾지 마세요. 이 패스에 신규 finding 보고 경로는 없습니다.
 > 응답은 Markdown/코드펜스/서문 없이 `REVIEW_VERDICT_CONTRACT_V1` raw JSON 객체 하나만 반환하세요.
 > 요청받은 `candidateId` **전부에 대해 각각** verdict를 반환하세요. 파일이나 cluster 단위로 한꺼번에 판정하지 마세요.
+> verdict 하나에는 `candidateId`, `disposition`, `evidence`, `location`을 **항상** 넣으세요. `disposition`이 `upheld`여도 넷 다 필요합니다 — `evidence`는 무엇을 읽고 그렇게 판정했는지이고, `location`은 판정 대상 anchor입니다. 유지 판정이라 쓸 것이 없다고 생각되면 그것은 확인하지 않았다는 뜻입니다.
+> verdict의 `location`은 `REVIEW_RESULT_CONTRACT_V1`의 location variant를 그대로 씁니다. 위치를 확인하지 못했으면 `unverified`와 `reason`을 쓰세요. **`unverified`를 금지하는 것은 아래 `rebuttal.location`뿐입니다** — 위치를 확인하지 못한 반박으로 지적을 지울 수는 없기 때문입니다.
 > `severity`는 어떤 depth에도 넣지 마세요. 등급은 판정하지 않습니다.
 > `disposition`이 `rejected`면 `rebuttal`이 필수입니다. 무엇이 이 주장을 막는지와 **그 코드의 위치**를 대세요. 위치를 댈 수 없으면 반박이 아니라 의견이며, 그때는 `rebuttal.kind`를 `other`로 두고 `note`에 사유를 적으세요.
 > `rebuttal.location`은 `verified` 또는 `deleted`만 허용합니다. `unverified`는 허용하지 않습니다.
@@ -311,6 +321,8 @@ bundle verifier와 isolated verifier는 **같은 prompt 계약**을 쓴다. 단�
 - 일반 패스 리포트는 `RULES_DIR`의 `[0-9]*.md`에서 발견한 numbered non-00 모듈명을 나열하고, 모듈별 sub-agent 결과를 각각 표시한다. `00-rule.md`는 공통 규칙이므로, `post-verification-synthesis` 모듈은 일반 패스 소속이 아니므로 이 목록에 넣지 않는다. 후자는 synthesis 단계 결과로 따로 표시한다.
 - numbered non-00 모듈 중 실행 또는 수집이 누락된 항목이 있으면 `FAILED orchestration`으로 표시하고, 완료된 리뷰처럼 요약하지 않는다.
 - lint/typecheck/test를 실행했으면 `도구 실행 결과` 섹션으로 분리해 보고하고, 리뷰 지적과 섞지 않는다 (`00-rule.md` 00-9).
+- `실행 타임라인` 섹션에는 `review-timeline.mjs --summary` 출력을 그대로 붙인다. 표를 직접 만들지 않고, 사이드카를 남기지 못했으면 그 사실을 그 섹션에 적는다 (C-9).
+- 리포트를 저장하고 `run.end`를 남긴 뒤 `review-timeline.mjs --check`를 돌린다. 종료 코드 1은 리뷰 실패가 아니지만, 지적된 빈 곳은 `실행 타임라인` 섹션에 함께 적는다 (C-9).
 - 개별 패스의 구조화 결과는 출력 전에 임의 축약하거나 버리지 않는다. aggregation은 parsed field를 유지한 채 병합·정렬만 하고, 최종 헤딩/섹션/표현은 renderer가 새로 만든다.
 - 같은 규칙 ID로 finding이 둘 이상이면 C-7에 따라 `17-3 (1/2)` 형태로 순번을 붙인다.
 - 패스에 적용 범위가 없으면 패스 이름, 사유, 그리고 `SKIPPED`가 비차단임을 명시해 `SKIPPED`로 출력한다.

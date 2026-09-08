@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process'
-import { readFileSync } from 'node:fs'
-import { isAbsolute, resolve, sep } from 'node:path'
-import { pathToFileURL } from 'node:url'
+import { existsSync, readFileSync } from 'node:fs'
+import { dirname, isAbsolute, join, resolve, sep } from 'node:path'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
 // Deterministic preparation for the cross-verification pass.
 //
@@ -342,11 +342,69 @@ function gitReaders(mergeBase) {
   }
 }
 
+/**
+ * Refuse to run when the execution timeline has not been started.
+ *
+ * C-9는 첫 sub-agent보다 먼저 `run.start`를 남기라고 하지만, 그것은 기억해야 하는
+ * 지시였다. 2026-09-08의 한 실행은 계약을 읽고도 타임라인을 한 줄도 남기지 않았고,
+ * 리포트는 그 사실을 말하지 않았다 — 그 리포트의 실행 수치는 뒷받침이 없다.
+ *
+ * 이 스크립트는 렌더 전 **필수 관문**이라 여기서 거부하면 반드시 걸린다. 디스패치
+ * 이후라 부팅을 강제할 수는 없지만, 타임라인 없이 검증까지 가는 경로는 닫힌다.
+ * 시작 자체를 강제하는 것은 `review-preflight.mjs`의 몫이다.
+ */
+function requireStartedTimeline(dir, run) {
+  const how = 'node <RULES_DIR>/../scripts/review-preflight.mjs --dir <리포트 디렉터리> --run <리포트 basename> --rules <RULES_DIR> --workflow <이름>'
+  if (!dir || !run) {
+    process.stderr.write(`--dir와 --run이 필요하다. 실행 타임라인(C-9) 없이 검증을 준비하지 않는다.\n먼저: ${how}\n`)
+    process.exit(2)
+  }
+  if (/[\\/]/.test(run)) {
+    process.stderr.write(`--run must be a bare basename, got ${JSON.stringify(run)}\n`)
+    process.exit(2)
+  }
+  const sidecar = join(dir, '.timing', `${run}.jsonl`)
+  if (!existsSync(sidecar) || !/"phase":"run\.start"/.test(readFileSync(sidecar, 'utf8'))) {
+    process.stderr.write(`실행 타임라인에 run.start가 없다: ${sidecar}\n먼저: ${how}\n`)
+    process.exit(2)
+  }
+  return sidecar
+}
+
+/**
+ * Record what this script decided, in the shape the timeline can aggregate.
+ *
+ * `counts`를 `--set` 한 값으로 넘기면 `total=5,verify=2,…`가 문자열 하나로 남아
+ * 다섯 수치를 다시 꺼낼 수 없다 — 실제로 그렇게 기록된 실행이 있다. 여기서는
+ * 셸을 거치지 않고 인자 배열로 넘기므로 `--data`의 JSON이 깨질 자리가 없다.
+ *
+ * 기록 실패는 준비 실패가 아니다 (C-9). 경고만 하고 결과는 그대로 낸다.
+ */
+function logScriptDone(dir, run, counts) {
+  const timeline = join(dirname(fileURLToPath(import.meta.url)), 'review-timeline.mjs')
+  try {
+    execFileSync(process.execPath, [
+      timeline, '--dir', dir, '--run', run, '--phase', 'script.done',
+      '--data', JSON.stringify({ ran: true, counts }),
+    ], { stdio: ['ignore', 'ignore', 'pipe'] })
+  } catch (error) {
+    process.stderr.write(`경고: script.done을 남기지 못했다 — ${String(error.stderr || error.message).trim()}\n`)
+  }
+}
+
 async function main() {
   const argv = process.argv.slice(2)
   const mergeBaseIndex = argv.indexOf('--merge-base')
   const mergeBase = mergeBaseIndex === -1 ? 'HEAD' : argv[mergeBaseIndex + 1]
   const locationsOnly = argv.includes('--locations-only')
+  const dirIndex = argv.indexOf('--dir')
+  const runIndex = argv.indexOf('--run')
+  const dir = dirIndex === -1 ? undefined : argv[dirIndex + 1]
+  const run = runIndex === -1 ? undefined : argv[runIndex + 1]
+
+  // 인자를 먼저 본다. stdin을 다 읽고 나서 거부하면 실패 메시지가 파이프 오류에
+  // 묻히고, 무엇을 고쳐야 하는지가 가려진다.
+  requireStartedTimeline(dir, run)
 
   let raw = ''
   for await (const chunk of process.stdin) raw += chunk
@@ -367,6 +425,7 @@ async function main() {
         ? candidatesFromResults(payload.results)
         : (payload.candidates ?? [])
   const result = prepareVerification(candidates, collectBlobs(candidates, gitReaders(mergeBase)), { locationsOnly })
+  logScriptDone(dir, run, result.counts)
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`)
 }
 
@@ -498,7 +557,11 @@ export function candidatesFromResults(results) {
       location.quote ?? '',
       finding.title ?? '',
       finding.body ?? '',
-    ].join(' ')
+      // NUL separator: no field can contain it, so two findings cannot collide by having
+      // a value that happens to span the boundary. Written as the escape rather than a
+      // literal NUL byte in the source — a real 0x00 here makes grep and other tools
+      // treat this whole file as binary and skip it silently.
+    ].join('\0')
   }
 
   const byRule = new Map()

@@ -181,7 +181,7 @@ bounded pass 완료 후:
 **위치 대조** — 블록 내용을 그대로 파이프한다. 변환하지 않는다.
 
 ```bash
-echo '{"locations": <REVIEW_LOCATIONS 블록 내용>}'   | node "$RULES_DIR/../scripts/prepare-verification.mjs" --merge-base "$MERGE_BASE" --locations-only
+echo '{"locations": <REVIEW_LOCATIONS 블록 내용>}'   | node "$RULES_DIR/../scripts/prepare-verification.mjs" --merge-base "$MERGE_BASE" --dir "$REPORT_DIR" --run "$REPORT_BASENAME" --locations-only
 ```
 
 - `--locations-only`를 반드시 붙인다. 이 워크플로우에는 반박 패스가 없다
@@ -239,6 +239,10 @@ echo '{"locations": <REVIEW_LOCATIONS 블록 내용>}'   | node "$RULES_DIR/../s
 | 명령 | 결과 | 비고 |
 |------|------|------|
 | ... | ... | 자동 수정 가능 항목은 실행하지 않고 개수만 기록 |
+
+## 실행 타임라인
+
+`review-timeline.mjs --summary` 출력을 그대로 붙인다. 남기지 못했으면 그 사실을 적는다 (C-9)
 
 ## 미해결 / 후속 확인
 
