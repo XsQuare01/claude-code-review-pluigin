@@ -1045,7 +1045,7 @@ for (const [owner, contextPaths] of Object.entries(STRUCTURED_OWNER_POLICY_BEARI
     if (/검증을 통과한 JSON만 최종 결과로 전달/.test(text)) {
       failCode('structured-producer', 'E_STANDALONE_PUBLIC_JSON_LEAK', `${relativePath} still says validated producer JSON is the final result instead of a rendered public Markdown report`)
     }
-    const missingPublicContract = listMissing(text, ['판정', '요약', '도구 실행 결과', '미해결 / 후속 확인'])
+    const missingPublicContract = listMissing(text, ['판정', '요약', '도구 실행 결과', '실행 타임라인', '미해결 / 후속 확인'])
     if (missingPublicContract.length > 0) {
       failCode('structured-producer', 'E_STANDALONE_PUBLIC_MARKDOWN_CONTRACT_MISSING', `${relativePath} does not define the historical public Markdown surface for standalone specialist output; missing ${missingPublicContract.join(', ')}`)
     }
@@ -1059,7 +1059,7 @@ for (const [owner, contextPaths] of Object.entries(STRUCTURED_OWNER_POLICY_BEARI
     if (headingPattern.test(text)) {
       failCode('structured-producer', 'E_LEGACY_PUBLIC_H1_MISSING_TARGET', `${relativePath} still documents a public H1 without the C-7 target placeholder`)
     }
-    const missingSections = listMissing(text, ['## 리뷰 기준', '## 판정', '## 상세 지적', '## 도구 실행 결과', '## 미해결 / 후속 확인'])
+    const missingSections = listMissing(text, ['## 리뷰 기준', '## 판정', '## 상세 지적', '## 도구 실행 결과', '## 실행 타임라인', '## 미해결 / 후속 확인'])
     if (missingSections.length > 0) {
       failCode('structured-producer', 'E_LEGACY_PUBLIC_SKELETON_CONTRADICTION', `${relativePath} cites C-7 but its documented public template still omits ${missingSections.join(', ')}`)
     }

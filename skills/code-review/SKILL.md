@@ -240,6 +240,10 @@ echo '{"locations": <REVIEW_LOCATIONS 블록 내용>}'   | node "$RULES_DIR/../s
 |------|------|------|
 | ... | ... | 자동 수정 가능 항목은 실행하지 않고 개수만 기록 |
 
+## 실행 타임라인
+
+`review-timeline.mjs --summary` 출력을 그대로 붙인다. 남기지 못했으면 그 사실을 적는다 (C-9)
+
 ## 미해결 / 후속 확인
 
 추가 확인이 필요한 absence claim, 범위 제한, unresolved follow-up을 적는다.

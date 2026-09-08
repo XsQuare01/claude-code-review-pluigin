@@ -311,6 +311,7 @@ bundle verifier와 isolated verifier는 **같은 prompt 계약**을 쓴다. 단�
 - 일반 패스 리포트는 `RULES_DIR`의 `[0-9]*.md`에서 발견한 numbered non-00 모듈명을 나열하고, 모듈별 sub-agent 결과를 각각 표시한다. `00-rule.md`는 공통 규칙이므로, `post-verification-synthesis` 모듈은 일반 패스 소속이 아니므로 이 목록에 넣지 않는다. 후자는 synthesis 단계 결과로 따로 표시한다.
 - numbered non-00 모듈 중 실행 또는 수집이 누락된 항목이 있으면 `FAILED orchestration`으로 표시하고, 완료된 리뷰처럼 요약하지 않는다.
 - lint/typecheck/test를 실행했으면 `도구 실행 결과` 섹션으로 분리해 보고하고, 리뷰 지적과 섞지 않는다 (`00-rule.md` 00-9).
+- `실행 타임라인` 섹션에는 `review-timeline.mjs --summary` 출력을 그대로 붙인다. 표를 직접 만들지 않고, 사이드카를 남기지 못했으면 그 사실을 그 섹션에 적는다 (C-9).
 - 개별 패스의 구조화 결과는 출력 전에 임의 축약하거나 버리지 않는다. aggregation은 parsed field를 유지한 채 병합·정렬만 하고, 최종 헤딩/섹션/표현은 renderer가 새로 만든다.
 - 같은 규칙 ID로 finding이 둘 이상이면 C-7에 따라 `17-3 (1/2)` 형태로 순번을 붙인다.
 - 패스에 적용 범위가 없으면 패스 이름, 사유, 그리고 `SKIPPED`가 비차단임을 명시해 `SKIPPED`로 출력한다.

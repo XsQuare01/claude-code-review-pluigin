@@ -96,7 +96,7 @@ sub-agent 응답을 받은 즉시 `workflow-contract.md` C-6A와 `REVIEW_RESULT_
 
 - 최종 사용자 출력은 C-7 골격을 따르는 Markdown이며 raw JSON을 그대로 노출하지 않는다.
 - H1은 `# {대상} 예외 처리 코드 리뷰 리포트` 형식으로 target-bearing title을 사용한다.
-- 공개 섹션은 `## 리뷰 기준`, `## 판정`, `## 상세 지적`, `## 요약`, `## 도구 실행 결과`, `## 미해결 / 후속 확인`을 기본으로 하고, 빈 섹션은 생략한다.
+- 공개 섹션은 `## 리뷰 기준`, `## 판정`, `## 상세 지적`, `## 요약`, `## 도구 실행 결과`, `## 실행 타임라인`, `## 미해결 / 후속 확인`을 기본으로 하고, 빈 섹션은 생략한다.
 - `요약`은 historical `한눈에 보기` 의미를 유지하는 공개 summary slot이다. finding/pass 집계와 merge decision을 빠르게 볼 수 있어야 한다.
 - `상세 지적`에는 validated finding을 Markdown으로 렌더링한다. `body`, `evidence`, `recommendation`, `findingConfidenceReason`, `locationUnverifiedReason`은 `workflow-contract.md` manifest의 renderer slot/label/order를 따른다.
 - `미해결 / 후속 확인`에는 validated `openQuestions`를 렌더링하고 `openQuestionReason` label을 사용한다.
