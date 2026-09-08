@@ -275,6 +275,8 @@ bundle verifier와 isolated verifier는 **같은 prompt 계약**을 쓴다. 단�
 > 다른 문제를 새로 찾지 마세요. 이 패스에 신규 finding 보고 경로는 없습니다.
 > 응답은 Markdown/코드펜스/서문 없이 `REVIEW_VERDICT_CONTRACT_V1` raw JSON 객체 하나만 반환하세요.
 > 요청받은 `candidateId` **전부에 대해 각각** verdict를 반환하세요. 파일이나 cluster 단위로 한꺼번에 판정하지 마세요.
+> verdict 하나에는 `candidateId`, `disposition`, `evidence`, `location`을 **항상** 넣으세요. `disposition`이 `upheld`여도 넷 다 필요합니다 — `evidence`는 무엇을 읽고 그렇게 판정했는지이고, `location`은 판정 대상 anchor입니다. 유지 판정이라 쓸 것이 없다고 생각되면 그것은 확인하지 않았다는 뜻입니다.
+> verdict의 `location`은 `REVIEW_RESULT_CONTRACT_V1`의 location variant를 그대로 씁니다. 위치를 확인하지 못했으면 `unverified`와 `reason`을 쓰세요. **`unverified`를 금지하는 것은 아래 `rebuttal.location`뿐입니다** — 위치를 확인하지 못한 반박으로 지적을 지울 수는 없기 때문입니다.
 > `severity`는 어떤 depth에도 넣지 마세요. 등급은 판정하지 않습니다.
 > `disposition`이 `rejected`면 `rebuttal`이 필수입니다. 무엇이 이 주장을 막는지와 **그 코드의 위치**를 대세요. 위치를 댈 수 없으면 반박이 아니라 의견이며, 그때는 `rebuttal.kind`를 `other`로 두고 `note`에 사유를 적으세요.
 > `rebuttal.location`은 `verified` 또는 `deleted`만 허용합니다. `unverified`는 허용하지 않습니다.
