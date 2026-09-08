@@ -557,7 +557,11 @@ export function candidatesFromResults(results) {
       location.quote ?? '',
       finding.title ?? '',
       finding.body ?? '',
-    ].join(' ')
+      // NUL separator: no field can contain it, so two findings cannot collide by having
+      // a value that happens to span the boundary. Written as the escape rather than a
+      // literal NUL byte in the source — a real 0x00 here makes grep and other tools
+      // treat this whole file as binary and skip it silently.
+    ].join('\0')
   }
 
   const byRule = new Map()
