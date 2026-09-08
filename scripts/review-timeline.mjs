@@ -17,6 +17,7 @@
 //   review-timeline.mjs --dir ... --run ... --phase dispatch.end --data-file payload.json
 //   review-timeline.mjs --dir ... --run ... --phase render.start --data '{"findings":47}'
 //   review-timeline.mjs --dir ... --run ... --summary
+//   review-timeline.mjs --dir ... --run ... --check     종료 직전, 기록 자체를 검사
 //
 // --set은 따옴표도 중괄호도 쓰지 않는다. PowerShell에서 --data의 JSON이 두 번
 // 깨져 기록을 잃은 뒤에 추가했다 — 자세한 사정은 아래 data 블록 주석에 있다.
@@ -55,7 +56,7 @@ const flagAll = name => process.argv
  * 도구에서 가장 나쁜 실패 방식이라, 인용을 잊었으면 시끄럽게 실패시킨다.
  */
 const VALUE_FLAGS = new Set(['dir', 'run', 'phase', 'data', 'data-file', 'set'])
-const BOOL_FLAGS = new Set(['summary'])
+const BOOL_FLAGS = new Set(['summary', 'check'])
 {
   const argv = process.argv.slice(2)
   for (let at = 0; at < argv.length; at += 1) {
@@ -95,6 +96,114 @@ const readLines = () => {
     }
   }
   return { events, malformed }
+}
+
+/**
+ * 닫힌 phase 목록과 payload 계약. C-9의 표가 정본이고 여기가 그 표의 실행판이다.
+ *
+ * 왜 스크립트가 이름을 검사하는가: 표에 "아래 이름만 쓴다"고 적어 두어도, 한
+ * 실행이 `verification.prepared`·`final.audit`·`report.saved`를 자체로 지어 쓰고
+ * `render.start`·`render.wrote`를 남기지 않았다. 그 실행은 완주해서 드러나지
+ * 않았지만, 문서를 쓰다 죽었다면 마지막 줄이 `synthesis.end`로 남아 "synthesis에서
+ * 멈췄다"로 오독됐을 것이다. **읽는 쪽이 알던 이름을 못 찾았을 때 그것이 "안
+ * 일어났다"인지 "다르게 불렀다"인지 구분할 수 없다**는 것이 이 검사의 이유다.
+ *
+ * `required`는 없으면 **경고**다. 줄을 거부하면 그 단계의 기록이 통째로 사라지는데,
+ * 필드 하나 빠진 기록이 없는 기록보다 낫다. `structured`는 **거부**다 — 중첩 값을
+ * `--set` 한 값으로 밀어 넣으면 `counts=total=5,verify=2`가 문자열 하나로 남아
+ * 집계가 불가능해지고, 그것이 조용히 통과하면 아무도 고치지 않는다.
+ */
+const PHASES = new Map([
+  ['run.start', { required: ['host', 'rules', 'version', 'branch', 'changedFiles'], structured: [] }],
+  ['scope.done', { required: ['files', 'excluded'], structured: [] }],
+  ['modules.planned', { required: ['candidates', 'applied'], structured: [] }],
+  ['dispatch.start', { required: ['modules', 'inflight'], structured: [] }],
+  ['module.start', { required: ['module'], structured: [] }],
+  ['module.done', { required: ['module', 'status'], structured: [] }],
+  ['dispatch.end', { required: ['ok', 'failed'], structured: ['failureClasses'] }],
+  ['script.done', { required: ['ran'], structured: ['counts'] }],
+  ['crossverify.start', { required: ['targets'], structured: [] }],
+  ['crossverify.end', { required: ['upheld', 'rejected'], structured: [] }],
+  ['synthesis.start', { required: [], structured: [] }],
+  ['synthesis.end', { required: [], structured: [] }],
+  ['render.start', { required: ['findings'], structured: [] }],
+  ['render.wrote', { required: ['path', 'lines'], structured: [] }],
+  ['run.end', { required: ['verdict'], structured: [] }],
+])
+
+/**
+ * 종료 직전에 기록 자체를 검사한다.
+ *
+ * `--summary`는 리포트에 실을 표를 만드는 것이고 이쪽은 **기록이 쓸 만한지**를
+ * 묻는다. 둘을 나눈 이유는 요약이 사람 눈에 들어가는 것이라 경고를 섞으면 표가
+ * 지저분해지고, 반대로 경고만 필요할 때 표를 만들 이유가 없기 때문이다.
+ *
+ * 종료 코드는 0(문제 없음) / 1(기록에 문제) / 2(사용법)로 나눈다 — 호출부가
+ * "돌리다 실패"와 "돌려 보니 문제"를 구분해야 한다.
+ */
+if (has('check')) {
+  const problems = []
+  const notes = []
+
+  if (!existsSync(path)) {
+    process.stderr.write(`사이드카가 없다: ${path}\nC-9는 첫 sub-agent보다 먼저 run.start를 남기라고 한다. 남기지 못했으면 리포트의 \`실행 타임라인\` 섹션에 그 사실을 적어라.\n`)
+    process.exit(1)
+  }
+
+  const { events, malformed } = readLines()
+  if (!events.length) {
+    process.stderr.write(`사이드카가 비었다: ${path}\n`)
+    process.exit(1)
+  }
+
+  const unknown = [...new Set(events.map(event => event.phase).filter(name => !PHASES.has(name)))]
+  if (unknown.length) problems.push(`표에 없는 단계 이름: ${unknown.join(', ')}. 실행마다 이름이 달라지면 실행 간 비교가 불가능해진다`)
+
+  const missing = []
+  for (const event of events) {
+    const spec = PHASES.get(event.phase)
+    if (!spec) continue
+    const absent = spec.required.filter(key => event[key] === undefined)
+    if (absent.length) missing.push(`\`${event.phase}\`(seq ${event.seq}) → ${absent.join(', ')}`)
+  }
+  if (missing.length) problems.push(`필수 필드가 빠진 줄: ${missing.join(' / ')}`)
+
+  const first = events[0]
+  if (first.phase !== 'run.start') problems.push(`첫 줄이 \`run.start\`가 아니라 \`${first.phase}\`다. 어느 버전·어느 규칙으로 돌았는지가 기록에 없다`)
+
+  const finalPhase = events[events.length - 1].phase
+  if (finalPhase !== 'run.end') {
+    problems.push(events.some(event => event.phase === 'run.end')
+      ? `\`run.end\` 뒤에 줄이 더 있다. 마지막 줄은 \`${finalPhase}\`다`
+      : `\`run.end\`가 없다. 마지막으로 남은 단계는 \`${finalPhase}\`이고 실행은 거기서 끝나지 않았다`)
+  }
+
+  // 후보 수는 두 자리에 적힌다. 어긋나면 한쪽이 세다가 틀린 것이고, 실제로 한
+  // 리포트가 후보를 20개가 아니라 21개로 적었다 — synthesis 전용 모듈을 후보로
+  // 세면서. 산술을 모델이 눈으로 세지 않는다는 원칙이 여기서도 같다.
+  const startedWith = events.find(event => event.phase === 'run.start')?.candidates
+  const planned = events.find(event => event.phase === 'modules.planned')?.candidates
+  if (startedWith !== undefined && planned !== undefined && startedWith !== planned) {
+    problems.push(`후보 수가 어긋난다: \`run.start\`는 ${startedWith}, \`modules.planned\`는 ${planned}`)
+  }
+
+  // fan-out 증거는 자동으로 남길 수 없다 — 이 플러그인은 task launcher를 갖고
+  // 있지 않다. 그래서 강제하지 못하고 **사후에 짚는** 것까지가 여기서 할 수 있는
+  // 전부다. 경고로 두는 이유는 이것만으로 실행을 실패로 부를 수 없기 때문이다.
+  const applied = events.find(event => event.phase === 'modules.planned')?.applied
+  const finished = new Set(events.filter(event => event.phase === 'module.done').map(event => String(event.module)))
+  if (Number.isInteger(applied) && finished.size !== applied) {
+    notes.push(`\`modules.planned.applied\`는 ${applied}인데 \`module.done\`이 남은 모듈은 ${finished.size}개다`)
+  }
+  if (malformed) notes.push(`읽지 못한 줄 ${malformed}개`)
+
+  const out = []
+  out.push(problems.length ? `FAIL ${path}` : `OK ${path}`)
+  out.push(`이벤트 ${events.length}개, 마지막 \`${finalPhase}\``)
+  for (const problem of problems) out.push(`  - ${problem}`)
+  for (const note of notes) out.push(`  · ${note}`)
+  process.stdout.write(out.join('\n') + '\n')
+  process.exit(problems.length ? 1 : 0)
 }
 
 if (has('summary')) {
@@ -220,6 +329,12 @@ if (has('summary')) {
 
 const phase = flag('phase')
 if (!phase) die('--phase is required')
+// 표에 없는 이름은 거부한다. 표에 없는 일을 남겨야 하면 이름을 짓지 말고 가장
+// 가까운 단계의 `--set` 필드로 적는다 — 이름이 정말 부족하면 표를 고치는 것이
+// 순서다 (C-9).
+if (!PHASES.has(phase)) {
+  die(`--phase ${JSON.stringify(phase)}는 C-9의 닫힌 목록에 없다. 쓸 수 있는 이름: ${[...PHASES.keys()].join(', ')}`)
+}
 
 /**
  * 값을 받는 세 가지 길.
@@ -313,6 +428,23 @@ const data = (() => {
 
   return merged
 })()
+
+{
+  const spec = PHASES.get(phase)
+  // 중첩이어야 하는 값이 스칼라로 오면 거부한다. `--set counts=total=5,verify=2`는
+  // 첫 `=`에서만 잘리므로 값 전체가 문자열 하나로 남고, 그렇게 기록된 다섯 수치는
+  // 다시 꺼낼 수 없다. 실제로 한 실행의 `script.done`이 그 모습으로 남았다.
+  const flattened = spec.structured.filter(key => key in data && (data[key] === null || typeof data[key] !== 'object'))
+  if (flattened.length) {
+    die(`\`${phase}\`의 ${flattened.join(', ')}는 중첩 값이다. \`--set\`은 첫 =에서만 자르므로 값이 문자열 하나로 남는다 — \`--data-file <경로>\`로 넘겨라`)
+  }
+  // 빠진 필수 필드는 경고만 한다. 줄을 거부하면 그 단계가 통째로 사라지는데,
+  // 필드 하나 빠진 기록이 없는 기록보다 낫다. `--check`가 종료 전에 다시 짚는다.
+  const absent = spec.required.filter(key => data[key] === undefined)
+  if (absent.length) {
+    process.stderr.write(`경고: \`${phase}\`에 ${absent.join(', ')}가 없다 (C-9 표가 요구한다)\n`)
+  }
+}
 
 const { events } = readLines()
 

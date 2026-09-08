@@ -143,7 +143,7 @@ test('타임라인이 없으면 빈 표를 내지 않고 사유를 낸다', t =>
 test('--set은 따옴표 없이 값을 싣는다', t => {
   const dir = freshDir(t)
   const out = spawnSync(process.execPath, [
-    SCRIPT, '--dir', dir, '--run', RUN, '--phase', 'report.saved',
+    SCRIPT, '--dir', dir, '--run', RUN, '--phase', 'run.end',
     '--set', 'lines=694', '--set', 'verdict=MERGE_BLOCKED',
   ], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
 
@@ -157,7 +157,7 @@ test('--set의 숫자와 참거짓은 문자열로 남지 않는다', t => {
   // "694"와 694가 섞이면 나중에 세는 쪽이 형을 맞추느라 또 틀린다.
   const dir = freshDir(t)
   spawnSync(process.execPath, [
-    SCRIPT, '--dir', dir, '--run', RUN, '--phase', 'x',
+    SCRIPT, '--dir', dir, '--run', RUN, '--phase', 'synthesis.start',
     '--set', 'n=41', '--set', 'ok=true', '--set', 'missing=null', '--set', 'name=17-3',
   ], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
 
@@ -171,7 +171,7 @@ test('--set의 숫자와 참거짓은 문자열로 남지 않는다', t => {
 
 test('--set은 등호 없는 값을 거부한다', t => {
   const dir = freshDir(t)
-  const out = spawnSync(process.execPath, [SCRIPT, '--dir', dir, '--run', RUN, '--phase', 'x', '--set', 'lines694'],
+  const out = spawnSync(process.execPath, [SCRIPT, '--dir', dir, '--run', RUN, '--phase', 'synthesis.start', '--set', 'lines694'],
     { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
   assert.equal(out.status, 2)
   assert.match(out.stderr, /--set must be key=value/)
@@ -193,7 +193,7 @@ test('--data-file은 중첩 값을 싣는다', t => {
 
 test('--data-file이 없으면 조용히 빈 값으로 기록하지 않는다', t => {
   const dir = freshDir(t)
-  const out = spawnSync(process.execPath, [SCRIPT, '--dir', dir, '--run', RUN, '--phase', 'x', '--data-file', join(dir, 'nope.json')],
+  const out = spawnSync(process.execPath, [SCRIPT, '--dir', dir, '--run', RUN, '--phase', 'synthesis.start', '--data-file', join(dir, 'nope.json')],
     { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
   assert.equal(out.status, 2)
   assert.match(out.stderr, /--data-file not found/)
@@ -206,7 +206,7 @@ test('셋을 함께 주면 --set이 마지막으로 이긴다', t => {
   writeFileSync(payload, JSON.stringify({ lines: 2, from: 'file' }), 'utf8')
 
   spawnSync(process.execPath, [
-    SCRIPT, '--dir', dir, '--run', RUN, '--phase', 'x',
+    SCRIPT, '--dir', dir, '--run', RUN, '--phase', 'synthesis.start',
     '--data', '{"lines":1,"from":"data"}', '--data-file', payload, '--set', 'lines=3',
   ], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
 
@@ -372,8 +372,8 @@ test('null은 타입 판정에서 빼고 센다', t => {
 
 test('섞인 필드를 여러 개면 여러 개 다 짚는다', t => {
   const dir = freshDir(t)
-  log(dir, 'a', { module: '01', clusters: 'pending' })
-  log(dir, 'b', { module: 11, clusters: 1 })
+  log(dir, 'synthesis.start', { module: '01', clusters: 'pending' })
+  log(dir, 'synthesis.end', { module: 11, clusters: 1 })
   log(dir, 'run.end', {})
 
   const out = summary(dir).stdout
@@ -451,7 +451,7 @@ test('UTF-8 BOM이 붙은 --data-file을 읽는다', t => {
   const payload = join(dir, 'bom8.json')
   writeBytes(payload, Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from(JSON.stringify({ note: '한글' }), 'utf8'))
 
-  const out = spawnSync(process.execPath, [SCRIPT, '--dir', dir, '--run', RUN, '--phase', 'x', '--data-file', payload],
+  const out = spawnSync(process.execPath, [SCRIPT, '--dir', dir, '--run', RUN, '--phase', 'synthesis.start', '--data-file', payload],
     { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
   assert.equal(out.status, 0, out.stderr)
   assert.equal(linesOf(dir).at(-1).note, '한글')
@@ -462,7 +462,7 @@ test('UTF-16LE로 쓴 --data-file을 읽는다', t => {
   const payload = join(dir, 'bom16.json')
   writeBytes(payload, Buffer.from([0xff, 0xfe]), Buffer.from(JSON.stringify({ note: '한글' }), 'utf16le'))
 
-  const out = spawnSync(process.execPath, [SCRIPT, '--dir', dir, '--run', RUN, '--phase', 'x', '--data-file', payload],
+  const out = spawnSync(process.execPath, [SCRIPT, '--dir', dir, '--run', RUN, '--phase', 'synthesis.start', '--data-file', payload],
     { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
   assert.equal(out.status, 0, out.stderr)
   assert.equal(linesOf(dir).at(-1).note, '한글')
@@ -475,7 +475,7 @@ test('UTF-16BE로 쓴 --data-file을 읽는다', t => {
   body.swap16()
   writeBytes(payload, Buffer.from([0xfe, 0xff]), body)
 
-  const out = spawnSync(process.execPath, [SCRIPT, '--dir', dir, '--run', RUN, '--phase', 'x', '--data-file', payload],
+  const out = spawnSync(process.execPath, [SCRIPT, '--dir', dir, '--run', RUN, '--phase', 'synthesis.start', '--data-file', payload],
     { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
   assert.equal(out.status, 0, out.stderr)
   assert.equal(linesOf(dir).at(-1).note, '한글')
@@ -498,7 +498,7 @@ test('앞에 0이 붙은 값은 문자열로 남는다', t => {
 
 test('원문과 다르게 되돌아오는 값은 숫자로 바꾸지 않는다', t => {
   const dir = freshDir(t)
-  spawnSync(process.execPath, [SCRIPT, '--dir', dir, '--run', RUN, '--phase', 'x',
+  spawnSync(process.execPath, [SCRIPT, '--dir', dir, '--run', RUN, '--phase', 'synthesis.start',
     '--set', 'a=1e3', '--set', 'b=0x10', '--set', 'c=+5', '--set', 'd=1.50'],
     { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
 
@@ -510,7 +510,7 @@ test('원문과 다르게 되돌아오는 값은 숫자로 바꾸지 않는다',
 
 test('세는 값은 여전히 숫자다', t => {
   const dir = freshDir(t)
-  spawnSync(process.execPath, [SCRIPT, '--dir', dir, '--run', RUN, '--phase', 'x',
+  spawnSync(process.execPath, [SCRIPT, '--dir', dir, '--run', RUN, '--phase', 'synthesis.start',
     '--set', 'lines=694', '--set', 'ratio=1.5', '--set', 'zero=0'],
     { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
 
@@ -526,7 +526,7 @@ test('공백으로 쪼개진 인자를 거부한다', t => {
   // PowerShell에서 --set note=검토 완료 는 세 토큰이 된다. 남은 토큰을 무시하면
   // 잘린 값이 기록되고 아무도 모른다.
   const dir = freshDir(t)
-  const out = spawnSync(process.execPath, [SCRIPT, '--dir', dir, '--run', RUN, '--phase', 'x', '--set', 'note=검토', '완료'],
+  const out = spawnSync(process.execPath, [SCRIPT, '--dir', dir, '--run', RUN, '--phase', 'synthesis.start', '--set', 'note=검토', '완료'],
     { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
   assert.equal(out.status, 2)
   assert.match(out.stderr, /unexpected argument/)
@@ -536,7 +536,7 @@ test('공백으로 쪼개진 인자를 거부한다', t => {
 
 test('모르는 플래그를 무시하지 않는다', t => {
   const dir = freshDir(t)
-  const out = spawnSync(process.execPath, [SCRIPT, '--dir', dir, '--run', RUN, '--phase', 'x', '--sset', 'a=1'],
+  const out = spawnSync(process.execPath, [SCRIPT, '--dir', dir, '--run', RUN, '--phase', 'synthesis.start', '--sset', 'a=1'],
     { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
   assert.equal(out.status, 2)
   assert.match(out.stderr, /unknown flag --sset/)
@@ -570,12 +570,12 @@ test('run에 경로 구분자가 들어오면 거부한다', t => {
 
 test('data가 JSON이 아니거나 객체가 아니면 거부한다', t => {
   const dir = freshDir(t)
-  const bad = spawnSync(process.execPath, [SCRIPT, '--dir', dir, '--run', RUN, '--phase', 'x', '--data', 'findings=3'],
+  const bad = spawnSync(process.execPath, [SCRIPT, '--dir', dir, '--run', RUN, '--phase', 'synthesis.start', '--data', 'findings=3'],
     { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
   assert.equal(bad.status, 2)
   assert.match(bad.stderr, /must be JSON/)
 
-  const array = spawnSync(process.execPath, [SCRIPT, '--dir', dir, '--run', RUN, '--phase', 'x', '--data', '[1,2]'],
+  const array = spawnSync(process.execPath, [SCRIPT, '--dir', dir, '--run', RUN, '--phase', 'synthesis.start', '--data', '[1,2]'],
     { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
   assert.equal(array.status, 2)
   assert.match(array.stderr, /JSON object/)
@@ -587,4 +587,143 @@ test('phase 없이 부르면 조용히 빈 줄을 쓰지 않는다', t => {
     { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
   assert.equal(out.status, 2)
   assert.match(out.stderr, /--phase is required/)
+})
+
+// ── 닫힌 단계 목록과 payload 계약 ─────────────────────────────────────────
+//
+// 한 실행이 `verification.prepared`·`final.audit`·`report.saved`를 자체로 지어
+// 쓰고 `render.start`·`render.wrote`를 남기지 않았다. 완주해서 드러나지 않았지만
+// 문서를 쓰다 죽었다면 마지막 줄이 `synthesis.end`로 남아 "synthesis에서 멈췄다"로
+// 오독됐을 것이다. 그래서 이름을 스크립트가 검사한다.
+
+const check = dir => spawnSync(process.execPath, [
+  SCRIPT, '--dir', dir, '--run', RUN, '--check',
+], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+
+test('표에 없는 단계 이름은 거부한다', t => {
+  const dir = freshDir(t)
+  const out = log(dir, 'final.audit', { status: 'verification-unavailable' })
+  assert.equal(out.status, 2)
+  assert.match(out.stderr, /닫힌 목록에 없다/)
+  assert.match(out.stderr, /run\.start/)
+  assert.equal(existsSync(join(dir, '.timing', `${RUN}.jsonl`)), false)
+})
+
+test('중첩이어야 하는 값을 --set으로 밀어 넣으면 거부한다', t => {
+  // `--set`은 첫 =에서만 자른다. `counts=total=5,verify=2`는 값 전체가 문자열
+  // 하나로 남아 다섯 수치를 다시 꺼낼 수 없다 — 실제로 그렇게 기록된 실행이 있다.
+  const dir = freshDir(t)
+  const out = spawnSync(process.execPath, [
+    SCRIPT, '--dir', dir, '--run', RUN, '--phase', 'script.done',
+    '--set', 'ran=true', '--set', 'counts=total=5,verify=2,skipVerify=3',
+  ], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+  assert.equal(out.status, 2)
+  assert.match(out.stderr, /--data-file/)
+})
+
+test('중첩 값을 --data-file로 넘기면 통과한다', t => {
+  const dir = freshDir(t)
+  const payload = join(dir, 'counts.json')
+  writeFileSync(payload, JSON.stringify({ ran: true, counts: { total: 5, verify: 2 } }), 'utf8')
+  const out = spawnSync(process.execPath, [
+    SCRIPT, '--dir', dir, '--run', RUN, '--phase', 'script.done', '--data-file', payload,
+  ], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+  assert.equal(out.status, 0, out.stderr)
+  assert.equal(linesOf(dir).at(-1).counts.verify, 2)
+})
+
+test('필수 필드가 빠지면 경고하되 줄은 남긴다', t => {
+  // 줄을 거부하면 그 단계의 기록이 통째로 사라진다. 필드 하나 빠진 기록이
+  // 없는 기록보다 낫고, 빠진 사실은 --check가 종료 전에 다시 짚는다.
+  const dir = freshDir(t)
+  const out = log(dir, 'run.start', { host: 'win32', version: '2.11.0' })
+  assert.equal(out.status, 0)
+  assert.match(out.stderr, /rules/)
+  assert.equal(linesOf(dir).length, 1)
+})
+
+test('--check는 run.end가 마지막이면 통과한다', t => {
+  const dir = freshDir(t)
+  plant(dir, [
+    { at: '2026-09-08T00:00:00.000Z', seq: 1, phase: 'run.start', host: 'win32', rules: 'r', version: '2.11.0', branch: 'b', changedFiles: 9 },
+    { at: '2026-09-08T00:10:00.000Z', seq: 2, phase: 'run.end', verdict: 'WARN' },
+  ])
+  const out = check(dir)
+  assert.equal(out.status, 0, out.stdout)
+  assert.match(out.stdout, /^OK/)
+})
+
+test('--check는 run.end가 없으면 실패한다', t => {
+  const dir = freshDir(t)
+  plant(dir, [
+    { at: '2026-09-08T00:00:00.000Z', seq: 1, phase: 'run.start', host: 'win32', rules: 'r', version: '2.11.0', branch: 'b', changedFiles: 9 },
+    { at: '2026-09-08T00:10:00.000Z', seq: 2, phase: 'synthesis.end', clusters: 1 },
+  ])
+  const out = check(dir)
+  assert.equal(out.status, 1)
+  assert.match(out.stdout, /run\.end`가 없다/)
+})
+
+test('--check는 첫 줄이 run.start가 아니면 짚는다', t => {
+  // 첫 줄이 run.start가 아니면 어느 버전·어느 규칙으로 돌았는지가 기록에 없다.
+  // 실제로 그런 사이드카가 남아, 죽은 실행의 규칙 버전을 끝내 알 수 없었다.
+  const dir = freshDir(t)
+  plant(dir, [
+    { at: '2026-09-08T00:00:00.000Z', seq: 1, phase: 'module.done', module: '01', status: 'ok' },
+    { at: '2026-09-08T00:10:00.000Z', seq: 2, phase: 'run.end', verdict: 'WARN' },
+  ])
+  const out = check(dir)
+  assert.equal(out.status, 1)
+  assert.match(out.stdout, /run\.start`가 아니라/)
+})
+
+test('--check는 표에 없는 이름과 빠진 필수 필드를 짚는다', t => {
+  const dir = freshDir(t)
+  plant(dir, [
+    { at: '2026-09-08T00:00:00.000Z', seq: 1, phase: 'run.start', host: 'win32', rules: 'r', version: '2.11.0', branch: 'b', changedFiles: 9 },
+    { at: '2026-09-08T00:05:00.000Z', seq: 2, phase: 'final.audit', attempts: 3 },
+    { at: '2026-09-08T00:06:00.000Z', seq: 3, phase: 'render.wrote', lines: 694 },
+    { at: '2026-09-08T00:10:00.000Z', seq: 4, phase: 'run.end', verdict: 'MERGE_BLOCKED' },
+  ])
+  const out = check(dir)
+  assert.equal(out.status, 1)
+  assert.match(out.stdout, /final\.audit/)
+  assert.match(out.stdout, /path/)
+})
+
+test('--check는 후보 수가 두 자리에서 어긋나면 짚는다', t => {
+  // 한 리포트가 후보를 20개가 아니라 21개로 적었다 — synthesis 전용 모듈을
+  // 후보로 세면서. 산술을 모델이 눈으로 세지 않는다는 원칙이 여기서도 같다.
+  const dir = freshDir(t)
+  plant(dir, [
+    { at: '2026-09-08T00:00:00.000Z', seq: 1, phase: 'run.start', host: 'win32', rules: 'r', version: '2.11.0', branch: 'b', changedFiles: 357, candidates: 20 },
+    { at: '2026-09-08T00:01:00.000Z', seq: 2, phase: 'modules.planned', candidates: 21, applied: 19 },
+    { at: '2026-09-08T00:10:00.000Z', seq: 3, phase: 'run.end', verdict: 'MERGE_BLOCKED' },
+  ])
+  const out = check(dir)
+  assert.equal(out.status, 1)
+  assert.match(out.stdout, /후보 수가 어긋난다/)
+})
+
+test('--check는 applied와 module.done 수가 어긋나면 경고로만 짚는다', t => {
+  // fan-out 증거는 자동으로 남길 수 없다. 사후에 짚는 것까지가 전부이고,
+  // 이것만으로 실행을 실패로 부를 수는 없다.
+  const dir = freshDir(t)
+  plant(dir, [
+    { at: '2026-09-08T00:00:00.000Z', seq: 1, phase: 'run.start', host: 'win32', rules: 'r', version: '2.11.0', branch: 'b', changedFiles: 9 },
+    { at: '2026-09-08T00:01:00.000Z', seq: 2, phase: 'modules.planned', candidates: 20, applied: 3 },
+    { at: '2026-09-08T00:02:00.000Z', seq: 3, phase: 'module.done', module: '01', status: 'ok' },
+    { at: '2026-09-08T00:10:00.000Z', seq: 4, phase: 'run.end', verdict: 'WARN' },
+  ])
+  const out = check(dir)
+  assert.equal(out.status, 0, out.stdout)
+  assert.match(out.stdout, /module\.done`이 남은 모듈은 1개/)
+})
+
+test('--check는 사이드카가 없으면 실패하고 어디를 봐야 하는지 말한다', t => {
+  const dir = freshDir(t)
+  const out = check(dir)
+  assert.equal(out.status, 1)
+  assert.match(out.stderr, /사이드카가 없다/)
+  assert.match(out.stderr, /실행 타임라인/)
 })
