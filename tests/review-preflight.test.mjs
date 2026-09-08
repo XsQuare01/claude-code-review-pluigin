@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { spawnSync } from 'node:child_process'
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { execFileSync, spawnSync } from 'node:child_process'
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -25,10 +25,47 @@ const freshDir = t => {
   return dir
 }
 
-const preflight = (dir, extra = []) => spawnSync(process.execPath, [
-  SCRIPT, '--dir', dir, '--run', RUN, '--rules', RULES, '--workflow', 'full',
-  '--repo', ROOT, '--base', 'main', '--host', 'test', ...extra,
-], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+/**
+ * 일회용 저장소를 만들어 그 안에서 잰다.
+ *
+ * 이 저장소의 `main`을 base로 쓰면 **테스트가 주변 상태에 의존한다.** 실제로 CI의
+ * 체크아웃에는 로컬 `main` ref가 없어서, 로컬에서 통과한 네 건이 거기서 전부
+ * 깨졌다. 범위를 재는 스크립트를 검증하는 테스트가 재는 대상 저장소를 스스로
+ * 만들지 않으면, 통과 여부가 "지금 어느 브랜치가 있는가"에 달린다.
+ *
+ * 커밋이 둘이라 base와 HEAD 사이에 파일 하나가 바뀐 상태가 된다. 한 번 만들어
+ * 재사용하되 테스트는 읽기만 한다.
+ */
+let scratch = null
+const scratchRepo = () => {
+  if (scratch) return scratch
+  const dir = mkdtempSync(join(tmpdir(), 'preflight-repo-'))
+  const git = (...args) => execFileSync('git', [
+    '-c', 'user.name=t', '-c', 'user.email=t@example.com', '-c', 'commit.gpgsign=false',
+    '-c', 'init.defaultBranch=main', ...args,
+  ], { cwd: dir, stdio: 'ignore' })
+  git('init', '-q')
+  writeFileSync(join(dir, 'a.txt'), 'a\n')
+  git('add', '-A')
+  git('commit', '-qm', 'base')
+  const base = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: dir, encoding: 'utf8' }).trim()
+  writeFileSync(join(dir, 'b.txt'), 'b\n')
+  git('add', '-A')
+  git('commit', '-qm', 'change')
+  scratch = { dir, base }
+  return scratch
+}
+process.on('exit', () => {
+  if (scratch) rmSync(scratch.dir, { recursive: true, force: true })
+})
+
+const preflight = (dir, extra = []) => {
+  const repo = scratchRepo()
+  return spawnSync(process.execPath, [
+    SCRIPT, '--dir', dir, '--run', RUN, '--rules', RULES, '--workflow', 'full',
+    '--repo', repo.dir, '--base', repo.base, '--host', 'test', ...extra,
+  ], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+}
 
 const linesOf = dir => readFileSync(join(dir, '.timing', `${RUN}.jsonl`), 'utf8')
   .split('\n').filter(Boolean).map(line => JSON.parse(line))
@@ -80,7 +117,7 @@ test('이미 시작된 타임라인에 두 번째 시작을 얹지 않는다', t
 test('없는 규칙 경로는 거부한다', t => {
   const dir = freshDir(t)
   const out = spawnSync(process.execPath, [
-    SCRIPT, '--dir', dir, '--run', RUN, '--rules', join(dir, 'nope'), '--workflow', 'full', '--repo', ROOT,
+    SCRIPT, '--dir', dir, '--run', RUN, '--rules', join(dir, 'nope'), '--workflow', 'full', '--repo', scratchRepo().dir,
   ], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
   assert.equal(out.status, 2)
   assert.match(out.stderr, /--rules not found/)
@@ -90,7 +127,7 @@ test('해석되지 않는 base는 조용히 HEAD로 바꾸지 않는다', t => {
   // 범위가 조용히 달라지면 리뷰가 무엇을 봤는지 리포트만 보고 알 수 없다.
   const out = spawnSync(process.execPath, [
     SCRIPT, '--dir', freshDir(t), '--run', RUN, '--rules', RULES, '--workflow', 'full',
-    '--repo', ROOT, '--base', 'no-such-ref-here',
+    '--repo', scratchRepo().dir, '--base', 'no-such-ref-here',
   ], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
   assert.equal(out.status, 2)
   assert.match(out.stderr, /맞춰볼 수 없다/)
@@ -99,7 +136,7 @@ test('해석되지 않는 base는 조용히 HEAD로 바꾸지 않는다', t => {
 test('인용을 빠뜨려 남은 토큰은 거부한다', t => {
   const dir = freshDir(t)
   const out = spawnSync(process.execPath, [
-    SCRIPT, '--dir', dir, '--run', RUN, '--rules', RULES, '--workflow', 'full', '--repo', ROOT, '--host', '검토', '완료',
+    SCRIPT, '--dir', dir, '--run', RUN, '--rules', RULES, '--workflow', 'full', '--repo', scratchRepo().dir, '--host', '검토', '완료',
   ], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
   assert.equal(out.status, 2)
   assert.match(out.stderr, /unexpected argument/)
@@ -107,7 +144,7 @@ test('인용을 빠뜨려 남은 토큰은 거부한다', t => {
 
 test('catalog에 없는 워크플로우는 거부한다', t => {
   const out = spawnSync(process.execPath, [
-    SCRIPT, '--dir', freshDir(t), '--run', RUN, '--rules', RULES, '--workflow', 'nope', '--repo', ROOT,
+    SCRIPT, '--dir', freshDir(t), '--run', RUN, '--rules', RULES, '--workflow', 'nope', '--repo', scratchRepo().dir,
   ], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
   assert.equal(out.status, 2)
   assert.match(out.stderr, /catalog\.json에 없다/)
