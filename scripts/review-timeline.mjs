@@ -116,12 +116,13 @@ const readLines = () => {
 const PHASES = new Map([
   ['run.start', { required: ['host', 'rules', 'version', 'branch', 'changedFiles'], structured: [] }],
   ['scope.done', { required: ['files', 'excluded'], structured: [] }],
-  ['modules.planned', { required: ['candidates', 'applied'], structured: [] }],
+  ['modules.planned', { required: ['candidates', 'applied'], structured: ['skipped', 'unknown'] }],
   ['dispatch.start', { required: ['modules', 'inflight'], structured: [] }],
-  ['module.start', { required: ['module'], structured: [] }],
-  ['module.done', { required: ['module', 'status'], structured: [] }],
-  ['dispatch.end', { required: ['ok', 'failed'], structured: ['failureClasses'] }],
+  ['module.start', { required: ['module', 'attempt'], structured: [] }],
+  ['module.done', { required: ['module', 'attempt', 'status'], structured: [] }],
+  ['dispatch.end', { required: ['terminalOk', 'terminalFailed', 'attemptsTotal', 'attemptsFailed'], structured: ['attemptFailureClasses'] }],
   ['script.done', { required: ['ran'], structured: ['counts'] }],
+  ['tool.done', { required: ['name', 'exit', 'treeSha'], structured: ['failing'] }],
   ['crossverify.start', { required: ['targets'], structured: [] }],
   ['crossverify.end', { required: ['upheld', 'rejected'], structured: [] }],
   ['synthesis.start', { required: [], structured: [] }],
@@ -129,6 +130,24 @@ const PHASES = new Map([
   ['render.start', { required: ['findings'], structured: [] }],
   ['render.wrote', { required: ['path', 'lines'], structured: [] }],
   ['run.end', { required: ['verdict'], structured: [] }],
+])
+
+/**
+ * 실패 클래스도 닫힌 목록이다.
+ *
+ * phase 이름만 닫아 두었더니 실패 클래스가 실행마다 새로 지어졌다. 문서에 정의된
+ * 것은 둘뿐인데 기록에는 `inactivity-timeout`·`poll-timeout`·`malformed-corrected`·
+ * `explore-provider-model-not-found`가 나타났고, 그중 어느 것이 최종 실패인지가
+ * 이름만으로 갈리지 않았다.
+ *
+ * 이름이 틀렸다고 줄을 거부하지는 않는다 — 실패를 기록하려는 줄을 실패 이름 때문에
+ * 버리는 것은 앞뒤가 맞지 않는다. append에서는 경고하고 `--check`가 짚는다.
+ */
+const FAILURE_CLASSES = new Set([
+  'none', 'malformed-corrected',
+  'no-start', 'task-not-found', 'inactivity-timeout', 'queue-expiry', 'empty-result',
+  'skill-injection-invalid', 'malformed-output', 'provider-model-not-found', 'poll-timeout',
+  'unknown',
 ])
 
 /**
@@ -185,6 +204,27 @@ if (has('check')) {
   const planned = events.find(event => event.phase === 'modules.planned')?.candidates
   if (startedWith !== undefined && planned !== undefined && startedWith !== planned) {
     problems.push(`후보 수가 어긋난다: \`run.start\`는 ${startedWith}, \`modules.planned\`는 ${planned}`)
+  }
+
+  const badClasses = [...new Set(events
+    .map(event => event.failureClass)
+    .filter(value => value !== undefined && !FAILURE_CLASSES.has(value)))]
+  if (badClasses.length) {
+    problems.push(`표에 없는 failureClass: ${badClasses.join(', ')}. 쓸 수 있는 값은 C-9의 표에 있다`)
+  }
+
+  // 같은 모듈·같은 시도가 두 번 끝났으면 재시도인지 중복 기록인지 알 수 없다.
+  // 시도마다 한 쌍이라는 정규형이 지켜졌는지를 여기서 본다.
+  const seenAttempts = new Set()
+  const doubled = new Set()
+  for (const event of events) {
+    if (event.phase !== 'module.done') continue
+    const key = `${event.module}#${event.attempt ?? '?'}`
+    if (seenAttempts.has(key)) doubled.add(key)
+    seenAttempts.add(key)
+  }
+  if (doubled.size) {
+    problems.push(`같은 모듈·시도가 두 번 끝났다: ${[...doubled].join(', ')}. 재시도는 \`attempt\`를 올려 남긴다`)
   }
 
   // fan-out 증거는 자동으로 남길 수 없다 — 이 플러그인은 task launcher를 갖고
@@ -443,6 +483,10 @@ const data = (() => {
   const absent = spec.required.filter(key => data[key] === undefined)
   if (absent.length) {
     process.stderr.write(`경고: \`${phase}\`에 ${absent.join(', ')}가 없다 (C-9 표가 요구한다)\n`)
+  }
+  // 실패를 기록하려는 줄을 실패 이름 때문에 버리지는 않는다. 이름만 짚는다.
+  if (data.failureClass !== undefined && !FAILURE_CLASSES.has(data.failureClass)) {
+    process.stderr.write(`경고: failureClass ${JSON.stringify(data.failureClass)}는 C-9의 닫힌 목록에 없다. 쓸 수 있는 값: ${[...FAILURE_CLASSES].join(', ')}\n`)
   }
 }
 

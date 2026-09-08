@@ -669,7 +669,7 @@ test('--check는 첫 줄이 run.start가 아니면 짚는다', t => {
   // 실제로 그런 사이드카가 남아, 죽은 실행의 규칙 버전을 끝내 알 수 없었다.
   const dir = freshDir(t)
   plant(dir, [
-    { at: '2026-09-08T00:00:00.000Z', seq: 1, phase: 'module.done', module: '01', status: 'ok' },
+    { at: '2026-09-08T00:00:00.000Z', seq: 1, phase: 'module.done', module: '01-fsd', attempt: 1, status: 'ok', failureClass: 'none' },
     { at: '2026-09-08T00:10:00.000Z', seq: 2, phase: 'run.end', verdict: 'WARN' },
   ])
   const out = check(dir)
@@ -712,7 +712,7 @@ test('--check는 applied와 module.done 수가 어긋나면 경고로만 짚는�
   plant(dir, [
     { at: '2026-09-08T00:00:00.000Z', seq: 1, phase: 'run.start', host: 'win32', rules: 'r', version: '2.11.0', branch: 'b', changedFiles: 9 },
     { at: '2026-09-08T00:01:00.000Z', seq: 2, phase: 'modules.planned', candidates: 20, applied: 3 },
-    { at: '2026-09-08T00:02:00.000Z', seq: 3, phase: 'module.done', module: '01', status: 'ok' },
+    { at: '2026-09-08T00:02:00.000Z', seq: 3, phase: 'module.done', module: '01-fsd', attempt: 1, status: 'ok', failureClass: 'none' },
     { at: '2026-09-08T00:10:00.000Z', seq: 4, phase: 'run.end', verdict: 'WARN' },
   ])
   const out = check(dir)
@@ -726,4 +726,114 @@ test('--check는 사이드카가 없으면 실패하고 어디를 봐야 하는�
   assert.equal(out.status, 1)
   assert.match(out.stderr, /사이드카가 없다/)
   assert.match(out.stderr, /실행 타임라인/)
+})
+
+// ── 세는 단위·재시도·실패 클래스 정규형 ───────────────────────────────────
+//
+// 한 실행이 `ok:18, failed:0, failureClasses:{task-not-found:1, …}`을 남겼다.
+// 실패가 0인데 실패 클래스가 3건이라, 세는 단위가 계약에 없으면 기록을 기계적으로
+// 신뢰할 수 없다는 것이 드러났다.
+
+test('dispatch.end는 최종 모듈 단위와 시도 단위를 따로 받는다', t => {
+  const dir = freshDir(t)
+  const out = spawnSync(process.execPath, [
+    SCRIPT, '--dir', dir, '--run', RUN, '--phase', 'dispatch.end',
+    '--set', 'terminalOk=18', '--set', 'terminalFailed=0',
+    '--set', 'attemptsTotal=21', '--set', 'attemptsFailed=3',
+  ], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+  assert.equal(out.status, 0, out.stderr)
+  assert.equal(out.stderr, '')
+  const last = linesOf(dir).at(-1)
+  assert.equal(last.terminalFailed, 0)
+  assert.equal(last.attemptsFailed, 3)
+})
+
+test('attemptFailureClasses를 --set 한 값으로 밀어 넣으면 거부한다', t => {
+  const dir = freshDir(t)
+  const out = spawnSync(process.execPath, [
+    SCRIPT, '--dir', dir, '--run', RUN, '--phase', 'dispatch.end',
+    '--set', 'terminalOk=18', '--set', 'terminalFailed=0',
+    '--set', 'attemptsTotal=21', '--set', 'attemptsFailed=3',
+    '--set', 'attemptFailureClasses=task-not-found:1,poll-timeout:2',
+  ], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+  assert.equal(out.status, 2)
+  assert.match(out.stderr, /--data-file/)
+})
+
+test('modules.planned의 skipped는 문자열로 받지 않는다', t => {
+  // `"17,18,21"`로 남기면 왜 건너뛰었는지가 사라진다 — 트리거 부재인지 오류인지
+  // 구분할 수 없다. 그 구분이 C-8이 요구하는 SKIPPED/FAILED/UNKNOWN이다.
+  const dir = freshDir(t)
+  const out = spawnSync(process.execPath, [
+    SCRIPT, '--dir', dir, '--run', RUN, '--phase', 'modules.planned',
+    '--set', 'candidates=20', '--set', 'applied=17', '--set', 'skipped=17,18,21',
+  ], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+  assert.equal(out.status, 2)
+  assert.match(out.stderr, /--data-file/)
+})
+
+test('tool.done은 트리와 baseline을 함께 받는다', t => {
+  const dir = freshDir(t)
+  const out = spawnSync(process.execPath, [
+    SCRIPT, '--dir', dir, '--run', RUN, '--phase', 'tool.done',
+    '--set', 'name=npm test', '--set', 'exit=1', '--set', 'treeSha=a6f9531',
+    '--set', 'failedNow=140', '--set', 'failedBaseline=140',
+  ], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+  assert.equal(out.status, 0, out.stderr)
+  const last = linesOf(dir).at(-1)
+  assert.equal(last.name, 'npm test')
+  assert.equal(last.failedNow, last.failedBaseline)
+})
+
+test('표에 없는 failureClass는 경고하되 줄은 남긴다', t => {
+  // 실패를 기록하려는 줄을 실패 이름 때문에 버리는 것은 앞뒤가 맞지 않는다.
+  const dir = freshDir(t)
+  const out = spawnSync(process.execPath, [
+    SCRIPT, '--dir', dir, '--run', RUN, '--phase', 'module.done',
+    '--set', 'module=01-fsd', '--set', 'attempt=1', '--set', 'status=failed',
+    '--set', 'failureClass=explore-provider-model-not-found',
+  ], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+  assert.equal(out.status, 0)
+  assert.match(out.stderr, /닫힌 목록에 없다/)
+  assert.equal(linesOf(dir).length, 1)
+})
+
+test('--check는 표에 없는 failureClass를 짚는다', t => {
+  const dir = freshDir(t)
+  plant(dir, [
+    { at: '2026-09-08T00:00:00.000Z', seq: 1, phase: 'run.start', host: 'h', rules: 'r', version: '2.11.0', branch: 'b', changedFiles: 9 },
+    { at: '2026-09-08T00:01:00.000Z', seq: 2, phase: 'module.done', module: '01-fsd', attempt: 1, status: 'failed', failureClass: 'final-audit-weird' },
+    { at: '2026-09-08T00:02:00.000Z', seq: 3, phase: 'run.end', verdict: 'WARN' },
+  ])
+  const out = check(dir)
+  assert.equal(out.status, 1)
+  assert.match(out.stdout, /표에 없는 failureClass: final-audit-weird/)
+})
+
+test('--check는 같은 모듈·시도가 두 번 끝난 것을 짚는다', t => {
+  // 한 실행이 모듈 01–04를 task-not-found로 찍고 같은 이름으로 다시 ok를 찍었다.
+  // 재시도인지 늦게 돌아온 결과인지 구분할 수 없었다.
+  const dir = freshDir(t)
+  plant(dir, [
+    { at: '2026-09-08T00:00:00.000Z', seq: 1, phase: 'run.start', host: 'h', rules: 'r', version: '2.11.0', branch: 'b', changedFiles: 9 },
+    { at: '2026-09-08T00:01:00.000Z', seq: 2, phase: 'module.done', module: '01-fsd', attempt: 1, status: 'failed', failureClass: 'task-not-found' },
+    { at: '2026-09-08T00:02:00.000Z', seq: 3, phase: 'module.done', module: '01-fsd', attempt: 1, status: 'ok', failureClass: 'none' },
+    { at: '2026-09-08T00:03:00.000Z', seq: 4, phase: 'run.end', verdict: 'WARN' },
+  ])
+  const out = check(dir)
+  assert.equal(out.status, 1)
+  assert.match(out.stdout, /같은 모듈·시도가 두 번 끝났다/)
+})
+
+test('--check는 attempt를 올린 재시도는 짚지 않는다', t => {
+  const dir = freshDir(t)
+  plant(dir, [
+    { at: '2026-09-08T00:00:00.000Z', seq: 1, phase: 'run.start', host: 'h', rules: 'r', version: '2.11.0', branch: 'b', changedFiles: 9 },
+    { at: '2026-09-08T00:01:00.000Z', seq: 2, phase: 'modules.planned', candidates: 20, applied: 1 },
+    { at: '2026-09-08T00:02:00.000Z', seq: 3, phase: 'module.done', module: '01-fsd', attempt: 1, status: 'failed', failureClass: 'task-not-found' },
+    { at: '2026-09-08T00:03:00.000Z', seq: 4, phase: 'module.done', module: '01-fsd', attempt: 2, status: 'ok', failureClass: 'none' },
+    { at: '2026-09-08T00:04:00.000Z', seq: 5, phase: 'run.end', verdict: 'WARN' },
+  ])
+  const out = check(dir)
+  assert.equal(out.status, 0, out.stdout)
 })

@@ -123,6 +123,26 @@ MERGE_BASE=$(git merge-base $BASE_BRANCH HEAD)
 - 사용자의 read-only / 파일 수정 금지 / 텍스트 응답 요청이 다른 모든 규칙보다 우선
 - 도구 실행 결과는 리뷰 지적과 분리해 별도 섹션으로 보고
 
+### 게이트 수치는 baseline 대비로 적는다
+
+lint·typecheck·test의 실패 건수를 **절대값으로만 적지 않는다.** baseline 대비
+증감으로 적고, baseline을 재지 못했으면 그 사실을 적는다.
+
+**왜.** 한 리뷰가 "전체 `typecheck` 실패, 전체 테스트 140건 실패"를 머지 차단
+사유로 적었다. 그 수치는 정확했지만 **그 워크트리의 알려진 baseline이었다** — 로컬
+SDK 드리프트로 원래부터 그만큼 실패하고 있었고, 그 브랜치가 만든 신규 실패는 0이었다.
+리포트는 브랜치가 만들지 않은 환경 문제를 브랜치의 차단 사유로 만들었고,
+`미해결`에는 "원인을 해소하고 전역 gate를 다시 통과하기 전에는 머지 준비 완료로
+판정할 수 없다"까지 남았다. **고칠 수 없는 것을 조건으로 건 판정은 판정이 아니다.**
+
+- `도구 실행 결과`에는 `baseline N → 현재 M (신규 K)` 형태로 적는다
+- baseline을 재지 못했으면 `baseline 미측정`이라고 적는다. 0으로 두지 않는다
+- **신규 실패가 0이면 그것을 차단 사유로 쓰지 않는다.** 기존 실패는 `미해결 / 후속
+  확인`에 사실로 남기고, 판정은 이 변경이 만든 것으로 한다
+- 게이트급 주장에는 어느 트리에서 쟀는지(`treeSha`)와 실패한 테스트 이름 또는 원문
+  summary 줄을 함께 남긴다. 없으면 다시 재볼 수 없다
+- 기록은 C-9의 `tool.done`으로 남긴다
+
 ## C-6A. 구조화된 결과 ownership 및 lifecycle
 
 `REVIEW_RESULT_CONTRACT_V1`은 **producer → orchestrator 내부 인터페이스**다. 최종 Markdown 공개 형식은 유지하고, 이 내부 인터페이스만 구조화한다. 이 변경은 **의도적으로 수용한 내부 계약 변경**이며 `.claude-plugin/plugin.json` `2.4.0`에서 **MINOR**로 취급한다. 기본 이유는 producer 출력과 최종 리포트 렌더링을 분리해, shared contract·validation·dedupe를 한 곳에서 고정하기 위해서다.
@@ -913,6 +933,7 @@ finding 헤딩 **바로 다음 줄**에 영향도와 확신도를 적는다. `00
 - 실패, timeout, 미수집이 발생한 범위는 완료로 표시하지 않는다
 - 부분 결과는 보존하되, **무엇이 성공하고 무엇이 실패했는지**를 리포트에 명시한다
 - 검토하지 않은 모듈을 "통과"로 표기하지 않는다. `SKIPPED`, `FAILED`, `UNKNOWN`을 구분해 적는다
+- 그 구분을 타임라인에도 같은 모양으로 남긴다. `SKIPPED`는 `reasonCode`와 근거를 함께, `UNKNOWN`은 `unknown` 배열로, 실패는 C-9의 **닫힌 failureClass 목록** 중 하나로 적는다. 이름을 새로 지으면 두 실행을 나란히 놓을 수 없다
 
 ---
 
@@ -1017,12 +1038,13 @@ UTF-16 파일도 읽는다 — PowerShell 5.1의 `Set-Content -Encoding UTF8`은
 |---|---|---|
 | `run.start` | 가장 먼저 | `host`, `rules`(해석된 RULES_DIR), `version`, `branch`, `changedFiles` |
 | `scope.done` | 범위 확정(C-4) | `files`, `excluded` |
-| `modules.planned` | 적용 모듈 확정(C-3) | `candidates`, `applied`, `skipped` |
+| `modules.planned` | 적용 모듈 확정(C-3) | `candidates`, `applied` · `skipped`, `unknown`(중첩, `--data-file`) |
 | `dispatch.start` | **첫 sub-agent를 실제로 띄운 직후** | `modules`, `inflight` |
-| `module.start` | **모듈 하나를 띄운 직후** | `module`, `taskId` |
-| `module.done` | **모듈 하나가 끝날 때마다** | `module`, `status`(ok/failed), `findings`, `failureClass`, `taskId`, (있으면) `tokensIn`·`tokensOut` |
-| `dispatch.end` | 전부 수집 후 | `ok`, `failed`, `failureClasses`, (있으면) `tokensIn`·`tokensOut` |
-| `script.done` | `prepare-verification.mjs` 실행 후 | `ran`, `counts` |
+| `module.start` | **모듈 하나를 띄운 직후** | `module`, `attempt`, `taskId`, (재시도면) `retryOf` |
+| `module.done` | **모듈 하나가 끝날 때마다** | `module`, `attempt`, `status`(ok/failed), `findings`, `failureClass`, `taskId`, (있으면) `tokensIn`·`tokensOut` |
+| `dispatch.end` | 전부 수집 후 | `terminalOk`, `terminalFailed`(최종 모듈 단위) · `attemptsTotal`, `attemptsFailed`(시도 단위) · `attemptFailureClasses`(중첩, `--data-file`), (있으면) `tokensIn`·`tokensOut` |
+| `script.done` | `prepare-verification.mjs` 실행 후 | `ran`, `counts`(중첩, 스크립트가 직접 남긴다) |
+| `tool.done` | lint/typecheck/test를 돌린 직후 | `name`, `exit`, `treeSha` · `failedNow`, `failedBaseline`(재지 못했으면 `null`) · `failing`(중첩, `--data-file`) |
 | `crossverify.start` / `.end` | 교차검증 패스 | `targets` / `upheld`, `rejected`, (있으면) `tokensIn`·`tokensOut` |
 | `synthesis.start` / `.end` | synthesis 패스 | `clusters`, (있으면) `tokensIn`·`tokensOut` |
 | `render.start` | **문서를 쓰기 직전** | `findings`(중복 제거 후) |
@@ -1037,6 +1059,106 @@ UTF-16 파일도 읽는다 — PowerShell 5.1의 `Set-Content -Encoding UTF8`은
 
 `module.done`을 모듈마다 쓰는 것이 fan-out의 유일한 증거다. `dispatch.end`
 하나로 합치면, fan-out 도중에 죽은 실행은 아무 줄도 남기지 못한다.
+
+### 세는 단위를 이름에 담는다
+
+`dispatch.end`가 한때 `ok`·`failed`·`failureClasses` 셋이었고, 한 실행이 이렇게
+남겼다: `ok:18, failed:0, failureClasses:{task-not-found:1, provider-model-not-found:2}`.
+**실패가 0인데 실패 클래스가 3건이다.** 최종 모듈은 전부 성공했고 중간 시도 셋이
+실패했다는 뜻으로 읽는 것이 자연스럽지만, 계약에 세는 단위가 없어서 그것을 확정할
+수 없었다. 같은 파일의 `module.done` 성공 이벤트는 특수 패스까지 세면 20개인데
+`ok`는 18이라, `ok`가 일반 모듈만 센 것인지도 기록에 없었다.
+
+그래서 단위를 필드 이름에 담는다.
+
+- `terminalOk` / `terminalFailed` — **최종 모듈 단위**. 재시도로 회복된 모듈은
+  `terminalOk`다. 일반 numbered 모듈만 세고, 특수 패스는 여기 넣지 않는다
+- `attemptsTotal` / `attemptsFailed` — **시도 단위**. 재시도는 별개의 시도다
+- `attemptFailureClasses` — 시도 단위 집계. `terminalFailed`가 0인데 이 맵이
+  비지 않는 것은 **모순이 아니라 정상**이다
+
+중첩 값은 `--data-file`로 넘긴다. 실패가 없었으면 그 맵은 생략한다.
+
+### 재시도는 시도마다 한 쌍이다
+
+한 실행에서 모듈 01–04가 `task-not-found`로 `module.done`을 찍고, 같은 이름으로
+다시 `ok`를 찍었다. 같은 파일의 다른 모듈은 대신 `attempts:2` 필드 하나로 남겼다.
+**두 방식이 섞였고, 어느 쪽도 재시도인지 늦게 돌아온 결과인지 구분해 주지 않았다.**
+
+정규형은 **시도마다 `module.start` → `module.done` 한 쌍**이다.
+
+```
+{"phase":"module.start","module":"03-react-rules","attempt":1,"taskId":"bg_a"}
+{"phase":"module.done","module":"03-react-rules","attempt":1,"taskId":"bg_a","status":"failed","failureClass":"task-not-found"}
+{"phase":"module.start","module":"03-react-rules","attempt":2,"taskId":"bg_b","retryOf":"bg_a"}
+{"phase":"module.done","module":"03-react-rules","attempt":2,"taskId":"bg_b","status":"ok","failureClass":"none"}
+```
+
+`attempts` 필드 하나로 합치지 않는다. 합치면 각 시도가 얼마나 걸렸는지, 어느
+시도가 어느 task였는지가 사라진다. **같은 `module`과 같은 `attempt`가 두 번
+나오면 재시도인지 중복 기록인지 알 수 없으므로, `--check`가 그것을 짚는다.**
+
+### failureClass도 닫힌 목록이다
+
+phase 이름만 닫아 두었더니 실패 클래스가 실행마다 새로 지어졌다. 문서에 정의된
+것은 `malformed-output`과 `task-not-found` 둘뿐인데, 기록에는
+`inactivity-timeout`·`poll-timeout`·`malformed-corrected`·`explore-provider-model-not-found`가
+나타났다. **읽는 쪽이 두 실행을 나란히 놓을 수 없고, 무엇보다 `none`과
+`malformed-corrected`가 실패인지 아닌지가 이름만으로 갈리지 않았다.**
+
+| 값 | 뜻 | 최종 실패 |
+|---|---|---|
+| `none` | 실패 없음 | 아니다 |
+| `malformed-corrected` | 계약 위반 출력이었으나 교정 1회로 회복 | 아니다 |
+| `no-start` | task가 시작되지 않음 | 그렇다 |
+| `task-not-found` | `Task not found for session` 또는 session loss | 그렇다 |
+| `inactivity-timeout` | 런타임이 무응답으로 끊음 | 그렇다 |
+| `queue-expiry` | 큐에서 만료(`timed out while queued`) | 그렇다 |
+| `empty-result` | 응답이 비었거나 결과가 없음 | 그렇다 |
+| `skill-injection-invalid` | skill 주입 검증 실패 | 그렇다 |
+| `malformed-output` | 계약 위반 출력, 교정 후에도 | 그렇다 |
+| `provider-model-not-found` | provider/model을 해석하지 못함 | 그렇다 |
+| `poll-timeout` | 결과 회수 폴링이 시한 내 끝나지 않음 | 그렇다 |
+| `unknown` | 위 어디에도 해당하지 않음 | 그렇다 |
+
+**`provider-model-not-found`는 `providerID`와 `modelID`를 함께 남긴다.** 한
+사이드카가 이 실패를 2건 기록하고 그것만 남겼다 — provider도, model도, 어느
+task였는지도, 어느 모듈이 영향을 받았는지도 복원할 수 없었다. 이름만 남은 실패는
+"무엇이 실패했는지 모른다"와 정보량이 같다.
+
+`unknown`을 쓸 때는 `note`에 관측한 것을 적는다. **새 이름을 짓지 않는다** —
+이름이 정말 부족하면 이 표를 고치는 것이 순서다.
+
+### 건너뛴 것은 이유와 함께 남긴다
+
+`modules.planned`의 `skipped`가 한때 `"17,18,21"` 같은 문자열이었다. 그러면
+**왜 건너뛰었는지가 사라진다** — 17이 해당 변경이 없어서 빠진 것인지 오류로 빠진
+것인지 구분할 수 없다. 그 실행의 최종 리포트에는 이유가 적혀 있었지만, 사이드카의
+목적은 **리포트를 쓰기 전에 죽어도 진행 상태와 근거가 남게 하는 것**이다. 리포트가
+나중에 이유를 적었다고 사이드카의 손실이 복구되지는 않는다.
+
+```json
+{
+  "candidates": 20,
+  "applied": 19,
+  "skipped": [
+    { "module": "21-rsc.md", "status": "skipped", "reasonCode": "profile-mismatch", "evidence": "프로파일 판정에서 RSC 신호 없음" },
+    { "module": "18-dangerous-change", "status": "skipped", "reasonCode": "trigger-absent", "evidence": "diff에 위험 변경 트리거 없음" }
+  ],
+  "unknown": []
+}
+```
+
+`reasonCode`는 `profile-mismatch`, `trigger-absent`, `requires-unmet`,
+`user-filter`, `unknown` 중 하나다. `unknown` 배열은 **판정하지 못해 띄우지 않은**
+모듈이고, C-8이 요구하는 `SKIPPED`/`FAILED`/`UNKNOWN` 구분이 여기서 갈린다.
+
+### 도구 게이트는 baseline 대비로 남긴다
+
+`tool.done`이 `failedNow`와 `failedBaseline`을 함께 받는 이유는 C-6의 baseline
+규칙과 같다. 절대 실패 건수만 남기면, 그 수가 이 변경 때문인지 원래 그랬는지
+기록만으로 알 수 없다. `treeSha`를 함께 남기는 것도 같은 이유다 — 어느 트리에서
+잰 수인지 없으면 다시 재볼 수 없다.
 
 ### 끝내기 전에 기록을 검사한다
 
@@ -1129,8 +1251,14 @@ C-7 골격 표에 있다 — 붙일 자리가 없다고 만들지 않거나 다�
 ### 리포트를 쓴 뒤에 실패하면
 
 렌더가 끝난 뒤에 벌어진 일은 **리포트에 들어갈 자리가 없다.** 실제로 한 실행에서
-리포트를 저장한 뒤 2시간짜리 단계가 실패했고, 타임라인에만 남고 리포트는 조용했다.
-사람이 읽는 것은 리포트다.
+리포트 렌더 전후에 2시간짜리 최종 감사 단계가 `poll-timeout`으로 실패했으나, 그
+실패는 타임라인에만 남고 공개 리포트는 조용했다. 사람이 읽는 것은 리포트다.
+
+**그 실행에서 저장이 감사보다 먼저였는지는 사이드카만으로 복원할 수 없다.** 기록된
+순서는 `final.audit` → `run.end` → `report.saved`지만, 같은 실행이 기록 실패로
+이벤트 순서가 밀린 적이 있어(아래 `순서` 항목) append 순서를 실제 작업 순서로 읽을
+수 없다. 규칙의 근거로 삼을 때 "저장한 뒤"라고 단정하지 않는다 — 이 조항이 막으려는
+것은 **렌더 이후 실패가 리포트에 반영되지 않는 것**이고, 그것은 순서와 무관하게 성립한다.
 
 - 렌더 이후 실패가 발생하면 **리포트를 갱신한다.** `도구 실행 결과`와
   `미해결 / 후속 확인`이 그 자리다 (C-8)
