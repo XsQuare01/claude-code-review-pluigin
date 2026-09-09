@@ -16,6 +16,8 @@ Run these in Claude Code:
 
 Choose the **user** scope so the workflows are available in every project. The commands become `/code-review`, `/code-review-fast`, and the rest — no files are copied into the project or into `~/.claude`.
 
+> **The rules and the default report language are Korean.** Every rule module is written in Korean, and `00-rule.md` tells the reviewer to write findings and the saved report in Korean unless you ask for another language. Say so in the request — "review in English" — and the reports come back in English; the rules the reviewer reads stay Korean either way.
+
 To develop against a local checkout instead, point the marketplace at the directory:
 
 ```
