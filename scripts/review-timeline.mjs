@@ -382,7 +382,7 @@ if (!PHASES.has(phase)) {
  * `--data`만 있던 때, 실제 실행에서 두 번 연속 깨졌다. Windows 경로의
  * 백슬래시와 한글이 섞인 JSON을 PowerShell 명령줄로 넘기려다 이렇게 됐다:
  *
- *   --data must be JSON, got "{\"path\":\"C:\\\\\\\\Users\\\\\\\\bhmun\\\\..."
+ *   --data must be JSON, got "{\"path\":\"C:\\\\\\\\Users\\\\\\\\<user>\\\\..."
  *   --data must be JSON, got "{yellow:25,verdict:MERGE BLOCKED,...}"
  *
  * 두 번째는 따옴표가 통째로 사라져 JSON도 아니게 된 모습이다. 기록을 남기라고
