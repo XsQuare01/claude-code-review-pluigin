@@ -1721,6 +1721,50 @@ validateOwnerRestatements()
   }
 }
 
+/**
+ * 두 축 줄이 헤딩 바로 다음 줄이라는 것을, 예시와 산문 양쪽에서 확인한다.
+ *
+ * 왜 있는가: 계약은 이 모양을 **예시로만** 보여줬고, 한 실행이 48개 지적 전부에
+ * 헤딩과 축 줄 사이 빈 줄을 넣어 렌더한 뒤 리포트 전체를 다시 썼다. 보여주는
+ * 것과 말하는 것은 다른 일이다 — verifier prompt에서 필수 필드를 주입해 놓고
+ * 산문이 빠뜨려 준수율이 무너진 것과 같은 실패다.
+ *
+ * 산문이 있는지와 **예시가 그 산문을 지키는지**를 함께 본다. 예시가 드리프트하면
+ * 읽는 쪽은 예시를 따라간다.
+ */
+function validateAxisLinePlacement() {
+  const workflowContract = rulesFile('workflow-contract.md')
+  if (!/헤딩 바로 다음 줄이다/.test(workflowContract)) {
+    failCode('workflow-contract', 'E_AXIS_LINE_PLACEMENT_UNSTATED', 'workflow-contract.md must state in prose that the two-axis line is the line immediately after the finding heading, not only show it in an example')
+  }
+  // 지적 헤딩은 severity 이모지로 시작한다. 목차나 설명용 `####`와 구분된다.
+  //
+  // 축 줄이 **없는** 예시는 이 규칙의 대상이 아니다 — 같은 규칙 ID의 순번 표기처럼
+  // 헤딩 줄만 나란히 보여주는 예시가 있고, 거기에 축 줄을 요구하면 다른 것을
+  // 가르치는 예시를 망가뜨린다. 그래서 축 줄을 담은 예시 블록 안에서만 인접을 본다.
+  const lines = workflowContract.split('\n')
+  const blocks = []
+  let current = null
+  lines.forEach((line, at) => {
+    if (line.startsWith('```')) {
+      if (current) { blocks.push(current); current = null }
+      else current = { from: at, lines: [] }
+      return
+    }
+    if (current) current.lines.push({ line, at })
+  })
+  for (const block of blocks) {
+    if (!block.lines.some(entry => entry.line.startsWith('영향:'))) continue
+    block.lines.forEach((entry, index) => {
+      if (!/^#### [🔴🟡🔵]/.test(entry.line)) return
+      const next = block.lines[index + 1]?.line ?? ''
+      if (!next.startsWith('영향:')) {
+        failCode('workflow-contract', 'E_AXIS_LINE_NOT_ADJACENT', `workflow-contract.md:${entry.at + 1} shows a finding heading whose next line is not the 영향 axis line — the example must obey the rule it teaches`)
+      }
+    })
+  }
+}
+
 function validateVersionPolicySync() {
   const readme = read(join(ROOT, 'README.md'))
   const script = read(join(ROOT, 'scripts', 'check-version-bump.mjs'))
@@ -1731,6 +1775,7 @@ function validateVersionPolicySync() {
 
 validateContractManifestAndFixtures()
 validateStructuredProducerDocs()
+validateAxisLinePlacement()
 validateVersionPolicySync()
 
 // ------------------------------------------------------------------ report
