@@ -332,6 +332,22 @@ Verification coverage: 대상 10 중 7 검증 … · counts 출처: 미실행 (�
 
 이 요구는 실행을 강제하지 못한다. **강제하는 대신 생략이 보이게 한다** — `SKIPPED`·`FAILED`·`UNKNOWN`을 구분해 적게 하는 C-8과 같은 이유다.
 
+### 검증 결과도 스크립트가 센다
+
+같은 논증이 **검증 결과**에도 적용된다. 후보 수와 대상 수는 `prepare-verification.mjs`가 결정적으로 내는데 `upheld`·`rejected`는 모델이 눈으로 세고 있었고, 한 실행이 `upheld 13 / rejected 3`으로 적은 뒤 44초 만에 `upheld 12 / rejected 4`로 정정했다.
+
+세는 일이 어려운 이유는 합산이 아니라 **재판정**이다. bundle verifier가 `needs-context`로 돌린 후보는 isolated verifier로 승격돼 다시 판정된다. 두 줄을 다 세면 total이 부풀고, 앞 줄을 세면 뒤집힌 판정을 놓친다.
+
+```
+node <RULES_DIR>/../scripts/tally-verdicts.mjs --dir <리포트 디렉터리> --run <리포트 basename> \
+     --input verdicts-bundle.json --input verdicts-isolated.json [--malformed-tasks-corrected N]
+```
+
+- 입력은 `REVIEW_VERDICT_CONTRACT_V1` payload 하나, 그 배열, 또는 `{ "tasks": [ … ] }`다
+- **`--input`을 준 순서가 정본 순서다.** 후보별로 마지막 판정만 세고, 뒤집힌 건수는 `reverdicted`로 따로 낸다
+- 이 스크립트가 `crossverify.end`를 직접 남긴다. `countsFrom`이 그 줄에 함께 남으므로, 손으로 센 실행과 구분된다
+- 교정 횟수는 verdict payload가 모르는 dispatch 쪽 사실이라 호출자가 넘긴다. 이름에 **세는 단위**를 담는다 — verdict가 아니라 task 수다
+
 ### candidate ID 표기
 
 candidate ID는 오케스트레이터가 부여하는 내부 식별자이고 형식을 고정하지 않는다. 다만 **리포트 본문에 등장하는 순간 독자의 것이 된다.**
