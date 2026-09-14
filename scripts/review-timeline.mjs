@@ -114,23 +114,52 @@ const readLines = () => {
  * 집계가 불가능해지고, 그것이 조용히 통과하면 아무도 고치지 않는다.
  */
 const PHASES = new Map([
-  ['run.start', { required: ['host', 'rules', 'version', 'branch', 'changedFiles'], structured: [] }],
-  ['scope.done', { required: ['files', 'excluded'], structured: [] }],
-  ['modules.planned', { required: ['candidates', 'applied'], structured: ['skipped', 'unknown'] }],
-  ['dispatch.start', { required: ['modules', 'inflight'], structured: [] }],
-  ['module.start', { required: ['module', 'attempt'], structured: [] }],
-  ['module.done', { required: ['module', 'attempt', 'status'], structured: [] }],
-  ['dispatch.end', { required: ['terminalOk', 'terminalFailed', 'attemptsTotal', 'attemptsFailed'], structured: ['attemptFailureClasses'] }],
-  ['script.done', { required: ['ran'], structured: ['counts'] }],
-  ['tool.done', { required: ['name', 'exit', 'treeSha'], structured: ['failing'] }],
-  ['crossverify.start', { required: ['targets'], structured: [] }],
-  ['crossverify.end', { required: ['upheld', 'rejected'], structured: [] }],
-  ['synthesis.start', { required: [], structured: [] }],
-  ['synthesis.end', { required: [], structured: [] }],
-  ['render.start', { required: ['findings'], structured: [] }],
-  ['render.wrote', { required: ['path', 'lines'], structured: [] }],
-  ['run.end', { required: ['verdict'], structured: [] }],
+  ['run.start', { required: ['host', 'rules', 'version', 'branch', 'changedFiles'], structured: [], allowed: ['candidates', 'workflow', 'mergeBase', 'os'] }],
+  ['scope.done', { required: ['files', 'excluded'], structured: [], allowed: [] }],
+  ['modules.planned', { required: ['candidates', 'applied'], structured: ['skipped', 'unknown'], allowed: [] }],
+  ['dispatch.start', { required: ['modules', 'inflight'], structured: [], allowed: [] }],
+  ['module.start', { required: ['module', 'attempt'], structured: [], allowed: ['taskId', 'retryOf'] }],
+  ['module.done', { required: ['module', 'attempt', 'status'], structured: [], allowed: ['findings', 'failureClass', 'taskId'] }],
+  ['dispatch.end', { required: ['terminalOk', 'terminalFailed', 'attemptsTotal', 'attemptsFailed'], structured: ['attemptFailureClasses'], allowed: [] }],
+  ['script.start', { required: [], structured: [], allowed: ['script'] }],
+  ['script.done', { required: ['ran'], structured: ['counts'], allowed: [] }],
+  ['tool.done', { required: ['name', 'exit', 'treeSha'], structured: ['failing'], allowed: ['failedNow', 'failedBaseline'] }],
+  ['crossverify.start', { required: ['targets'], structured: [], allowed: [] }],
+  ['crossverify.end', { required: ['upheld', 'rejected'], structured: [], allowed: ['needsContext', 'malformedTasksCorrected', 'countsFrom'] }],
+  ['synthesis.start', { required: [], structured: [], allowed: ['findings'] }],
+  ['synthesis.end', { required: [], structured: [], allowed: ['clusters'] }],
+  ['render.start', { required: ['findings'], structured: [], allowed: [] }],
+  ['render.wrote', { required: ['path', 'lines'], structured: [], allowed: [] }],
+  ['run.end', { required: ['verdict'], structured: [], allowed: ['usageSource', 'costUsd', 'tokensCacheRead'] }],
 ])
+
+/**
+ * 어느 단계에서든 쓸 수 있는 필드.
+ *
+ * `note`는 append-only 기록에서 앞 줄을 고치지 않고 바로잡는 유일한 길이다 —
+ * 실제로 한 실행이 `crossverify.end`를 잘못 세고, 줄을 고치는 대신 다음 줄에
+ * `note`로 정정했다. 토큰은 C-9가 "있으면 적는다"로 둔 값이라 단계를 가리지 않는다.
+ */
+const ALWAYS_ALLOWED = new Set(['note', 'tokensIn', 'tokensOut'])
+
+/**
+ * 필드 이름도 닫는다.
+ *
+ * phase 이름만 닫아 두었더니 2026-09-11 실행이 `crossverify.end`에
+ * `malformedCorrected`를 지어 넣었다. 계약 어디에도 없는 이름이고, 더 나쁜 것은
+ * **단위가 없다**는 것이다 — verdict를 센 것인지 verifier task를 센 것인지
+ * 리포트 본문을 읽어야 알 수 있었다. `dispatch.end`의 `ok`/`failed`에서 이미 한 번
+ * 겪은 실패이고, 그때 계약이 내린 결론이 "세는 단위를 이름에 담는다"였다.
+ *
+ * 이름을 거부하지는 않는다. 기록을 남기려는 줄을 필드 이름 때문에 버리면
+ * 그 단계가 통째로 사라진다 — `failureClass`와 같은 처리다.
+ */
+const undeclaredKeys = (phase, data) => {
+  const spec = PHASES.get(phase)
+  if (!spec) return []
+  const known = new Set([...spec.required, ...spec.structured, ...(spec.allowed ?? [])])
+  return Object.keys(data).filter(key => !known.has(key) && !ALWAYS_ALLOWED.has(key))
+}
 
 /**
  * 실패 클래스도 닫힌 목록이다.
@@ -206,6 +235,15 @@ if (has('check')) {
     problems.push(`후보 수가 어긋난다: \`run.start\`는 ${startedWith}, \`modules.planned\`는 ${planned}`)
   }
 
+  const invented = []
+  for (const event of events) {
+    if (!PHASES.has(event.phase)) continue
+    const { at: _at, seq: _seq, sinceStartSec: _since, phase: _phase, ...rest } = event
+    const keys = undeclaredKeys(event.phase, rest)
+    if (keys.length) invented.push(`\`${event.phase}\`(seq ${event.seq}) → ${keys.join(', ')}`)
+  }
+  if (invented.length) problems.push(`표에 없는 필드 이름: ${invented.join(' / ')}. 이름이 실행마다 달라지면 무엇을 센 값인지 기록만으로 알 수 없다`)
+
   const badClasses = [...new Set(events
     .map(event => event.failureClass)
     .filter(value => value !== undefined && !FAILURE_CLASSES.has(value)))]
@@ -276,8 +314,18 @@ if (has('summary')) {
   // 줄이 더 붙은 실행을 정상 종료로 읽는다 — 실제로 기록 실패 때문에 순서가
   // 밀려 그런 타임라인이 만들어진 적이 있다. 없는 것과 자리에 없는 것은 다르다.
   const finalPhase = events[events.length - 1].phase
-  if (finalPhase !== 'run.end') {
-    out.push('', events.some(event => event.phase === 'run.end')
+  const ended = events.some(event => event.phase === 'run.end')
+  if (finalPhase === 'render.start') {
+    // C-7은 이 표를 `render.start` 직후, `render.wrote`와 `run.end`를 적기 전에
+    // 만들라고 한다. 그 자리에서 종료 줄이 없는 것은 사고가 아니라 순서다.
+    // 그런데도 경보를 찍으면 **계약을 지킨 실행마다** 뜨고, 실제로 한 실행은
+    // 그 경보 밑에 "이것이 정상"이라는 문단을 손으로 붙여 리포트에 실었다.
+    // 늘 울리는 경보는 신호가 아니다.
+    out.push('', `> 이 표는 \`render.start\` 시점까지의 기록이다. \`render.wrote\`와 \`run.end\`는 이 표를 만든 뒤에 기록되므로 여기 없다 — 빠진 것이 아니라 아직 일어나지 않은 것이다.${
+      ended ? ' 앞선 `run.end`는 이 렌더를 고쳐 쓴 것이므로, 렌더 뒤에 다시 적어 마지막 자리를 되찾는다.' : ''
+    } 실행 전체의 정본은 사이드카다.`)
+  } else if (finalPhase !== 'run.end') {
+    out.push('', ended
       ? `> **\`run.end\` 뒤에 줄이 더 있다.** 마지막 줄은 \`${finalPhase}\`다. 종료가 마지막 자리에 있지 않으므로 실행이 어디서 끝났는지 이 기록만으로는 알 수 없다.`
       : `> **\`run.end\`가 없다.** 마지막으로 남은 단계는 \`${finalPhase}\`이고, 실행은 거기서 끝나지 않았다.`)
   }
@@ -487,6 +535,11 @@ const data = (() => {
   // 실패를 기록하려는 줄을 실패 이름 때문에 버리지는 않는다. 이름만 짚는다.
   if (data.failureClass !== undefined && !FAILURE_CLASSES.has(data.failureClass)) {
     process.stderr.write(`경고: failureClass ${JSON.stringify(data.failureClass)}는 C-9의 닫힌 목록에 없다. 쓸 수 있는 값: ${[...FAILURE_CLASSES].join(', ')}\n`)
+  }
+  const undeclared = undeclaredKeys(phase, data)
+  if (undeclared.length) {
+    const usable = [...spec.required, ...spec.structured, ...(spec.allowed ?? []), ...ALWAYS_ALLOWED]
+    process.stderr.write(`경고: \`${phase}\`의 ${undeclared.join(', ')}는 C-9의 닫힌 목록에 없다. 쓸 수 있는 이름: ${usable.join(', ')}\n`)
   }
 }
 

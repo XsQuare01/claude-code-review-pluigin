@@ -332,6 +332,22 @@ Verification coverage: 대상 10 중 7 검증 … · counts 출처: 미실행 (�
 
 이 요구는 실행을 강제하지 못한다. **강제하는 대신 생략이 보이게 한다** — `SKIPPED`·`FAILED`·`UNKNOWN`을 구분해 적게 하는 C-8과 같은 이유다.
 
+### 검증 결과도 스크립트가 센다
+
+같은 논증이 **검증 결과**에도 적용된다. 후보 수와 대상 수는 `prepare-verification.mjs`가 결정적으로 내는데 `upheld`·`rejected`는 모델이 눈으로 세고 있었고, 한 실행이 `upheld 13 / rejected 3`으로 적은 뒤 44초 만에 `upheld 12 / rejected 4`로 정정했다.
+
+세는 일이 어려운 이유는 합산이 아니라 **재판정**이다. bundle verifier가 `needs-context`로 돌린 후보는 isolated verifier로 승격돼 다시 판정된다. 두 줄을 다 세면 total이 부풀고, 앞 줄을 세면 뒤집힌 판정을 놓친다.
+
+```
+node <RULES_DIR>/../scripts/tally-verdicts.mjs --dir <리포트 디렉터리> --run <리포트 basename> \
+     --input verdicts-bundle.json --input verdicts-isolated.json [--malformed-tasks-corrected N]
+```
+
+- 입력은 `REVIEW_VERDICT_CONTRACT_V1` payload 하나, 그 배열, 또는 `{ "tasks": [ … ] }`다
+- **`--input`을 준 순서가 정본 순서다.** 후보별로 마지막 판정만 세고, 뒤집힌 건수는 `reverdicted`로 따로 낸다
+- 이 스크립트가 `crossverify.end`를 직접 남긴다. `countsFrom`이 그 줄에 함께 남으므로, 손으로 센 실행과 구분된다
+- 교정 횟수는 verdict payload가 모르는 dispatch 쪽 사실이라 호출자가 넘긴다. 이름에 **세는 단위**를 담는다 — verdict가 아니라 task 수다
+
 ### candidate ID 표기
 
 candidate ID는 오케스트레이터가 부여하는 내부 식별자이고 형식을 고정하지 않는다. 다만 **리포트 본문에 등장하는 순간 독자의 것이 된다.**
@@ -860,6 +876,8 @@ finding 헤딩 **바로 다음 줄**에 영향도와 확신도를 적는다. `00
 개선 제안: 계산을 상위에서 memoize하거나 필요 시 데이터 shape를 안정화하세요.
 ```
 
+**두 축 줄은 헤딩 바로 다음 줄이다 — 사이에 빈 줄을 두지 않는다.** 위 예시가 그 모양이지만, 예시로만 두었더니 한 실행이 48개 지적 전부에 빈 줄을 넣어 렌더한 뒤 **리포트 전체를 다시 썼다.** 보여주는 것과 말하는 것은 다른 일이고, 산문이 빠뜨리면 산문이 이긴다.
+
 ### 교차검증 표기
 
 교차검증을 수행하는 워크플로우는 두 축 줄에 축을 하나 더 붙인다.
@@ -972,7 +990,15 @@ node <RULES_DIR>/../scripts/review-preflight.mjs --dir <리포트 디렉터리> 
 
 **`prepare-verification.mjs`는 `--dir`와 `--run`을 받고, 사이드카에 `run.start`가
 없으면 거부한다.** 렌더 전 필수 관문이므로 여기서 막으면 타임라인 없이 검증까지
-가는 경로가 닫힌다. 그 스크립트는 자기 결과를 `script.done`으로 직접 남긴다.
+가는 경로가 닫힌다. 그 스크립트는 **진입 직후 `script.start`를, 끝난 뒤
+`script.done`을** 직접 남긴다.
+
+**시작과 끝을 따로 남기는 이유**는 그 사이를 나눌 수 없었기 때문이다. 한 실행의
+`dispatch.end` → `script.done` 구간이 1086초로 **전체 최장**이었는데, 그 안에는
+producer 출력을 하나의 JSON으로 조립한 시간, 실패한 입력 전달 두 번, 실제 스크립트
+실행이 함께 들어 있었다. 다른 다단계 단계는 전부 start/end 쌍인데 여기만 끝 하나였다.
+`script.start`만 있고 `script.done`이 없는 기록은 **"불렀고 끝내지 못했다"**는 뜻이고,
+아무 줄도 없는 것은 **"부르지 않았다"**는 뜻이다.
 
 ### 그 다음 단계들
 
@@ -1043,9 +1069,10 @@ UTF-16 파일도 읽는다 — PowerShell 5.1의 `Set-Content -Encoding UTF8`은
 | `module.start` | **모듈 하나를 띄운 직후** | `module`, `attempt`, `taskId`, (재시도면) `retryOf` |
 | `module.done` | **모듈 하나가 끝날 때마다** | `module`, `attempt`, `status`(ok/failed), `findings`, `failureClass`, `taskId`, (있으면) `tokensIn`·`tokensOut` |
 | `dispatch.end` | 전부 수집 후 | `terminalOk`, `terminalFailed`(최종 모듈 단위) · `attemptsTotal`, `attemptsFailed`(시도 단위) · `attemptFailureClasses`(중첩, `--data-file`), (있으면) `tokensIn`·`tokensOut` |
+| `script.start` | `prepare-verification.mjs` 진입 직후 (스크립트가 직접 남긴다) | `script` |
 | `script.done` | `prepare-verification.mjs` 실행 후 | `ran`, `counts`(중첩, 스크립트가 직접 남긴다) |
 | `tool.done` | lint/typecheck/test를 돌린 직후 | `name`, `exit`, `treeSha` · `failedNow`, `failedBaseline`(재지 못했으면 `null`) · `failing`(중첩, `--data-file`) |
-| `crossverify.start` / `.end` | 교차검증 패스 | `targets` / `upheld`, `rejected`, (있으면) `tokensIn`·`tokensOut` |
+| `crossverify.start` / `.end` | 교차검증 패스 | `targets` / `upheld`, `rejected`, `needsContext`, `countsFrom`, (있으면) `malformedTasksCorrected`·`tokensIn`·`tokensOut` |
 | `synthesis.start` / `.end` | synthesis 패스 | `clusters`, (있으면) `tokensIn`·`tokensOut` |
 | `render.start` | **문서를 쓰기 직전** | `findings`(중복 제거 후) |
 | `render.wrote` | 파일을 쓴 직후 | `path`, `lines`, (있으면) `tokensIn`·`tokensOut` |
@@ -1097,6 +1124,22 @@ UTF-16 파일도 읽는다 — PowerShell 5.1의 `Set-Content -Encoding UTF8`은
 `attempts` 필드 하나로 합치지 않는다. 합치면 각 시도가 얼마나 걸렸는지, 어느
 시도가 어느 task였는지가 사라진다. **같은 `module`과 같은 `attempt`가 두 번
 나오면 재시도인지 중복 기록인지 알 수 없으므로, `--check`가 그것을 짚는다.**
+
+### 필드 이름도 닫힌 목록이다
+
+phase 이름을 닫아 두어도 **필드는 샌다.** 한 실행이 `crossverify.end`에
+`malformedCorrected`를 지어 넣었다. 계약 어디에도 없는 이름이고, 더 나쁜 것은
+**단위가 없다**는 것이다 — verdict를 센 것인지 verifier task를 센 것인지 리포트
+본문을 읽어야 알 수 있었다. 「세는 단위를 이름에 담는다」에서 `dispatch.end`로 이미
+한 번 겪은 실패다.
+
+그래서 각 단계가 받는 필드 이름도 표가 정한다. `note`와 토큰 필드는 단계를 가리지
+않는다 — `note`는 append-only 기록에서 앞 줄을 고치지 않고 바로잡는 유일한 길이고,
+토큰은 "있으면 적는다"로 둔 값이다.
+
+**줄을 거부하지는 않는다.** 기록을 남기려는 줄을 필드 이름 때문에 버리면 그 단계가
+통째로 사라진다 — `failureClass`와 같은 처리다. 쓸 때 경고하고, `--check`가 종료 전에
+다시 짚는다.
 
 ### failureClass도 닫힌 목록이다
 

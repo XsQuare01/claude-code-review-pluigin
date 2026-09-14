@@ -207,6 +207,8 @@ instanceId 부여
       eligibility 판정 · bundle/isolated 라우팅 · context bundle 구성
   → bundle verifier      (in-flight 최대 4, isolated와 공유)
   → isolated verifier    (승격분 + bundle이 needs-context로 돌린 것 · 같은 상한)
+  → scripts/tally-verdicts.mjs              추가 sub-agent 호출 0회
+      후보별 마지막 판정 집계 · crossverify.end 기록
   → disposition 적용
   → 10-principles synthesis
   → rendering
@@ -214,11 +216,16 @@ instanceId 부여
 
 **위치 대조와 eligibility는 모델이 아니라 `scripts/prepare-verification.mjs`가 판정한다.** Markdown 지시로는 결정성을 주장할 수 없다. **판단으로 대체하지 말고 실제로 실행한다.**
 
-**입력을 새로 만들지 않는다.** 검증을 통과한 producer 결과를 그대로 파이프한다.
+**입력을 새로 만들지 않는다.** 검증을 통과한 producer 결과를 그대로 넘긴다.
+
+**payload는 파일로 넘긴다.** 편집 도구로 `{"results":[ … ]}`를 파일에 쓰고 경로만 준다.
 
 ```bash
-echo '{"results":[ <REVIEW_RESULT_CONTRACT_V1 객체들> ]}'   | node "$RULES_DIR/../scripts/prepare-verification.mjs" --merge-base "$MERGE_BASE" --dir "$REPORT_DIR" --run "$REPORT_BASENAME"
+node "$RULES_DIR/../scripts/prepare-verification.mjs" --merge-base "$MERGE_BASE" --dir "$REPORT_DIR" --run "$REPORT_BASENAME" --input "$REPORT_DIR/.timing/$REPORT_BASENAME.candidates.json"
 ```
+
+- **셸에 담지 않는다.** payload에는 한국어 산문·코드 인용·Windows 경로의 역슬래시가 들어 있고, 그것을 인용부호 한 쌍 안에 넣는 구조는 깨지는 쪽이 정상이다. 한 실행이 문서에 적힌 파이프를 **두 번 연달아 실패**하고 세 번째에 우회했다. 경로만 넘기면 셸이 볼 것이 경로 하나뿐이다
+- stdin 파이프도 계속 받는다(`… < candidates.json`). 셸이 payload를 통째로 들고 있지 않은 경우에만 쓴다
 
 - `results[]`는 C-6A validation을 통과한 producer JSON **그대로**다. 필드를 골라 옮기거나 변환하지 않는다
 - **`candidateId`는 스크립트가 부여한다.** `{ruleId}#{n}` 형식이고 정규화 위치 순서로 매겨지므로, 같은 입력이면 항상 같은 ID가 나오고 규칙 ID로 리포트에서 바로 추적된다
@@ -313,6 +320,19 @@ bundle verifier와 isolated verifier는 **같은 prompt 계약**을 쓴다. 단�
 - retry 1회 / in-flight 상한 공유 / 실패 클래스별 건수 기록 — 일반 모듈 정책을 그대로 재사용한다
 - verdict `malformed-output` → C-6A와 동일 (교정 재시도 1회, 두 번째 실패 시 확정). 반환된 `candidateId` 집합이 요청과 다르면 그것도 `malformed-output`이다
 - `exhaustive` release-gate 실행에서 **차단 후보(`impact = high`)의 검증이 실패하면 최종 판정은 `INCONCLUSIVE`** 다. 개별 finding의 차단 여부와 gate 전체의 완결성 판정은 다른 값이다
+
+### 검증 결과 집계
+
+**`upheld`·`rejected`를 직접 세지 않는다.** 검증 작업이 낸 verdict payload를 파일로 쓰고 집계 스크립트에 넘긴다.
+
+```bash
+node "$RULES_DIR/../scripts/tally-verdicts.mjs" --dir "$REPORT_DIR" --run "$REPORT_BASENAME" --input <verdicts-bundle.json> --input <verdicts-isolated.json> --malformed-tasks-corrected <N>
+```
+
+- **이 스크립트가 `crossverify.end`를 남긴다.** 같은 줄을 따로 기록하지 않는다
+- `--input`을 준 순서가 정본 순서다. 후보별로 마지막 판정만 세므로, bundle이 `needs-context`로 돌리고 isolated가 다시 판정한 후보가 두 번 세어지지 않는다
+- coverage 숫자는 이 출력을 그대로 옮긴다. 한 실행이 손으로 세어 `upheld 13 / rejected 3`으로 적고 44초 뒤 `upheld 12 / rejected 4`로 정정했다 — 후보 수는 스크립트가 세면서 검증 결과만 눈으로 세고 있었다
+- `--malformed-tasks-corrected`는 **verdict가 아니라 verifier task 수**다. verdict payload가 모르는 dispatch 쪽 사실이라 여기서 넘긴다
 
 ## 리포팅
 - 문서 골격(섹션 이름·순서·헤딩 레벨)은 `workflow-contract.md` C-7의 **문서 골격** 표를 따른다. 매 실행마다 다른 골격을 만들지 않는다.
