@@ -837,3 +837,43 @@ test('--check는 attempt를 올린 재시도는 짚지 않는다', t => {
   const out = check(dir)
   assert.equal(out.status, 0, out.stdout)
 })
+
+// ------------------------------------------------------- script.start 와 필드 이름
+
+test('script.start는 닫힌 목록에 있다', t => {
+  const dir = freshDir(t)
+  const out = log(dir, 'script.start')
+  assert.equal(out.status, 0, out.stderr)
+  assert.equal(linesOf(dir)[0].phase, 'script.start')
+})
+
+test('표에 없는 필드는 경고하되 줄은 남긴다', t => {
+  // 2026-09-11 실행이 `crossverify.end`에 `malformedCorrected`를 지어 넣었다.
+  // 계약 어디에도 없는 이름이고 단위도 없어서, 그것이 verdict 수인지 task 수인지
+  // 리포트 본문을 읽어야 알 수 있었다. phase 이름만 닫아 두면 필드가 샌다.
+  const dir = freshDir(t)
+  const out = log(dir, 'crossverify.end', { upheld: 12, rejected: 4, malformedCorrected: 3 })
+  assert.equal(out.status, 0)
+  assert.match(out.stderr, /malformedCorrected/)
+  assert.match(out.stderr, /닫힌 목록에 없다/)
+  assert.equal(linesOf(dir).length, 1)
+})
+
+test('선언된 필드와 note는 경고하지 않는다', t => {
+  const dir = freshDir(t)
+  const out = log(dir, 'crossverify.end', { upheld: 12, rejected: 4, needsContext: 0, malformedTasksCorrected: 3, note: '다시 셌다' })
+  assert.equal(out.status, 0)
+  assert.doesNotMatch(out.stderr, /닫힌 목록에 없다/)
+})
+
+test('--check는 표에 없는 필드 이름을 짚는다', t => {
+  const dir = freshDir(t)
+  plant(dir, [
+    { at: '2026-09-08T00:00:00.000Z', seq: 1, phase: 'run.start', host: 'h', rules: 'r', version: '2.12.1', branch: 'b', changedFiles: 9 },
+    { at: '2026-09-08T00:01:00.000Z', seq: 2, phase: 'crossverify.end', upheld: 12, rejected: 4, malformedCorrected: 3 },
+    { at: '2026-09-08T00:02:00.000Z', seq: 3, phase: 'run.end', verdict: 'WARN' },
+  ])
+  const out = check(dir)
+  assert.equal(out.status, 1)
+  assert.match(out.stdout, /crossverify\.end.*malformedCorrected/)
+})

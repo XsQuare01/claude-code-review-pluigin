@@ -1043,9 +1043,10 @@ UTF-16 파일도 읽는다 — PowerShell 5.1의 `Set-Content -Encoding UTF8`은
 | `module.start` | **모듈 하나를 띄운 직후** | `module`, `attempt`, `taskId`, (재시도면) `retryOf` |
 | `module.done` | **모듈 하나가 끝날 때마다** | `module`, `attempt`, `status`(ok/failed), `findings`, `failureClass`, `taskId`, (있으면) `tokensIn`·`tokensOut` |
 | `dispatch.end` | 전부 수집 후 | `terminalOk`, `terminalFailed`(최종 모듈 단위) · `attemptsTotal`, `attemptsFailed`(시도 단위) · `attemptFailureClasses`(중첩, `--data-file`), (있으면) `tokensIn`·`tokensOut` |
+| `script.start` | `prepare-verification.mjs` 진입 직후 (스크립트가 직접 남긴다) | `script` |
 | `script.done` | `prepare-verification.mjs` 실행 후 | `ran`, `counts`(중첩, 스크립트가 직접 남긴다) |
 | `tool.done` | lint/typecheck/test를 돌린 직후 | `name`, `exit`, `treeSha` · `failedNow`, `failedBaseline`(재지 못했으면 `null`) · `failing`(중첩, `--data-file`) |
-| `crossverify.start` / `.end` | 교차검증 패스 | `targets` / `upheld`, `rejected`, (있으면) `tokensIn`·`tokensOut` |
+| `crossverify.start` / `.end` | 교차검증 패스 | `targets` / `upheld`, `rejected`, `needsContext`, `countsFrom`, (있으면) `malformedTasksCorrected`·`tokensIn`·`tokensOut` |
 | `synthesis.start` / `.end` | synthesis 패스 | `clusters`, (있으면) `tokensIn`·`tokensOut` |
 | `render.start` | **문서를 쓰기 직전** | `findings`(중복 제거 후) |
 | `render.wrote` | 파일을 쓴 직후 | `path`, `lines`, (있으면) `tokensIn`·`tokensOut` |
@@ -1097,6 +1098,22 @@ UTF-16 파일도 읽는다 — PowerShell 5.1의 `Set-Content -Encoding UTF8`은
 `attempts` 필드 하나로 합치지 않는다. 합치면 각 시도가 얼마나 걸렸는지, 어느
 시도가 어느 task였는지가 사라진다. **같은 `module`과 같은 `attempt`가 두 번
 나오면 재시도인지 중복 기록인지 알 수 없으므로, `--check`가 그것을 짚는다.**
+
+### 필드 이름도 닫힌 목록이다
+
+phase 이름을 닫아 두어도 **필드는 샌다.** 한 실행이 `crossverify.end`에
+`malformedCorrected`를 지어 넣었다. 계약 어디에도 없는 이름이고, 더 나쁜 것은
+**단위가 없다**는 것이다 — verdict를 센 것인지 verifier task를 센 것인지 리포트
+본문을 읽어야 알 수 있었다. 「세는 단위를 이름에 담는다」에서 `dispatch.end`로 이미
+한 번 겪은 실패다.
+
+그래서 각 단계가 받는 필드 이름도 표가 정한다. `note`와 토큰 필드는 단계를 가리지
+않는다 — `note`는 append-only 기록에서 앞 줄을 고치지 않고 바로잡는 유일한 길이고,
+토큰은 "있으면 적는다"로 둔 값이다.
+
+**줄을 거부하지는 않는다.** 기록을 남기려는 줄을 필드 이름 때문에 버리면 그 단계가
+통째로 사라진다 — `failureClass`와 같은 처리다. 쓸 때 경고하고, `--check`가 종료 전에
+다시 짚는다.
 
 ### failureClass도 닫힌 목록이다
 
