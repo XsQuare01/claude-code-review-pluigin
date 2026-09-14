@@ -314,8 +314,18 @@ if (has('summary')) {
   // 줄이 더 붙은 실행을 정상 종료로 읽는다 — 실제로 기록 실패 때문에 순서가
   // 밀려 그런 타임라인이 만들어진 적이 있다. 없는 것과 자리에 없는 것은 다르다.
   const finalPhase = events[events.length - 1].phase
-  if (finalPhase !== 'run.end') {
-    out.push('', events.some(event => event.phase === 'run.end')
+  const ended = events.some(event => event.phase === 'run.end')
+  if (finalPhase === 'render.start') {
+    // C-7은 이 표를 `render.start` 직후, `render.wrote`와 `run.end`를 적기 전에
+    // 만들라고 한다. 그 자리에서 종료 줄이 없는 것은 사고가 아니라 순서다.
+    // 그런데도 경보를 찍으면 **계약을 지킨 실행마다** 뜨고, 실제로 한 실행은
+    // 그 경보 밑에 "이것이 정상"이라는 문단을 손으로 붙여 리포트에 실었다.
+    // 늘 울리는 경보는 신호가 아니다.
+    out.push('', `> 이 표는 \`render.start\` 시점까지의 기록이다. \`render.wrote\`와 \`run.end\`는 이 표를 만든 뒤에 기록되므로 여기 없다 — 빠진 것이 아니라 아직 일어나지 않은 것이다.${
+      ended ? ' 앞선 `run.end`는 이 렌더를 고쳐 쓴 것이므로, 렌더 뒤에 다시 적어 마지막 자리를 되찾는다.' : ''
+    } 실행 전체의 정본은 사이드카다.`)
+  } else if (finalPhase !== 'run.end') {
+    out.push('', ended
       ? `> **\`run.end\` 뒤에 줄이 더 있다.** 마지막 줄은 \`${finalPhase}\`다. 종료가 마지막 자리에 있지 않으므로 실행이 어디서 끝났는지 이 기록만으로는 알 수 없다.`
       : `> **\`run.end\`가 없다.** 마지막으로 남은 단계는 \`${finalPhase}\`이고, 실행은 거기서 끝나지 않았다.`)
   }

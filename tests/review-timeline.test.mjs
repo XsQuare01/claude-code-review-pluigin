@@ -102,12 +102,16 @@ test('요약 표를 스크립트가 만든다', t => {
 
 test('run.end가 없으면 그 사실을 적는다', t => {
   // 마지막 단계가 성공했다는 뜻이 아니다. 없는 것과 0은 다르다.
+  //
+  // 끊긴 자리로 `render.start`를 쓰지 않는다 — 거기는 C-7이 이 표를 만들라고
+  // 지정한 자리라서 종료 줄이 없는 것이 정상이고, 그 구분은 아래 렌더 시점
+  // 요약 테스트가 따로 고정한다.
   const dir = freshDir(t)
   log(dir, 'run.start')
-  log(dir, 'render.start')
+  log(dir, 'synthesis.end', { clusters: 9 })
   const out = summary(dir)
   assert.match(out.stdout, /`run\.end`가 없다/)
-  assert.match(out.stdout, /마지막으로 남은 단계는 `render\.start`/)
+  assert.match(out.stdout, /마지막으로 남은 단계는 `synthesis\.end`/)
 })
 
 test('run.end가 있으면 없다고 하지 않는다', t => {
@@ -836,6 +840,54 @@ test('--check는 attempt를 올린 재시도는 짚지 않는다', t => {
   ])
   const out = check(dir)
   assert.equal(out.status, 0, out.stdout)
+})
+
+// --------------------------------------------------------------- 렌더 시점 요약
+//
+// C-7은 이 표를 `render.start` **직후**, `render.wrote`와 `run.end`를 적기 전에
+// 만들라고 한다. 그 자리에서 종료 줄이 없는 것은 사고가 아니라 순서다. 그런데도
+// "run.end가 없다"를 찍어, 계약을 지킨 2026-09-11 실행이 그 경보를 리포트에
+// 싣고 **모델이 그 밑에 정상이라는 문단을 손으로 붙였다.** 늘 울리는 경보는
+// 신호가 아니다.
+
+test('--summary는 render.start에서 끝난 표를 사고가 아니라 순서로 적는다', t => {
+  const dir = freshDir(t)
+  plant(dir, [
+    { at: '2026-09-11T00:00:00.000Z', seq: 1, phase: 'run.start', host: 'h', rules: 'r', version: '2.12.1', branch: 'b', changedFiles: 68 },
+    { at: '2026-09-11T00:10:00.000Z', seq: 2, phase: 'render.start', findings: 47 },
+  ])
+  const out = summary(dir)
+  assert.equal(out.status, 0, out.stderr)
+  assert.doesNotMatch(out.stdout, /실행은 거기서 끝나지 않았다/)
+  assert.match(out.stdout, /아직 일어나지 않은 것/)
+})
+
+test('--summary는 render.start가 아닌 자리에서 끊긴 실행에는 경보를 유지한다', t => {
+  const dir = freshDir(t)
+  plant(dir, [
+    { at: '2026-09-11T00:00:00.000Z', seq: 1, phase: 'run.start', host: 'h', rules: 'r', version: '2.12.1', branch: 'b', changedFiles: 68 },
+    { at: '2026-09-11T00:10:00.000Z', seq: 2, phase: 'synthesis.end', clusters: 9 },
+  ])
+  const out = summary(dir)
+  assert.match(out.stdout, /`run.end`가 없다/)
+  assert.match(out.stdout, /실행은 거기서 끝나지 않았다/)
+})
+
+test('--summary는 재렌더의 render.start도 순서로 읽는다', t => {
+  // 렌더를 고쳐 다시 쓰면 run.end 뒤에 render.start가 온다. 계약은 그때
+  // run.end를 다시 적어 마지막 자리를 되찾으라고 한다 — 이 표는 그 사이에서
+  // 만들어지므로, "종료 뒤에 줄이 더 있다"도 같은 거짓 경보가 된다.
+  const dir = freshDir(t)
+  plant(dir, [
+    { at: '2026-09-11T00:00:00.000Z', seq: 1, phase: 'run.start', host: 'h', rules: 'r', version: '2.12.1', branch: 'b', changedFiles: 68 },
+    { at: '2026-09-11T00:10:00.000Z', seq: 2, phase: 'render.wrote', path: 'r.md', lines: 1524 },
+    { at: '2026-09-11T00:11:00.000Z', seq: 3, phase: 'run.end', verdict: 'merge-blocked' },
+    { at: '2026-09-11T00:13:00.000Z', seq: 4, phase: 'render.start', findings: 47, note: '고쳐 다시 쓴다' },
+  ])
+  const out = summary(dir)
+  assert.doesNotMatch(out.stdout, /종료가 마지막 자리에 있지 않으므로/)
+  assert.match(out.stdout, /아직 일어나지 않은 것/)
+  assert.match(out.stdout, /다시 적어/)
 })
 
 // ------------------------------------------------------- script.start 와 필드 이름
