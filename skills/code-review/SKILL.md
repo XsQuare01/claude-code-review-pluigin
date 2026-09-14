@@ -184,6 +184,7 @@ bounded pass 완료 후:
 echo '{"locations": <REVIEW_LOCATIONS 블록 내용>}'   | node "$RULES_DIR/../scripts/prepare-verification.mjs" --merge-base "$MERGE_BASE" --dir "$REPORT_DIR" --run "$REPORT_BASENAME" --locations-only
 ```
 
+- light form은 `ruleId`·경로·줄·인용만 담아 셸에 실어도 대체로 견딘다. 그래도 깨지면 payload를 파일에 쓰고 `--input <경로>`로 넘긴다 — `full`이 그 이유로 파일 경유를 기본으로 쓴다
 - `--locations-only`를 반드시 붙인다. 이 워크플로우에는 반박 패스가 없다
 - `location-mismatch`와 `location-unresolvable`인 지적은 **표에서 지우지 않는다.** 위치만 `위치 미확인`으로 바꾸고 사유를 단다 (`00-rule.md` 00-10). 줄 번호가 틀렸다는 것이 지적이 틀렸다는 뜻은 아니다
 - `counts`를 그대로 옮기고 직접 세지 않는다. **네 상태를 모두 적어 합이 total과 맞게 한다**

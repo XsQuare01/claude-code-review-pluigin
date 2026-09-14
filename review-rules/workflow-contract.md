@@ -972,7 +972,15 @@ node <RULES_DIR>/../scripts/review-preflight.mjs --dir <리포트 디렉터리> 
 
 **`prepare-verification.mjs`는 `--dir`와 `--run`을 받고, 사이드카에 `run.start`가
 없으면 거부한다.** 렌더 전 필수 관문이므로 여기서 막으면 타임라인 없이 검증까지
-가는 경로가 닫힌다. 그 스크립트는 자기 결과를 `script.done`으로 직접 남긴다.
+가는 경로가 닫힌다. 그 스크립트는 **진입 직후 `script.start`를, 끝난 뒤
+`script.done`을** 직접 남긴다.
+
+**시작과 끝을 따로 남기는 이유**는 그 사이를 나눌 수 없었기 때문이다. 한 실행의
+`dispatch.end` → `script.done` 구간이 1086초로 **전체 최장**이었는데, 그 안에는
+producer 출력을 하나의 JSON으로 조립한 시간, 실패한 입력 전달 두 번, 실제 스크립트
+실행이 함께 들어 있었다. 다른 다단계 단계는 전부 start/end 쌍인데 여기만 끝 하나였다.
+`script.start`만 있고 `script.done`이 없는 기록은 **"불렀고 끝내지 못했다"**는 뜻이고,
+아무 줄도 없는 것은 **"부르지 않았다"**는 뜻이다.
 
 ### 그 다음 단계들
 

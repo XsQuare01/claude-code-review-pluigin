@@ -214,11 +214,16 @@ instanceId 부여
 
 **위치 대조와 eligibility는 모델이 아니라 `scripts/prepare-verification.mjs`가 판정한다.** Markdown 지시로는 결정성을 주장할 수 없다. **판단으로 대체하지 말고 실제로 실행한다.**
 
-**입력을 새로 만들지 않는다.** 검증을 통과한 producer 결과를 그대로 파이프한다.
+**입력을 새로 만들지 않는다.** 검증을 통과한 producer 결과를 그대로 넘긴다.
+
+**payload는 파일로 넘긴다.** 편집 도구로 `{"results":[ … ]}`를 파일에 쓰고 경로만 준다.
 
 ```bash
-echo '{"results":[ <REVIEW_RESULT_CONTRACT_V1 객체들> ]}'   | node "$RULES_DIR/../scripts/prepare-verification.mjs" --merge-base "$MERGE_BASE" --dir "$REPORT_DIR" --run "$REPORT_BASENAME"
+node "$RULES_DIR/../scripts/prepare-verification.mjs" --merge-base "$MERGE_BASE" --dir "$REPORT_DIR" --run "$REPORT_BASENAME" --input "$REPORT_DIR/.timing/$REPORT_BASENAME.candidates.json"
 ```
+
+- **셸에 담지 않는다.** payload에는 한국어 산문·코드 인용·Windows 경로의 역슬래시가 들어 있고, 그것을 인용부호 한 쌍 안에 넣는 구조는 깨지는 쪽이 정상이다. 한 실행이 문서에 적힌 파이프를 **두 번 연달아 실패**하고 세 번째에 우회했다. 경로만 넘기면 셸이 볼 것이 경로 하나뿐이다
+- stdin 파이프도 계속 받는다(`… < candidates.json`). 셸이 payload를 통째로 들고 있지 않은 경우에만 쓴다
 
 - `results[]`는 C-6A validation을 통과한 producer JSON **그대로**다. 필드를 골라 옮기거나 변환하지 않는다
 - **`candidateId`는 스크립트가 부여한다.** `{ruleId}#{n}` 형식이고 정규화 위치 순서로 매겨지므로, 같은 입력이면 항상 같은 ID가 나오고 규칙 ID로 리포트에서 바로 추적된다

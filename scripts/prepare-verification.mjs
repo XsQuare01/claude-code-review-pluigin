@@ -3,6 +3,8 @@ import { existsSync, readFileSync } from 'node:fs'
 import { dirname, isAbsolute, join, resolve, sep } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
+import { logPhase, requireStartedTimeline } from './lib/run-record.mjs'
+
 // Deterministic preparation for the cross-verification pass.
 //
 // Everything here runs without a sub-agent. The orchestrator calls it before
@@ -245,9 +247,16 @@ export function prepareVerification(candidates, blobs, options = {}) {
 
 // ---------------------------------------------------------------------- CLI
 //
+//   node scripts/prepare-verification.mjs --merge-base <sha> --input candidates.json
 //   node scripts/prepare-verification.mjs --merge-base <sha> < candidates.json
 //
-// stdin  : { "results": [ <REVIEW_RESULT_CONTRACT_V1>, … ] }   preferred — pipe what you have
+// --input <path> : read the payload from a file. **Prefer this.** The payload carries
+//                  prose, code quotes and Windows paths, and a shell that has to hold
+//                  all of it inside one pair of quotes is the part that breaks — one
+//                  run failed the documented pipe twice before working around it.
+//                  With a path, the shell only ever sees the path.
+//
+// stdin  : { "results": [ <REVIEW_RESULT_CONTRACT_V1>, … ] }   the same payload, piped
 //          { "locations": [ {ruleId, path, line, quote}, … ] }  light form for a
 //                                                              consolidated pass
 //          { "candidates": [ … ] }                            when the caller owns the ids
@@ -342,56 +351,6 @@ function gitReaders(mergeBase) {
   }
 }
 
-/**
- * Refuse to run when the execution timeline has not been started.
- *
- * C-9는 첫 sub-agent보다 먼저 `run.start`를 남기라고 하지만, 그것은 기억해야 하는
- * 지시였다. 2026-09-08의 한 실행은 계약을 읽고도 타임라인을 한 줄도 남기지 않았고,
- * 리포트는 그 사실을 말하지 않았다 — 그 리포트의 실행 수치는 뒷받침이 없다.
- *
- * 이 스크립트는 렌더 전 **필수 관문**이라 여기서 거부하면 반드시 걸린다. 디스패치
- * 이후라 부팅을 강제할 수는 없지만, 타임라인 없이 검증까지 가는 경로는 닫힌다.
- * 시작 자체를 강제하는 것은 `review-preflight.mjs`의 몫이다.
- */
-function requireStartedTimeline(dir, run) {
-  const how = 'node <RULES_DIR>/../scripts/review-preflight.mjs --dir <리포트 디렉터리> --run <리포트 basename> --rules <RULES_DIR> --workflow <이름>'
-  if (!dir || !run) {
-    process.stderr.write(`--dir와 --run이 필요하다. 실행 타임라인(C-9) 없이 검증을 준비하지 않는다.\n먼저: ${how}\n`)
-    process.exit(2)
-  }
-  if (/[\\/]/.test(run)) {
-    process.stderr.write(`--run must be a bare basename, got ${JSON.stringify(run)}\n`)
-    process.exit(2)
-  }
-  const sidecar = join(dir, '.timing', `${run}.jsonl`)
-  if (!existsSync(sidecar) || !/"phase":"run\.start"/.test(readFileSync(sidecar, 'utf8'))) {
-    process.stderr.write(`실행 타임라인에 run.start가 없다: ${sidecar}\n먼저: ${how}\n`)
-    process.exit(2)
-  }
-  return sidecar
-}
-
-/**
- * Record what this script decided, in the shape the timeline can aggregate.
- *
- * `counts`를 `--set` 한 값으로 넘기면 `total=5,verify=2,…`가 문자열 하나로 남아
- * 다섯 수치를 다시 꺼낼 수 없다 — 실제로 그렇게 기록된 실행이 있다. 여기서는
- * 셸을 거치지 않고 인자 배열로 넘기므로 `--data`의 JSON이 깨질 자리가 없다.
- *
- * 기록 실패는 준비 실패가 아니다 (C-9). 경고만 하고 결과는 그대로 낸다.
- */
-function logScriptDone(dir, run, counts) {
-  const timeline = join(dirname(fileURLToPath(import.meta.url)), 'review-timeline.mjs')
-  try {
-    execFileSync(process.execPath, [
-      timeline, '--dir', dir, '--run', run, '--phase', 'script.done',
-      '--data', JSON.stringify({ ran: true, counts }),
-    ], { stdio: ['ignore', 'ignore', 'pipe'] })
-  } catch (error) {
-    process.stderr.write(`경고: script.done을 남기지 못했다 — ${String(error.stderr || error.message).trim()}\n`)
-  }
-}
-
 async function main() {
   const argv = process.argv.slice(2)
   const mergeBaseIndex = argv.indexOf('--merge-base')
@@ -399,20 +358,44 @@ async function main() {
   const locationsOnly = argv.includes('--locations-only')
   const dirIndex = argv.indexOf('--dir')
   const runIndex = argv.indexOf('--run')
+  const inputIndex = argv.indexOf('--input')
   const dir = dirIndex === -1 ? undefined : argv[dirIndex + 1]
   const run = runIndex === -1 ? undefined : argv[runIndex + 1]
+  const inputPath = inputIndex === -1 ? undefined : argv[inputIndex + 1]
 
-  // 인자를 먼저 본다. stdin을 다 읽고 나서 거부하면 실패 메시지가 파이프 오류에
+  // 인자를 먼저 본다. 입력을 다 읽고 나서 거부하면 실패 메시지가 파이프 오류에
   // 묻히고, 무엇을 고쳐야 하는지가 가려진다.
+  //
+  // 이 스크립트는 렌더 전 **필수 관문**이라 여기서 거부하면 반드시 걸린다. C-9는
+  // 첫 sub-agent보다 먼저 `run.start`를 남기라고 하지만 그것은 기억해야 하는
+  // 지시였고, 2026-09-08의 한 실행은 계약을 읽고도 타임라인을 한 줄도 남기지
+  // 않았다. 디스패치 이후라 부팅을 강제할 수는 없지만, 타임라인 없이 검증까지
+  // 가는 경로는 여기서 닫힌다. 시작 자체를 강제하는 것은 `review-preflight.mjs`의 몫이다.
   requireStartedTimeline(dir, run)
 
+  // 부른 사실을 먼저 남긴다. `script.start`만 있고 `script.done`이 없는 기록은
+  // "불렀고 끝내지 못했다"는 뜻이고, 아무 줄도 없는 것은 "부르지 않았다"는 뜻이다.
+  // 둘을 구분하지 못하면 조립에 걸린 시간과 스크립트가 걸린 시간도 갈리지 않는다 —
+  // 한 실행에서 그 구간이 1086초로 전체 최장이었는데 무엇이 오래 걸렸는지 알 수 없었다.
+  logPhase(dir, run, 'script.start', { script: 'prepare-verification' })
+
+  const source = inputPath === undefined ? 'stdin' : inputPath
   let raw = ''
-  for await (const chunk of process.stdin) raw += chunk
+  if (inputPath === undefined) {
+    for await (const chunk of process.stdin) raw += chunk
+  } else {
+    try {
+      raw = readFileSync(inputPath, 'utf8')
+    } catch (error) {
+      process.stderr.write(`--input을 읽지 못했다: ${inputPath} — ${error.message}\n`)
+      process.exit(2)
+    }
+  }
   let payload
   try {
     payload = JSON.parse(raw)
   } catch (error) {
-    process.stderr.write(`stdin is not valid JSON: ${error.message}\n`)
+    process.stderr.write(`${source} is not valid JSON: ${error.message}\n`)
     process.exit(2)
   }
   // Producer results are what the orchestrator already holds, so that is the cheap shape.
@@ -425,7 +408,7 @@ async function main() {
         ? candidatesFromResults(payload.results)
         : (payload.candidates ?? [])
   const result = prepareVerification(candidates, collectBlobs(candidates, gitReaders(mergeBase)), { locationsOnly })
-  logScriptDone(dir, run, result.counts)
+  logPhase(dir, run, 'script.done', { ran: true, counts: result.counts })
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`)
 }
 
