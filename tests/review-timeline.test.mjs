@@ -718,7 +718,8 @@ test('--check는 applied와 module.done 수가 어긋나면 경고로만 짚는�
     { at: '2026-09-08T00:01:00.000Z', seq: 2, phase: 'modules.planned', candidates: 20, applied: 3 },
     { at: '2026-09-08T00:01:30.000Z', seq: 3, phase: 'module.start', module: '01-fsd', attempt: 1 },
     { at: '2026-09-08T00:02:00.000Z', seq: 4, phase: 'module.done', module: '01-fsd', attempt: 1, status: 'ok', failureClass: 'none' },
-    { at: '2026-09-08T00:10:00.000Z', seq: 5, phase: 'run.end', verdict: 'WARN' },
+    { at: '2026-09-08T00:02:10.000Z', seq: 5, phase: 'dispatch.end', terminalOk: 1, terminalFailed: 0, attemptsTotal: 1, attemptsFailed: 0 },
+    { at: '2026-09-08T00:10:00.000Z', seq: 6, phase: 'run.end', verdict: 'WARN' },
   ])
   const out = check(dir)
   assert.equal(out.status, 0, out.stdout)
@@ -839,7 +840,8 @@ test('--check는 attempt를 올린 재시도는 짚지 않는다', t => {
     { at: '2026-09-08T00:02:00.000Z', seq: 4, phase: 'module.done', module: '01-fsd', attempt: 1, status: 'failed', failureClass: 'task-not-found' },
     { at: '2026-09-08T00:02:30.000Z', seq: 5, phase: 'module.start', module: '01-fsd', attempt: 2 },
     { at: '2026-09-08T00:03:00.000Z', seq: 6, phase: 'module.done', module: '01-fsd', attempt: 2, status: 'ok', failureClass: 'none' },
-    { at: '2026-09-08T00:04:00.000Z', seq: 7, phase: 'run.end', verdict: 'WARN' },
+    { at: '2026-09-08T00:03:10.000Z', seq: 7, phase: 'dispatch.end', terminalOk: 1, terminalFailed: 0, attemptsTotal: 2, attemptsFailed: 1 },
+    { at: '2026-09-08T00:04:00.000Z', seq: 8, phase: 'run.end', verdict: 'WARN' },
   ])
   const out = check(dir)
   assert.equal(out.status, 0, out.stdout)
@@ -1472,7 +1474,8 @@ test('--check는 attempt를 올린 재시도의 시작은 짚지 않는다', t =
     { at: '2026-09-18T00:00:30.000Z', seq: 3, phase: 'module.done', module: '01-fsd', attempt: 1, status: 'failed', failureClass: 'task-not-found' },
     { at: '2026-09-18T00:00:31.000Z', seq: 4, phase: 'module.start', module: '01-fsd', attempt: 2 },
     { at: '2026-09-18T00:01:40.000Z', seq: 5, phase: 'module.done', module: '01-fsd', attempt: 2, status: 'ok', failureClass: 'none' },
-    { at: '2026-09-18T00:01:41.000Z', seq: 6, phase: 'run.end', verdict: 'WARN' },
+    { at: '2026-09-18T00:01:45.000Z', seq: 6, phase: 'dispatch.end', terminalOk: 1, terminalFailed: 0, attemptsTotal: 2, attemptsFailed: 1 },
+    { at: '2026-09-18T00:01:46.000Z', seq: 7, phase: 'run.end', verdict: 'WARN' },
   ])
   const out = check(dir)
   assert.equal(out.status, 0, out.stdout)
@@ -1524,4 +1527,132 @@ test('도구의 attempt는 닫힌 목록에 있다', t => {
   const out = log(dir, 'tool.start', { name: 'test', attempt: 2 })
   assert.equal(out.status, 0, out.stderr)
   assert.doesNotMatch(out.stderr, /닫힌 목록에 없다/)
+})
+
+// ── 디스패치의 끝·사이드카와 리포트의 짝·표의 출처 ─────────────────────────
+//
+// 2026-09-18 실행이 `dispatch.start`만 남기고 끝냈는데 리포트에는 "초기 실패
+// 4건 · malformed 1건 · 최종 미회수 0건"이 적혀 있었다. 그 셋이 정확히
+// `dispatch.end`가 담는 값이므로 손으로 옮긴 수치다.
+
+const dispatched = (extra = []) => ([
+  { at: '2026-09-18T00:00:00.000Z', seq: 1, phase: 'run.start', host: 'opencode', rules: 'r', version: '2.13.5', branch: 'b', changedFiles: 73, candidates: 20 },
+  { at: '2026-09-18T00:00:10.000Z', seq: 2, phase: 'modules.planned', candidates: 20, applied: 1 },
+  { at: '2026-09-18T00:00:20.000Z', seq: 3, phase: 'dispatch.start', modules: 1, inflight: 4 },
+  { at: '2026-09-18T00:00:21.000Z', seq: 4, phase: 'module.start', module: '01-fsd', attempt: 1 },
+  { at: '2026-09-18T00:01:00.000Z', seq: 5, phase: 'module.done', module: '01-fsd', attempt: 1, status: 'failed', failureClass: 'skill-injection-invalid' },
+  { at: '2026-09-18T00:01:10.000Z', seq: 6, phase: 'module.start', module: '01-fsd', attempt: 2 },
+  { at: '2026-09-18T00:02:00.000Z', seq: 7, phase: 'module.done', module: '01-fsd', attempt: 2, status: 'ok', failureClass: 'none' },
+  ...extra,
+  { at: '2026-09-18T00:10:00.000Z', seq: 90, phase: 'run.end', verdict: 'WARN' },
+])
+
+test('--check는 dispatch.end가 없으면 실패한다', t => {
+  const dir = freshDir(t)
+  plant(dir, dispatched())
+  const out = check(dir)
+  assert.equal(out.status, 1)
+  assert.match(out.stdout, /`dispatch\.end`가 없다/)
+  assert.match(out.stdout, /기억에서 온 것/)
+})
+
+test('--check는 dispatch.end의 수치를 module.done으로 다시 센다', t => {
+  const dir = freshDir(t)
+  plant(dir, dispatched([
+    { at: '2026-09-18T00:03:00.000Z', seq: 8, phase: 'dispatch.end', terminalOk: 1, terminalFailed: 0, attemptsTotal: 1, attemptsFailed: 0 },
+  ]))
+  const out = check(dir)
+  assert.equal(out.status, 1)
+  assert.match(out.stdout, /attemptsTotal 1 → 기록으로 세면 2/)
+  assert.match(out.stdout, /attemptsFailed 0 → 기록으로 세면 1/)
+})
+
+test('--check는 맞는 dispatch.end는 짚지 않는다', t => {
+  const dir = freshDir(t)
+  plant(dir, dispatched([
+    { at: '2026-09-18T00:03:00.000Z', seq: 8, phase: 'dispatch.end', terminalOk: 1, terminalFailed: 0, attemptsTotal: 2, attemptsFailed: 1 },
+  ]))
+  const out = check(dir)
+  assert.doesNotMatch(out.stdout, /`dispatch\.end`가 없다|`dispatch\.end`의 수치/)
+})
+
+test('--check는 특수 패스를 dispatch.end 집계에 넣지 않는다', t => {
+  // numbered 모듈만 센다. 두 단위가 한 필드에서 섞이면 `ok:18`과 `module.done`
+  // 20건이 어긋나던 그 문제로 돌아간다.
+  const dir = freshDir(t)
+  plant(dir, dispatched([
+    { at: '2026-09-18T00:02:30.000Z', seq: 8, phase: 'module.start', module: 'exception', attempt: 1 },
+    { at: '2026-09-18T00:02:50.000Z', seq: 9, phase: 'module.done', module: 'exception', attempt: 1, status: 'ok', failureClass: 'none' },
+    { at: '2026-09-18T00:03:00.000Z', seq: 10, phase: 'dispatch.end', terminalOk: 1, terminalFailed: 0, attemptsTotal: 2, attemptsFailed: 1 },
+  ]))
+  const out = check(dir)
+  assert.doesNotMatch(out.stdout, /dispatch\.end`의 수치/)
+})
+
+test('--check는 디스패치가 없던 실행에 dispatch.end를 요구하지 않는다', t => {
+  const dir = freshDir(t)
+  plant(dir, [
+    { at: '2026-09-18T00:00:00.000Z', seq: 1, phase: 'run.start', host: 'opencode', rules: 'r', version: '2.13.5', branch: 'b', changedFiles: 1, candidates: 0 },
+    { at: '2026-09-18T00:10:00.000Z', seq: 2, phase: 'run.end', verdict: 'WARN' },
+  ])
+  const out = check(dir)
+  assert.equal(out.status, 0, out.stdout)
+})
+
+// 사이드카는 `<리포트 디렉터리>/.timing/<리포트 basename>.jsonl`이다. 한 실행이
+// 리포트를 Docs에 쓰고 사이드카는 워크트리에 남겼다 — 이름도 디렉터리도 달랐다.
+
+const wroteTo = path => ([
+  { at: '2026-09-18T00:00:00.000Z', seq: 1, phase: 'run.start', host: 'opencode', rules: 'r', version: '2.13.5', branch: 'b', changedFiles: 9 },
+  { at: '2026-09-18T00:10:00.000Z', seq: 2, phase: 'render.wrote', path, lines: 681 },
+  { at: '2026-09-18T00:10:01.000Z', seq: 3, phase: 'run.end', verdict: 'WARN' },
+])
+
+test('--check는 사이드카와 리포트의 이름이 다르면 짚는다', t => {
+  const dir = freshDir(t)
+  plant(dir, wroteTo(join(dir, 'code-review-full-refactor-3d-scan-ux-2026-09-18.md')))
+  const out = check(dir)
+  assert.equal(out.status, 1)
+  assert.match(out.stdout, /사이드카와 리포트의 이름이 다르다/)
+})
+
+test('--check는 사이드카와 리포트가 다른 디렉터리면 짚는다', t => {
+  const dir = freshDir(t)
+  const elsewhere = mkdtempSync(join(tmpdir(), 'elsewhere-'))
+  t.after(() => rmSync(elsewhere, { recursive: true, force: true }))
+  plant(dir, wroteTo(join(elsewhere, `${RUN}.md`)))
+  const out = check(dir)
+  assert.equal(out.status, 1)
+  assert.match(out.stdout, /다른 디렉터리에 있다/)
+})
+
+test('--check는 짝이 맞으면 짚지 않는다', t => {
+  const dir = freshDir(t)
+  plant(dir, wroteTo(join(dir, `${RUN}.md`)))
+  const out = check(dir)
+  assert.equal(out.status, 0, out.stdout)
+})
+
+test('--check는 render.wrote가 없으면 짝을 따지지 않는다', t => {
+  const dir = freshDir(t)
+  plant(dir, [
+    { at: '2026-09-18T00:00:00.000Z', seq: 1, phase: 'run.start', host: 'opencode', rules: 'r', version: '2.13.5', branch: 'b', changedFiles: 9 },
+    { at: '2026-09-18T00:10:00.000Z', seq: 2, phase: 'run.end', verdict: 'WARN' },
+  ])
+  const out = check(dir)
+  assert.equal(out.status, 0, out.stdout)
+})
+
+test('--summary는 표의 출처와 이벤트 수를 함께 낸다', t => {
+  // 한 리포트가 71행짜리 표를 실었는데 그중 4행이 사이드카와 달랐다. 위조를
+  // 막을 수는 없지만 대조할 수 있게는 만든다.
+  const dir = freshDir(t)
+  plant(dir, [
+    { at: '2026-09-18T00:00:00.000Z', seq: 1, phase: 'run.start', host: 'opencode', rules: 'r', version: '2.13.5', branch: 'b', changedFiles: 9 },
+    { at: '2026-09-18T00:10:00.000Z', seq: 2, phase: 'run.end', verdict: 'WARN' },
+  ])
+  const out = summary(dir)
+  assert.equal(out.status, 0)
+  assert.match(out.stdout, /> 출처: `.*code-review-full-feat-x-2026-09-01\.jsonl` · 이벤트 2개 · 마지막 `run\.end`/)
+  assert.match(out.stdout, /손으로 고치면 대조가 깨진다/)
 })
