@@ -112,6 +112,11 @@ const readLines = () => {
  * 필드 하나 빠진 기록이 없는 기록보다 낫다. `structured`는 **거부**다 — 중첩 값을
  * `--set` 한 값으로 밀어 넣으면 `counts=total=5,verify=2`가 문자열 하나로 남아
  * 집계가 불가능해지고, 그것이 조용히 통과하면 아무도 고치지 않는다.
+ *
+ * `tool.start`가 `script.start`와 같은 이유로 있다. 한 실행이 lint·typecheck·test·
+ * targeted-test 넷을 돌리고 `tool.done` 넷을 **같은 초에** 찍었다 — 앞 단계와의
+ * 간격은 442초였고, 그 442초가 넷 중 어느 도구의 것인지 기록 어디에도 없었다.
+ * 끝만 남기면 여러 개를 연달아 돌린 구간이 통째로 하나의 이름 없는 덩어리가 된다.
  */
 const PHASES = new Map([
   ['run.start', { required: ['host', 'rules', 'version', 'branch', 'changedFiles'], structured: [], allowed: ['candidates', 'workflow', 'mergeBase', 'os'] }],
@@ -123,6 +128,7 @@ const PHASES = new Map([
   ['dispatch.end', { required: ['terminalOk', 'terminalFailed', 'attemptsTotal', 'attemptsFailed'], structured: ['attemptFailureClasses'], allowed: [] }],
   ['script.start', { required: [], structured: [], allowed: ['script'] }],
   ['script.done', { required: ['ran'], structured: ['counts'], allowed: [] }],
+  ['tool.start', { required: ['name'], structured: [], allowed: [] }],
   ['tool.done', { required: ['name', 'exit', 'treeSha'], structured: ['failing'], allowed: ['failedNow', 'failedBaseline'] }],
   ['crossverify.start', { required: ['targets'], structured: [], allowed: [] }],
   ['crossverify.end', { required: ['upheld', 'rejected'], structured: [], allowed: ['needsContext', 'malformedTasksCorrected', 'countsFrom'] }],

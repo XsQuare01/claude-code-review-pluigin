@@ -929,3 +929,26 @@ test('--check는 표에 없는 필드 이름을 짚는다', t => {
   assert.equal(out.status, 1)
   assert.match(out.stdout, /crossverify\.end.*malformedCorrected/)
 })
+
+// ── 기록이 통째로 빠진 실행·디스패치의 모양 ────────────────────────────────
+//
+// 2026-09-18 실행이 `run.start` 다음에 곧장 `script.start`를 찍고 그 사이 1863초를
+// 비운 채 `--check`를 통과했다. `modules.planned`까지 없으면 기존의 "applied와
+// module.done 수가 어긋난다" 경고가 아예 돌지 않기 때문이다 — **하나도 안 남긴
+// 실행이 몇 개 빠뜨린 실행보다 조용했다.**
+
+test('tool.start는 닫힌 목록에 있다', t => {
+  // 도구 넷을 돌리고 끝만 넷 찍으면 442초가 이름 없는 덩어리 하나로 남는다.
+  const dir = freshDir(t)
+  const out = log(dir, 'tool.start', { name: 'typecheck' })
+  assert.equal(out.status, 0, out.stderr)
+  assert.equal(linesOf(dir)[0].name, 'typecheck')
+})
+
+test('tool.start에 name이 없으면 경고하되 줄은 남긴다', t => {
+  const dir = freshDir(t)
+  const out = log(dir, 'tool.start', {})
+  assert.equal(out.status, 0)
+  assert.match(out.stderr, /name/)
+  assert.equal(linesOf(dir).length, 1)
+})

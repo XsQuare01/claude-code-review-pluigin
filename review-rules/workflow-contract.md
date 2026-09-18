@@ -141,7 +141,9 @@ SDK 드리프트로 원래부터 그만큼 실패하고 있었고, 그 브랜치
   확인`에 사실로 남기고, 판정은 이 변경이 만든 것으로 한다
 - 게이트급 주장에는 어느 트리에서 쟀는지(`treeSha`)와 실패한 테스트 이름 또는 원문
   summary 줄을 함께 남긴다. 없으면 다시 재볼 수 없다
-- 기록은 C-9의 `tool.done`으로 남긴다
+- 기록은 C-9의 `tool.start`와 `tool.done` **한 쌍**으로 남긴다. 도구를 넷 돌리고
+  끝만 넷 남기면 네 번의 실행이 하나의 이름 없는 구간으로 뭉친다 — 실제로 한
+  실행이 442초를 그렇게 남겼고, 그 시간이 어느 도구의 것인지 알 수 없었다
 
 ## C-6A. 구조화된 결과 ownership 및 lifecycle
 
@@ -1000,6 +1002,12 @@ producer 출력을 하나의 JSON으로 조립한 시간, 실패한 입력 전�
 `script.start`만 있고 `script.done`이 없는 기록은 **"불렀고 끝내지 못했다"**는 뜻이고,
 아무 줄도 없는 것은 **"부르지 않았다"**는 뜻이다.
 
+**`tool.start`가 같은 이유로 있다.** 한 실행이 lint·typecheck·test·targeted-test를
+연달아 돌리고 `tool.done` 넷을 **같은 초에** 찍었다. 앞 단계와의 간격은 442초였고,
+그 442초가 넷 중 어느 도구의 것인지는 기록 어디에도 없었다. 도구는 하나씩 돌리므로
+끝만 모아 찍으면 여러 번의 실행이 이름 없는 덩어리 하나가 된다. 도구를 돌리기 직전에
+`tool.start`를 찍으면 각 도구의 몫이 뺄셈으로 나온다.
+
 ### 그 다음 단계들
 
 ```
@@ -1071,6 +1079,7 @@ UTF-16 파일도 읽는다 — PowerShell 5.1의 `Set-Content -Encoding UTF8`은
 | `dispatch.end` | 전부 수집 후 | `terminalOk`, `terminalFailed`(최종 모듈 단위) · `attemptsTotal`, `attemptsFailed`(시도 단위) · `attemptFailureClasses`(중첩, `--data-file`), (있으면) `tokensIn`·`tokensOut` |
 | `script.start` | `prepare-verification.mjs` 진입 직후 (스크립트가 직접 남긴다) | `script` |
 | `script.done` | `prepare-verification.mjs` 실행 후 | `ran`, `counts`(중첩, 스크립트가 직접 남긴다) |
+| `tool.start` | **도구 하나를 돌리기 직전** | `name` |
 | `tool.done` | lint/typecheck/test를 돌린 직후 | `name`, `exit`, `treeSha` · `failedNow`, `failedBaseline`(재지 못했으면 `null`) · `failing`(중첩, `--data-file`) |
 | `crossverify.start` / `.end` | 교차검증 패스 | `targets` / `upheld`, `rejected`, `needsContext`, `countsFrom`, (있으면) `malformedTasksCorrected`·`tokensIn`·`tokensOut` |
 | `synthesis.start` / `.end` | synthesis 패스 | `clusters`, (있으면) `tokensIn`·`tokensOut` |
