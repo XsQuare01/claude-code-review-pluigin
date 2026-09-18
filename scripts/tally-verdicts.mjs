@@ -21,7 +21,7 @@
 
 import { readFileSync } from 'node:fs'
 
-import { logPhase, requireStartedTimeline } from './lib/run-record.mjs'
+import { lastPhase, logPhase, requireStartedTimeline } from './lib/run-record.mjs'
 
 // C-6B의 닫힌 목록이다. 목록 밖 값을 만나면 세지 않고 멈춘다 — 모르는 값을 0으로
 // 흘려보내면 합계는 그럴듯하고 판정만 틀린다.
@@ -93,7 +93,7 @@ export function tally(verdicts) {
 
 const dir = flag('dir')
 const run = flag('run')
-requireStartedTimeline(dir, run)
+const sidecar = requireStartedTimeline(dir, run)
 
 const inputs = flagAll('input')
 if (!inputs.length) die('--input <경로>가 필요하다. 검증 작업이 낸 verdict payload를 파일로 넘긴다')
@@ -122,10 +122,25 @@ if (corrected !== undefined && !Number.isInteger(malformedTasksCorrected)) {
   die(`--malformed-tasks-corrected는 정수여야 한다: ${JSON.stringify(corrected)}`)
 }
 
+/**
+ * 판정을 받지 못한 후보 수도 센다.
+ *
+ * 2026-09-18 실행이 검증 대상 16건을 잡고 판정 13건을 남겼다. 나머지 3건은
+ * verifier가 두 차례 타임아웃해 판정이 없었는데, **그 사실이 리포트 산문에만
+ * 있고 기록에는 없었다.** 사이드카만 읽으면 3건이 증발한 것으로 보인다.
+ *
+ * 대상 수는 이미 `prepare-verification.mjs`가 결정적으로 내서 `script.done`에
+ * 들어 있으므로, 여기서 뺄셈만 하면 된다 — 모델에게 다시 세게 하지 않는다.
+ * 대상 수를 못 읽으면 필드를 만들지 않는다. **0과 미측정은 다르다.**
+ */
+const targeted = lastPhase(sidecar, 'script.done')?.counts?.verify
+const noVerdict = Number.isInteger(targeted) ? Math.max(0, targeted - counts.total) : undefined
+
 logPhase(dir, run, 'crossverify.end', {
   upheld: counts.upheld,
   rejected: counts.rejected,
   needsContext: counts.needsContext,
+  ...(noVerdict === undefined ? {} : { noVerdict }),
   ...(malformedTasksCorrected === undefined ? {} : { malformedTasksCorrected }),
   countsFrom: 'tally-verdicts.mjs',
 })

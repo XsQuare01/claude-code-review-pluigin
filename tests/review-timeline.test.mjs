@@ -1319,3 +1319,85 @@ test('--summary는 최장 구간이 끝 표시에 붙으면 그 문장을 붙이
   const out = summary(dir)
   assert.doesNotMatch(out.stdout, /사이\*\*의/)
 })
+
+// ── 검증 대상과 판정 수 ────────────────────────────────────────────────────
+//
+// 2026-09-18 실행이 대상 16건을 잡고 판정 13건을 남겼다. 3건은 verifier
+// 타임아웃으로 판정이 없었고, 그 사실은 리포트 산문에만 있었다. 사이드카만
+// 읽으면 "검증하고 통과했다"인지 "검증하지 못했다"인지 갈리지 않는다.
+
+const withVerify = (verify, verdicts) => ([
+  { at: '2026-09-18T00:00:00.000Z', seq: 1, phase: 'run.start', host: 'opencode', rules: 'r', version: '2.13.3', branch: 'b', changedFiles: 22 },
+  { at: '2026-09-18T00:01:00.000Z', seq: 2, phase: 'script.done', ran: true, counts: { total: 35, verify } },
+  { at: '2026-09-18T01:00:00.000Z', seq: 3, phase: 'crossverify.end', ...verdicts },
+  { at: '2026-09-18T01:01:00.000Z', seq: 4, phase: 'run.end', verdict: 'MERGE_BLOCKED' },
+])
+
+test('noVerdict는 닫힌 목록에 있다', t => {
+  const dir = freshDir(t)
+  const out = log(dir, 'crossverify.end', { upheld: 13, rejected: 0, needsContext: 0, noVerdict: 3 })
+  assert.equal(out.status, 0, out.stderr)
+  assert.doesNotMatch(out.stderr, /닫힌 목록에 없다/)
+  assert.equal(linesOf(dir)[0].noVerdict, 3)
+})
+
+test('--check는 대상보다 판정이 적으면 실패한다', t => {
+  const dir = freshDir(t)
+  plant(dir, withVerify(16, { upheld: 13, rejected: 0, needsContext: 0 }))
+  const out = check(dir)
+  assert.equal(out.status, 1)
+  assert.match(out.stdout, /검증 대상과 판정 수가 맞지 않는다/)
+  assert.match(out.stdout, /16건을 대상으로 적었는데.*13건/)
+})
+
+test('--check는 noVerdict로 채워진 차이는 짚지 않는다', t => {
+  const dir = freshDir(t)
+  plant(dir, withVerify(16, { upheld: 13, rejected: 0, needsContext: 0, noVerdict: 3 }))
+  const out = check(dir)
+  assert.equal(out.status, 0, out.stdout)
+})
+
+test('--check는 대상보다 판정이 많아도 짚는다', t => {
+  // 후보별 마지막 판정만 세야 하는데 재판정을 두 번 세면 이렇게 된다.
+  const dir = freshDir(t)
+  plant(dir, withVerify(10, { upheld: 9, rejected: 3, needsContext: 0 }))
+  const out = check(dir)
+  assert.equal(out.status, 1)
+  assert.match(out.stdout, /검증 대상과 판정 수가 맞지 않는다/)
+})
+
+test('--check는 대상 수가 없으면 대조하지 않는다', t => {
+  const dir = freshDir(t)
+  plant(dir, [
+    { at: '2026-09-18T00:00:00.000Z', seq: 1, phase: 'run.start', host: 'opencode', rules: 'r', version: '2.13.3', branch: 'b', changedFiles: 22 },
+    { at: '2026-09-18T01:00:00.000Z', seq: 2, phase: 'crossverify.end', upheld: 13, rejected: 0 },
+    { at: '2026-09-18T01:01:00.000Z', seq: 3, phase: 'run.end', verdict: 'WARN' },
+  ])
+  const out = check(dir)
+  assert.equal(out.status, 0, out.stdout)
+})
+
+test('--check는 교차검증을 돌리지 않은 실행을 불일치로 부르지 않는다', t => {
+  const dir = freshDir(t)
+  plant(dir, [
+    { at: '2026-09-18T00:00:00.000Z', seq: 1, phase: 'run.start', host: 'opencode', rules: 'r', version: '2.13.3', branch: 'b', changedFiles: 22 },
+    { at: '2026-09-18T00:01:00.000Z', seq: 2, phase: 'script.done', ran: true, counts: { total: 35, verify: 16 } },
+    { at: '2026-09-18T01:01:00.000Z', seq: 3, phase: 'run.end', verdict: 'WARN' },
+  ])
+  const out = check(dir)
+  assert.equal(out.status, 0, out.stdout)
+})
+
+test('--check는 나중에 적힌 crossverify.end를 정본으로 쓴다', t => {
+  // append-only 기록에서 정정은 앞 줄을 고치는 대신 새 줄로 온다.
+  const dir = freshDir(t)
+  plant(dir, [
+    { at: '2026-09-18T00:00:00.000Z', seq: 1, phase: 'run.start', host: 'opencode', rules: 'r', version: '2.13.3', branch: 'b', changedFiles: 22 },
+    { at: '2026-09-18T00:01:00.000Z', seq: 2, phase: 'script.done', ran: true, counts: { total: 35, verify: 16 } },
+    { at: '2026-09-18T01:00:00.000Z', seq: 3, phase: 'crossverify.end', upheld: 13, rejected: 0, needsContext: 0 },
+    { at: '2026-09-18T01:00:44.000Z', seq: 4, phase: 'crossverify.end', upheld: 13, rejected: 0, needsContext: 0, noVerdict: 3, note: '다시 셌다' },
+    { at: '2026-09-18T01:01:00.000Z', seq: 5, phase: 'run.end', verdict: 'WARN' },
+  ])
+  const out = check(dir)
+  assert.equal(out.status, 0, out.stdout)
+})

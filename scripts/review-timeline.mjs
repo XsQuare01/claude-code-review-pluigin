@@ -131,7 +131,7 @@ const PHASES = new Map([
   ['tool.start', { required: ['name'], structured: [], allowed: [] }],
   ['tool.done', { required: ['name', 'exit', 'treeSha'], structured: ['failing'], allowed: ['failedNow', 'failedBaseline'] }],
   ['crossverify.start', { required: ['targets'], structured: [], allowed: [] }],
-  ['crossverify.end', { required: ['upheld', 'rejected'], structured: [], allowed: ['needsContext', 'malformedTasksCorrected', 'countsFrom'] }],
+  ['crossverify.end', { required: ['upheld', 'rejected'], structured: [], allowed: ['needsContext', 'noVerdict', 'malformedTasksCorrected', 'countsFrom'] }],
   ['synthesis.start', { required: [], structured: [], allowed: ['findings'] }],
   ['synthesis.end', { required: [], structured: [], allowed: ['clusters'] }],
   ['render.start', { required: ['findings'], structured: [], allowed: [] }],
@@ -429,6 +429,35 @@ if (has('check')) {
       notes.push(`${at === 0 ? '가장 긴 무기록 구간' : `그 다음 ${at + 1}위`} ${gap.sec}s (전체의 ${gap.share}%): \`${gap.from}\` → \`${gap.to}\` — ${
         busy.length ? `${busy.join('와 ')}가 그 사이 돌고 있었다` : '돌고 있던 것이 기록에 없다'}`)
     })
+  }
+
+  // 검증 대상과 판정 수가 맞는지 본다.
+  //
+  // 2026-09-18 실행이 대상 16건을 잡고 판정 13건을 남겼다. 나머지 3건은 verifier가
+  // 두 차례 타임아웃해 판정이 없었는데 **그 사실이 리포트 산문에만 있었다.**
+  // 사이드카만 읽으면 3건이 증발한 것으로 보이고, 그것이 "검증하고 통과했다"인지
+  // "검증하지 못했다"인지 기록만으로 갈리지 않는다 — 차단 판정이 걸린 자리에서
+  // 가장 위험한 모호함이다. 판정을 못 받은 건수는 `noVerdict`로 적는다.
+  //
+  // 대상보다 판정이 **많은** 것도 여기서 걸린다. 후보별 마지막 판정만 세야 하는데
+  // 재판정을 두 번 세면 그렇게 된다.
+  {
+    const lastOf = name => {
+      let found = null
+      for (const event of events) if (event.phase === name) found = event
+      return found
+    }
+    const targeted = lastOf('script.done')?.counts?.verify
+    const verdicts = lastOf('crossverify.end')
+    if (Number.isInteger(targeted) && verdicts) {
+      const judged = ['upheld', 'rejected', 'needsContext', 'noVerdict']
+        .map(key => verdicts[key])
+        .filter(Number.isInteger)
+        .reduce((sum, count) => sum + count, 0)
+      if (judged !== targeted) {
+        problems.push(`검증 대상과 판정 수가 맞지 않는다: \`script.done\`은 ${targeted}건을 대상으로 적었는데 \`crossverify.end\`의 합은 ${judged}건이다. 판정을 받지 못한 건수는 \`noVerdict\`로 적는다 — 기록에 없으면 검증하고 통과한 것인지 검증하지 못한 것인지 갈리지 않는다`)
+      }
+    }
   }
 
   // 도구는 시작과 끝이 짝을 이뤄야 한다.

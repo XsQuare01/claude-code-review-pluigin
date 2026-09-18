@@ -39,6 +39,29 @@ export function requireStartedTimeline(dir, run) {
 }
 
 /**
+ * 사이드카에서 그 단계의 **마지막** 줄을 읽는다.
+ *
+ * 앞의 것을 집으면 다시 적힌 값을 놓친다 — append-only 기록에서 정정은 앞 줄을
+ * 고치는 대신 새 줄로 오므로 나중 것이 정본이다. 깨진 줄은 건너뛴다. 없으면
+ * `null`이고, 그것은 "그 단계가 없었다"는 뜻이지 0이 아니다.
+ */
+export function lastPhase(sidecar, phase) {
+  if (!existsSync(sidecar)) return null
+  let found = null
+  for (const line of readFileSync(sidecar, 'utf8').split('\n')) {
+    if (!line.trim()) continue
+    let event
+    try {
+      event = JSON.parse(line)
+    } catch {
+      continue
+    }
+    if (event?.phase === phase) found = event
+  }
+  return found
+}
+
+/**
  * 한 줄 남긴다. 중첩 값은 `--data`로 넘긴다.
  *
  * `--set`으로 중첩 값을 밀어 넣으면 `counts=total=5,verify=2`가 문자열 하나로 남아

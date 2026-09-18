@@ -1092,7 +1092,7 @@ UTF-16 파일도 읽는다 — PowerShell 5.1의 `Set-Content -Encoding UTF8`은
 | `script.done` | `prepare-verification.mjs` 실행 후 | `ran`, `counts`(중첩, 스크립트가 직접 남긴다) |
 | `tool.start` | **도구 하나를 돌리기 직전** | `name` |
 | `tool.done` | lint/typecheck/test를 돌린 직후 | `name`, `exit`, `treeSha` · `failedNow`, `failedBaseline`(재지 못했으면 `null`) · `failing`(중첩, `--data-file`) |
-| `crossverify.start` / `.end` | 교차검증 패스 | `targets` / `upheld`, `rejected`, `needsContext`, `countsFrom`, (있으면) `malformedTasksCorrected`·`tokensIn`·`tokensOut` |
+| `crossverify.start` / `.end` | 교차검증 패스 | `targets` / `upheld`, `rejected`, `needsContext`, `noVerdict`, `countsFrom`, (있으면) `malformedTasksCorrected`·`tokensIn`·`tokensOut` |
 | `synthesis.start` / `.end` | synthesis 패스 | `clusters`, (있으면) `tokensIn`·`tokensOut` |
 | `render.start` | **문서를 쓰기 직전** | `findings`(중복 제거 후) |
 | `render.wrote` | 파일을 쓴 직후 | `path`, `lines`, (있으면) `tokensIn`·`tokensOut` |
@@ -1117,6 +1117,22 @@ UTF-16 파일도 읽는다 — PowerShell 5.1의 `Set-Content -Encoding UTF8`은
 **다만 `applied`가 0이면 짚지 않는다.** 적용할 모듈이 하나도 없다고 스스로 적은 실행은
 정상이고, 없는 것을 빠뜨렸다고 부르면 경보가 늘 울린다. 계획 줄이 없을 때만
 `run.start`의 후보 수로 물러선다.
+
+**검증 대상과 판정 수도 맞춰 본다.** 2026-09-18 실행이 대상 16건을 잡고 판정 13건을
+남겼다. 나머지 3건은 verifier가 두 차례 타임아웃해 판정을 받지 못했고, **그 사실은
+리포트 산문에만 있었다.** 사이드카만 읽으면 3건이 증발한 것으로 보이는데, 그것이
+"검증하고 통과했다"인지 "검증하지 못했다"인지 기록만으로 갈리지 않는다 — 차단 판정이
+걸린 자리에서 가장 위험한 모호함이다.
+
+그래서 판정을 받지 못한 후보 수를 `noVerdict`로 적고, `--check`가
+`script.done`의 `counts.verify`와 `upheld + rejected + needsContext + noVerdict`가
+같은지 본다. 대상보다 판정이 **많은** 경우도 같은 검사에 걸린다 — 후보별 마지막
+판정만 세야 하는데 재판정을 두 번 세면 그렇게 된다.
+
+**`noVerdict`는 `tally-verdicts.mjs`가 직접 센다.** 대상 수는 이미
+`prepare-verification.mjs`가 결정적으로 내서 `script.done`에 들어 있으므로 뺄셈만 하면
+된다. 대상 수를 읽지 못하면 필드를 만들지 않는다 — **0과 미측정은 다르다**는 원칙이
+여기서도 같다.
 
 `--check`는 긴 무기록 구간도 함께 낸다. **그 사이 돌고 있던 모듈과 도구 수를 붙여서**
 낸다 — 넷이 나란히 도는 동안 줄이 안 남는 것은 정상이고, 그것을 아무것도 돌지 않은
