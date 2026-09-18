@@ -186,6 +186,39 @@ const FAILURE_CLASSES = new Set([
 ])
 
 /**
+ * 모듈 시도를 구간으로 접는다. **끝나지 않은 시도도 구간으로 낸다.**
+ *
+ * 처음에는 끝난 시도만 셌다. 그랬더니 `module.start` 넷을 남기고 죽은 실행에서
+ * 구간이 0개가 되어 디스패치 요약이 통째로 사라지고, 30분짜리 최장 구간이
+ * "돌고 있던 모듈이 기록에 없다"로 적혔다 — 셋이 돌고 있었는데. **죽은 실행에서
+ * 가장 조용해지는 계측은 존재 이유와 정반대다.** 열린 구간은 마지막으로 관측된
+ * 시각까지의 **최소** 시간으로 두고, 추정이라는 사실을 `open`으로 들고 다닌다.
+ *
+ * 구간의 단위는 모듈이 아니라 **시도**다. 재시도한 모듈은 구간이 둘이고, 그것을
+ * 모듈 둘로 세면 C-9가 애써 나눠 둔 "최종 모듈 단위"와 "시도 단위"가 다시 섞인다.
+ */
+const attemptSpans = events => {
+  if (!events.length) return []
+  const lastSeen = new Date(events[events.length - 1].at).getTime()
+  const opened = new Map()
+  const spans = []
+  for (const event of events) {
+    const at = new Date(event.at).getTime()
+    const key = `${event.module}#${event.attempt ?? '?'}`
+    if (event.phase === 'module.start') opened.set(key, { from: at, module: String(event.module) })
+    if (event.phase === 'module.done' && opened.has(key)) {
+      const start = opened.get(key)
+      spans.push({ from: start.from, to: at, module: start.module, open: false })
+      opened.delete(key)
+    }
+  }
+  for (const start of opened.values()) {
+    spans.push({ from: start.from, to: Math.max(lastSeen, start.from), module: start.module, open: true })
+  }
+  return spans.sort((a, b) => a.from - b.from)
+}
+
+/**
  * 도구 실행을 시작·끝 쌍으로 접는다.
  *
  * **이름의 유일성으로 짝짓지 않는다.** C-6은 baseline과 현재를 각각 재라고 하므로
@@ -331,11 +364,20 @@ if (has('check')) {
   // 자리에 47줄을 남겼으므로 **일은 일어났고 기록만 빠진 것**인데, 기록만 보면
   // 그 1863초에 무엇이 있었는지 말할 수 없다. 이것이 C-9가 막으려던 바로 그
   // 상태이므로 경고가 아니라 문제로 짚는다.
+  //
+  // **띄울 모듈이 있었는지를 `applied`로 판정한다.** 계획 줄이 있기만 하면
+  // fan-out을 예상하도록 두었더니 `applied: 0`인 기록 — 적용할 모듈이 하나도
+  // 없다고 스스로 적은 정상 실행 — 이 디스패치 누락으로 실패했다. 없는 것을
+  // 빠뜨렸다고 부르면 경보가 늘 울리고, 늘 울리는 경보는 신호가 아니다.
+  // 계획 줄이 없을 때만 `run.start`의 후보 수로 물러선다.
   const DISPATCH_EVIDENCE = ['dispatch.start', 'module.start', 'module.done', 'dispatch.end']
   const POST_DISPATCH = ['script.start', 'script.done', 'crossverify.start', 'crossverify.end', 'render.start', 'render.wrote', 'run.end']
   const candidates = events.find(event => event.phase === 'run.start')?.candidates
   const plannedAny = events.some(event => event.phase === 'modules.planned')
-  const expectedFanOut = plannedAny || (Number.isInteger(candidates) && candidates > 0)
+  const someCandidates = Number.isInteger(candidates) && candidates > 0
+  const expectedFanOut = plannedAny
+    ? (Number.isInteger(applied) ? applied > 0 : someCandidates)
+    : someCandidates
   const reachedAfter = events.find(event => POST_DISPATCH.includes(event.phase))
   if (expectedFanOut && reachedAfter && !events.some(event => DISPATCH_EVIDENCE.includes(event.phase))) {
     problems.push(`디스패치 기록이 한 줄도 없다: \`${DISPATCH_EVIDENCE.join('`/`')}\` 중 아무것도 없이 \`${reachedAfter.phase}\`(seq ${reachedAfter.seq})까지 갔다. 모듈이 언제 몇 개 돌았는지가 기록에 없으므로 그 사이 시간은 귀속 불가다`)
@@ -350,34 +392,43 @@ if (has('check')) {
   // 남는 것이 정상이고, 그 구간을 "기록이 비었다"로만 부르면 진짜 빈 구간과
   // 구분되지 않는다. 09-17 실행의 최장 656초는 모듈 4개가 도는 중이었고,
   // 09-18 실행의 최장 1863초는 아무것도 돌고 있지 않은 것으로 **기록됐다** —
-  // 둘을 같은 문장으로 부르면 뒤쪽이 묻힌다.
+  // 둘을 같은 문장으로 부르면 뒤쪽이 묻힌다. 열린 시도도 인플라이트로 센다.
+  //
+  // **한 개가 아니라 최대 세 개를 낸다.** 09-18 실행에서 1위는 1863초였고 2위는
+  // 442초(전체의 17%)였는데, 1위만 내면 2위가 그 뒤에 가린다. 실제로 그 리포트는
+  // 442초 구간을 한 번도 언급하지 않았다. 2·3위는 전체의 10% 이상일 때만 낸다 —
+  // 정상 실행에서 잔구간까지 줄줄이 내면 읽히지 않는다.
   if (events.length > 1) {
     const msOf = event => new Date(event.at).getTime()
     const span = msOf(events[events.length - 1]) - msOf(events[0])
-    const opened = new Map()
-    const spans = []
-    for (const event of events) {
-      const key = `${event.module}#${event.attempt ?? '?'}`
-      if (event.phase === 'module.start') opened.set(key, msOf(event))
-      if (event.phase === 'module.done' && opened.has(key)) {
-        spans.push({ from: opened.get(key), to: msOf(event) })
-        opened.delete(key)
-      }
-    }
-    let widest = null
+    const spans = attemptSpans(events)
+    // 도구가 도는 동안에도 줄은 안 남는다. 그 구간까지 "돌고 있던 모듈이 기록에
+    // 없다"로 적으면 **아무 일도 없었다**로 읽히는데, 이 계약이 442초를 귀속하려고
+    // `tool.start`를 넣은 바로 그 구간이 그렇게 적힌다.
+    const running = toolRuns(events).runs.filter(one => one.from !== null && one.to !== null)
+    const overlap = (list, from, to) => list.filter(one => one.from < to && one.to > from).length
+    const gaps = []
     for (let at = 1; at < events.length; at += 1) {
       const from = msOf(events[at - 1])
       const to = msOf(events[at])
       const sec = Math.round((to - from) / 1000)
-      if (!widest || sec > widest.sec) {
-        widest = { sec, from: events[at - 1].phase, to: events[at].phase, inflight: spans.filter(s => s.from < to && s.to > from).length }
-      }
+      if (sec <= 0) continue
+      gaps.push({
+        sec,
+        share: span > 0 ? Math.round((sec * 1000 * 100) / span) : 0,
+        from: events[at - 1].phase,
+        to: events[at].phase,
+        modules: overlap(spans, from, to),
+        tools: overlap(running, from, to),
+      })
     }
-    if (widest && widest.sec > 0) {
-      const share = span > 0 ? Math.round((widest.sec * 1000 * 100) / span) : 0
-      notes.push(`가장 긴 무기록 구간 ${widest.sec}s (전체의 ${share}%): \`${widest.from}\` → \`${widest.to}\` — ${
-        widest.inflight ? `모듈 ${widest.inflight}개가 그 사이 돌고 있었다` : '돌고 있던 모듈이 기록에 없다'}`)
-    }
+    gaps.sort((a, b) => b.sec - a.sec)
+    const shown = gaps.filter((gap, at) => at === 0 || gap.share >= 10).slice(0, 3)
+    shown.forEach((gap, at) => {
+      const busy = [gap.modules && `모듈 ${gap.modules}개`, gap.tools && `도구 ${gap.tools}개`].filter(Boolean)
+      notes.push(`${at === 0 ? '가장 긴 무기록 구간' : `그 다음 ${at + 1}위`} ${gap.sec}s (전체의 ${gap.share}%): \`${gap.from}\` → \`${gap.to}\` — ${
+        busy.length ? `${busy.join('와 ')}가 그 사이 돌고 있었다` : '돌고 있던 것이 기록에 없다'}`)
+    })
   }
 
   // 도구는 시작과 끝이 짝을 이뤄야 한다.
@@ -472,43 +523,50 @@ if (has('summary')) {
   // 두었다. 지시는 적혀 있었고 지켜지지 않았으며, 아무도 그것을 몰랐다.
   // 사후 탐지가 이 플러그인이 할 수 있는 전부이므로 여기서 한다.
   {
-    const msOf = event => new Date(event.at).getTime()
-    const opened = new Map()
-    const spans = []
-    for (const event of events) {
-      const key = `${event.module}#${event.attempt ?? '?'}`
-      if (event.phase === 'module.start') opened.set(key, msOf(event))
-      if (event.phase === 'module.done' && opened.has(key)) {
-        spans.push({ from: opened.get(key), to: msOf(event) })
-        opened.delete(key)
-      }
-    }
-    const dangling = opened.size
-
+    const spans = attemptSpans(events)
     if (spans.length) {
-      spans.sort((a, b) => a.from - b.from)
+      const seconds = ms => Math.round(ms / 1000)
       const lastDone = spans.reduce((last, span) => Math.max(last, span.to), spans[0].to)
       const wall = lastDone - spans[0].from
-      const moduleMs = spans.reduce((sum, span) => sum + (span.to - span.from), 0)
+      const attemptMs = spans.reduce((sum, span) => sum + (span.to - span.from), 0)
+      const unfinished = spans.filter(span => span.open).length
+      const modules = new Set(spans.map(span => span.module)).size
 
       // 겹치는 구간을 합쳐 **하나라도 돌고 있던** 시간을 낸다. 벽시계에서 그것을
       // 빼면 슬롯이 통째로 빈 시간이 남는다 — 그것이 배리어의 값이다.
+      //
+      // 새 wave의 기준을 `>=`가 아니라 `>`로 둔다. 같은 타임스탬프로 인계되는
+      // 것은 슬롯이 빈 것이 아니다 — 재시도가 앞 시도의 종료와 같은 초에 시작한
+      // 기록에서 "인플라이트가 1번 0으로 떨어졌다, 유휴 0s"라는 **자기모순적인**
+      // 경고가 나왔다. 배리어가 아닌 것을 배리어로 세면 이 수치 전체를 못 믿는다.
       let busy = 0
       let waves = 0
       let cursor = -Infinity
       let waveEnd = -Infinity
       for (const span of spans) {
-        if (span.from >= waveEnd) waves += 1
+        if (span.from > waveEnd) waves += 1
         busy += Math.max(0, span.to - Math.max(span.from, cursor))
         cursor = Math.max(cursor, span.to)
         waveEnd = Math.max(waveEnd, span.to)
       }
       const idle = Math.max(0, wall - busy)
-      const seconds = ms => Math.round(ms / 1000)
-      const concurrency = wall > 0 ? (moduleMs / wall).toFixed(2) : '—'
 
-      out.push('', `**디스패치** 모듈 ${spans.length}개 · 합 ${seconds(moduleMs)}s · 벽시계 ${seconds(wall)}s · 실효 동시 ${concurrency} · 슬롯 유휴 ${seconds(idle)}s${
-        dangling ? ` · 끝을 남기지 않은 시도 ${dangling}개` : ''}`)
+      // 동시에 열려 있던 시도의 최대치. 상한에 닿았는지를 기록만으로 말할 수 있게
+      // 한다 — 실효 동시가 낮은 것이 상한 때문인지 배리어 때문인지가 여기서 갈린다.
+      const edges = spans.flatMap(span => [{ at: span.from, delta: 1 }, { at: span.to, delta: -1 }])
+        .sort((a, b) => (a.at - b.at) || (a.delta - b.delta))
+      let live = 0
+      let peak = 0
+      for (const edge of edges) {
+        live += edge.delta
+        peak = Math.max(peak, live)
+      }
+
+      out.push('', `**디스패치** 모듈 ${modules}개 · 시도 ${spans.length}개(완료 ${spans.length - unfinished} · 미완료 ${unfinished}) · 합 ${
+        seconds(attemptMs)}s · 벽시계 ${seconds(wall)}s · 실효 동시 ${wall > 0 ? (attemptMs / wall).toFixed(2) : '—'} · 최대 동시 ${peak} · 슬롯 유휴 ${seconds(idle)}s`)
+      if (unfinished) {
+        out.push('', `> **끝을 남기지 않은 시도가 ${unfinished}개다.** 그 구간은 마지막 기록 시각까지의 **최소** 관측 시간으로 셌으므로, 합계와 실효 동시는 실제보다 작다. 시도가 정말 그때 끝났다는 뜻이 아니다.`)
+      }
       if (waves > 1) {
         out.push('', `> **인플라이트가 ${waves - 1}번 0으로 떨어졌다** (연속 구간 ${waves}개). 한 모듈이 끝나면 즉시 다음을 넣으라는 규칙대로면 구간은 하나다. 비어 있는 동안 ${seconds(idle)}s가 쌓였다.`)
       }
