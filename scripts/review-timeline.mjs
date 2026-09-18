@@ -279,6 +279,65 @@ if (has('check')) {
   if (Number.isInteger(applied) && finished.size !== applied) {
     notes.push(`\`modules.planned.applied\`는 ${applied}인데 \`module.done\`이 남은 모듈은 ${finished.size}개다`)
   }
+
+  // fan-out 기록이 **한 줄도** 없는 것은 위의 수 불일치와 다른 사건이다.
+  //
+  // 위 검사는 `modules.planned`가 있어야 돈다. 그 줄까지 없는 실행에서는
+  // `applied`가 undefined라 아무 말도 나오지 않았고, 실제로 2026-09-18 실행이
+  // `run.start` 다음에 곧장 `script.start`를 찍고 그 사이 1863초를 비운 채
+  // `--check`를 통과했다. 같은 플러그인 버전·같은 harness의 전날 실행은 같은
+  // 자리에 47줄을 남겼으므로 **일은 일어났고 기록만 빠진 것**인데, 기록만 보면
+  // 그 1863초에 무엇이 있었는지 말할 수 없다. 이것이 C-9가 막으려던 바로 그
+  // 상태이므로 경고가 아니라 문제로 짚는다.
+  const DISPATCH_EVIDENCE = ['dispatch.start', 'module.start', 'module.done', 'dispatch.end']
+  const POST_DISPATCH = ['script.start', 'script.done', 'crossverify.start', 'crossverify.end', 'render.start', 'render.wrote', 'run.end']
+  const candidates = events.find(event => event.phase === 'run.start')?.candidates
+  const plannedAny = events.some(event => event.phase === 'modules.planned')
+  const expectedFanOut = plannedAny || (Number.isInteger(candidates) && candidates > 0)
+  const reachedAfter = events.find(event => POST_DISPATCH.includes(event.phase))
+  if (expectedFanOut && reachedAfter && !events.some(event => DISPATCH_EVIDENCE.includes(event.phase))) {
+    problems.push(`디스패치 기록이 한 줄도 없다: \`${DISPATCH_EVIDENCE.join('`/`')}\` 중 아무것도 없이 \`${reachedAfter.phase}\`(seq ${reachedAfter.seq})까지 갔다. 모듈이 언제 몇 개 돌았는지가 기록에 없으므로 그 사이 시간은 귀속 불가다`)
+  }
+
+  // 두 줄 사이가 비어 있으면 그 시간에 무엇이 있었는지 기록으로 말할 수 없다.
+  // 경보가 아니라 **수치**로 낸다 — 정상 실행에도 최장 구간은 늘 하나 있고,
+  // 늘 울리는 경보는 신호가 아니다. 리포트가 이 값을 그대로 옮기면 "어디서
+  // 오래 걸렸나"에 체감이 아니라 숫자로 답하게 된다.
+  //
+  // **돌고 있던 모듈 수를 함께 낸다.** 모듈 넷이 나란히 도는 동안에는 줄이 안
+  // 남는 것이 정상이고, 그 구간을 "기록이 비었다"로만 부르면 진짜 빈 구간과
+  // 구분되지 않는다. 09-17 실행의 최장 656초는 모듈 4개가 도는 중이었고,
+  // 09-18 실행의 최장 1863초는 아무것도 돌고 있지 않은 것으로 **기록됐다** —
+  // 둘을 같은 문장으로 부르면 뒤쪽이 묻힌다.
+  if (events.length > 1) {
+    const msOf = event => new Date(event.at).getTime()
+    const span = msOf(events[events.length - 1]) - msOf(events[0])
+    const opened = new Map()
+    const spans = []
+    for (const event of events) {
+      const key = `${event.module}#${event.attempt ?? '?'}`
+      if (event.phase === 'module.start') opened.set(key, msOf(event))
+      if (event.phase === 'module.done' && opened.has(key)) {
+        spans.push({ from: opened.get(key), to: msOf(event) })
+        opened.delete(key)
+      }
+    }
+    let widest = null
+    for (let at = 1; at < events.length; at += 1) {
+      const from = msOf(events[at - 1])
+      const to = msOf(events[at])
+      const sec = Math.round((to - from) / 1000)
+      if (!widest || sec > widest.sec) {
+        widest = { sec, from: events[at - 1].phase, to: events[at].phase, inflight: spans.filter(s => s.from < to && s.to > from).length }
+      }
+    }
+    if (widest && widest.sec > 0) {
+      const share = span > 0 ? Math.round((widest.sec * 1000 * 100) / span) : 0
+      notes.push(`가장 긴 무기록 구간 ${widest.sec}s (전체의 ${share}%): \`${widest.from}\` → \`${widest.to}\` — ${
+        widest.inflight ? `모듈 ${widest.inflight}개가 그 사이 돌고 있었다` : '돌고 있던 모듈이 기록에 없다'}`)
+    }
+  }
+
   if (malformed) notes.push(`읽지 못한 줄 ${malformed}개`)
 
   const out = []

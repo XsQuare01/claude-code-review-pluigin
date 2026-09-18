@@ -952,3 +952,66 @@ test('tool.start에 name이 없으면 경고하되 줄은 남긴다', t => {
   assert.match(out.stderr, /name/)
   assert.equal(linesOf(dir).length, 1)
 })
+
+test('--check는 디스패치 기록이 한 줄도 없으면 실패한다', t => {
+  const dir = freshDir(t)
+  plant(dir, [
+    { at: '2026-09-18T02:21:46.000Z', seq: 1, phase: 'run.start', host: 'opencode', rules: 'r', version: '2.13.0', branch: 'b', changedFiles: 12, candidates: 20 },
+    { at: '2026-09-18T02:52:49.000Z', seq: 2, phase: 'script.start', script: 'prepare-verification' },
+    { at: '2026-09-18T03:03:58.000Z', seq: 3, phase: 'run.end', verdict: 'CHANGES_REQUIRED' },
+  ])
+  const out = check(dir)
+  assert.equal(out.status, 1)
+  assert.match(out.stdout, /디스패치 기록이 한 줄도 없다/)
+  assert.match(out.stdout, /script\.start/)
+})
+
+test('--check는 모듈이 한 줄이라도 남았으면 디스패치를 없다고 하지 않는다', t => {
+  const dir = freshDir(t)
+  plant(dir, [
+    { at: '2026-09-18T00:00:00.000Z', seq: 1, phase: 'run.start', host: 'opencode', rules: 'r', version: '2.13.0', branch: 'b', changedFiles: 12, candidates: 20 },
+    { at: '2026-09-18T00:01:00.000Z', seq: 2, phase: 'dispatch.start', modules: 19, inflight: 4 },
+    { at: '2026-09-18T00:30:00.000Z', seq: 3, phase: 'run.end', verdict: 'WARN' },
+  ])
+  const out = check(dir)
+  assert.doesNotMatch(out.stdout, /디스패치 기록이 한 줄도 없다/)
+})
+
+test('--check는 fan-out을 예정하지 않은 기록을 디스패치 누락으로 부르지 않는다', t => {
+  // 후보가 0이면 띄울 모듈이 없다. 없는 것을 빠뜨렸다고 하면 경보가 늘 울린다.
+  const dir = freshDir(t)
+  plant(dir, [
+    { at: '2026-09-18T00:00:00.000Z', seq: 1, phase: 'run.start', host: 'opencode', rules: 'r', version: '2.13.0', branch: 'b', changedFiles: 0, candidates: 0 },
+    { at: '2026-09-18T00:10:00.000Z', seq: 2, phase: 'run.end', verdict: 'WARN' },
+  ])
+  const out = check(dir)
+  assert.equal(out.status, 0, out.stdout)
+})
+
+test('--check는 가장 긴 구간을 수치로 내고 그 사이 돌던 모듈 수를 함께 적는다', t => {
+  // 모듈 넷이 나란히 도는 동안 줄이 안 남는 것은 정상이다. 그 구간을 "기록이
+  // 비었다"로만 부르면 진짜 빈 구간과 구분되지 않는다.
+  const dir = freshDir(t)
+  plant(dir, [
+    { at: '2026-09-17T00:00:00.000Z', seq: 1, phase: 'run.start', host: 'opencode', rules: 'r', version: '2.13.0', branch: 'b', changedFiles: 13, candidates: 20 },
+    { at: '2026-09-17T00:00:10.000Z', seq: 2, phase: 'module.start', module: '01-fsd', attempt: 1 },
+    { at: '2026-09-17T00:00:11.000Z', seq: 3, phase: 'module.start', module: '02-type', attempt: 1 },
+    { at: '2026-09-17T00:11:00.000Z', seq: 4, phase: 'module.done', module: '01-fsd', attempt: 1, status: 'ok', failureClass: 'none' },
+    { at: '2026-09-17T00:11:01.000Z', seq: 5, phase: 'module.done', module: '02-type', attempt: 1, status: 'ok', failureClass: 'none' },
+    { at: '2026-09-17T00:12:00.000Z', seq: 6, phase: 'run.end', verdict: 'WARN' },
+  ])
+  const out = check(dir)
+  assert.match(out.stdout, /가장 긴 무기록 구간 649s/)
+  assert.match(out.stdout, /모듈 2개가 그 사이 돌고 있었다/)
+})
+
+test('--check는 아무것도 돌지 않은 빈 구간을 그렇게 부른다', t => {
+  const dir = freshDir(t)
+  plant(dir, [
+    { at: '2026-09-18T02:21:46.000Z', seq: 1, phase: 'run.start', host: 'opencode', rules: 'r', version: '2.13.0', branch: 'b', changedFiles: 12, candidates: 20 },
+    { at: '2026-09-18T02:52:49.000Z', seq: 2, phase: 'script.start', script: 'prepare-verification' },
+    { at: '2026-09-18T02:52:50.000Z', seq: 3, phase: 'run.end', verdict: 'WARN' },
+  ])
+  const out = check(dir)
+  assert.match(out.stdout, /돌고 있던 모듈이 기록에 없다/)
+})
