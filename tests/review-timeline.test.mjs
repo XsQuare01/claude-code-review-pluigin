@@ -1015,3 +1015,87 @@ test('--check는 아무것도 돌지 않은 빈 구간을 그렇게 부른다', 
   const out = check(dir)
   assert.match(out.stdout, /돌고 있던 모듈이 기록에 없다/)
 })
+
+test('--summary는 디스패치의 합계와 벽시계를 따로 낸다', t => {
+  // 합계만 있으면 "느렸다"와 "놀았다"가 갈리지 않는다.
+  const dir = freshDir(t)
+  plant(dir, [
+    { at: '2026-09-17T00:00:00.000Z', seq: 1, phase: 'run.start', host: 'opencode', rules: 'r', version: '2.13.0', branch: 'b', changedFiles: 13 },
+    { at: '2026-09-17T00:00:00.000Z', seq: 2, phase: 'module.start', module: '01-fsd', attempt: 1 },
+    { at: '2026-09-17T00:00:00.000Z', seq: 3, phase: 'module.start', module: '02-type', attempt: 1 },
+    { at: '2026-09-17T00:01:40.000Z', seq: 4, phase: 'module.done', module: '01-fsd', attempt: 1, status: 'ok', failureClass: 'none' },
+    { at: '2026-09-17T00:01:40.000Z', seq: 5, phase: 'module.done', module: '02-type', attempt: 1, status: 'ok', failureClass: 'none' },
+    { at: '2026-09-17T00:01:40.000Z', seq: 6, phase: 'run.end', verdict: 'WARN' },
+  ])
+  const out = summary(dir)
+  assert.equal(out.status, 0)
+  assert.match(out.stdout, /\*\*디스패치\*\* 모듈 2개 · 합 200s · 벽시계 100s · 실효 동시 2\.00 · 슬롯 유휴 0s/)
+  assert.doesNotMatch(out.stdout, /0으로 떨어졌다/)
+})
+
+test('--summary는 인플라이트가 0으로 떨어진 횟수를 센다', t => {
+  // 4개를 띄우고 4개가 모두 끝나기를 기다린 실행이 있다. 스킬은 정확히 그것을
+  // 하지 말라고 적어 두었고, 지시는 세어 보기 전까지 지켜지지 않았다.
+  const dir = freshDir(t)
+  plant(dir, [
+    { at: '2026-09-17T00:00:00.000Z', seq: 1, phase: 'run.start', host: 'opencode', rules: 'r', version: '2.13.0', branch: 'b', changedFiles: 13 },
+    { at: '2026-09-17T00:00:00.000Z', seq: 2, phase: 'module.start', module: '01-fsd', attempt: 1 },
+    { at: '2026-09-17T00:01:00.000Z', seq: 3, phase: 'module.done', module: '01-fsd', attempt: 1, status: 'ok', failureClass: 'none' },
+    { at: '2026-09-17T00:02:00.000Z', seq: 4, phase: 'module.start', module: '02-type', attempt: 1 },
+    { at: '2026-09-17T00:03:00.000Z', seq: 5, phase: 'module.done', module: '02-type', attempt: 1, status: 'ok', failureClass: 'none' },
+    { at: '2026-09-17T00:03:00.000Z', seq: 6, phase: 'run.end', verdict: 'WARN' },
+  ])
+  const out = summary(dir)
+  assert.match(out.stdout, /인플라이트가 1번 0으로 떨어졌다/)
+  assert.match(out.stdout, /비어 있는 동안 60s가 쌓였다/)
+})
+
+test('--summary는 끝을 남기지 않은 시도를 합계에서 빼고 세어 알린다', t => {
+  const dir = freshDir(t)
+  plant(dir, [
+    { at: '2026-09-17T00:00:00.000Z', seq: 1, phase: 'run.start', host: 'opencode', rules: 'r', version: '2.13.0', branch: 'b', changedFiles: 13 },
+    { at: '2026-09-17T00:00:00.000Z', seq: 2, phase: 'module.start', module: '01-fsd', attempt: 1 },
+    { at: '2026-09-17T00:00:00.000Z', seq: 3, phase: 'module.start', module: '02-type', attempt: 1 },
+    { at: '2026-09-17T00:01:40.000Z', seq: 4, phase: 'module.done', module: '01-fsd', attempt: 1, status: 'ok', failureClass: 'none' },
+    { at: '2026-09-17T00:01:40.000Z', seq: 5, phase: 'run.end', verdict: 'WARN' },
+  ])
+  const out = summary(dir)
+  assert.match(out.stdout, /모듈 1개 · 합 100s/)
+  assert.match(out.stdout, /끝을 남기지 않은 시도 1개/)
+})
+
+test('--summary는 모듈 기록이 없으면 디스패치 줄을 만들지 않는다', t => {
+  const dir = freshDir(t)
+  plant(dir, [
+    { at: '2026-09-18T00:00:00.000Z', seq: 1, phase: 'run.start', host: 'opencode', rules: 'r', version: '2.13.0', branch: 'b', changedFiles: 12 },
+    { at: '2026-09-18T00:30:00.000Z', seq: 2, phase: 'run.end', verdict: 'WARN' },
+  ])
+  const out = summary(dir)
+  assert.doesNotMatch(out.stdout, /\*\*디스패치\*\*/)
+})
+
+test('--summary는 최장 구간이 시작 표시에 붙으면 그 단계의 소요가 아니라고 적는다', t => {
+  // 한 리포트가 `script.start`에 1863초가 찍힌 표를 그대로 싣고 본문에서 그
+  // 시간을 언급하지 않았다. script.start 자체는 0초이고, 1863초는 그 앞의
+  // 아무 기록도 없는 구간이었다.
+  const dir = freshDir(t)
+  plant(dir, [
+    { at: '2026-09-18T02:21:46.000Z', seq: 1, phase: 'run.start', host: 'opencode', rules: 'r', version: '2.13.0', branch: 'b', changedFiles: 12 },
+    { at: '2026-09-18T02:52:49.000Z', seq: 2, phase: 'script.start', script: 'prepare-verification' },
+    { at: '2026-09-18T02:52:49.000Z', seq: 3, phase: 'script.done', ran: true, counts: { total: 17 } },
+    { at: '2026-09-18T02:53:00.000Z', seq: 4, phase: 'run.end', verdict: 'WARN' },
+  ])
+  const out = summary(dir)
+  assert.match(out.stdout, /사이\*\*의 1863s이고/)
+})
+
+test('--summary는 최장 구간이 끝 표시에 붙으면 그 문장을 붙이지 않는다', t => {
+  const dir = freshDir(t)
+  plant(dir, [
+    { at: '2026-09-18T00:00:00.000Z', seq: 1, phase: 'run.start', host: 'opencode', rules: 'r', version: '2.13.0', branch: 'b', changedFiles: 12 },
+    { at: '2026-09-18T00:30:00.000Z', seq: 2, phase: 'crossverify.end', upheld: 3, rejected: 0 },
+    { at: '2026-09-18T00:30:10.000Z', seq: 3, phase: 'run.end', verdict: 'WARN' },
+  ])
+  const out = summary(dir)
+  assert.doesNotMatch(out.stdout, /사이\*\*의/)
+})

@@ -394,6 +394,70 @@ if (has('summary')) {
       ? `> **\`run.end\` 뒤에 줄이 더 있다.** 마지막 줄은 \`${finalPhase}\`다. 종료가 마지막 자리에 있지 않으므로 실행이 어디서 끝났는지 이 기록만으로는 알 수 없다.`
       : `> **\`run.end\`가 없다.** 마지막으로 남은 단계는 \`${finalPhase}\`이고, 실행은 거기서 끝나지 않았다.`)
   }
+
+  // `←최장`이 **그 단계의 소요**로 읽힌다.
+  //
+  // 구간 칸은 앞 줄과 이 줄 사이의 시간인데, 표시는 줄 하나에 붙는다. 한 리포트가
+  // `script.start`에 1863초가 찍힌 표를 그대로 싣고 본문에서 그 시간을 언급하지
+  // 않았다 — `script.start`는 스크립트 진입 직후에 찍히므로 그 자체는 0초이고,
+  // 1863초는 **그 앞의 아무 기록도 없는 구간**이었다. 시작 표시에 붙은 최장
+  // 구간은 "여기까지 오는 데"라고 읽어야 한다.
+  if (slowest && slowest.step > 0 && /\.start$/.test(slowest.phase)) {
+    out.push('', `> \`←최장\`은 앞 줄과 \`${slowest.phase}\` **사이**의 ${slowest.step}s이고, \`${slowest.phase}\`가 그만큼 걸렸다는 뜻이 아니다. 그 사이에 남은 기록이 없으므로 무엇이 그 시간을 썼는지는 이 표로 알 수 없다.`)
+  }
+
+  // 디스패치의 모양. 합계와 벽시계가 따로 있어야 "느렸다"와 "놀았다"가 갈린다.
+  //
+  // 왜 스크립트가 세는가: 2026-09-17 실행의 모듈 합계는 5587초인데 벽시계는
+  // 1962초였고, 그 차이를 사람이 47줄에서 눈으로 복원해야 했다. 더 중요한 것은
+  // **인플라이트가 0으로 떨어진 지점이 여섯 번**이라는 사실이다 — 4개씩 띄우고
+  // 넷이 모두 끝나기를 기다린 모양이고, 스킬은 정확히 그것을 하지 말라고 적어
+  // 두었다. 지시는 적혀 있었고 지켜지지 않았으며, 아무도 그것을 몰랐다.
+  // 사후 탐지가 이 플러그인이 할 수 있는 전부이므로 여기서 한다.
+  {
+    const msOf = event => new Date(event.at).getTime()
+    const opened = new Map()
+    const spans = []
+    for (const event of events) {
+      const key = `${event.module}#${event.attempt ?? '?'}`
+      if (event.phase === 'module.start') opened.set(key, msOf(event))
+      if (event.phase === 'module.done' && opened.has(key)) {
+        spans.push({ from: opened.get(key), to: msOf(event) })
+        opened.delete(key)
+      }
+    }
+    const dangling = opened.size
+
+    if (spans.length) {
+      spans.sort((a, b) => a.from - b.from)
+      const lastDone = spans.reduce((last, span) => Math.max(last, span.to), spans[0].to)
+      const wall = lastDone - spans[0].from
+      const moduleMs = spans.reduce((sum, span) => sum + (span.to - span.from), 0)
+
+      // 겹치는 구간을 합쳐 **하나라도 돌고 있던** 시간을 낸다. 벽시계에서 그것을
+      // 빼면 슬롯이 통째로 빈 시간이 남는다 — 그것이 배리어의 값이다.
+      let busy = 0
+      let waves = 0
+      let cursor = -Infinity
+      let waveEnd = -Infinity
+      for (const span of spans) {
+        if (span.from >= waveEnd) waves += 1
+        busy += Math.max(0, span.to - Math.max(span.from, cursor))
+        cursor = Math.max(cursor, span.to)
+        waveEnd = Math.max(waveEnd, span.to)
+      }
+      const idle = Math.max(0, wall - busy)
+      const seconds = ms => Math.round(ms / 1000)
+      const concurrency = wall > 0 ? (moduleMs / wall).toFixed(2) : '—'
+
+      out.push('', `**디스패치** 모듈 ${spans.length}개 · 합 ${seconds(moduleMs)}s · 벽시계 ${seconds(wall)}s · 실효 동시 ${concurrency} · 슬롯 유휴 ${seconds(idle)}s${
+        dangling ? ` · 끝을 남기지 않은 시도 ${dangling}개` : ''}`)
+      if (waves > 1) {
+        out.push('', `> **인플라이트가 ${waves - 1}번 0으로 떨어졌다** (연속 구간 ${waves}개). 한 모듈이 끝나면 즉시 다음을 넣으라는 규칙대로면 구간은 하나다. 비어 있는 동안 ${seconds(idle)}s가 쌓였다.`)
+      }
+    }
+  }
+
   // 사용량. 표 상세 칸에만 두면 긴 JSON 사이에 묻혀 아무도 안 읽으므로 따로 낸다.
   //
   // 이 블록은 "숫자를 보여주는" 것이 아니라 **무엇을 근거로 그 숫자를 말하는지**를
