@@ -128,8 +128,8 @@ const PHASES = new Map([
   ['dispatch.end', { required: ['terminalOk', 'terminalFailed', 'attemptsTotal', 'attemptsFailed'], structured: ['attemptFailureClasses'], allowed: [] }],
   ['script.start', { required: [], structured: [], allowed: ['script'] }],
   ['script.done', { required: ['ran'], structured: ['counts'], allowed: [] }],
-  ['tool.start', { required: ['name'], structured: [], allowed: [] }],
-  ['tool.done', { required: ['name', 'exit', 'treeSha'], structured: ['failing'], allowed: ['failedNow', 'failedBaseline'] }],
+  ['tool.start', { required: ['name'], structured: [], allowed: ['attempt'] }],
+  ['tool.done', { required: ['name', 'exit', 'treeSha'], structured: ['failing'], allowed: ['failedNow', 'failedBaseline', 'attempt'] }],
   ['crossverify.start', { required: ['targets'], structured: [], allowed: [] }],
   ['crossverify.end', { required: ['upheld', 'rejected'], structured: [], allowed: ['needsContext', 'noVerdict', 'malformedTasksCorrected', 'countsFrom'] }],
   ['synthesis.start', { required: [], structured: [], allowed: ['findings'] }],
@@ -202,20 +202,28 @@ const attemptSpans = events => {
   const lastSeen = new Date(events[events.length - 1].at).getTime()
   const opened = new Map()
   const spans = []
+  const unstarted = []
   for (const event of events) {
     const at = new Date(event.at).getTime()
     const key = `${event.module}#${event.attempt ?? '?'}`
     if (event.phase === 'module.start') opened.set(key, { from: at, module: String(event.module) })
-    if (event.phase === 'module.done' && opened.has(key)) {
+    if (event.phase !== 'module.done') continue
+    if (opened.has(key)) {
       const start = opened.get(key)
       spans.push({ from: start.from, to: at, module: start.module, open: false })
       opened.delete(key)
+      continue
     }
+    // 시작이 없는 끝. 구간을 지어내지 않는다 — 언제 시작했는지 모르는 것과
+    // 0초에 끝난 것은 다르고, 후자로 적으면 합계가 조용히 낮아진다.
+    unstarted.push({ module: String(event.module), to: at })
   }
   for (const start of opened.values()) {
     spans.push({ from: start.from, to: Math.max(lastSeen, start.from), module: start.module, open: true })
   }
-  return spans.sort((a, b) => a.from - b.from)
+  spans.sort((a, b) => a.from - b.from)
+  spans.unstarted = unstarted
+  return spans
 }
 
 /**
@@ -228,6 +236,12 @@ const attemptSpans = events => {
  *
  * 시작 없이 끝만 있는 것은 **이 계약이 `tool.start`를 넣은 이유 그 자체**다 —
  * 끝만 넷 남은 기록에서 442초가 어느 도구의 것인지 갈리지 않았다.
+ *
+ * **가장 최근에 열린 시작부터 닫는다.** 먼저 열린 것부터 닫았더니 타임아웃 뒤
+ * 재시작한 도구의 끝이 **죽은 첫 시작**에 붙어, 5분짜리 재실행이 25분으로
+ * 기록됐다. 도구는 하나씩 돌리므로 열린 시작이 둘이면 앞의 것은 끝나지 못한
+ * 시도이고, 끝은 마지막 시도의 것이다. `attempt`를 양쪽에 적으면 추측할 것이
+ * 없어지므로, 있으면 그것을 먼저 쓴다.
  */
 const toolRuns = events => {
   const open = new Map()
@@ -239,21 +253,26 @@ const toolRuns = events => {
     const name = String(event.name)
     if (event.phase === 'tool.start') {
       if (!open.has(name)) open.set(name, [])
-      open.get(name).push(at)
+      open.get(name).push({ at, attempt: event.attempt })
       continue
     }
-    const queue = open.get(name)
-    if (queue && queue.length) {
-      runs.push({ name, from: queue.shift(), to: at, exit: event.exit })
+    const queue = open.get(name) ?? []
+    const exact = event.attempt === undefined
+      ? -1
+      : queue.findIndex(start => start.attempt === event.attempt)
+    const at_ = exact >= 0 ? exact : queue.length - 1
+    if (queue.length) {
+      const [start] = queue.splice(at_, 1)
+      runs.push({ name, from: start.at, to: at, exit: event.exit, open: false })
     } else {
-      runs.push({ name, from: null, to: at, exit: event.exit })
+      runs.push({ name, from: null, to: at, exit: event.exit, open: false })
       orphanDone.push({ name, seq: event.seq })
     }
   }
   const unfinished = []
   for (const [name, queue] of open) {
-    for (const from of queue) {
-      runs.push({ name, from, to: null, exit: undefined })
+    for (const start of queue) {
+      runs.push({ name, from: start.at, to: null, exit: undefined, open: true })
       unfinished.push(name)
     }
   }
@@ -346,6 +365,35 @@ if (has('check')) {
     problems.push(`같은 모듈·시도가 두 번 끝났다: ${[...doubled].join(', ')}. 재시도는 \`attempt\`를 올려 남긴다`)
   }
 
+  // 시작 쪽도 같은 정규형을 지켜야 한다. 끝만 검사하던 동안 같은 시도가 두 번
+  // 시작한 기록은 그대로 통과했고, 그러면 어느 시작이 그 끝의 짝인지 갈리지 않는다.
+  {
+    const seenStarts = new Set()
+    const twice = new Set()
+    for (const event of events) {
+      if (event.phase !== 'module.start') continue
+      const key = `${event.module}#${event.attempt ?? '?'}`
+      if (seenStarts.has(key)) twice.add(key)
+      seenStarts.add(key)
+    }
+    if (twice.size) {
+      problems.push(`같은 모듈·시도가 두 번 시작됐다: ${[...twice].join(', ')}. 재시도는 \`attempt\`를 올려 남긴다`)
+    }
+  }
+
+  // 시작 없는 끝은 `tool.done`만 남은 것과 **같은 결함**이다.
+  //
+  // `applied`와 `module.done` 수를 맞춰 보는 검사는 끝만 세므로, 시작을 하나도
+  // 남기지 않은 기록이 그대로 통과했다. 그런데 요약의 디스패치 블록은 구간을
+  // 만들 수 없어 통째로 사라진다 — 검사에는 정상이고 요약에는 없는 상태가
+  // 되고, 그것이 이 PR이 없애려는 "시간 귀속이 조용히 비는" 상태 그 자체다.
+  {
+    const unstarted = attemptSpans(events).unstarted
+    if (unstarted.length) {
+      problems.push(`\`module.start\` 없이 끝난 시도: ${unstarted.map(one => `\`${one.module}\``).join(', ')}. 언제 시작했는지가 없으면 그 모듈이 쓴 시간을 낼 수 없다`)
+    }
+  }
+
   // fan-out 증거는 자동으로 남길 수 없다 — 이 플러그인은 task launcher를 갖고
   // 있지 않다. 그래서 강제하지 못하고 **사후에 짚는** 것까지가 여기서 할 수 있는
   // 전부다. 경고로 두는 이유는 이것만으로 실행을 실패로 부를 수 없기 때문이다.
@@ -405,7 +453,14 @@ if (has('check')) {
     // 도구가 도는 동안에도 줄은 안 남는다. 그 구간까지 "돌고 있던 모듈이 기록에
     // 없다"로 적으면 **아무 일도 없었다**로 읽히는데, 이 계약이 442초를 귀속하려고
     // `tool.start`를 넣은 바로 그 구간이 그렇게 적힌다.
-    const running = toolRuns(events).runs.filter(one => one.from !== null && one.to !== null)
+    // 끝나지 않은 도구도 돌고 있던 것으로 센다. 열린 모듈과 같은 처리다 —
+    // `tool.start`만 남기고 죽은 실행에서 그 30분을 "돌고 있던 것이 기록에 없다"로
+    // 적으면, 도구 요약은 "끝 기록 없음"이라고 하는데 구간은 비었다고 해서 같은
+    // 기록이 두 말을 한다.
+    const lastSeen = msOf(events[events.length - 1])
+    const running = toolRuns(events).runs
+      .filter(one => one.from !== null)
+      .map(one => ({ from: one.from, to: one.to ?? Math.max(lastSeen, one.from) }))
     const overlap = (list, from, to) => list.filter(one => one.from < to && one.to > from).length
     const gaps = []
     for (let at = 1; at < events.length; at += 1) {
@@ -553,6 +608,12 @@ if (has('summary')) {
   // 사후 탐지가 이 플러그인이 할 수 있는 전부이므로 여기서 한다.
   {
     const spans = attemptSpans(events)
+    const unstarted = spans.unstarted ?? []
+    if (!spans.length && unstarted.length) {
+      // 시작이 하나도 없으면 구간을 만들 수 없다. 그래도 **블록은 낸다** —
+      // 없는 블록은 "모듈이 안 돌았다"로 읽히는데, 끝은 남아 있으므로 돌기는 했다.
+      out.push('', `**디스패치** 모듈 ${new Set(unstarted.map(one => one.module)).size}개 · 완료 ${unstarted.length}개 · **소요 미측정**(\`module.start\`가 없어 구간을 만들 수 없다)`)
+    }
     if (spans.length) {
       const seconds = ms => Math.round(ms / 1000)
       const lastDone = spans.reduce((last, span) => Math.max(last, span.to), spans[0].to)
@@ -592,7 +653,8 @@ if (has('summary')) {
       }
 
       out.push('', `**디스패치** 모듈 ${modules}개 · 시도 ${spans.length}개(완료 ${spans.length - unfinished} · 미완료 ${unfinished}) · 합 ${
-        seconds(attemptMs)}s · 벽시계 ${seconds(wall)}s · 실효 동시 ${wall > 0 ? (attemptMs / wall).toFixed(2) : '—'} · 최대 동시 ${peak} · 슬롯 유휴 ${seconds(idle)}s`)
+        seconds(attemptMs)}s · 벽시계 ${seconds(wall)}s · 실효 동시 ${wall > 0 ? (attemptMs / wall).toFixed(2) : '—'} · 최대 동시 ${peak} · 슬롯 유휴 ${seconds(idle)}s${
+        unstarted.length ? ` · 시작 기록 없는 완료 ${unstarted.length}개(소요 미측정)` : ''}`)
       if (unfinished) {
         out.push('', `> **끝을 남기지 않은 시도가 ${unfinished}개다.** 그 구간은 마지막 기록 시각까지의 **최소** 관측 시간으로 셌으므로, 합계와 실효 동시는 실제보다 작다. 시도가 정말 그때 끝났다는 뜻이 아니다.`)
       }

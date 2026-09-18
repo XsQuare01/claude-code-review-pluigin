@@ -175,3 +175,85 @@ test('재판정이 있어도 후보 단위로 빼서 센다', t => {
   assert.equal(line.upheld, 1)
   assert.equal(line.noVerdict, 1)
 })
+
+// ── 대상을 ID로 본다 ───────────────────────────────────────────────────────
+//
+// 개수만 맞추면 다른 후보가 누락을 가린다. 대상이 A·B인데 verdict가 A·X로 오면
+// 대상 2 · 판정 2 · noVerdict 0이 되어 검사를 통과하고, 정작 B는 사라진다.
+
+const routedFile = (dir, entries) => {
+  const path = join(dir, 'routed.json')
+  writeFileSync(path, JSON.stringify({ candidates: entries }), 'utf8')
+  return path
+}
+
+test('--targets는 빠진 대상을 ID로 가려낸다', t => {
+  const dir = withScriptDone(started(t), 2)
+  const targets = routedFile(dir, [
+    { candidateId: 'A', route: 'isolated' },
+    { candidateId: 'B', route: 'bundle' },
+  ])
+  const out = tally(dir, { verdicts: [verdict('A', 'upheld')] }, ['--targets', targets])
+  assert.equal(out.status, 0, out.stderr)
+  assert.equal(timelineOf(dir).at(-1).noVerdict, 1)
+})
+
+test('--targets는 대상 밖 후보의 판정을 거부한다', t => {
+  // 개수만 보면 통과하는 바로 그 기록이다: 대상 2 · 판정 2 · noVerdict 0.
+  const dir = withScriptDone(started(t), 2)
+  const targets = routedFile(dir, [
+    { candidateId: 'A', route: 'isolated' },
+    { candidateId: 'B', route: 'isolated' },
+  ])
+  const out = tally(dir, { verdicts: [verdict('A', 'upheld'), verdict('X', 'upheld')] }, ['--targets', targets])
+  assert.equal(out.status, 2)
+  assert.match(out.stderr, /검증 대상이 아닌 후보의 판정이 있다.*X/)
+})
+
+test('--targets는 route가 none인 후보를 대상으로 세지 않는다', t => {
+  // 띄우지 않은 것을 "판정을 못 받았다"로 세면 정상 실행마다 값이 부푼다.
+  const dir = withScriptDone(started(t), 1)
+  const targets = routedFile(dir, [
+    { candidateId: 'A', route: 'isolated' },
+    { candidateId: 'B', route: 'none' },
+  ])
+  const out = tally(dir, { verdicts: [verdict('A', 'upheld')] }, ['--targets', targets])
+  assert.equal(out.status, 0, out.stderr)
+  assert.equal(timelineOf(dir).at(-1).noVerdict, 0)
+})
+
+test('--targets 없이 센 noVerdict에는 그 한계를 적는다', t => {
+  // 숫자만 보면 두 방식의 결과가 같아 보인다.
+  const dir = withScriptDone(started(t), 3)
+  const out = tally(dir, { verdicts: [verdict('A', 'upheld')] })
+  assert.equal(out.status, 0, out.stderr)
+  const line = timelineOf(dir).at(-1)
+  assert.equal(line.noVerdict, 2)
+  assert.match(line.note, /--targets 없이는 후보 ID 불일치를 잡지 못한다/)
+})
+
+test('--targets로 세면 그 한계 문구를 붙이지 않는다', t => {
+  const dir = withScriptDone(started(t), 1)
+  const targets = routedFile(dir, [{ candidateId: 'A', route: 'isolated' }])
+  const out = tally(dir, { verdicts: [verdict('A', 'upheld')] }, ['--targets', targets])
+  assert.equal(out.status, 0, out.stderr)
+  assert.equal(timelineOf(dir).at(-1).note, undefined)
+})
+
+test('--targets에 대상이 하나도 없으면 거부한다', t => {
+  const dir = withScriptDone(started(t), 1)
+  const targets = routedFile(dir, [{ candidateId: 'A', route: 'none' }])
+  const out = tally(dir, { verdicts: [verdict('A', 'upheld')] }, ['--targets', targets])
+  assert.equal(out.status, 2)
+  assert.match(out.stderr, /검증 대상이 없다/)
+})
+
+test('stdout에 판정 집합을 빈 객체로 흘리지 않는다', t => {
+  // JSON.stringify는 Set을 {}로 내보낸다. 호출자에게 빈 값처럼 보인다.
+  const dir = withScriptDone(started(t), 2)
+  const out = tally(dir, { verdicts: [verdict('A', 'upheld')] })
+  const printed = JSON.parse(out.stdout)
+  assert.equal(printed.judged, undefined)
+  assert.equal(printed.upheld, 1)
+  assert.equal(printed.noVerdict, 1)
+})

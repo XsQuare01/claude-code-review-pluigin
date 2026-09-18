@@ -342,10 +342,12 @@ Verification coverage: 대상 10 중 7 검증 … · counts 출처: 미실행 (�
 
 ```
 node <RULES_DIR>/../scripts/tally-verdicts.mjs --dir <리포트 디렉터리> --run <리포트 basename> \
-     --input verdicts-bundle.json --input verdicts-isolated.json [--malformed-tasks-corrected N]
+     --input verdicts-bundle.json --input verdicts-isolated.json \
+     --targets <prepare-verification 출력> [--malformed-tasks-corrected N]
 ```
 
 - 입력은 `REVIEW_VERDICT_CONTRACT_V1` payload 하나, 그 배열, 또는 `{ "tasks": [ … ] }`다
+- **`--targets`에 `prepare-verification.mjs`의 출력을 넘긴다.** 판정을 받지 못한 후보를 개수가 아니라 ID로 가려내므로, 대상 밖 후보의 판정이 빠진 대상을 가리지 못한다. 넘기지 않으면 뺄셈으로만 세고 그 한계가 `note`로 기록에 남는다
 - **`--input`을 준 순서가 정본 순서다.** 후보별로 마지막 판정만 세고, 뒤집힌 건수는 `reverdicted`로 따로 낸다
 - 이 스크립트가 `crossverify.end`를 직접 남긴다. `countsFrom`이 그 줄에 함께 남으므로, 손으로 센 실행과 구분된다
 - 교정 횟수는 verdict payload가 모르는 dispatch 쪽 사실이라 호출자가 넘긴다. 이름에 **세는 단위**를 담는다 — verdict가 아니라 task 수다
@@ -1015,9 +1017,14 @@ producer 출력을 하나의 JSON으로 조립한 시간, 실패한 입력 전�
 문제**이고, 시작만 있고 끝이 없는 것은 `script.start`와 같은 처리로 **경고**다
 ("돌렸고 끝내지 못했다"는 유효한 기록이다).
 
-**짝은 이름의 유일성이 아니라 열린 시작의 큐로 맞춘다.** C-6은 baseline과 현재를 각각
+**짝은 이름의 유일성이 아니라 열린 시작으로 맞춘다.** C-6은 baseline과 현재를 각각
 재라고 하므로 같은 `lint`가 두 트리에서 두 번 도는 것이 정상이다. "이름마다 한 번"으로
 짝지으면 계약을 지킨 실행이 중복으로 불린다.
+
+**닫을 때는 가장 최근에 열린 시작부터 닫는다.** 먼저 열린 것부터 닫았더니 타임아웃 뒤
+재시작한 도구의 끝이 **죽은 첫 시작**에 붙어, 5분짜리 재실행이 25분으로 기록됐다.
+도구는 하나씩 돌리므로 열린 시작이 둘이면 앞의 것은 끝나지 못한 시도다. **재시도라면
+`attempt`를 양쪽에 적는다** — 그러면 추측할 것이 없어진다.
 
 ### 그 다음 단계들
 
@@ -1090,8 +1097,8 @@ UTF-16 파일도 읽는다 — PowerShell 5.1의 `Set-Content -Encoding UTF8`은
 | `dispatch.end` | 전부 수집 후 | `terminalOk`, `terminalFailed`(최종 모듈 단위) · `attemptsTotal`, `attemptsFailed`(시도 단위) · `attemptFailureClasses`(중첩, `--data-file`), (있으면) `tokensIn`·`tokensOut` |
 | `script.start` | `prepare-verification.mjs` 진입 직후 (스크립트가 직접 남긴다) | `script` |
 | `script.done` | `prepare-verification.mjs` 실행 후 | `ran`, `counts`(중첩, 스크립트가 직접 남긴다) |
-| `tool.start` | **도구 하나를 돌리기 직전** | `name` |
-| `tool.done` | lint/typecheck/test를 돌린 직후 | `name`, `exit`, `treeSha` · `failedNow`, `failedBaseline`(재지 못했으면 `null`) · `failing`(중첩, `--data-file`) |
+| `tool.start` | **도구 하나를 돌리기 직전** | `name`, (재시도면) `attempt` |
+| `tool.done` | lint/typecheck/test를 돌린 직후 | `name`, `exit`, `treeSha` · `failedNow`, `failedBaseline`(재지 못했으면 `null`) · `failing`(중첩, `--data-file`) · (재시도면) `attempt` |
 | `crossverify.start` / `.end` | 교차검증 패스 | `targets` / `upheld`, `rejected`, `needsContext`, `noVerdict`, `countsFrom`, (있으면) `malformedTasksCorrected`·`tokensIn`·`tokensOut` |
 | `synthesis.start` / `.end` | synthesis 패스 | `clusters`, (있으면) `tokensIn`·`tokensOut` |
 | `render.start` | **문서를 쓰기 직전** | `findings`(중복 제거 후) |
@@ -1129,10 +1136,17 @@ UTF-16 파일도 읽는다 — PowerShell 5.1의 `Set-Content -Encoding UTF8`은
 같은지 본다. 대상보다 판정이 **많은** 경우도 같은 검사에 걸린다 — 후보별 마지막
 판정만 세야 하는데 재판정을 두 번 세면 그렇게 된다.
 
-**`noVerdict`는 `tally-verdicts.mjs`가 직접 센다.** 대상 수는 이미
-`prepare-verification.mjs`가 결정적으로 내서 `script.done`에 들어 있으므로 뺄셈만 하면
-된다. 대상 수를 읽지 못하면 필드를 만들지 않는다 — **0과 미측정은 다르다**는 원칙이
-여기서도 같다.
+**`noVerdict`는 `tally-verdicts.mjs`가 직접 센다.** 대상 수를 읽지 못하면 필드를 만들지
+않는다 — **0과 미측정은 다르다**는 원칙이 여기서도 같다.
+
+**세는 방법은 개수가 아니라 ID여야 한다.** `prepare-verification.mjs`의 출력을
+`--targets`로 넘기면 대상 후보 ID 집합과 판정 받은 ID 집합의 차이로 센다. 개수만
+맞추면 **다른 후보가 누락을 가린다** — 대상이 A·B인데 판정이 A·X로 오면 대상 2 ·
+판정 2 · `noVerdict` 0이 되어 검사를 통과하고 정작 B는 사라진다. 집합으로 보면 B가
+빠졌다는 것과 X가 대상 밖이라는 것이 함께 드러나고, 대상 밖 판정은 거부한다.
+
+`--targets` 없이 부르면 `script.done`의 대상 수와 뺄셈만 한다. 그 경우 **그 한계를
+`note`로 기록에 남긴다** — 숫자만 보면 두 방식의 결과가 같아 보이기 때문이다.
 
 `--check`는 긴 무기록 구간도 함께 낸다. **그 사이 돌고 있던 모듈과 도구 수를 붙여서**
 낸다 — 넷이 나란히 도는 동안 줄이 안 남는 것은 정상이고, 그것을 아무것도 돌지 않은
@@ -1150,7 +1164,17 @@ C-9가 `terminalOk`와 `attemptsTotal`을 나눈 것과 같은 이유다 — 재
 **끝나지 않은 시도도 구간으로 센다.** 끝난 것만 세던 때에는 `module.start`만 남기고
 죽은 실행에서 이 블록이 통째로 사라졌다 — **계측이 가장 필요한 순간에 가장 조용해졌다.**
 열린 구간은 마지막으로 관측된 시각까지의 **최소** 시간으로 두고, 그래서 합계와 실효
-동시가 실제보다 작다는 사실을 함께 적는다.
+동시가 실제보다 작다는 사실을 함께 적는다. 도구도 같다 — 끝나지 않은 도구는 구간
+주석에서 "돌고 있던 것"으로 센다. 요약은 "끝 기록 없음"이라 하는데 구간은 비었다고
+하면 같은 기록이 두 말을 한다.
+
+**`module.start` 없이 끝난 시도는 `--check`가 문제로 짚는다.** `tool.done`만 남은 것과
+같은 결함인데, `applied`와 `module.done` 수를 맞춰 보는 검사는 끝만 세므로 그대로
+통과했다. 그러면 검사에는 정상이고 요약에는 디스패치 블록이 없는 상태가 되는데,
+그것이 C-9가 없애려는 "시간 귀속이 조용히 비는" 상태 그 자체다. 같은 이유로 **같은
+모듈·시도가 두 번 시작된 것**도 짚는다 — 어느 시작이 그 끝의 짝인지 갈리지 않는다.
+그런 기록이 이미 남았으면 요약은 "완료 N개 · 소요 미측정"으로 낸다. 없는 블록은
+"모듈이 안 돌았다"로 읽히는데, 끝이 남아 있으므로 돌기는 했다.
 
 인플라이트가 0으로 떨어진 횟수도 나오는데, **한 모듈이 끝나면 즉시 다음을 넣는다**는
 규칙(배리어 금지)을 지킨 실행이라면 그 값은 0이어야 한다. 2026-09-17 실행은 6번

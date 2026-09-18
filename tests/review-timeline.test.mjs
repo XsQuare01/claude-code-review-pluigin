@@ -716,8 +716,9 @@ test('--check는 applied와 module.done 수가 어긋나면 경고로만 짚는�
   plant(dir, [
     { at: '2026-09-08T00:00:00.000Z', seq: 1, phase: 'run.start', host: 'win32', rules: 'r', version: '2.11.0', branch: 'b', changedFiles: 9 },
     { at: '2026-09-08T00:01:00.000Z', seq: 2, phase: 'modules.planned', candidates: 20, applied: 3 },
-    { at: '2026-09-08T00:02:00.000Z', seq: 3, phase: 'module.done', module: '01-fsd', attempt: 1, status: 'ok', failureClass: 'none' },
-    { at: '2026-09-08T00:10:00.000Z', seq: 4, phase: 'run.end', verdict: 'WARN' },
+    { at: '2026-09-08T00:01:30.000Z', seq: 3, phase: 'module.start', module: '01-fsd', attempt: 1 },
+    { at: '2026-09-08T00:02:00.000Z', seq: 4, phase: 'module.done', module: '01-fsd', attempt: 1, status: 'ok', failureClass: 'none' },
+    { at: '2026-09-08T00:10:00.000Z', seq: 5, phase: 'run.end', verdict: 'WARN' },
   ])
   const out = check(dir)
   assert.equal(out.status, 0, out.stdout)
@@ -834,9 +835,11 @@ test('--check는 attempt를 올린 재시도는 짚지 않는다', t => {
   plant(dir, [
     { at: '2026-09-08T00:00:00.000Z', seq: 1, phase: 'run.start', host: 'h', rules: 'r', version: '2.11.0', branch: 'b', changedFiles: 9 },
     { at: '2026-09-08T00:01:00.000Z', seq: 2, phase: 'modules.planned', candidates: 20, applied: 1 },
-    { at: '2026-09-08T00:02:00.000Z', seq: 3, phase: 'module.done', module: '01-fsd', attempt: 1, status: 'failed', failureClass: 'task-not-found' },
-    { at: '2026-09-08T00:03:00.000Z', seq: 4, phase: 'module.done', module: '01-fsd', attempt: 2, status: 'ok', failureClass: 'none' },
-    { at: '2026-09-08T00:04:00.000Z', seq: 5, phase: 'run.end', verdict: 'WARN' },
+    { at: '2026-09-08T00:01:30.000Z', seq: 3, phase: 'module.start', module: '01-fsd', attempt: 1 },
+    { at: '2026-09-08T00:02:00.000Z', seq: 4, phase: 'module.done', module: '01-fsd', attempt: 1, status: 'failed', failureClass: 'task-not-found' },
+    { at: '2026-09-08T00:02:30.000Z', seq: 5, phase: 'module.start', module: '01-fsd', attempt: 2 },
+    { at: '2026-09-08T00:03:00.000Z', seq: 6, phase: 'module.done', module: '01-fsd', attempt: 2, status: 'ok', failureClass: 'none' },
+    { at: '2026-09-08T00:04:00.000Z', seq: 7, phase: 'run.end', verdict: 'WARN' },
   ])
   const out = check(dir)
   assert.equal(out.status, 0, out.stdout)
@@ -1400,4 +1403,125 @@ test('--check는 나중에 적힌 crossverify.end를 정본으로 쓴다', t => 
   ])
   const out = check(dir)
   assert.equal(out.status, 0, out.stdout)
+})
+
+// ── 시작 없는 끝·열린 도구·재시도 짝 ───────────────────────────────────────
+//
+// `tool.done`만 남은 기록을 막았더니 `module.done`만 남은 기록이 같은 자리에
+// 그대로 있었다. 검사에는 정상이고 요약에는 없는 상태가 되는데, 그것이 이
+// 변경이 없애려는 "시간 귀속이 조용히 비는" 상태 그 자체다.
+
+test('--check는 module.start 없이 끝난 시도를 실패로 짚는다', t => {
+  const dir = freshDir(t)
+  plant(dir, [
+    { at: '2026-09-18T00:00:00.000Z', seq: 1, phase: 'run.start', host: 'opencode', rules: 'r', version: '2.13.4', branch: 'b', changedFiles: 9, candidates: 20 },
+    { at: '2026-09-18T00:00:10.000Z', seq: 2, phase: 'modules.planned', candidates: 20, applied: 1 },
+    { at: '2026-09-18T00:30:00.000Z', seq: 3, phase: 'module.done', module: '01-fsd', attempt: 1, status: 'ok', findings: 2 },
+    { at: '2026-09-18T00:30:01.000Z', seq: 4, phase: 'run.end', verdict: 'WARN' },
+  ])
+  const out = check(dir)
+  assert.equal(out.status, 1)
+  assert.match(out.stdout, /`module\.start` 없이 끝난 시도.*01-fsd/)
+})
+
+test('--summary는 시작 기록이 없어도 완료를 내고 소요를 미측정이라고 적는다', t => {
+  // 블록이 없으면 "모듈이 안 돌았다"로 읽히는데, 끝은 남아 있으므로 돌기는 했다.
+  const dir = freshDir(t)
+  plant(dir, [
+    { at: '2026-09-18T00:00:00.000Z', seq: 1, phase: 'run.start', host: 'opencode', rules: 'r', version: '2.13.4', branch: 'b', changedFiles: 9 },
+    { at: '2026-09-18T00:30:00.000Z', seq: 2, phase: 'module.done', module: '01-fsd', attempt: 1, status: 'ok', findings: 2 },
+    { at: '2026-09-18T00:30:01.000Z', seq: 3, phase: 'run.end', verdict: 'WARN' },
+  ])
+  const out = summary(dir)
+  assert.match(out.stdout, /\*\*디스패치\*\* 모듈 1개 · 완료 1개 · \*\*소요 미측정\*\*/)
+})
+
+test('--summary는 짝이 있는 시도와 시작 없는 완료를 함께 낸다', t => {
+  const dir = freshDir(t)
+  plant(dir, [
+    { at: '2026-09-18T00:00:00.000Z', seq: 1, phase: 'run.start', host: 'opencode', rules: 'r', version: '2.13.4', branch: 'b', changedFiles: 9 },
+    { at: '2026-09-18T00:00:00.000Z', seq: 2, phase: 'module.start', module: '01-fsd', attempt: 1 },
+    { at: '2026-09-18T00:01:40.000Z', seq: 3, phase: 'module.done', module: '01-fsd', attempt: 1, status: 'ok', failureClass: 'none' },
+    { at: '2026-09-18T00:01:40.000Z', seq: 4, phase: 'module.done', module: '02-type', attempt: 1, status: 'ok', failureClass: 'none' },
+    { at: '2026-09-18T00:01:41.000Z', seq: 5, phase: 'run.end', verdict: 'WARN' },
+  ])
+  const out = summary(dir)
+  assert.match(out.stdout, /모듈 1개 · 시도 1개\(완료 1 · 미완료 0\)/)
+  assert.match(out.stdout, /시작 기록 없는 완료 1개\(소요 미측정\)/)
+})
+
+test('--check는 같은 모듈·시도가 두 번 시작되면 짚는다', t => {
+  const dir = freshDir(t)
+  plant(dir, [
+    { at: '2026-09-18T00:00:00.000Z', seq: 1, phase: 'run.start', host: 'opencode', rules: 'r', version: '2.13.4', branch: 'b', changedFiles: 9 },
+    { at: '2026-09-18T00:00:00.000Z', seq: 2, phase: 'module.start', module: '01-fsd', attempt: 1 },
+    { at: '2026-09-18T00:00:30.000Z', seq: 3, phase: 'module.start', module: '01-fsd', attempt: 1 },
+    { at: '2026-09-18T00:01:40.000Z', seq: 4, phase: 'module.done', module: '01-fsd', attempt: 1, status: 'ok', failureClass: 'none' },
+    { at: '2026-09-18T00:01:41.000Z', seq: 5, phase: 'run.end', verdict: 'WARN' },
+  ])
+  const out = check(dir)
+  assert.equal(out.status, 1)
+  assert.match(out.stdout, /같은 모듈·시도가 두 번 시작됐다/)
+})
+
+test('--check는 attempt를 올린 재시도의 시작은 짚지 않는다', t => {
+  const dir = freshDir(t)
+  plant(dir, [
+    { at: '2026-09-18T00:00:00.000Z', seq: 1, phase: 'run.start', host: 'opencode', rules: 'r', version: '2.13.4', branch: 'b', changedFiles: 9 },
+    { at: '2026-09-18T00:00:00.000Z', seq: 2, phase: 'module.start', module: '01-fsd', attempt: 1 },
+    { at: '2026-09-18T00:00:30.000Z', seq: 3, phase: 'module.done', module: '01-fsd', attempt: 1, status: 'failed', failureClass: 'task-not-found' },
+    { at: '2026-09-18T00:00:31.000Z', seq: 4, phase: 'module.start', module: '01-fsd', attempt: 2 },
+    { at: '2026-09-18T00:01:40.000Z', seq: 5, phase: 'module.done', module: '01-fsd', attempt: 2, status: 'ok', failureClass: 'none' },
+    { at: '2026-09-18T00:01:41.000Z', seq: 6, phase: 'run.end', verdict: 'WARN' },
+  ])
+  const out = check(dir)
+  assert.equal(out.status, 0, out.stdout)
+})
+
+test('--check는 끝나지 않은 도구도 그 구간에 돌던 것으로 센다', t => {
+  // 도구 요약은 "끝 기록 없음"이라고 하는데 구간은 비었다고 하면 같은 기록이
+  // 두 말을 한다.
+  const dir = freshDir(t)
+  plant(dir, [
+    { at: '2026-09-18T00:00:00.000Z', seq: 1, phase: 'run.start', host: 'opencode', rules: 'r', version: '2.13.4', branch: 'b', changedFiles: 9 },
+    { at: '2026-09-18T00:00:10.000Z', seq: 2, phase: 'tool.start', name: 'test' },
+    { at: '2026-09-18T00:30:10.000Z', seq: 3, phase: 'run.end', verdict: 'WARN' },
+  ])
+  const out = check(dir)
+  assert.match(out.stdout, /도구 1개가 그 사이 돌고 있었다/)
+})
+
+test('--summary는 타임아웃 뒤 재시작한 도구의 끝을 마지막 시작에 붙인다', t => {
+  // 먼저 열린 것부터 닫았더니 5분짜리 재실행이 25분으로 기록됐다.
+  const dir = freshDir(t)
+  plant(dir, [
+    { at: '2026-09-18T00:00:00.000Z', seq: 1, phase: 'run.start', host: 'opencode', rules: 'r', version: '2.13.4', branch: 'b', changedFiles: 9 },
+    { at: '2026-09-18T00:00:00.000Z', seq: 2, phase: 'tool.start', name: 'test' },
+    { at: '2026-09-18T00:20:00.000Z', seq: 3, phase: 'tool.start', name: 'test' },
+    { at: '2026-09-18T00:25:00.000Z', seq: 4, phase: 'tool.done', name: 'test', exit: 0, treeSha: 't' },
+    { at: '2026-09-18T00:25:01.000Z', seq: 5, phase: 'run.end', verdict: 'WARN' },
+  ])
+  const out = summary(dir)
+  assert.match(out.stdout, /`test` 300s\(exit 0\) · `test` 끝 기록 없음/)
+})
+
+test('--summary는 attempt가 있으면 그것으로 도구의 짝을 맞춘다', t => {
+  // 추측할 것이 없어진다. 끝이 1차 시도의 것이라고 기록이 말하면 그대로 붙인다.
+  const dir = freshDir(t)
+  plant(dir, [
+    { at: '2026-09-18T00:00:00.000Z', seq: 1, phase: 'run.start', host: 'opencode', rules: 'r', version: '2.13.4', branch: 'b', changedFiles: 9 },
+    { at: '2026-09-18T00:00:00.000Z', seq: 2, phase: 'tool.start', name: 'test', attempt: 1 },
+    { at: '2026-09-18T00:20:00.000Z', seq: 3, phase: 'tool.start', name: 'test', attempt: 2 },
+    { at: '2026-09-18T00:25:00.000Z', seq: 4, phase: 'tool.done', name: 'test', attempt: 1, exit: 0, treeSha: 't' },
+    { at: '2026-09-18T00:25:01.000Z', seq: 5, phase: 'run.end', verdict: 'WARN' },
+  ])
+  const out = summary(dir)
+  assert.match(out.stdout, /`test` 1500s\(exit 0\)/)
+})
+
+test('도구의 attempt는 닫힌 목록에 있다', t => {
+  const dir = freshDir(t)
+  const out = log(dir, 'tool.start', { name: 'test', attempt: 2 })
+  assert.equal(out.status, 0, out.stderr)
+  assert.doesNotMatch(out.stderr, /닫힌 목록에 없다/)
 })

@@ -13,7 +13,11 @@
 //
 // Usage:
 //   node scripts/tally-verdicts.mjs --dir <리포트 디렉터리> --run <리포트 basename> \
-//        --input verdicts.json [--input more.json …] [--malformed-tasks-corrected N]
+//        --input verdicts.json [--input more.json …] [--targets routed.json] \
+//        [--malformed-tasks-corrected N]
+//
+// `--targets`는 `prepare-verification.mjs`의 출력이다. 판정을 받지 못한 후보를
+// **개수가 아니라 ID로** 가려내므로, 대상 밖 후보의 판정이 빠진 대상을 가리지 못한다.
 //
 // 입력은 `REVIEW_VERDICT_CONTRACT_V1` payload 하나, 그 배열, 또는 `{ "tasks": [ … ] }`다.
 // 파일로 받는 이유는 `prepare-verification.mjs --input`과 같다 — 산문과 코드 인용이
@@ -65,6 +69,26 @@ export function collectVerdicts(payloads) {
 }
 
 /**
+ * 검증 대상 후보 ID를 `prepare-verification.mjs` 출력에서 읽는다.
+ *
+ * 개수만 맞추면 **다른 후보가 누락을 가린다.** 대상이 A·B인데 verdict가 A·X로
+ * 오면 대상 2 · 판정 2 · `noVerdict` 0이 되어 검사를 통과하고, 정작 B는 사라진다.
+ * 집합으로 보면 B가 빠졌다는 것과 X가 대상 밖이라는 것이 동시에 드러난다.
+ *
+ * `route: 'none'`은 검증 대상이 아니다 — 띄우지 않은 것을 "판정을 못 받았다"로
+ * 세면 정상 실행마다 값이 부풀고, 그 수치는 아무것도 가리키지 못한다.
+ */
+export function targetIds(routed) {
+  const ids = new Set()
+  for (const entry of routed?.candidates ?? []) {
+    if (typeof entry?.candidateId !== 'string') continue
+    if (entry.route === 'none') continue
+    ids.add(entry.candidateId)
+  }
+  return ids
+}
+
+/**
  * 후보별 마지막 판정만 센다.
  *
  * 순서가 곧 정본 순서다 — `--input`을 준 순서대로 읽으므로, 승격된 isolated
@@ -88,7 +112,7 @@ export function tally(verdicts) {
 
   const counts = { upheld: 0, rejected: 0, needsContext: 0 }
   for (const disposition of latest.values()) counts[DISPOSITIONS.get(disposition)] += 1
-  return { ...counts, total: latest.size, reverdicted }
+  return { ...counts, total: latest.size, reverdicted, judged: new Set(latest.keys()) }
 }
 
 const dir = flag('dir')
@@ -133,8 +157,35 @@ if (corrected !== undefined && !Number.isInteger(malformedTasksCorrected)) {
  * 들어 있으므로, 여기서 뺄셈만 하면 된다 — 모델에게 다시 세게 하지 않는다.
  * 대상 수를 못 읽으면 필드를 만들지 않는다. **0과 미측정은 다르다.**
  */
-const targeted = lastPhase(sidecar, 'script.done')?.counts?.verify
-const noVerdict = Number.isInteger(targeted) ? Math.max(0, targeted - counts.total) : undefined
+const targetsPath = flag('targets')
+let noVerdict
+let weakNote
+
+if (targetsPath !== undefined) {
+  // ID로 본다. 빠진 것과 대상 밖의 것이 함께 드러난다.
+  let routed
+  try {
+    routed = JSON.parse(readFileSync(targetsPath, 'utf8'))
+  } catch (error) {
+    die(`--targets를 읽지 못했다: ${targetsPath} — ${error.message}`)
+  }
+  const targets = targetIds(routed)
+  if (!targets.size) die(`--targets에 검증 대상이 없다: ${targetsPath} — prepare-verification.mjs의 출력을 넘긴다`)
+
+  const strays = [...counts.judged].filter(id => !targets.has(id))
+  if (strays.length) {
+    die(`검증 대상이 아닌 후보의 판정이 있다: ${strays.join(', ')}. 대상 밖 판정을 세면 빠진 대상이 그 수에 가려진다`)
+  }
+  noVerdict = [...targets].filter(id => !counts.judged.has(id)).length
+} else {
+  // 대상 수만 보고 뺄셈한다. **다른 ID가 누락을 가릴 수 있다** — 그 한계를
+  // 기록에 남긴다. 숫자만 보면 두 방식의 결과가 같아 보이기 때문이다.
+  const targeted = lastPhase(sidecar, 'script.done')?.counts?.verify
+  if (Number.isInteger(targeted)) {
+    noVerdict = Math.max(0, targeted - counts.total)
+    weakNote = 'noVerdict는 대상 수와의 뺄셈이다. --targets 없이는 후보 ID 불일치를 잡지 못한다'
+  }
+}
 
 logPhase(dir, run, 'crossverify.end', {
   upheld: counts.upheld,
@@ -143,6 +194,10 @@ logPhase(dir, run, 'crossverify.end', {
   ...(noVerdict === undefined ? {} : { noVerdict }),
   ...(malformedTasksCorrected === undefined ? {} : { malformedTasksCorrected }),
   countsFrom: 'tally-verdicts.mjs',
+  ...(weakNote === undefined ? {} : { note: weakNote }),
 })
 
-process.stdout.write(`${JSON.stringify(counts, null, 2)}\n`)
+// `judged`는 집합 차이를 내려고 들고 다닌 것이라 stdout에는 싣지 않는다.
+// `JSON.stringify`가 Set을 `{}`로 내보내 호출자에게 빈 값처럼 보이기 때문이다.
+const { judged: _judged, ...reported } = counts
+process.stdout.write(`${JSON.stringify({ ...reported, ...(noVerdict === undefined ? {} : { noVerdict }) }, null, 2)}\n`)

@@ -330,10 +330,11 @@ bundle verifier와 isolated verifier는 **같은 prompt 계약**을 쓴다. 단�
 **`upheld`·`rejected`를 직접 세지 않는다.** 검증 작업이 낸 verdict payload를 파일로 쓰고 집계 스크립트에 넘긴다.
 
 ```bash
-node "$RULES_DIR/../scripts/tally-verdicts.mjs" --dir "$REPORT_DIR" --run "$REPORT_BASENAME" --input <verdicts-bundle.json> --input <verdicts-isolated.json> --malformed-tasks-corrected <N>
+node "$RULES_DIR/../scripts/tally-verdicts.mjs" --dir "$REPORT_DIR" --run "$REPORT_BASENAME" --input <verdicts-bundle.json> --input <verdicts-isolated.json> --targets <prepare-verification 출력> --malformed-tasks-corrected <N>
 ```
 
 - **이 스크립트가 `crossverify.end`를 남긴다.** 같은 줄을 따로 기록하지 않는다
+- **`--targets`를 빠뜨리지 않는다.** 판정을 받지 못한 후보를 개수가 아니라 ID로 센다. 개수만 맞추면 대상 밖 후보의 판정이 빠진 대상을 가리는데, 한 실행에서 verifier 타임아웃으로 판정을 못 받은 3건이 기록에서 통째로 사라진 적이 있다
 - `--input`을 준 순서가 정본 순서다. 후보별로 마지막 판정만 세므로, bundle이 `needs-context`로 돌리고 isolated가 다시 판정한 후보가 두 번 세어지지 않는다
 - coverage 숫자는 이 출력을 그대로 옮긴다. 한 실행이 손으로 세어 `upheld 13 / rejected 3`으로 적고 44초 뒤 `upheld 12 / rejected 4`로 정정했다 — 후보 수는 스크립트가 세면서 검증 결과만 눈으로 세고 있었다
 - `--malformed-tasks-corrected`는 **verdict가 아니라 verifier task 수**다. verdict payload가 모르는 dispatch 쪽 사실이라 여기서 넘긴다
