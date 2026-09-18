@@ -186,6 +186,48 @@ const FAILURE_CLASSES = new Set([
 ])
 
 /**
+ * 도구 실행을 시작·끝 쌍으로 접는다.
+ *
+ * **이름의 유일성으로 짝짓지 않는다.** C-6은 baseline과 현재를 각각 재라고 하므로
+ * 같은 `lint`가 두 트리에서 두 번 도는 것이 정상이고, "이름마다 한 번"으로 짝지으면
+ * 정상 실행을 중복으로 부른다. 열린 시작을 큐로 들고 먼저 열린 것부터 닫으면
+ * 그 경우가 따로 다룰 것 없이 풀린다.
+ *
+ * 시작 없이 끝만 있는 것은 **이 계약이 `tool.start`를 넣은 이유 그 자체**다 —
+ * 끝만 넷 남은 기록에서 442초가 어느 도구의 것인지 갈리지 않았다.
+ */
+const toolRuns = events => {
+  const open = new Map()
+  const runs = []
+  const orphanDone = []
+  for (const event of events) {
+    if (event.phase !== 'tool.start' && event.phase !== 'tool.done') continue
+    const at = new Date(event.at).getTime()
+    const name = String(event.name)
+    if (event.phase === 'tool.start') {
+      if (!open.has(name)) open.set(name, [])
+      open.get(name).push(at)
+      continue
+    }
+    const queue = open.get(name)
+    if (queue && queue.length) {
+      runs.push({ name, from: queue.shift(), to: at, exit: event.exit })
+    } else {
+      runs.push({ name, from: null, to: at, exit: event.exit })
+      orphanDone.push({ name, seq: event.seq })
+    }
+  }
+  const unfinished = []
+  for (const [name, queue] of open) {
+    for (const from of queue) {
+      runs.push({ name, from, to: null, exit: undefined })
+      unfinished.push(name)
+    }
+  }
+  return { runs, orphanDone, unfinished }
+}
+
+/**
  * 종료 직전에 기록 자체를 검사한다.
  *
  * `--summary`는 리포트에 실을 표를 만드는 것이고 이쪽은 **기록이 쓸 만한지**를
@@ -338,6 +380,21 @@ if (has('check')) {
     }
   }
 
+  // 도구는 시작과 끝이 짝을 이뤄야 한다.
+  //
+  // `tool.start`를 닫힌 목록에 넣는 것만으로는 아무것도 강제되지 않는다 —
+  // 끝만 넷 남긴 기록이 그대로 통과하고, 442초를 귀속할 수 없던 상태가 그대로
+  // 재발한다. 이름으로 짝짓지 않는 이유는 `toolRuns`에 적어 두었다.
+  {
+    const tools = toolRuns(events)
+    if (tools.orphanDone.length) {
+      problems.push(`\`tool.start\` 없이 끝난 도구: ${tools.orphanDone.map(one => `\`${one.name}\`(seq ${one.seq})`).join(', ')}. 끝만 남기면 앞 단계와의 간격이 어느 도구의 것인지 갈리지 않는다`)
+    }
+    if (tools.unfinished.length) {
+      notes.push(`끝을 남기지 않은 도구 ${tools.unfinished.length}개: ${tools.unfinished.map(name => `\`${name}\``).join(', ')}`)
+    }
+  }
+
   if (malformed) notes.push(`읽지 못한 줄 ${malformed}개`)
 
   const out = []
@@ -455,6 +512,21 @@ if (has('summary')) {
       if (waves > 1) {
         out.push('', `> **인플라이트가 ${waves - 1}번 0으로 떨어졌다** (연속 구간 ${waves}개). 한 모듈이 끝나면 즉시 다음을 넣으라는 규칙대로면 구간은 하나다. 비어 있는 동안 ${seconds(idle)}s가 쌓였다.`)
       }
+    }
+  }
+
+  // 도구별 몫. `tool.start`를 넣은 목적이 여기서 눈에 보이는 값이 된다 —
+  // 넷을 연달아 돌린 442초가 각각 몇 초였는지를 뺄셈으로 낸다. 모듈 이벤트가
+  // 사이에 끼어도 상관없다. 짝은 이름이 아니라 열린 시작의 큐로 맞춘다.
+  {
+    const { runs } = toolRuns(events)
+    if (runs.length) {
+      const describe = one => {
+        if (one.from === null) return `\`${one.name}\` 시작 기록 없음(exit ${one.exit ?? '?'})`
+        if (one.to === null) return `\`${one.name}\` 끝 기록 없음`
+        return `\`${one.name}\` ${Math.round((one.to - one.from) / 1000)}s(exit ${one.exit ?? '?'})`
+      }
+      out.push('', `**도구** ${runs.map(describe).join(' · ')}`)
     }
   }
 

@@ -1099,3 +1099,91 @@ test('--summary는 최장 구간이 끝 표시에 붙으면 그 문장을 붙이
   const out = summary(dir)
   assert.doesNotMatch(out.stdout, /사이\*\*의/)
 })
+
+// ── 도구 실행의 시작·끝 짝 ────────────────────────────────────────────────
+//
+// `tool.start`를 닫힌 목록에 넣는 것만으로는 아무것도 강제되지 않는다. 끝만 넷
+// 남긴 기록이 그대로 통과하면, 442초를 귀속할 수 없던 상태가 그대로 재발한다.
+
+test('--check는 tool.start 없이 끝난 도구를 실패로 짚는다', t => {
+  const dir = freshDir(t)
+  plant(dir, [
+    { at: '2026-09-18T00:00:00.000Z', seq: 1, phase: 'run.start', host: 'opencode', rules: 'r', version: '2.13.1', branch: 'b', changedFiles: 9 },
+    { at: '2026-09-18T00:10:00.000Z', seq: 2, phase: 'tool.done', name: 'lint', exit: 0, treeSha: 't' },
+    { at: '2026-09-18T00:10:00.000Z', seq: 3, phase: 'tool.done', name: 'typecheck', exit: 2, treeSha: 't' },
+    { at: '2026-09-18T00:10:01.000Z', seq: 4, phase: 'run.end', verdict: 'WARN' },
+  ])
+  const out = check(dir)
+  assert.equal(out.status, 1)
+  assert.match(out.stdout, /`tool\.start` 없이 끝난 도구/)
+  assert.match(out.stdout, /lint.*typecheck/)
+})
+
+test('--check는 끝을 남기지 않은 도구를 경고로만 짚는다', t => {
+  // 시작만 있고 끝이 없는 것은 "돌렸고 끝내지 못했다"는 유효한 기록이다 —
+  // `script.start`에 대해 계약이 이미 그렇게 정했다.
+  const dir = freshDir(t)
+  plant(dir, [
+    { at: '2026-09-18T00:00:00.000Z', seq: 1, phase: 'run.start', host: 'opencode', rules: 'r', version: '2.13.1', branch: 'b', changedFiles: 9 },
+    { at: '2026-09-18T00:01:00.000Z', seq: 2, phase: 'tool.start', name: 'test' },
+    { at: '2026-09-18T00:10:00.000Z', seq: 3, phase: 'run.end', verdict: 'WARN' },
+  ])
+  const out = check(dir)
+  assert.equal(out.status, 0, out.stdout)
+  assert.match(out.stdout, /끝을 남기지 않은 도구 1개.*test/)
+})
+
+test('--check는 시작과 끝의 이름이 다르면 양쪽 다 짚는다', t => {
+  const dir = freshDir(t)
+  plant(dir, [
+    { at: '2026-09-18T00:00:00.000Z', seq: 1, phase: 'run.start', host: 'opencode', rules: 'r', version: '2.13.1', branch: 'b', changedFiles: 9 },
+    { at: '2026-09-18T00:01:00.000Z', seq: 2, phase: 'tool.start', name: 'typecheck' },
+    { at: '2026-09-18T00:02:00.000Z', seq: 3, phase: 'tool.done', name: 'lint', exit: 0, treeSha: 't' },
+    { at: '2026-09-18T00:02:01.000Z', seq: 4, phase: 'run.end', verdict: 'WARN' },
+  ])
+  const out = check(dir)
+  assert.equal(out.status, 1)
+  assert.match(out.stdout, /`tool\.start` 없이 끝난 도구.*lint/)
+  assert.match(out.stdout, /끝을 남기지 않은 도구 1개.*typecheck/)
+})
+
+test('--check는 같은 도구가 중복 시작되면 끝나지 않은 쪽을 남긴다', t => {
+  const dir = freshDir(t)
+  plant(dir, [
+    { at: '2026-09-18T00:00:00.000Z', seq: 1, phase: 'run.start', host: 'opencode', rules: 'r', version: '2.13.1', branch: 'b', changedFiles: 9 },
+    { at: '2026-09-18T00:01:00.000Z', seq: 2, phase: 'tool.start', name: 'test' },
+    { at: '2026-09-18T00:01:30.000Z', seq: 3, phase: 'tool.start', name: 'test' },
+    { at: '2026-09-18T00:02:00.000Z', seq: 4, phase: 'tool.done', name: 'test', exit: 0, treeSha: 't' },
+    { at: '2026-09-18T00:02:01.000Z', seq: 5, phase: 'run.end', verdict: 'WARN' },
+  ])
+  const out = check(dir)
+  assert.equal(out.status, 0, out.stdout)
+  assert.match(out.stdout, /끝을 남기지 않은 도구 1개/)
+})
+
+test('--check는 같은 도구를 여러 번 정상 실행한 기록을 통과시킨다', t => {
+  // C-6은 baseline과 현재를 각각 재라고 한다. 같은 `lint`가 두 트리에서 두 번
+  // 도는 것이 정상이므로, 이름 유일성으로 짝지으면 정상 실행을 중복으로 부른다.
+  const dir = freshDir(t)
+  plant(dir, [
+    { at: '2026-09-18T00:00:00.000Z', seq: 1, phase: 'run.start', host: 'opencode', rules: 'r', version: '2.13.1', branch: 'b', changedFiles: 9 },
+    { at: '2026-09-18T00:01:00.000Z', seq: 2, phase: 'tool.start', name: 'lint' },
+    { at: '2026-09-18T00:01:30.000Z', seq: 3, phase: 'tool.done', name: 'lint', exit: 0, treeSha: 'base' },
+    { at: '2026-09-18T00:02:00.000Z', seq: 4, phase: 'tool.start', name: 'lint' },
+    { at: '2026-09-18T00:03:00.000Z', seq: 5, phase: 'tool.done', name: 'lint', exit: 1, treeSha: 'head' },
+    { at: '2026-09-18T00:03:01.000Z', seq: 6, phase: 'run.end', verdict: 'WARN' },
+  ])
+  const out = check(dir)
+  assert.equal(out.status, 0, out.stdout)
+  assert.doesNotMatch(out.stdout, /없이 끝난 도구|끝을 남기지 않은 도구/)
+  assert.match(summary(dir).stdout, /\*\*도구\*\* `lint` 30s\(exit 0\) · `lint` 60s\(exit 1\)/)
+})
+
+test('--summary는 도구 이벤트가 없으면 도구 줄을 만들지 않는다', t => {
+  const dir = freshDir(t)
+  plant(dir, [
+    { at: '2026-09-18T00:00:00.000Z', seq: 1, phase: 'run.start', host: 'opencode', rules: 'r', version: '2.13.1', branch: 'b', changedFiles: 9 },
+    { at: '2026-09-18T00:10:00.000Z', seq: 2, phase: 'run.end', verdict: 'WARN' },
+  ])
+  assert.doesNotMatch(summary(dir).stdout, /\*\*도구\*\*/)
+})
