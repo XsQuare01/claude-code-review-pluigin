@@ -112,6 +112,11 @@ const readLines = () => {
  * 필드 하나 빠진 기록이 없는 기록보다 낫다. `structured`는 **거부**다 — 중첩 값을
  * `--set` 한 값으로 밀어 넣으면 `counts=total=5,verify=2`가 문자열 하나로 남아
  * 집계가 불가능해지고, 그것이 조용히 통과하면 아무도 고치지 않는다.
+ *
+ * `tool.start`가 `script.start`와 같은 이유로 있다. 한 실행이 lint·typecheck·test·
+ * targeted-test 넷을 돌리고 `tool.done` 넷을 **같은 초에** 찍었다 — 앞 단계와의
+ * 간격은 442초였고, 그 442초가 넷 중 어느 도구의 것인지 기록 어디에도 없었다.
+ * 끝만 남기면 여러 개를 연달아 돌린 구간이 통째로 하나의 이름 없는 덩어리가 된다.
  */
 const PHASES = new Map([
   ['run.start', { required: ['host', 'rules', 'version', 'branch', 'changedFiles'], structured: [], allowed: ['candidates', 'workflow', 'mergeBase', 'os'] }],
@@ -123,9 +128,10 @@ const PHASES = new Map([
   ['dispatch.end', { required: ['terminalOk', 'terminalFailed', 'attemptsTotal', 'attemptsFailed'], structured: ['attemptFailureClasses'], allowed: [] }],
   ['script.start', { required: [], structured: [], allowed: ['script'] }],
   ['script.done', { required: ['ran'], structured: ['counts'], allowed: [] }],
-  ['tool.done', { required: ['name', 'exit', 'treeSha'], structured: ['failing'], allowed: ['failedNow', 'failedBaseline'] }],
+  ['tool.start', { required: ['name'], structured: [], allowed: ['attempt'] }],
+  ['tool.done', { required: ['name', 'exit', 'treeSha'], structured: ['failing'], allowed: ['failedNow', 'failedBaseline', 'attempt'] }],
   ['crossverify.start', { required: ['targets'], structured: [], allowed: [] }],
-  ['crossverify.end', { required: ['upheld', 'rejected'], structured: [], allowed: ['needsContext', 'malformedTasksCorrected', 'countsFrom'] }],
+  ['crossverify.end', { required: ['upheld', 'rejected'], structured: [], allowed: ['needsContext', 'noVerdict', 'malformedTasksCorrected', 'countsFrom'] }],
   ['synthesis.start', { required: [], structured: [], allowed: ['findings'] }],
   ['synthesis.end', { required: [], structured: [], allowed: ['clusters'] }],
   ['render.start', { required: ['findings'], structured: [], allowed: [] }],
@@ -178,6 +184,100 @@ const FAILURE_CLASSES = new Set([
   'skill-injection-invalid', 'malformed-output', 'provider-model-not-found', 'poll-timeout',
   'unknown',
 ])
+
+/**
+ * 모듈 시도를 구간으로 접는다. **끝나지 않은 시도도 구간으로 낸다.**
+ *
+ * 처음에는 끝난 시도만 셌다. 그랬더니 `module.start` 넷을 남기고 죽은 실행에서
+ * 구간이 0개가 되어 디스패치 요약이 통째로 사라지고, 30분짜리 최장 구간이
+ * "돌고 있던 모듈이 기록에 없다"로 적혔다 — 셋이 돌고 있었는데. **죽은 실행에서
+ * 가장 조용해지는 계측은 존재 이유와 정반대다.** 열린 구간은 마지막으로 관측된
+ * 시각까지의 **최소** 시간으로 두고, 추정이라는 사실을 `open`으로 들고 다닌다.
+ *
+ * 구간의 단위는 모듈이 아니라 **시도**다. 재시도한 모듈은 구간이 둘이고, 그것을
+ * 모듈 둘로 세면 C-9가 애써 나눠 둔 "최종 모듈 단위"와 "시도 단위"가 다시 섞인다.
+ */
+const attemptSpans = events => {
+  if (!events.length) return []
+  const lastSeen = new Date(events[events.length - 1].at).getTime()
+  const opened = new Map()
+  const spans = []
+  const unstarted = []
+  for (const event of events) {
+    const at = new Date(event.at).getTime()
+    const key = `${event.module}#${event.attempt ?? '?'}`
+    if (event.phase === 'module.start') opened.set(key, { from: at, module: String(event.module) })
+    if (event.phase !== 'module.done') continue
+    if (opened.has(key)) {
+      const start = opened.get(key)
+      spans.push({ from: start.from, to: at, module: start.module, open: false })
+      opened.delete(key)
+      continue
+    }
+    // 시작이 없는 끝. 구간을 지어내지 않는다 — 언제 시작했는지 모르는 것과
+    // 0초에 끝난 것은 다르고, 후자로 적으면 합계가 조용히 낮아진다.
+    unstarted.push({ module: String(event.module), to: at })
+  }
+  for (const start of opened.values()) {
+    spans.push({ from: start.from, to: Math.max(lastSeen, start.from), module: start.module, open: true })
+  }
+  spans.sort((a, b) => a.from - b.from)
+  spans.unstarted = unstarted
+  return spans
+}
+
+/**
+ * 도구 실행을 시작·끝 쌍으로 접는다.
+ *
+ * **이름의 유일성으로 짝짓지 않는다.** C-6은 baseline과 현재를 각각 재라고 하므로
+ * 같은 `lint`가 두 트리에서 두 번 도는 것이 정상이고, "이름마다 한 번"으로 짝지으면
+ * 정상 실행을 중복으로 부른다. 열린 시작을 큐로 들고 먼저 열린 것부터 닫으면
+ * 그 경우가 따로 다룰 것 없이 풀린다.
+ *
+ * 시작 없이 끝만 있는 것은 **이 계약이 `tool.start`를 넣은 이유 그 자체**다 —
+ * 끝만 넷 남은 기록에서 442초가 어느 도구의 것인지 갈리지 않았다.
+ *
+ * **가장 최근에 열린 시작부터 닫는다.** 먼저 열린 것부터 닫았더니 타임아웃 뒤
+ * 재시작한 도구의 끝이 **죽은 첫 시작**에 붙어, 5분짜리 재실행이 25분으로
+ * 기록됐다. 도구는 하나씩 돌리므로 열린 시작이 둘이면 앞의 것은 끝나지 못한
+ * 시도이고, 끝은 마지막 시도의 것이다. `attempt`를 양쪽에 적으면 추측할 것이
+ * 없어지므로, 있으면 그것을 먼저 쓴다.
+ */
+const toolRuns = events => {
+  const open = new Map()
+  const runs = []
+  const orphanDone = []
+  for (const event of events) {
+    if (event.phase !== 'tool.start' && event.phase !== 'tool.done') continue
+    const at = new Date(event.at).getTime()
+    const name = String(event.name)
+    if (event.phase === 'tool.start') {
+      if (!open.has(name)) open.set(name, [])
+      open.get(name).push({ at, attempt: event.attempt })
+      continue
+    }
+    const queue = open.get(name) ?? []
+    const exact = event.attempt === undefined
+      ? -1
+      : queue.findIndex(start => start.attempt === event.attempt)
+    const at_ = exact >= 0 ? exact : queue.length - 1
+    if (queue.length) {
+      const [start] = queue.splice(at_, 1)
+      runs.push({ name, from: start.at, to: at, exit: event.exit, open: false })
+    } else {
+      runs.push({ name, from: null, to: at, exit: event.exit, open: false })
+      orphanDone.push({ name, seq: event.seq })
+    }
+  }
+  const unfinished = []
+  for (const [name, queue] of open) {
+    for (const start of queue) {
+      runs.push({ name, from: start.at, to: null, exit: undefined, open: true })
+      unfinished.push(name)
+    }
+  }
+  return { runs, orphanDone, unfinished }
+}
 
 /**
  * 종료 직전에 기록 자체를 검사한다.
@@ -265,6 +365,35 @@ if (has('check')) {
     problems.push(`같은 모듈·시도가 두 번 끝났다: ${[...doubled].join(', ')}. 재시도는 \`attempt\`를 올려 남긴다`)
   }
 
+  // 시작 쪽도 같은 정규형을 지켜야 한다. 끝만 검사하던 동안 같은 시도가 두 번
+  // 시작한 기록은 그대로 통과했고, 그러면 어느 시작이 그 끝의 짝인지 갈리지 않는다.
+  {
+    const seenStarts = new Set()
+    const twice = new Set()
+    for (const event of events) {
+      if (event.phase !== 'module.start') continue
+      const key = `${event.module}#${event.attempt ?? '?'}`
+      if (seenStarts.has(key)) twice.add(key)
+      seenStarts.add(key)
+    }
+    if (twice.size) {
+      problems.push(`같은 모듈·시도가 두 번 시작됐다: ${[...twice].join(', ')}. 재시도는 \`attempt\`를 올려 남긴다`)
+    }
+  }
+
+  // 시작 없는 끝은 `tool.done`만 남은 것과 **같은 결함**이다.
+  //
+  // `applied`와 `module.done` 수를 맞춰 보는 검사는 끝만 세므로, 시작을 하나도
+  // 남기지 않은 기록이 그대로 통과했다. 그런데 요약의 디스패치 블록은 구간을
+  // 만들 수 없어 통째로 사라진다 — 검사에는 정상이고 요약에는 없는 상태가
+  // 되고, 그것이 이 PR이 없애려는 "시간 귀속이 조용히 비는" 상태 그 자체다.
+  {
+    const unstarted = attemptSpans(events).unstarted
+    if (unstarted.length) {
+      problems.push(`\`module.start\` 없이 끝난 시도: ${unstarted.map(one => `\`${one.module}\``).join(', ')}. 언제 시작했는지가 없으면 그 모듈이 쓴 시간을 낼 수 없다`)
+    }
+  }
+
   // fan-out 증거는 자동으로 남길 수 없다 — 이 플러그인은 task launcher를 갖고
   // 있지 않다. 그래서 강제하지 못하고 **사후에 짚는** 것까지가 여기서 할 수 있는
   // 전부다. 경고로 두는 이유는 이것만으로 실행을 실패로 부를 수 없기 때문이다.
@@ -273,6 +402,134 @@ if (has('check')) {
   if (Number.isInteger(applied) && finished.size !== applied) {
     notes.push(`\`modules.planned.applied\`는 ${applied}인데 \`module.done\`이 남은 모듈은 ${finished.size}개다`)
   }
+
+  // fan-out 기록이 **한 줄도** 없는 것은 위의 수 불일치와 다른 사건이다.
+  //
+  // 위 검사는 `modules.planned`가 있어야 돈다. 그 줄까지 없는 실행에서는
+  // `applied`가 undefined라 아무 말도 나오지 않았고, 실제로 2026-09-18 실행이
+  // `run.start` 다음에 곧장 `script.start`를 찍고 그 사이 1863초를 비운 채
+  // `--check`를 통과했다. 같은 플러그인 버전·같은 harness의 전날 실행은 같은
+  // 자리에 47줄을 남겼으므로 **일은 일어났고 기록만 빠진 것**인데, 기록만 보면
+  // 그 1863초에 무엇이 있었는지 말할 수 없다. 이것이 C-9가 막으려던 바로 그
+  // 상태이므로 경고가 아니라 문제로 짚는다.
+  //
+  // **띄울 모듈이 있었는지를 `applied`로 판정한다.** 계획 줄이 있기만 하면
+  // fan-out을 예상하도록 두었더니 `applied: 0`인 기록 — 적용할 모듈이 하나도
+  // 없다고 스스로 적은 정상 실행 — 이 디스패치 누락으로 실패했다. 없는 것을
+  // 빠뜨렸다고 부르면 경보가 늘 울리고, 늘 울리는 경보는 신호가 아니다.
+  // 계획 줄이 없을 때만 `run.start`의 후보 수로 물러선다.
+  const DISPATCH_EVIDENCE = ['dispatch.start', 'module.start', 'module.done', 'dispatch.end']
+  const POST_DISPATCH = ['script.start', 'script.done', 'crossverify.start', 'crossverify.end', 'render.start', 'render.wrote', 'run.end']
+  const candidates = events.find(event => event.phase === 'run.start')?.candidates
+  const plannedAny = events.some(event => event.phase === 'modules.planned')
+  const someCandidates = Number.isInteger(candidates) && candidates > 0
+  const expectedFanOut = plannedAny
+    ? (Number.isInteger(applied) ? applied > 0 : someCandidates)
+    : someCandidates
+  const reachedAfter = events.find(event => POST_DISPATCH.includes(event.phase))
+  if (expectedFanOut && reachedAfter && !events.some(event => DISPATCH_EVIDENCE.includes(event.phase))) {
+    problems.push(`디스패치 기록이 한 줄도 없다: \`${DISPATCH_EVIDENCE.join('`/`')}\` 중 아무것도 없이 \`${reachedAfter.phase}\`(seq ${reachedAfter.seq})까지 갔다. 모듈이 언제 몇 개 돌았는지가 기록에 없으므로 그 사이 시간은 귀속 불가다`)
+  }
+
+  // 두 줄 사이가 비어 있으면 그 시간에 무엇이 있었는지 기록으로 말할 수 없다.
+  // 경보가 아니라 **수치**로 낸다 — 정상 실행에도 최장 구간은 늘 하나 있고,
+  // 늘 울리는 경보는 신호가 아니다. 리포트가 이 값을 그대로 옮기면 "어디서
+  // 오래 걸렸나"에 체감이 아니라 숫자로 답하게 된다.
+  //
+  // **돌고 있던 모듈 수를 함께 낸다.** 모듈 넷이 나란히 도는 동안에는 줄이 안
+  // 남는 것이 정상이고, 그 구간을 "기록이 비었다"로만 부르면 진짜 빈 구간과
+  // 구분되지 않는다. 09-17 실행의 최장 656초는 모듈 4개가 도는 중이었고,
+  // 09-18 실행의 최장 1863초는 아무것도 돌고 있지 않은 것으로 **기록됐다** —
+  // 둘을 같은 문장으로 부르면 뒤쪽이 묻힌다. 열린 시도도 인플라이트로 센다.
+  //
+  // **한 개가 아니라 최대 세 개를 낸다.** 09-18 실행에서 1위는 1863초였고 2위는
+  // 442초(전체의 17%)였는데, 1위만 내면 2위가 그 뒤에 가린다. 실제로 그 리포트는
+  // 442초 구간을 한 번도 언급하지 않았다. 2·3위는 전체의 10% 이상일 때만 낸다 —
+  // 정상 실행에서 잔구간까지 줄줄이 내면 읽히지 않는다.
+  if (events.length > 1) {
+    const msOf = event => new Date(event.at).getTime()
+    const span = msOf(events[events.length - 1]) - msOf(events[0])
+    const spans = attemptSpans(events)
+    // 도구가 도는 동안에도 줄은 안 남는다. 그 구간까지 "돌고 있던 모듈이 기록에
+    // 없다"로 적으면 **아무 일도 없었다**로 읽히는데, 이 계약이 442초를 귀속하려고
+    // `tool.start`를 넣은 바로 그 구간이 그렇게 적힌다.
+    // 끝나지 않은 도구도 돌고 있던 것으로 센다. 열린 모듈과 같은 처리다 —
+    // `tool.start`만 남기고 죽은 실행에서 그 30분을 "돌고 있던 것이 기록에 없다"로
+    // 적으면, 도구 요약은 "끝 기록 없음"이라고 하는데 구간은 비었다고 해서 같은
+    // 기록이 두 말을 한다.
+    const lastSeen = msOf(events[events.length - 1])
+    const running = toolRuns(events).runs
+      .filter(one => one.from !== null)
+      .map(one => ({ from: one.from, to: one.to ?? Math.max(lastSeen, one.from) }))
+    const overlap = (list, from, to) => list.filter(one => one.from < to && one.to > from).length
+    const gaps = []
+    for (let at = 1; at < events.length; at += 1) {
+      const from = msOf(events[at - 1])
+      const to = msOf(events[at])
+      const sec = Math.round((to - from) / 1000)
+      if (sec <= 0) continue
+      gaps.push({
+        sec,
+        share: span > 0 ? Math.round((sec * 1000 * 100) / span) : 0,
+        from: events[at - 1].phase,
+        to: events[at].phase,
+        modules: overlap(spans, from, to),
+        tools: overlap(running, from, to),
+      })
+    }
+    gaps.sort((a, b) => b.sec - a.sec)
+    const shown = gaps.filter((gap, at) => at === 0 || gap.share >= 10).slice(0, 3)
+    shown.forEach((gap, at) => {
+      const busy = [gap.modules && `모듈 ${gap.modules}개`, gap.tools && `도구 ${gap.tools}개`].filter(Boolean)
+      notes.push(`${at === 0 ? '가장 긴 무기록 구간' : `그 다음 ${at + 1}위`} ${gap.sec}s (전체의 ${gap.share}%): \`${gap.from}\` → \`${gap.to}\` — ${
+        busy.length ? `${busy.join('와 ')}가 그 사이 돌고 있었다` : '돌고 있던 것이 기록에 없다'}`)
+    })
+  }
+
+  // 검증 대상과 판정 수가 맞는지 본다.
+  //
+  // 2026-09-18 실행이 대상 16건을 잡고 판정 13건을 남겼다. 나머지 3건은 verifier가
+  // 두 차례 타임아웃해 판정이 없었는데 **그 사실이 리포트 산문에만 있었다.**
+  // 사이드카만 읽으면 3건이 증발한 것으로 보이고, 그것이 "검증하고 통과했다"인지
+  // "검증하지 못했다"인지 기록만으로 갈리지 않는다 — 차단 판정이 걸린 자리에서
+  // 가장 위험한 모호함이다. 판정을 못 받은 건수는 `noVerdict`로 적는다.
+  //
+  // 대상보다 판정이 **많은** 것도 여기서 걸린다. 후보별 마지막 판정만 세야 하는데
+  // 재판정을 두 번 세면 그렇게 된다.
+  {
+    const lastOf = name => {
+      let found = null
+      for (const event of events) if (event.phase === name) found = event
+      return found
+    }
+    const targeted = lastOf('script.done')?.counts?.verify
+    const verdicts = lastOf('crossverify.end')
+    if (Number.isInteger(targeted) && verdicts) {
+      const judged = ['upheld', 'rejected', 'needsContext', 'noVerdict']
+        .map(key => verdicts[key])
+        .filter(Number.isInteger)
+        .reduce((sum, count) => sum + count, 0)
+      if (judged !== targeted) {
+        problems.push(`검증 대상과 판정 수가 맞지 않는다: \`script.done\`은 ${targeted}건을 대상으로 적었는데 \`crossverify.end\`의 합은 ${judged}건이다. 판정을 받지 못한 건수는 \`noVerdict\`로 적는다 — 기록에 없으면 검증하고 통과한 것인지 검증하지 못한 것인지 갈리지 않는다`)
+      }
+    }
+  }
+
+  // 도구는 시작과 끝이 짝을 이뤄야 한다.
+  //
+  // `tool.start`를 닫힌 목록에 넣는 것만으로는 아무것도 강제되지 않는다 —
+  // 끝만 넷 남긴 기록이 그대로 통과하고, 442초를 귀속할 수 없던 상태가 그대로
+  // 재발한다. 이름으로 짝짓지 않는 이유는 `toolRuns`에 적어 두었다.
+  {
+    const tools = toolRuns(events)
+    if (tools.orphanDone.length) {
+      problems.push(`\`tool.start\` 없이 끝난 도구: ${tools.orphanDone.map(one => `\`${one.name}\`(seq ${one.seq})`).join(', ')}. 끝만 남기면 앞 단계와의 간격이 어느 도구의 것인지 갈리지 않는다`)
+    }
+    if (tools.unfinished.length) {
+      notes.push(`끝을 남기지 않은 도구 ${tools.unfinished.length}개: ${tools.unfinished.map(name => `\`${name}\``).join(', ')}`)
+    }
+  }
+
   if (malformed) notes.push(`읽지 못한 줄 ${malformed}개`)
 
   const out = []
@@ -329,6 +586,99 @@ if (has('summary')) {
       ? `> **\`run.end\` 뒤에 줄이 더 있다.** 마지막 줄은 \`${finalPhase}\`다. 종료가 마지막 자리에 있지 않으므로 실행이 어디서 끝났는지 이 기록만으로는 알 수 없다.`
       : `> **\`run.end\`가 없다.** 마지막으로 남은 단계는 \`${finalPhase}\`이고, 실행은 거기서 끝나지 않았다.`)
   }
+
+  // `←최장`이 **그 단계의 소요**로 읽힌다.
+  //
+  // 구간 칸은 앞 줄과 이 줄 사이의 시간인데, 표시는 줄 하나에 붙는다. 한 리포트가
+  // `script.start`에 1863초가 찍힌 표를 그대로 싣고 본문에서 그 시간을 언급하지
+  // 않았다 — `script.start`는 스크립트 진입 직후에 찍히므로 그 자체는 0초이고,
+  // 1863초는 **그 앞의 아무 기록도 없는 구간**이었다. 시작 표시에 붙은 최장
+  // 구간은 "여기까지 오는 데"라고 읽어야 한다.
+  if (slowest && slowest.step > 0 && /\.start$/.test(slowest.phase)) {
+    out.push('', `> \`←최장\`은 앞 줄과 \`${slowest.phase}\` **사이**의 ${slowest.step}s이고, \`${slowest.phase}\`가 그만큼 걸렸다는 뜻이 아니다. 그 사이에 남은 기록이 없으므로 무엇이 그 시간을 썼는지는 이 표로 알 수 없다.`)
+  }
+
+  // 디스패치의 모양. 합계와 벽시계가 따로 있어야 "느렸다"와 "놀았다"가 갈린다.
+  //
+  // 왜 스크립트가 세는가: 2026-09-17 실행의 모듈 합계는 5587초인데 벽시계는
+  // 1962초였고, 그 차이를 사람이 47줄에서 눈으로 복원해야 했다. 더 중요한 것은
+  // **인플라이트가 0으로 떨어진 지점이 여섯 번**이라는 사실이다 — 4개씩 띄우고
+  // 넷이 모두 끝나기를 기다린 모양이고, 스킬은 정확히 그것을 하지 말라고 적어
+  // 두었다. 지시는 적혀 있었고 지켜지지 않았으며, 아무도 그것을 몰랐다.
+  // 사후 탐지가 이 플러그인이 할 수 있는 전부이므로 여기서 한다.
+  {
+    const spans = attemptSpans(events)
+    const unstarted = spans.unstarted ?? []
+    if (!spans.length && unstarted.length) {
+      // 시작이 하나도 없으면 구간을 만들 수 없다. 그래도 **블록은 낸다** —
+      // 없는 블록은 "모듈이 안 돌았다"로 읽히는데, 끝은 남아 있으므로 돌기는 했다.
+      out.push('', `**디스패치** 모듈 ${new Set(unstarted.map(one => one.module)).size}개 · 완료 ${unstarted.length}개 · **소요 미측정**(\`module.start\`가 없어 구간을 만들 수 없다)`)
+    }
+    if (spans.length) {
+      const seconds = ms => Math.round(ms / 1000)
+      const lastDone = spans.reduce((last, span) => Math.max(last, span.to), spans[0].to)
+      const wall = lastDone - spans[0].from
+      const attemptMs = spans.reduce((sum, span) => sum + (span.to - span.from), 0)
+      const unfinished = spans.filter(span => span.open).length
+      const modules = new Set(spans.map(span => span.module)).size
+
+      // 겹치는 구간을 합쳐 **하나라도 돌고 있던** 시간을 낸다. 벽시계에서 그것을
+      // 빼면 슬롯이 통째로 빈 시간이 남는다 — 그것이 배리어의 값이다.
+      //
+      // 새 wave의 기준을 `>=`가 아니라 `>`로 둔다. 같은 타임스탬프로 인계되는
+      // 것은 슬롯이 빈 것이 아니다 — 재시도가 앞 시도의 종료와 같은 초에 시작한
+      // 기록에서 "인플라이트가 1번 0으로 떨어졌다, 유휴 0s"라는 **자기모순적인**
+      // 경고가 나왔다. 배리어가 아닌 것을 배리어로 세면 이 수치 전체를 못 믿는다.
+      let busy = 0
+      let waves = 0
+      let cursor = -Infinity
+      let waveEnd = -Infinity
+      for (const span of spans) {
+        if (span.from > waveEnd) waves += 1
+        busy += Math.max(0, span.to - Math.max(span.from, cursor))
+        cursor = Math.max(cursor, span.to)
+        waveEnd = Math.max(waveEnd, span.to)
+      }
+      const idle = Math.max(0, wall - busy)
+
+      // 동시에 열려 있던 시도의 최대치. 상한에 닿았는지를 기록만으로 말할 수 있게
+      // 한다 — 실효 동시가 낮은 것이 상한 때문인지 배리어 때문인지가 여기서 갈린다.
+      const edges = spans.flatMap(span => [{ at: span.from, delta: 1 }, { at: span.to, delta: -1 }])
+        .sort((a, b) => (a.at - b.at) || (a.delta - b.delta))
+      let live = 0
+      let peak = 0
+      for (const edge of edges) {
+        live += edge.delta
+        peak = Math.max(peak, live)
+      }
+
+      out.push('', `**디스패치** 모듈 ${modules}개 · 시도 ${spans.length}개(완료 ${spans.length - unfinished} · 미완료 ${unfinished}) · 합 ${
+        seconds(attemptMs)}s · 벽시계 ${seconds(wall)}s · 실효 동시 ${wall > 0 ? (attemptMs / wall).toFixed(2) : '—'} · 최대 동시 ${peak} · 슬롯 유휴 ${seconds(idle)}s${
+        unstarted.length ? ` · 시작 기록 없는 완료 ${unstarted.length}개(소요 미측정)` : ''}`)
+      if (unfinished) {
+        out.push('', `> **끝을 남기지 않은 시도가 ${unfinished}개다.** 그 구간은 마지막 기록 시각까지의 **최소** 관측 시간으로 셌으므로, 합계와 실효 동시는 실제보다 작다. 시도가 정말 그때 끝났다는 뜻이 아니다.`)
+      }
+      if (waves > 1) {
+        out.push('', `> **인플라이트가 ${waves - 1}번 0으로 떨어졌다** (연속 구간 ${waves}개). 한 모듈이 끝나면 즉시 다음을 넣으라는 규칙대로면 구간은 하나다. 비어 있는 동안 ${seconds(idle)}s가 쌓였다.`)
+      }
+    }
+  }
+
+  // 도구별 몫. `tool.start`를 넣은 목적이 여기서 눈에 보이는 값이 된다 —
+  // 넷을 연달아 돌린 442초가 각각 몇 초였는지를 뺄셈으로 낸다. 모듈 이벤트가
+  // 사이에 끼어도 상관없다. 짝은 이름이 아니라 열린 시작의 큐로 맞춘다.
+  {
+    const { runs } = toolRuns(events)
+    if (runs.length) {
+      const describe = one => {
+        if (one.from === null) return `\`${one.name}\` 시작 기록 없음(exit ${one.exit ?? '?'})`
+        if (one.to === null) return `\`${one.name}\` 끝 기록 없음`
+        return `\`${one.name}\` ${Math.round((one.to - one.from) / 1000)}s(exit ${one.exit ?? '?'})`
+      }
+      out.push('', `**도구** ${runs.map(describe).join(' · ')}`)
+    }
+  }
+
   // 사용량. 표 상세 칸에만 두면 긴 JSON 사이에 묻혀 아무도 안 읽으므로 따로 낸다.
   //
   // 이 블록은 "숫자를 보여주는" 것이 아니라 **무엇을 근거로 그 숫자를 말하는지**를

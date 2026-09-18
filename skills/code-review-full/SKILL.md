@@ -81,7 +81,11 @@ Trigger 섹션이 있는 모듈(`12`, `14`, `16`, `17`, `18`, `21`)은 diff에 �
   **되돌리는 조건** — timeout, inactivity timeout, queue expiry가 한 실행에서 두 건 이상 나오면 4가 이 런타임에 과했다는 신호다. 2로 내리고, 어떤 실패 클래스가 몇 번 나왔는지 기록한다 — 이름은 `workflow-contract.md` C-9의 닫힌 목록에서 고른다. 실패 없이 느리기만 한 것은 되돌릴 근거가 아니다.
 
   **관측 (2026-08-18, 교차검증 패스 도입 후 첫 실행)** — 이 조건이 실제로 발동했다. 한 실행에서 skill-injection validation 4건, inactivity timeout 4건, task-not-found 4건이 나와 in-flight를 4에서 2로 내렸고, fresh retry 1회로 전부 회복해 적용 모듈 19개를 모두 수집했다. **되돌리기 장치는 설계대로 동작했다.** 다만 관측이 1회뿐이므로 기본값 4는 그대로 둔다 — 71초/모듈 실측으로 정한 값을 표본 하나로 뒤집지 않는다. 같은 발동이 반복되면 그때 기본값을 다시 본다.
+
+  **관측 (2026-09-11·09-17, 사이드카 재집계)** — 위의 71초는 더 이상 맞지 않는다. `--summary`의 디스패치 블록이 낸 값은 모듈 19개에 합 4340초(09-11, 평균 228초)와 합 5587초(09-17, 평균 294초)다. **그런데 상한 4는 여기서 병목이 아니다** — 같은 두 실행의 실효 동시 실행은 2.98과 2.85로 상한에 닿지 못했고, 모자란 몫은 아래 배리어 항목에서 통째로 나온다. 모듈이 느려졌다고 상한을 올리면 놀고 있는 슬롯을 더 만들 뿐이다. 상한을 다시 보는 것은 실효 동시가 4에 붙은 뒤의 일이다.
 - **배리어를 두지 않는다.** 어느 한 모듈이 terminal 상태(`COMPLETED` 또는 `FAILED_ORCHESTRATION`)가 되면 **즉시** 다음 대기 모듈을 그 슬롯에 넣는다. 두 모듈이 모두 끝나기를 기다리지 않는다 — 기다리면 빨리 끝난 슬롯이 느린 모듈이 끝날 때까지 놀고, 그 유휴 시간이 모듈 수만큼 누적된다.
+
+  **이 지시는 지켜지지 않았고, 이제 세어서 드러난다.** 09-11 실행은 인플라이트가 4번, 09-17 실행은 6번 0으로 떨어졌다 — 4개를 띄우고 4개가 모두 끝나기를 기다린 모양이다. 쌓인 유휴는 각각 316초와 333초로 디스패치 벽시계의 약 20%다. `--summary`의 디스패치 블록이 그 횟수와 유휴를 내므로, **0이 아니면 리포트에 그대로 남는다.** 예정된 마지막 모듈 하나·props·예외 패스를 각각 혼자 돌리는 것도 같은 문제다 — 남은 것이 셋이면 셋을 함께 띄운다.
 - 대기열 순서는 모듈 번호 순으로 하되, 순서 자체가 정확성 요건은 아니다. 결과는 리포팅 시점에 모듈 번호로 정렬한다.
 
 **각 모듈 sub-agent prompt에 담을 것** — 3a에서 이미 확보했으므로 에이전트가 다시 조사하지 않는다.
@@ -326,10 +330,11 @@ bundle verifier와 isolated verifier는 **같은 prompt 계약**을 쓴다. 단�
 **`upheld`·`rejected`를 직접 세지 않는다.** 검증 작업이 낸 verdict payload를 파일로 쓰고 집계 스크립트에 넘긴다.
 
 ```bash
-node "$RULES_DIR/../scripts/tally-verdicts.mjs" --dir "$REPORT_DIR" --run "$REPORT_BASENAME" --input <verdicts-bundle.json> --input <verdicts-isolated.json> --malformed-tasks-corrected <N>
+node "$RULES_DIR/../scripts/tally-verdicts.mjs" --dir "$REPORT_DIR" --run "$REPORT_BASENAME" --input <verdicts-bundle.json> --input <verdicts-isolated.json> --targets <prepare-verification 출력> --malformed-tasks-corrected <N>
 ```
 
 - **이 스크립트가 `crossverify.end`를 남긴다.** 같은 줄을 따로 기록하지 않는다
+- **`--targets`를 빠뜨리지 않는다.** 판정을 받지 못한 후보를 개수가 아니라 ID로 센다. 개수만 맞추면 대상 밖 후보의 판정이 빠진 대상을 가리는데, 한 실행에서 verifier 타임아웃으로 판정을 못 받은 3건이 기록에서 통째로 사라진 적이 있다
 - `--input`을 준 순서가 정본 순서다. 후보별로 마지막 판정만 세므로, bundle이 `needs-context`로 돌리고 isolated가 다시 판정한 후보가 두 번 세어지지 않는다
 - coverage 숫자는 이 출력을 그대로 옮긴다. 한 실행이 손으로 세어 `upheld 13 / rejected 3`으로 적고 44초 뒤 `upheld 12 / rejected 4`로 정정했다 — 후보 수는 스크립트가 세면서 검증 결과만 눈으로 세고 있었다
 - `--malformed-tasks-corrected`는 **verdict가 아니라 verifier task 수**다. verdict payload가 모르는 dispatch 쪽 사실이라 여기서 넘긴다
@@ -341,7 +346,11 @@ node "$RULES_DIR/../scripts/tally-verdicts.mjs" --dir "$REPORT_DIR" --run "$REPO
 - 일반 패스 리포트는 `RULES_DIR`의 `[0-9]*.md`에서 발견한 numbered non-00 모듈명을 나열하고, 모듈별 sub-agent 결과를 각각 표시한다. `00-rule.md`는 공통 규칙이므로, `post-verification-synthesis` 모듈은 일반 패스 소속이 아니므로 이 목록에 넣지 않는다. 후자는 synthesis 단계 결과로 따로 표시한다.
 - numbered non-00 모듈 중 실행 또는 수집이 누락된 항목이 있으면 `FAILED orchestration`으로 표시하고, 완료된 리뷰처럼 요약하지 않는다.
 - lint/typecheck/test를 실행했으면 `도구 실행 결과` 섹션으로 분리해 보고하고, 리뷰 지적과 섞지 않는다 (`00-rule.md` 00-9).
-- `실행 타임라인` 섹션에는 `review-timeline.mjs --summary` 출력을 그대로 붙인다. 표를 직접 만들지 않고, 사이드카를 남기지 못했으면 그 사실을 그 섹션에 적는다 (C-9).
+- **도구마다 돌리기 직전에 `tool.start`를, 끝난 직후에 `tool.done`을 남긴다** (C-9). 끝만 모아 찍으면 네 번의 실행이 이름 없는 구간 하나가 된다 — 한 실행이 442초를 그렇게 남겼고, 그것이 어느 도구의 몫인지 끝내 알 수 없었다.
+- **lint/typecheck/test는 모듈이 도는 동안 함께 돌린다.** 이 도구들은 sub-agent 결과에 의존하지 않으므로 디스패치가 끝나기를 기다릴 이유가 없다. 09-17 실행은 2번째 wave가 도는 중에 넷을 끝내 벽시계에 거의 아무것도 더하지 않았고, 09-18 실행은 교차검증까지 끝난 뒤에 돌려 **442초를 통째로 직렬로 썼다.** 같은 일에 같은 시간이 들었지만 한쪽만 값을 치렀다.
+- `실행 타임라인` 섹션에는 `review-timeline.mjs --summary` 출력을 **마지막으로 한 번 더 돌려** 그대로 붙인다. 표를 직접 만들지 않고, 사이드카를 남기지 못했으면 그 사실을 그 섹션에 적는다 (C-9).
+
+  **중간에 뽑은 표를 그대로 두지 않는다.** 한 리포트가 교차검증 직후에 뽑은 4줄짜리 표를 실었는데 사이드카에는 13줄이 있었고, 빠진 9줄 안에 **전체 두 번째로 긴 442초 구간**이 들어 있었다. 그 리포트는 표 밑에 "렌더 시점 요약이므로 `run.end`는 포함되지 않습니다"라고 적었지만 실제로 빠진 것은 `run.end` 하나가 아니었다. `render.start`를 남긴 뒤에 뽑으면 그 문장이 참이 된다.
 - 리포트를 저장하고 `run.end`를 남긴 뒤 `review-timeline.mjs --check`를 돌린다. 종료 코드 1은 리뷰 실패가 아니지만, 지적된 빈 곳은 `실행 타임라인` 섹션에 함께 적는다 (C-9).
 - 개별 패스의 구조화 결과는 출력 전에 임의 축약하거나 버리지 않는다. aggregation은 parsed field를 유지한 채 병합·정렬만 하고, 최종 헤딩/섹션/표현은 renderer가 새로 만든다.
 - 같은 규칙 ID로 finding이 둘 이상이면 C-7에 따라 `17-3 (1/2)` 형태로 순번을 붙인다.
