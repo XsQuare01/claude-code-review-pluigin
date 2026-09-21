@@ -235,7 +235,7 @@ node "$RULES_DIR/../scripts/prepare-verification.mjs" --merge-base "$MERGE_BASE"
 
 - `results[]`는 C-6A validation을 통과한 producer JSON **그대로**다. 필드를 골라 옮기거나 변환하지 않는다
 - **`candidateId`는 스크립트가 부여한다.** `{ruleId}#{n}` 형식이고 정규화 위치 순서로 매겨지므로, 같은 입력이면 항상 같은 ID가 나오고 규칙 ID로 리포트에서 바로 추적된다
-- 출력은 candidate별 `locationCheck`·`eligibility`·`route`와 `bundles`, 그리고 `counts`다
+- 출력은 candidate별 `locationCheck`·`eligibility`·`route`·`impact`·`confidence`·`category`·`location`·`content`(producer 산문 — `title`·`body`와, 있으면 `evidence`·`recommendation`·`reason`)와 `bundles`, 그리고 `counts`다
 - **coverage 숫자는 이 `counts`를 그대로 옮긴다.** 직접 세지 않는다 — 손으로 센 수치는 `verify + skipVerify = total`을 깨뜨린다
 - **coverage 숫자의 출처를 함께 적는다.** 스크립트를 돌렸으면 `도구 실행 결과`에도 실행을 남기고, 돌리지 않았으면 미실행이라고 적는다. 숫자가 맞더라도 **결정적으로 판정했다고 서술하지 않는다**
 - 플러그인으로 설치된 경우 스크립트는 `RULES_DIR`의 상위에 있다. 경로를 찾지 못하면 그 사실을 `실행 계획`에 적는다
@@ -368,6 +368,20 @@ node "$RULES_DIR/../scripts/tally-verdicts.mjs" --dir "$REPORT_DIR" --run "$REPO
 - aggregation은 **검증을 통과한 JSON만** 입력으로 받는다. 이 단계에서는 parsed finding/openQuestion을 패스 라벨과 함께 정렬·중복 제거·그룹화할 뿐, Markdown 헤딩이나 severity 문자열을 읽거나 재사용하지 않는다.
 - renderer가 구조화 필드에서 최종 문서를 생성한다. `####` 헤딩, 섹션 이름, 상태 표, `미해결 / 후속 확인` 항목, severity 이모지는 모두 renderer가 만든다.
 - severity는 renderer output 단계에서만 `impact × confidence`로 파생한다. producer나 aggregation 단계에는 severity source field가 없다.
+
+**`상세 지적`과 `특수 패스`의 표기를 직접 만들지 않는다.**
+
+```bash
+node "$RULES_DIR/../scripts/render-findings.mjs" \
+     --input <prepare-verification 출력 경로> \
+     [--verdicts <verdicts-bundle.json 경로> --verdicts <verdicts-isolated.json 경로>] \
+     --phase <active-deletion|rollout-shadow> \
+     --rules "$RULES_DIR" \
+     --workflow full \
+     [--planned <modules-planned 페이로드 경로>]
+```
+
+출력을 두 섹션 자리에 그대로 붙인다. 같은 명령이 실행마다 다른 모양의 지적을 냈고, 규칙은 이미 계약에 다 있었는데도 그랬다 — 문서가 부탁하는 동안에는 지켜지지 않는다. `--verdicts`는 교차검증을 껐거나 아직 돌지 않았으면 생략한다(`crossVerified`가 `false`로 남아 `교차검증:` 축 자체가 렌더링되지 않는다) — 준 순서가 정본 순서이므로 `tally-verdicts.mjs`에 넘긴 순서(bundle 다음 isolated)와 같게 둔다. `--planned`는 `실행 계획`에서 건너뛴/미확인 모듈이 있을 때만 주고, 없으면 생략한다.
 
 ### 상세 지적 작성 규칙
 - 사용자가 다른 언어를 명시하지 않은 한 모든 패스의 상세 지적과 최종 저장 문서는 한국어로 작성한다.

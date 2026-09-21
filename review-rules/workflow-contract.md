@@ -216,7 +216,7 @@ SDK 드리프트로 원래부터 그만큼 실패하고 있었고, 그 브랜치
 - `location.quote`는 **안전한 code slot** 으로 렌더링한다. quote 안의 backtick/fence delimiter와 충돌하지 않도록 delimiter를 escape하거나 더 긴 delimiter를 선택한다. quote 내용의 정상적인 코드 문자 자체를 금지하지 않는다
 - `location.path`는 항상 code로 렌더링한다
 - URL이 필드 안에 있더라도 Markdown 링크로 승격하지 않고 **plain text** 로 렌더링한다
-- slot별 렌더링은 canonical order `body → evidence → recommendation → findingConfidenceReason → locationUnverifiedReason → openQuestionReason`만 사용하고, 값이 없는 slot은 생략한다. 한 field를 여러 slot에 중복 렌더링하지 않는다
+- slot별 렌더링은 canonical order `body → evidence → recommendation → findingConfidenceReason → locationUnverifiedReason → openQuestionReason`만 사용하고, 값이 없는 slot은 생략한다. **존재하는 슬롯은 각자 한 줄을 갖는다 — 합치지 않는다.** 한 칸으로 합치면 무엇을 왜 어떻게 고쳐야 하는지가 사라진다. `evidence`와 `recommendation`을 필수로 올리지 않는 이유는, 덧붙일 것이 정말 없는 지적에 필수 필드가 군더더기로 채워지기 때문이다. 합치는 것은 `render-findings.mjs`가 구조적으로 막는다. 한 field를 여러 slot에 중복 렌더링하지 않는다
 - `findingConfidenceReason`은 finding의 `confidence = low` 때문에 필요한 `reason`이고, `locationUnverifiedReason`은 `location.kind = "unverified"` 에 붙는 location reason이며, `openQuestionReason`은 open question 자체가 아직 닫히지 않은 이유다. 셋은 서로 다른 의미를 가지므로 합치거나 서로 대체하지 않는다
 - 이 계약은 renderer의 책임을 정의할 뿐이다. 정적 validator는 관련 contract token의 존재와 문서 간 동기화만 검사하며, 실제 escaping/renderer 실행을 증명하지 않는다
 
@@ -851,10 +851,10 @@ H1은 **`# {대상} {워크플로우 이름} 리포트`** 형식이며, 대상�
 | `##` | 리뷰 기준 | 범위, base, merge-base, `RULES_DIR`, 플러그인 버전, 프로젝트 프로파일 | 전체 |
 | `##` | 판정 | 결론 한 줄과 차단 사유. 길어야 서너 줄 | 전체 |
 | `##` | 실행 계획 | 후보 N / 적용 M / `SKIPPED`·`UNKNOWN` 목록과 사유 / 실패 클래스별 건수 | 모듈을 쓰는 워크플로우 |
-| `##` | 상세 지적 | 아래 모듈 섹션을 담는다 | 전체 |
+| `##` | 상세 지적 | 아래 모듈 섹션을 담는다. `render-findings.mjs` 출력을 그대로 붙인다. 표기를 직접 만들지 않는다 | 전체 |
 | `###` | `{NN} {모듈 제목}` | 모듈 하나당 하나 | 모듈을 쓰는 워크플로우 |
 | `####` | `{severity} {규칙 ID} {제목}` | finding 하나당 하나 | 전체 |
-| `##` | 특수 패스 | Props·수학·예외를 `###`로 | `full` |
+| `##` | 특수 패스 | Props·수학·예외를 `###`로. `render-findings.mjs` 출력을 그대로 붙인다. 표기를 직접 만들지 않는다 | `full` |
 | `##` | 요약 | 중복 제거된 지적을 severity 순으로 | `full`, `default` |
 | `##` | 도구 실행 결과 | C-6 / `00-rule.md` 00-9 | 전체 |
 | `##` | 실행 타임라인 | C-9 `--summary` 출력 표를 그대로. 표를 직접 만들지 않는다 | 전체 |

@@ -991,6 +991,25 @@ for (const [owner, contextPaths] of Object.entries(STRUCTURED_OWNER_POLICY_BEARI
         }
       }
     }
+
+    // 렌더 단계가 표기를 직접 만들지 않는지 본다. 참조만 있고 호출이 없으면
+    // 모델이 형식을 기억으로 재구성하는 자리가 그대로 남는다. 파일 이름만
+    // 찾는 부분 문자열 검사는 "렌더러가 있다"는 언급 한 줄로도 통과한다 —
+    // 실제 호출과 지나가는 언급을 못 가른 시도가 이 자리에서 실패했었다.
+    // 그래서 `render-findings.mjs` 언급 바로 뒤(500자 창)에 필수 플래그
+    // `--input`·`--rules`·`--phase`·`--workflow`가 모두 있는 호출문을
+    // 찾는다 — CLI 자체가 이 네 개 없이는 실행을 거부하므로(die), 넷이
+    // 함께 있어야 "언급"이 아니라 "그대로 옮길 수 있는 호출"이다.
+    const rendererMentions = [...text.matchAll(/render-findings\.mjs/g)]
+    const rendererRequiredFlags = ['--input', '--rules', '--phase', '--workflow']
+    const rendererActuallyInvoked = rendererMentions.some(mention => {
+      const window = text.slice(mention.index, mention.index + 500)
+      return rendererRequiredFlags.every(flagName => window.includes(flagName))
+    })
+    if (!rendererActuallyInvoked) {
+      failCode('structured-producer', 'E_RENDERER_NOT_CALLED',
+        `${relativePath} must call render-findings.mjs with its required flags (--input, --rules, --phase, --workflow) for the finding sections, not merely mention it`)
+    }
   }
 
   const forbiddenNeutralityPatterns = [

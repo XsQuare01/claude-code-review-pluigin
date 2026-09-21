@@ -101,7 +101,17 @@ sub-agent 응답을 받은 즉시 `workflow-contract.md` C-6A와 `REVIEW_RESULT_
 - H1은 `# {대상} Props/인자 전달 코드 리뷰 리포트` 형식으로 target-bearing title을 사용한다.
 - 공개 섹션은 `## 리뷰 기준`, `## 판정`, `## 상세 지적`, `## 요약`, `## 도구 실행 결과`, `## 실행 타임라인`, `## 미해결 / 후속 확인`을 기본으로 하고, 빈 섹션은 생략한다.
 - `요약`은 historical `한눈에 보기` 의미를 유지하는 공개 summary slot이다. finding/pass 집계와 merge decision을 빠르게 볼 수 있어야 한다.
-- `상세 지적`에는 validated finding을 Markdown으로 렌더링한다. `body`, `evidence`, `recommendation`, `findingConfidenceReason`, `locationUnverifiedReason`은 `workflow-contract.md` manifest의 renderer slot/label/order를 따른다.
+- **`상세 지적`의 표기를 직접 만들지 않는다.** `render-findings.mjs`가 정본이고, `body`·`evidence`·`recommendation`·`findingConfidenceReason`·`locationUnverifiedReason` slot과 순서는 그 스크립트가 정한다.
+
+```bash
+node "$RULES_DIR/../scripts/render-findings.mjs" \
+     --input <검증을 통과한 finding에 candidateId(`P-1`처럼 `{ruleId}#{n}`)를 붙여 candidates로 감싼 경로> \
+     --phase active-deletion \
+     --rules "$RULES_DIR" \
+     --workflow props
+```
+
+출력을 `상세 지적` 자리에 그대로 붙인다. 이 패스는 교차검증을 하지 않으므로 `--verdicts`는 주지 않는다 — `crossVerified`가 늘 `false`로 남아 교차검증 축 자체가 렌더링되지 않는다. `--phase`는 그래서 결과에 영향이 없지만 기본값 없이 필수인 플래그이므로 값을 채운다. numbered 모듈 실행 계획이 없으므로 `--planned`도 주지 않는다. 이 워크플로우는 `P` 접두만 내므로 렌더러가 만드는 `## 특수 패스` 헤딩도 같은 출력에 포함된다 — 지우지 않고 그대로 둔다.
 - `미해결 / 후속 확인`에는 validated `openQuestions`를 렌더링하고 `openQuestionReason` label을 사용한다.
 
 ### Step 5: 문서 저장
