@@ -259,17 +259,30 @@ export function withInstanceNumbers(candidates) {
  * `null`이면 이 finding을 렌더링하지 않는다 — 그 필터링은 여기서 하지 않고
  * Task 6의 `render`가 한다(`renderFinding`은 이미 걸러진 뒤에만 불린다).
  *
- * 판정이 없는 검증 대상(`disposition === undefined`)은 입력 오류가 아니라
+ * 판정이 없는 검증 대상(`verdict === undefined`)은 입력 오류가 아니라
  * `검증 실패`다. verifier가 타임아웃 나서 실제로 있었던 일이고, 조용히
  * 사라지면 안 되는 사실이라 그대로 표기한다.
+ *
+ * `verdictByCandidateId`의 값은 disposition 문자열 하나가 아니라
+ * `{ disposition, rebuttalKind }`다. `rebuttal.kind`를 같이 실어야 하는
+ * 이유는 계약(C-6B)이 `rebuttal.kind = other`를 세 번 못박기 때문이다 —
+ * "`other`는 어떤 phase에서도 finding의 상태를 바꾸지 않는다", "삭제를
+ * 유발하지 않는다", "차단 우회로가 되어서는 안 된다". disposition만 보고
+ * `rejected`면 무조건 active-deletion에서 지우면, `other`로 반박된
+ * high-impact finding까지 계약이 금지한 그 우회로로 사라진다. `kind`가
+ * `other`인 반박은 그래서 `rejected`의 일반 경로(active-deletion에서
+ * null, rollout-shadow에서 `rejected-shadow`)를 타지 않고 모든 phase에서
+ * `rejected-other`로 남는다.
  */
 export function labelFor(candidate, verdictByCandidateId, phase, vocabulary) {
   const tokens = vocabulary.crossVerification
   if (candidate.eligibility !== 'VERIFY') return tokens['not-eligible']
-  const disposition = verdictByCandidateId.get(candidate.candidateId)
-  if (disposition === undefined) return tokens['verification-unavailable']
+  const verdict = verdictByCandidateId.get(candidate.candidateId)
+  if (verdict === undefined) return tokens['verification-unavailable']
+  const { disposition, rebuttalKind } = verdict
   if (disposition === 'needs-context') return tokens['scope-open']
   if (disposition === 'rejected') {
+    if (rebuttalKind === 'other') return tokens['rejected-other']
     return phase === 'rollout-shadow' ? tokens['rejected-shadow'] : null
   }
   return tokens.upheld
@@ -325,7 +338,15 @@ if (process.argv[1] && process.argv[1].endsWith('render-findings.mjs')) {
     } catch (error) {
       die(`--verdicts를 읽지 못했다: ${path} — ${error.message}`)
     }
-    for (const verdict of parsed.verdicts ?? []) byCandidateId.set(verdict.candidateId, verdict.disposition)
+    // labelFor는 disposition만으로 rejected를 판단하지 않는다 —
+    // rebuttal.kind가 'other'인지도 봐야 그 반박을 계약(C-6B)대로 모든
+    // phase에서 살려둘 수 있다. 그래서 문자열 하나가 아니라
+    // { disposition, rebuttalKind } 객체를 싣는다. rebuttal이 없는
+    // disposition(upheld·needs-context)에서는 rebuttalKind가 그냥
+    // undefined로 남고 labelFor는 그 값을 보지 않는다.
+    for (const verdict of parsed.verdicts ?? []) {
+      byCandidateId.set(verdict.candidateId, { disposition: verdict.disposition, rebuttalKind: verdict.rebuttal?.kind })
+    }
   }
   // 하나도 주지 않으면 교차검증 패스가 없었다는 뜻이다. 준 뒤에 어떤 후보의
   // 판정이 없는 것과는 다른 사건이라, 전자는 축 자체를 렌더링하지 않는다.

@@ -396,24 +396,75 @@ test('판정이 없는 검증 대상은 검증 실패다', () => {
   assert.equal(label, '검증 실패')
 })
 
+// 리뷰 fix round 1, Important 2 — verdictByCandidateId의 값은 더 이상 disposition
+// 문자열 하나가 아니라 { disposition, rebuttalKind } 객체다(아래
+// "rebuttal.kind = other" 절 참고). rebuttal이 없는 판정에서는 rebuttalKind를
+// 그냥 생략한다.
 test('반박된 finding은 active-deletion에서 사라진다', () => {
-  const verdicts = new Map([['04-3#1', 'rejected']])
+  const verdicts = new Map([['04-3#1', { disposition: 'rejected' }]])
   assert.equal(labelFor(ok({ eligibility: 'VERIFY' }), verdicts, 'active-deletion', VOCAB), null)
 })
 
 test('반박된 finding은 rollout-shadow에서 관찰 중으로 남는다', () => {
-  const verdicts = new Map([['04-3#1', 'rejected']])
+  const verdicts = new Map([['04-3#1', { disposition: 'rejected' }]])
   const vocab = { ...VOCAB, crossVerification: { ...VOCAB.crossVerification, 'rejected-shadow': '반박됨 — 관찰 중' } }
   assert.equal(labelFor(ok({ eligibility: 'VERIFY' }), verdicts, 'rollout-shadow', vocab), '반박됨 — 관찰 중')
 })
 
 test('needs-context 판정은 범위 미확정이다', () => {
-  const verdicts = new Map([['04-3#1', 'needs-context']])
+  const verdicts = new Map([['04-3#1', { disposition: 'needs-context' }]])
   const vocab = { ...VOCAB, crossVerification: { ...VOCAB.crossVerification, 'scope-open': '범위 미확정' } }
   assert.equal(labelFor(ok({ eligibility: 'VERIFY' }), verdicts, 'active-deletion', vocab), '범위 미확정')
 })
 
 test('upheld 판정은 유지다', () => {
-  const verdicts = new Map([['04-3#1', 'upheld']])
+  const verdicts = new Map([['04-3#1', { disposition: 'upheld' }]])
   assert.equal(labelFor(ok({ eligibility: 'VERIFY' }), verdicts, 'active-deletion', VOCAB), '유지')
+})
+
+// 리뷰 fix round 1, Important 1 — 위의 정렬 테스트는 전부 ruleId가 다른 후보만
+// 썼다. compareCandidates의 candidateId tie-break(같은 ruleId일 때만 타는
+// 마지막 줄)은 그 테스트들로는 한 번도 실행되지 않는다. withInstanceNumbers는
+// 정렬된 배열의 "그 자리 순서"로 (n/총)을 매기므로, tie-break가 뒤집히거나
+// 지워지면 같은 ruleId의 두 finding이 서로의 순번과 — 렌더링에서는 서로의
+// 본문까지 — 뒤바뀐 채로 나가는데도 이 파일의 11개 테스트는 전부 그대로
+// 통과한다. 그래서 순서 자체를 candidateId로 직접 확인한다.
+test('같은 규칙 ID의 형제는 candidateId로 정렬해 순번이 서로 바뀌지 않게 한다', () => {
+  const sorted = [
+    ok({ candidateId: '11-6#2', ruleId: '11-6' }),
+    ok({ candidateId: '11-6#1', ruleId: '11-6' }),
+  ].sort(compareCandidates)
+  assert.deepEqual(sorted.map(c => c.candidateId), ['11-6#1', '11-6#2'])
+})
+
+// -------------------------------------------------------- rebuttal.kind = other
+//
+// 리뷰 fix round 1, Important 2 — 계약(C-6B)은 `other`가 어떤 phase에서도
+// finding을 지우지 않는다고 세 번 못박는다. 그런데 labelFor는 disposition만
+// 보고 `rejected`면 active-deletion에서 무조건 null을 냈다 — `other`도 그
+// 경로를 탔고, 그러면 차단해야 할 🔴가 계약이 금지한 그 우회로로 사라진다.
+// 이걸 구분하려면 verdict 채널이 disposition 문자열 하나가 아니라
+// `{ disposition, rebuttalKind }`를 실어야 한다. 이 시점부터
+// verdictByCandidateId의 값은 문자열이 아니라 이 객체 모양이다 — 아래 세
+// 테스트와 위의 세 판정 테스트(rejected/needs-context/upheld)가 그 모양을
+// 쓴다.
+
+test('rebuttal.kind가 other면 active-deletion에서도 사라지지 않는다', () => {
+  const verdicts = new Map([['04-3#1', { disposition: 'rejected', rebuttalKind: 'other' }]])
+  const vocab = { ...VOCAB, crossVerification: { ...VOCAB.crossVerification, 'rejected-other': '반박 시도 — 분류 밖' } }
+  assert.equal(labelFor(ok({ eligibility: 'VERIFY' }), verdicts, 'active-deletion', vocab), '반박 시도 — 분류 밖')
+})
+
+test('rebuttal.kind가 other면 rollout-shadow에서도 분류 밖으로 남는다 — 관찰 중이 아니다', () => {
+  const verdicts = new Map([['04-3#1', { disposition: 'rejected', rebuttalKind: 'other' }]])
+  const vocab = {
+    ...VOCAB,
+    crossVerification: { ...VOCAB.crossVerification, 'rejected-other': '반박 시도 — 분류 밖', 'rejected-shadow': '반박됨 — 관찰 중' },
+  }
+  assert.equal(labelFor(ok({ eligibility: 'VERIFY' }), verdicts, 'rollout-shadow', vocab), '반박 시도 — 분류 밖')
+})
+
+test('rebuttal.kind가 other가 아니면 active-deletion에서 그대로 사라진다', () => {
+  const verdicts = new Map([['04-3#1', { disposition: 'rejected', rebuttalKind: 'guard-exists' }]])
+  assert.equal(labelFor(ok({ eligibility: 'VERIFY' }), verdicts, 'active-deletion', VOCAB), null)
 })
