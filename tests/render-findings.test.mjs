@@ -497,7 +497,7 @@ test('rebuttal.kind가 other가 아니면 active-deletion에서 그대로 사라
 test('catalog에서 워크플로우의 모듈 섹션을 만든다', () => {
   const { value } = loadModuleSections(RULES, 'full')
   assert.ok(value.length >= 19)
-  assert.deepEqual(value[0], { id: '01', title: 'FSD 아키텍처' })
+  assert.deepEqual(value[0], { kind: 'module', id: '01', title: 'FSD 아키텍처' })
   assert.equal(value.some(section => section.id === '00'), false, '공통 규칙은 섹션이 아니다')
   assert.equal(value.some(section => section.id === '10'), false, 'synthesis 전용 모듈은 섹션이 아니다')
 })
@@ -528,14 +528,47 @@ test('catalog을 읽지 못하면 사유를 낸다 — loadModuleSections', () =
 test('catalog에서 특수 패스 접두를 얻는다', () => {
   const { value } = loadSpecialistPasses(RULES)
   assert.deepEqual(value, [
-    { id: 'props', title: 'Props', prefixes: ['P'] },
-    { id: 'math', title: '수학', prefixes: ['A', 'C'] },
-    { id: 'exception', title: '예외', prefixes: ['EX'] },
+    { kind: 'pass', id: 'props', title: 'Props', prefixes: ['P'] },
+    { kind: 'pass', id: 'math', title: '수학', prefixes: ['A', 'C'] },
+    { kind: 'pass', id: 'exception', title: '예외', prefixes: ['EX'] },
   ])
 })
 
 test('catalog을 읽지 못하면 사유를 낸다 — loadSpecialistPasses', () => {
   assert.match(loadSpecialistPasses(join(tmpdir(), 'no-such-dir')).error, /catalog/)
+})
+
+// 리뷰 fix round 1, Important 4 — rulePrefixes가 없거나 빈 배열이면 조용히
+// "접두 없음"으로 넘기지 않고 거부한다. catalog를 접두의 단일 소스로 만든
+// 것(Ruling 1)은 그 소스가 조용히 사라질 수 있으면 단일 소스가 아니다.
+test('specialist 항목에 rulePrefixes가 없으면 거부한다', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'render-catalog-'))
+  writeFileSync(join(dir, 'catalog.json'), JSON.stringify({
+    modules: [
+      { id: 'props', role: 'specialist' },
+      { id: 'math', role: 'specialist', rulePrefixes: ['A', 'C'] },
+      { id: 'exception', role: 'specialist', rulePrefixes: ['EX'] },
+    ],
+  }), 'utf8')
+  const result = loadSpecialistPasses(dir)
+  rmSync(dir, { recursive: true, force: true })
+  assert.ok(result.error, 'error가 없다')
+  assert.match(result.error, /props/)
+  assert.match(result.error, /rulePrefixes/)
+})
+
+test('specialist 항목의 rulePrefixes가 빈 배열이면 거부한다', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'render-catalog-'))
+  writeFileSync(join(dir, 'catalog.json'), JSON.stringify({
+    modules: [
+      { id: 'props', role: 'specialist', rulePrefixes: [] },
+      { id: 'math', role: 'specialist', rulePrefixes: ['A', 'C'] },
+      { id: 'exception', role: 'specialist', rulePrefixes: ['EX'] },
+    ],
+  }), 'utf8')
+  const result = loadSpecialistPasses(dir)
+  rmSync(dir, { recursive: true, force: true })
+  assert.match(result.error, /props/)
 })
 
 // -------------------------------------------------------------- render — golden
@@ -544,16 +577,16 @@ test('catalog을 읽지 못하면 사유를 낸다 — loadSpecialistPasses', ()
 // 누락을 따로 검사할 필요가 없다 — 한 글자만 달라도 깨진다.
 //
 // SECTIONS는 CLI가 실제로 만드는 모양(loadModuleSections + loadSpecialistPasses를
-// 이어붙인 것)을 흉내 낸다 — 숫자 id는 모듈, `prefixes`가 있는 항목은 특수
-// 패스다. `passLabel` 필드는 애초에 없으므로 EX-6 후보의 ruleId 접두(`EX`)만으로
-// "예외" 섹션에 묶인다.
+// 이어붙인 것)을 흉내 낸다 — `kind: 'module'`은 모듈, `kind: 'pass'`는 특수
+// 패스다(리뷰 fix round 1, Important 5). `passLabel` 필드는 애초에 없으므로
+// EX-6 후보의 ruleId 접두(`EX`)만으로 "예외" 섹션에 묶인다.
 
 const SECTIONS = [
-  { id: '04', title: '상태와 Effect' },
-  { id: '11', title: '스타일링' },
-  { id: 'props', title: 'Props', prefixes: ['P'] },
-  { id: 'math', title: '수학', prefixes: ['A', 'C'] },
-  { id: 'exception', title: '예외', prefixes: ['EX'] },
+  { kind: 'module', id: '04', title: '상태와 Effect' },
+  { kind: 'module', id: '11', title: '스타일링' },
+  { kind: 'pass', id: 'props', title: 'Props', prefixes: ['P'] },
+  { kind: 'pass', id: 'math', title: '수학', prefixes: ['A', 'C'] },
+  { kind: 'pass', id: 'exception', title: '예외', prefixes: ['EX'] },
 ]
 
 test('두 섹션 전문을 낸다 — golden', () => {
@@ -612,14 +645,76 @@ test('두 섹션 전문을 낸다 — golden', () => {
 
 test('적용 대상인데 지적이 없는 모듈은 지적 없음으로 남는다', () => {
   const md = render([], new Map(), 'active-deletion',
-    { categoryLabels: {}, crossVerification: {} }, [{ id: '03', title: 'React 규칙' }], true)
+    { categoryLabels: {}, crossVerification: {} }, [{ kind: 'module', id: '03', title: 'React 규칙' }], true)
   assert.match(md, /### 03 React 규칙\n\n지적 없음\.\n/)
 })
 
+// 리뷰 fix round 1, Important 2 — 원래 이 테스트는 `crossVerification: {}`인
+// vocab을 썼다. 빈 토큰 테이블에서는 render가 crossVerified를 무시하고
+// labelFor를 그냥 불러도 `labelFor`가 모든 경로에서 undefined를 내므로
+// `doesNotMatch(md, /교차검증/)`가 통과했다 — 검증하려던 동작(labelFor를
+// 부르지 않는 것)이 실패해도 테스트는 못 잡는 헛것이었다. `not-eligible`
+// 토큰이 채워진 실제 VOCAB을 쓰면, render가 crossVerified===false에서도
+// labelFor를 부르는 회귀가 생기면 "교차검증: `대상 아님`"이 찍혀 이 assert가
+// 실제로 깨진다.
 test('교차검증을 돌리지 않았으면 축을 아예 내지 않는다', () => {
   const md = render([ok({ eligibility: 'SKIP-VERIFY' })], new Map(), 'active-deletion',
-    { categoryLabels: { 'data-loss': '데이터 손상·유실' }, crossVerification: {} },
-    [{ id: '04', title: '상태와 Effect' }], false)
+    VOCAB, [{ kind: 'module', id: '04', title: '상태와 Effect' }], false)
   assert.doesNotMatch(md, /교차검증/)
   assert.match(md, /영향: 높음 \(데이터 손상·유실\) · 확신: 높음\n/)
+})
+
+// 리뷰 fix round 1, Important 1 — labelFor가 null을 내는 finding(반박된
+// VERIFY 대상)이 순번 매기기 *전에* 걸러지는지를 직접 본다. `labelFor`
+// 단위 테스트(위)는 null이라는 값 자체만 확인하지, render가 그 null을
+// 정렬·순번보다 먼저 거르는지는 보지 않는다 — 순서를 바꿔도(순번을 먼저
+// 매기고 나중에 거르면) 그 단위 테스트들은 전부 그대로 통과한다. 세 형제
+// 중 가운데 하나가 반박되면, 살아남은 둘의 분모는 2여야 한다(반박된 것까지
+// 센 3이 아니라).
+test('반박된 형제는 순번 분모에서도 빠진다 — 필터링이 정렬·순번보다 먼저다', () => {
+  const candidates = [
+    ok({ candidateId: '11-6#1', ruleId: '11-6', eligibility: 'VERIFY', impact: 'low', category: undefined,
+         content: { title: '살아남음1', body: 'B1' } }),
+    ok({ candidateId: '11-6#2', ruleId: '11-6', eligibility: 'VERIFY', impact: 'low', category: undefined,
+         content: { title: '반박됨', body: 'B2' } }),
+    ok({ candidateId: '11-6#3', ruleId: '11-6', eligibility: 'VERIFY', impact: 'low', category: undefined,
+         content: { title: '살아남음2', body: 'B3' } }),
+  ]
+  const verdicts = new Map([['11-6#2', { disposition: 'rejected', rebuttalKind: 'guard-exists' }]])
+  const md = render(candidates, verdicts, 'active-deletion', VOCAB,
+    [{ kind: 'module', id: '11', title: '스타일링' }], true)
+  assert.doesNotMatch(md, /반박됨/, '반박된 finding 자체가 리포트에 남아있다')
+  assert.doesNotMatch(md, /\/3\)/, '걸러지기 전 건수(3)가 분모에 남아있다')
+  assert.match(md, /`11-6 \(1\/2\)` 살아남음1/)
+  assert.match(md, /`11-6 \(2\/2\)` 살아남음2/)
+})
+
+// 리뷰 fix round 1, Important 3 — Ruling 2가 고정한 순서(Props → 수학 →
+// 예외)를 loadSpecialistPasses 자체의 deepEqual만으로는 render가 지키는지
+// 확인할 수 없다(golden 테스트는 예외 하나만 후보가 있어 Props·수학이
+// 통째로 스킵된다). 세 패스에 각각 후보를 하나씩 둬서 실제로 그 순서로
+// 나오는지를 직접 본다.
+test('특수 패스는 Props → 수학 → 예외 순서로 나온다', () => {
+  const candidates = [
+    ok({ candidateId: 'EX-1#1', ruleId: 'EX-1', impact: 'low', category: undefined,
+         content: { title: '예외 후보', body: 'B' } }),
+    ok({ candidateId: 'A-1#1', ruleId: 'A-1', impact: 'low', category: undefined,
+         content: { title: '수학 후보', body: 'B' } }),
+    ok({ candidateId: 'P-1#1', ruleId: 'P-1', impact: 'low', category: undefined,
+         content: { title: 'Props 후보', body: 'B' } }),
+  ]
+  const md = render(candidates, new Map(), 'active-deletion', VOCAB, SECTIONS, false)
+  const order = [...md.matchAll(/^### (Props|수학|예외)$/gm)].map(match => match[1])
+  assert.deepEqual(order, ['Props', '수학', '예외'])
+})
+
+// 리뷰 fix round 1, Important 5 — sections 항목의 kind가 'module'도 'pass'도
+// 아니면 두 분기 모두에서 조용히 빠지지 않고 던진다. 조용히 버리면 그
+// 섹션의 지적이 리포트에서 통째로 사라지는데, 원인이 CLI 배선이라 다시
+// 돌려도 똑같이 사라진다.
+test('sections 항목의 kind가 module·pass가 아니면 조용히 사라지지 않고 던진다', () => {
+  assert.throws(
+    () => render([], new Map(), 'active-deletion', VOCAB, [{ kind: 'mystery', id: 'zz', title: '?' }], false),
+    /kind/,
+  )
 })

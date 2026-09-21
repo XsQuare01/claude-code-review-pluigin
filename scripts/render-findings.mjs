@@ -319,7 +319,11 @@ export function loadModuleSections(rulesDir, workflow, plannedPath) {
     .filter(module => (module.workflows ?? []).includes(workflow))
     .filter(module => module.phaseByWorkflow?.[workflow] !== 'post-verification-synthesis')
     .filter(module => !skipped.has(module.id))
-    .map(module => ({ id: module.id, title: module.title }))
+    // `kind`는 render가 이 배열과 loadSpecialistPasses의 배열을 CLI가 합친
+    // 뒤에도 둘을 구분할 수 있게 하는 판별자다(리뷰 판정 Ruling 2 후속,
+    // Important 5) — id 모양으로 추측하면(두 자리 숫자인지 등) 그 추측과
+    // 어긋나는 항목이 양쪽 분기 모두에서 조용히 빠질 수 있다.
+    .map(module => ({ kind: 'module', id: module.id, title: module.title }))
     .sort((left, right) => (left.id < right.id ? -1 : 1))
   return { value: sections }
 }
@@ -338,6 +342,14 @@ export function loadModuleSections(rulesDir, workflow, plannedPath) {
  * 하는데, 여기서 손으로 다시 옮기면 review-rules 쪽만 바뀌고 이 파일은
  * 조용히 낡은 채로 남는다(파일 맨 위 주석이 경고하는 "같은 사실을 두 번
  * 코드로 옮기는" 실패).
+ *
+ * rulePrefixes가 없거나 빈 배열이면 `{ error }`를 낸다(리뷰 fix round 1,
+ * Important 4) — `byId.get(id)?.rulePrefixes ?? []`로 조용히 "접두 없음"을
+ * 흘려보내면, catalog의 오타나 항목 삭제가 EX-* 지적을 "### EX"라는 원시
+ * 접두 헤딩 아래로 새게 하고, 그 상태로도 이 함수는 "성공"한다. 같은 파일의
+ * `loadVocabulary`가 categoryLabels 누락을 거부하는 것과 같은 이유로 같은
+ * 방식(`{value}`/`{error}`)을 쓴다 — catalog를 그 사실의 단일 소스로 만든
+ * 것(Ruling 1)은, 그 소스가 조용히 사라질 수 있으면 단일 소스가 아니다.
  */
 export function loadSpecialistPasses(rulesDir) {
   let catalog
@@ -347,11 +359,14 @@ export function loadSpecialistPasses(rulesDir) {
     return { error: `catalog.json을 읽지 못했다: ${error.message}` }
   }
   const byId = new Map((catalog.modules ?? []).map(module => [module.id, module]))
-  const passes = [
-    ['props', 'Props'],
-    ['math', '수학'],
-    ['exception', '예외'],
-  ].map(([id, title]) => ({ id, title, prefixes: byId.get(id)?.rulePrefixes ?? [] }))
+  const passes = []
+  for (const [id, title] of [['props', 'Props'], ['math', '수학'], ['exception', '예외']]) {
+    const prefixes = byId.get(id)?.rulePrefixes
+    if (!Array.isArray(prefixes) || prefixes.length === 0) {
+      return { error: `catalog.json의 "${id}" specialist 항목에 rulePrefixes가 없다 — 특수 패스 접두를 알 수 없다` }
+    }
+    passes.push({ kind: 'pass', id, title, prefixes })
+  }
   return { value: passes }
 }
 
@@ -359,9 +374,12 @@ export function loadSpecialistPasses(rulesDir) {
  * 리포트의 `상세 지적`과 `특수 패스` 두 섹션을 조립한다.
  *
  * `sections`는 숫자 모듈 섹션(`loadModuleSections`)과 특수 패스 섹션
- * (`loadSpecialistPasses`)을 CLI가 합쳐 넘긴다 — id가 두 자리 숫자면 모듈,
- * `prefixes` 배열을 가지면 특수 패스다. render는 catalog 파일을 직접
- * 읽지 않는다(rulesDir을 받지 않는다); 그 경로는 CLI 배선 한 곳에만
+ * (`loadSpecialistPasses`)을 CLI가 합쳐 넘긴다. 두 loader가 붙인 `kind`
+ * (`'module'` | `'pass'`)로 구분한다 — id 모양(두 자리 숫자인지, `prefixes`
+ * 배열이 있는지)으로 추측하던 이전 버전은 그 추측과 항목이 어긋나면(예:
+ * 둘 다 아니거나 둘 다인 항목) 양쪽 분기 모두에서 조용히 빠지거나 두 번
+ * 그려질 수 있었다(리뷰 fix round 1, Important 5). render는 catalog 파일을
+ * 직접 읽지 않는다(rulesDir을 받지 않는다); 그 경로는 CLI 배선 한 곳에만
  * 있어야 같은 rulesDir 인자를 두 번 파싱하다 어긋나는 일이 없다.
  */
 export function render(candidates, verdictByCandidateId, phase, vocabulary, sections, crossVerified) {
@@ -372,6 +390,8 @@ export function render(candidates, verdictByCandidateId, phase, vocabulary, sect
     const label = crossVerified ? labelFor(candidate, verdictByCandidateId, phase, vocabulary) : undefined
     // `null`은 이 phase에서 리포트에 나타나지 않는다는 뜻이다 — 정렬·순번을
     // 매기기 전에 걸러야, 지워진 finding이 "(1/3)" 같은 분모를 차지하지 않는다.
+    // (리뷰 fix round 1, Important 1 — 순번을 먼저 매기고 나중에 거르면
+    // 분모가 걸러지기 전 건수로 굳어 남는다.)
     if (label === null) continue
     labelled.push({ candidate, label })
   }
@@ -385,8 +405,19 @@ export function render(candidates, verdictByCandidateId, phase, vocabulary, sect
   const numberedModules = numbered.filter(candidate => /^\d\d-/.test(candidate.ruleId))
   const specials = numbered.filter(candidate => !/^\d\d-/.test(candidate.ruleId))
 
+  // sections를 kind로 총함수(total function)처럼 나눈다 — module도 pass도
+  // 아닌 항목을 조용히 두 분기 모두에서 버리면, 그 섹션의 지적이 리포트에서
+  // 통째로 사라지고 원인이 CLI 배선이라 다시 돌려도 똑같이 사라진다. 던져서
+  // 바로 드러낸다(리뷰 fix round 1, Important 5).
+  const moduleSections = []
+  const specialistSections = []
+  for (const section of sections) {
+    if (section.kind === 'module') { moduleSections.push(section); continue }
+    if (section.kind === 'pass') { specialistSections.push(section); continue }
+    throw new Error(`render: sections[].kind는 'module' 또는 'pass'여야 한다 — 받은 값: ${JSON.stringify(section)}`)
+  }
+
   const lines = ['## 상세 지적', '']
-  const moduleSections = sections.filter(section => /^\d{2}$/.test(section.id))
   const titleById = new Map(moduleSections.map(section => [section.id, section.title]))
   // 섹션에 없는 모듈에서 지적이 오면 그 모듈도 낸다. 조용히 버리면 지적이
   // 사라지는데, 섹션 목록이 틀린 것보다 지적이 없어지는 쪽이 나쁘다.
@@ -409,7 +440,6 @@ export function render(candidates, verdictByCandidateId, phase, vocabulary, sect
 
   if (specials.length) {
     lines.push('## 특수 패스', '')
-    const specialistSections = sections.filter(section => Array.isArray(section.prefixes))
     // 규칙 ID 접두(`EX`, `P`, `A`, `C`, …)로 특수 패스 표시명을 찾는다. 못
     // 찾으면(카탈로그와 CLI 배선이 어긋난 경우) 접두 자체를 헤딩으로 써서
     // 낸다 — 숫자 모듈에서 이미 쓰는 것과 같은 안전장치로, 조용히 버리지
@@ -419,8 +449,8 @@ export function render(candidates, verdictByCandidateId, phase, vocabulary, sect
       return specialistSections.find(pass => pass.prefixes.includes(prefix))?.title ?? prefix
     }
     // Map은 삽입 순서를 지킨다 — specialistSections 순서(계약 C-7이 고정한
-    // Props·수학·예외)가 먼저 채워지고, 못 알아본 접두는 등장 순으로 뒤에
-    // 붙는다.
+    // Props·수학·예외, Important 3으로 골든 테스트가 이 순서를 직접 고정한다)가
+    // 먼저 채워지고, 못 알아본 접두는 등장 순으로 뒤에 붙는다.
     const grouped = new Map(specialistSections.map(pass => [pass.title, []]))
     for (const candidate of specials) {
       const title = titleFor(candidate)
