@@ -13,6 +13,7 @@ import { checkProducerWriteAccess, parseAgentTools } from './lib/producer-tools.
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { validateEffectiveCommonContext } from './lib/effective-common-context-validator.mjs'
+import { markedBlock } from './lib/contract-blocks.mjs'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 const RULES = join(ROOT, 'review-rules')
@@ -36,22 +37,16 @@ function walkFiles(dir) {
   return files.sort()
 }
 
+// 블록을 자르는 실제 로직은 scripts/lib/contract-blocks.mjs 에 있다. 렌더러도
+// 같은 계약 파일을 읽어야 해서 그 헬퍼는 순수 함수(예외 대신 값 반환)로
+// 뺐고, 여기서는 validator의 실패 수집 방식(failCode)에 감싸 쓴다.
 function extractMarkedBlock(text, label, check, code) {
-  const begin = `<!-- ${label}:BEGIN -->`
-  const end = `<!-- ${label}:END -->`
-  const beginCount = text.split(begin).length - 1
-  const endCount = text.split(end).length - 1
-  if (beginCount !== 1 || endCount !== 1) {
-    failCode(check, code, `${label} block must appear exactly once (found BEGIN=${beginCount}, END=${endCount})`)
+  const out = markedBlock(text, label)
+  if (out.error) {
+    failCode(check, code, out.error)
     return null
   }
-  const start = text.indexOf(begin)
-  const finish = text.indexOf(end)
-  if (finish <= start) {
-    failCode(check, code, `${label} block end appears before begin`)
-    return null
-  }
-  return text.slice(start + begin.length, finish).trim()
+  return out.value
 }
 
 function parseJsonCodeBlock(block, label, check, code) {
