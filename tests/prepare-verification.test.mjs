@@ -482,3 +482,61 @@ test('a row missing its line or quote is dropped rather than checked as if compl
   ])
   assert.equal(candidates.length, 1)
 })
+
+// ---------------------------------------------------- 렌더러로 가는 산문
+
+// 산문이 버려지는 자리가 둘이었다. 후보를 만들 때 이미 떨어져서
+// prepareVerification에는 도달조차 하지 않았고, 그래서 렌더 시점에 모델이
+// producer 결과와 후보를 손으로 다시 맞춰야 했다.
+
+const proseResult = {
+  schemaVersion: 1,
+  openQuestions: [],
+  findings: [{
+    ruleId: '04-3',
+    title: '저장 실패 후 편집 상태가 복구되지 않는다',
+    body: '본문입니다.',
+    impact: 'high',
+    confidence: 'high',
+    category: 'data-loss',
+    evidence: '근거입니다.',
+    recommendation: '제안입니다.',
+    location: { kind: 'unverified', reason: '경로를 확인하지 못했습니다.' },
+  }],
+}
+
+test('candidatesFromResults는 산문을 content로 실어 보낸다', () => {
+  const [candidate] = candidatesFromResults([proseResult])
+  assert.deepEqual(candidate.content, {
+    title: '저장 실패 후 편집 상태가 복구되지 않는다',
+    body: '본문입니다.',
+    evidence: '근거입니다.',
+    recommendation: '제안입니다.',
+  })
+})
+
+test('없는 선택 필드는 content에 키를 만들지 않는다', () => {
+  const lean = { ...proseResult, findings: [{
+    ruleId: '07-1', title: '제목', body: '본문', impact: 'low', confidence: 'high',
+    location: { kind: 'unverified', reason: '사유' },
+  }] }
+  const [candidate] = candidatesFromResults([lean])
+  assert.deepEqual(Object.keys(candidate.content).sort(), ['body', 'title'])
+})
+
+test('확신이 낮으면 reason을 content에 담는다', () => {
+  const low = { ...proseResult, findings: [{
+    ruleId: '07-1', title: '제목', body: '본문', impact: 'low', confidence: 'low',
+    reason: '추정입니다.', location: { kind: 'unverified', reason: '사유' },
+  }] }
+  const [candidate] = candidatesFromResults([low])
+  assert.equal(candidate.content.reason, '추정입니다.')
+})
+
+test('prepareVerification의 출력이 content를 그대로 통과시킨다', () => {
+  const candidates = candidatesFromResults([proseResult])
+  const { candidates: decided } = prepareVerification(candidates, { head: {}, base: {} })
+  assert.equal(decided[0].content.title, '저장 실패 후 편집 상태가 복구되지 않는다')
+  assert.equal(decided[0].impact, 'high', '최상위 축은 그대로 남는다')
+  assert.equal(decided[0].content.impact, undefined, '축을 content에 복제하지 않는다')
+})

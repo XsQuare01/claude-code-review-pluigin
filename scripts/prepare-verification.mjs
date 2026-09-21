@@ -224,7 +224,14 @@ export function prepareVerification(candidates, blobs, options = {}) {
       eligibility,
       reasons,
       route,
+      // 축(impact/confidence/category)은 그동안 checkLocation·decideEligibility의
+      // 입력으로만 쓰이고 출력에는 없었다. 렌더러가 같은 배열을 --input으로 받아
+      // 등급을 매기므로(Task 3), 여기서 빠지면 렌더 단계에서 등급을 만들 수 없다.
+      impact: candidate.impact,
+      confidence: candidate.confidence,
+      category: candidate.category,
       location: candidate.location,
+      content: candidate.content,
     }
   })
 
@@ -564,6 +571,13 @@ export function candidatesFromResults(results) {
       return left < right ? -1 : left > right ? 1 : 0
     })
     group.forEach((finding, index) => {
+      const content = { title: finding.title, body: finding.body }
+      // 선택 필드는 없으면 키를 만들지 않는다. 빈 문자열을 넣으면 렌더러가
+      // "값이 없다"와 "값이 빈 문자열이다"를 구분할 수 없다.
+      if (finding.evidence !== undefined) content.evidence = finding.evidence
+      if (finding.recommendation !== undefined) content.recommendation = finding.recommendation
+      if (finding.reason !== undefined) content.reason = finding.reason
+
       candidates.push({
         candidateId: `${ruleId}#${index + 1}`,
         ruleId,
@@ -571,6 +585,9 @@ export function candidatesFromResults(results) {
         confidence: finding.confidence,
         category: finding.category,
         location: finding.location,
+        // 산문은 렌더러가 쓴다. 축과 위치를 여기 복제하지 않는 이유는 같은 값이
+        // 두 벌이 되면 나중에 한쪽만 고쳐져 어긋나기 때문이다.
+        content,
         // 병합된 instance를 candidate에 붙여 보낸다. 이것이 없으면 canonical
         // candidate 하나가 원래 몇 건이었는지 사후에 알 수 없다.
         memberInstanceIds: finding.memberInstanceIds ?? [],
