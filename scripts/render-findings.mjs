@@ -111,9 +111,21 @@ export function severityOf(impact, confidence) {
  *
  * 계약은 이 escape를 요구하면서 "정적 validator는 실제 escaping을 증명하지
  * 않는다"고 스스로 적어 두었다. 여기가 그 규칙의 첫 실행 주체다.
+ *
+ * 개행을 포함한 공백 연속을 먼저 한 칸으로 접는다. `본문: ` 같은 라벨
+ * 접두어는 producer 텍스트가 0번 컬럼에서 시작하는 것만 막을 뿐, 텍스트
+ * 안에 박힌 개행이 그 뒤의 `<div>`나 `---`, `1. `을 다시 0번 컬럼으로
+ * 되돌리는 것은 못 막는다 — 개행 자체가 escape 대상 문자 집합에 없으면
+ * 슬롯 하나가 여러 물리 줄로 샌다("있는 것만, 각자 한 줄"이 깨진다). 접은
+ * 뒤에도 문자 수를 보존해야 하므로 삭제 대신 공백 하나로 대체한다.
+ *
+ * `<`는 별도 escape 대상이다 — `>`를 escape해도 여는 태그(`<script>`)는
+ * 열린 채로 남고, CommonMark는 여는 델리미터만으로 HTML 블록/인라인 HTML을
+ * 인식한다.
  */
 export function escapeProse(text) {
-  return String(text).replace(/[\\`*_[\]()#>|]/g, match => `\\${match}`)
+  const collapsed = String(text).replace(/\s+/g, ' ').trim()
+  return collapsed.replace(/[\\`*_[\]()#>|<]/g, match => `\\${match}`)
 }
 
 /** 인용 안의 backtick과 충돌하지 않는 가장 짧은 delimiter를 고른다. */

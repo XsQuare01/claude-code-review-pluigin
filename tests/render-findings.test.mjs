@@ -155,6 +155,19 @@ test('있는 슬롯만 각자 한 줄로 낸다', () => {
   assert.deepEqual(lines.slice(3), ['본문: B', '개선 제안: R'])
 })
 
+// 리뷰 Important — 슬롯 두 개짜리 순서 테스트(위)와 낮은 확신 사유 테스트(아래
+// 확신이 낮으면 사유 줄을 낸다)는 각각 슬롯을 둘만 켠다. `recommendation`과
+// `reason`이 서로 바뀌어도 두 테스트 모두 통과한다 — SLOTS 배열의 순서 자체를
+// 검증하려면 네 슬롯을 동시에 켜고 `lines.slice(...)`로 정확한 순서를 봐야 한다.
+test('네 슬롯이 모두 있으면 body·evidence·recommendation·reason 순서를 지킨다', () => {
+  const md = renderFinding(ok({
+    confidence: 'low',
+    content: { title: '제목', body: 'B', evidence: 'E', recommendation: 'R', reason: 'Y' },
+  }), { label: undefined, vocabulary: VOCAB })
+  const lines = md.split('\n')
+  assert.deepEqual(lines.slice(3), ['본문: B', '근거: E', '개선 제안: R', '확신 낮음 사유: Y'])
+})
+
 test('확신이 낮으면 사유 줄을 낸다', () => {
   const md = renderFinding(ok({ confidence: 'low', content: { title: '제목', body: 'B', reason: '추정' } }),
     { label: '대상 아님', vocabulary: VOCAB })
@@ -175,6 +188,31 @@ test('산문이 Markdown 구조를 만들지 못하게 막는다', () => {
   assert.equal(escapeProse('```fence'), '\\`\\`\\`fence')
   assert.equal(escapeProse('[링크](http://x)'), '\\[링크\\]\\(http://x\\)')
   assert.equal(escapeProse('> 인용'), '\\> 인용')
+})
+
+// 리뷰 Critical 1 — 계약은 raw HTML을 헤딩/펜스/표/링크/인용과 별개의 필수
+// escape 대상으로 명시한다. 기존 문자 집합은 그 다섯과만 겹쳤고 `<`는 없었다.
+// `>`만 escape하면 여는 델리미터(`<script>`)는 그대로 열려 있고, CommonMark는
+// 여는 델리미터만으로 HTML 블록/인라인 HTML을 인식하므로 보호가 안 된다.
+test('산문의 raw HTML 여는 델리미터(`<`)를 escape한다', () => {
+  assert.equal(escapeProse('<script>alert(1)</script>'), '\\<script\\>alert\\(1\\)\\</script\\>')
+})
+
+// 리뷰 Critical 2 — 이 태스크가 막아야 했던 결함(슬롯이 한 칸으로 합쳐지는 것)의
+// 거울상이다. `본문: ` 라벨 접두어는 producer 텍스트가 0번 컬럼에서 시작하는
+// 것만 막을 뿐, 텍스트 안에 박힌 개행이 그 뒤 문자를 다시 0번 컬럼으로 되돌리는
+// 것은 못 막는다 — `<div>`뿐 아니라 `---`(thematic break/setext 헤딩)나
+// `1. `(리스트 항목)도 같은 경로로 새는데, 그 문자들은 escape 대상 집합에
+// 없다. substring 매치는 이 결함을 못 잡는다 — 줄이 샌 채로도 부분 문자열은
+// 그대로 들어있기 때문이다. 그래서 반드시 줄 개수를 센다.
+test('산문 안의 개행은 한 칸으로 접혀 슬롯이 여러 물리 줄로 새지 않는다', () => {
+  const md = renderFinding(ok({ content: { title: '제목', body: 'body line1\n<div>\ninjected' } }),
+    { label: undefined, vocabulary: VOCAB })
+  const lines = md.split('\n')
+  // 헤딩 · 축 줄 · 위치 줄 · 본문 슬롯 — 딱 네 줄이어야 한다. 개행이 escape
+  // 되지 않으면 본문 슬롯 하나가 세 줄로 새서 총 6줄이 나온다.
+  assert.equal(lines.length, 4, `본문 슬롯이 여러 줄로 샜다: ${JSON.stringify(lines)}`)
+  assert.equal(lines[3], '본문: body line1 \\<div\\> injected')
 })
 
 test('인용의 backtick과 충돌하지 않는 delimiter를 고른다', () => {
