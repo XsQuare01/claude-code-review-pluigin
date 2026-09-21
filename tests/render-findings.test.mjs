@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url'
 
 import {
   validateCandidates, loadVocabulary, renderFinding, severityOf, escapeProse, codeSpan,
-  withInstanceNumbers, labelFor, compareCandidates,
+  withInstanceNumbers, labelFor, compareCandidates, loadModuleSections, loadSpecialistPasses, render,
 } from '../scripts/render-findings.mjs'
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)))
@@ -321,15 +321,35 @@ test('--workflow가 없으면 거부한다 — 섹션 목록을 만들 수 없�
   assert.match(out.stderr, /--workflow/)
 })
 
-test('멀쩡한 후보는 exit 0으로 끝까지 간다 — render/loadModuleSections 스텁 상태에서는 빈 출력이 맞다', () => {
+test('멀쩡한 후보는 exit 0이고 실제 모듈 리포트를 낸다', () => {
   // 이 테스트가 없으면 flag 파싱 → 입력 로드 → validateCandidates →
-  // loadVocabulary → loadModuleSections으로 이어지는 정상 경로 전체가 CI에서
-  // 한 번도 실행되지 않는다. loadModuleSections 스텁이 없던 시점에는 바로 이
-  // 경로에서 ReferenceError가 났었는데, 거부 테스트만으로는 그 결함을 못 잡았다.
+  // loadVocabulary → loadModuleSections → loadSpecialistPasses로 이어지는
+  // 정상 경로 전체가 CI에서 한 번도 실행되지 않는다. render/loadModuleSections이
+  // 스텁이던 시점에는 이 경로가 빈 출력으로 "통과"했는데, 거부 테스트만으로는
+  // 그 결함을 못 잡았다. --workflow full의 실제 catalog.json으로 돌리므로
+  // 04번 모듈 제목은 이 저장소의 진짜 값("상태 관리 & 사이드이펙트")이어야 한다.
   const out = runWith([ok()])
   assert.equal(out.status, 0)
-  assert.equal(out.stdout, '')
   assert.equal(out.stderr, '')
+  assert.match(out.stdout, /^## 상세 지적\n/)
+  assert.match(out.stdout, /### 04 상태 관리 & 사이드이펙트\n/)
+  assert.match(out.stdout, /#### 🔴 `04-3` 제목/)
+  // 특수 패스 후보가 없으므로 그 섹션 자체가 나오지 않는다.
+  assert.doesNotMatch(out.stdout, /## 특수 패스/)
+})
+
+test('CLI가 특수 패스 규칙 ID 접두를 실제로 예외 섹션으로 묶는다', () => {
+  // loadModuleSections와 loadSpecialistPasses를 CLI가 합쳐 sections로 넘기는
+  // 배선 자체를 검증한다 — render 단위 테스트는 손으로 만든 SECTIONS를 쓰므로
+  // 이 배선이 실제로 맞는지는 CLI를 직접 돌려야만 드러난다.
+  const out = runWith([ok({
+    candidateId: 'EX-1#1', ruleId: 'EX-1', impact: 'low', category: undefined,
+    content: { title: '예외 통합 테스트', body: 'B' },
+  })])
+  assert.equal(out.status, 0)
+  assert.equal(out.stderr, '')
+  assert.match(out.stdout, /## 특수 패스\n\n### 예외\n/)
+  assert.match(out.stdout, /`EX-1` 예외 통합 테스트/)
 })
 
 // -------------------------------------------------------- 정렬·순번·교차검증 라벨
@@ -467,4 +487,139 @@ test('rebuttal.kind가 other면 rollout-shadow에서도 분류 밖으로 남는�
 test('rebuttal.kind가 other가 아니면 active-deletion에서 그대로 사라진다', () => {
   const verdicts = new Map([['04-3#1', { disposition: 'rejected', rebuttalKind: 'guard-exists' }]])
   assert.equal(labelFor(ok({ eligibility: 'VERIFY' }), verdicts, 'active-deletion', VOCAB), null)
+})
+
+// -------------------------------------------------------------- loadModuleSections
+//
+// 섹션 목록은 손으로 넘기지 않는다. catalog.json에 모듈 제목이 있고
+// modules-planned.json에 건너뛴 모듈이 있으므로, 둘을 합치면 결정적으로 나온다.
+
+test('catalog에서 워크플로우의 모듈 섹션을 만든다', () => {
+  const { value } = loadModuleSections(RULES, 'full')
+  assert.ok(value.length >= 19)
+  assert.deepEqual(value[0], { id: '01', title: 'FSD 아키텍처' })
+  assert.equal(value.some(section => section.id === '00'), false, '공통 규칙은 섹션이 아니다')
+  assert.equal(value.some(section => section.id === '10'), false, 'synthesis 전용 모듈은 섹션이 아니다')
+})
+
+test('건너뛴 모듈은 섹션에서 뺀다', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'planned-'))
+  const planned = join(dir, 'planned.json')
+  writeFileSync(planned, JSON.stringify({
+    candidates: 20, applied: 19, unknown: [],
+    skipped: [{ module: '21-rsc', status: 'skipped', reasonCode: 'profile-mismatch' }],
+  }), 'utf8')
+  const { value } = loadModuleSections(RULES, 'full', planned)
+  rmSync(dir, { recursive: true, force: true })
+  assert.equal(value.some(section => section.id === '21'), false)
+})
+
+test('catalog을 읽지 못하면 사유를 낸다 — loadModuleSections', () => {
+  assert.match(loadModuleSections(join(tmpdir(), 'no-such-dir'), 'full').error, /catalog/)
+})
+
+// -------------------------------------------------------------- loadSpecialistPasses
+//
+// 리뷰 판정 Ruling 1 — `passLabel`은 어디에도 없다. prepare-verification의
+// 입력은 `{ results: [...] }`뿐이라 패스 정보를 안 나른다. 특수 패스는 대신
+// 규칙 ID 접두로 가른다. 그 접두를 review-rules 문서 텍스트에서 손으로
+// 베끼지 않고 catalog.json의 rulePrefixes에서 읽는다는 것을 이 테스트가 고정한다.
+
+test('catalog에서 특수 패스 접두를 얻는다', () => {
+  const { value } = loadSpecialistPasses(RULES)
+  assert.deepEqual(value, [
+    { id: 'props', title: 'Props', prefixes: ['P'] },
+    { id: 'math', title: '수학', prefixes: ['A', 'C'] },
+    { id: 'exception', title: '예외', prefixes: ['EX'] },
+  ])
+})
+
+test('catalog을 읽지 못하면 사유를 낸다 — loadSpecialistPasses', () => {
+  assert.match(loadSpecialistPasses(join(tmpdir(), 'no-such-dir')).error, /catalog/)
+})
+
+// -------------------------------------------------------------- render — golden
+//
+// 기대 Markdown 전문을 golden으로 고정한다. 표 형식이나 영어 등급, 축 줄
+// 누락을 따로 검사할 필요가 없다 — 한 글자만 달라도 깨진다.
+//
+// SECTIONS는 CLI가 실제로 만드는 모양(loadModuleSections + loadSpecialistPasses를
+// 이어붙인 것)을 흉내 낸다 — 숫자 id는 모듈, `prefixes`가 있는 항목은 특수
+// 패스다. `passLabel` 필드는 애초에 없으므로 EX-6 후보의 ruleId 접두(`EX`)만으로
+// "예외" 섹션에 묶인다.
+
+const SECTIONS = [
+  { id: '04', title: '상태와 Effect' },
+  { id: '11', title: '스타일링' },
+  { id: 'props', title: 'Props', prefixes: ['P'] },
+  { id: 'math', title: '수학', prefixes: ['A', 'C'] },
+  { id: 'exception', title: '예외', prefixes: ['EX'] },
+]
+
+test('두 섹션 전문을 낸다 — golden', () => {
+  const candidates = [
+    ok({ candidateId: '11-6#2', ruleId: '11-6', impact: 'low', category: undefined,
+         content: { title: '두 번째', body: 'B2' },
+         location: { kind: 'unverified', reason: '못 찾음' } }),
+    ok({ candidateId: '04-3#1', ruleId: '04-3', eligibility: 'VERIFY',
+         content: { title: '첫 번째', body: 'B1', evidence: 'E1', recommendation: 'R1' } }),
+    ok({ candidateId: '11-6#1', ruleId: '11-6', impact: 'low', category: undefined,
+         content: { title: '첫 스타일', body: 'B3' },
+         location: { kind: 'deleted', path: 'src/x.ts', lineBefore: 4, quote: 'old()' } }),
+    ok({ candidateId: 'EX-6#1', ruleId: 'EX-6', impact: 'low', category: undefined,
+         content: { title: '예외 지적', body: 'B4' },
+         location: { kind: 'unverified', reason: '사유' } }),
+  ]
+  const verdicts = new Map([['04-3#1', { disposition: 'upheld' }]])
+  const vocab = { categoryLabels: { 'data-loss': '데이터 손상·유실' },
+    crossVerification: { upheld: '유지', 'not-eligible': '대상 아님' } }
+
+  assert.equal(render(candidates, verdicts, 'active-deletion', vocab, SECTIONS, true), [
+    '## 상세 지적',
+    '',
+    '### 04 상태와 Effect',
+    '',
+    '#### 🔴 `04-3` 첫 번째',
+    '영향: 높음 (데이터 손상·유실) · 확신: 높음 · 교차검증: `유지`',
+    '`src/a.ts:1` — `const a = 1`',
+    '본문: B1',
+    '근거: E1',
+    '개선 제안: R1',
+    '',
+    '### 11 스타일링',
+    '',
+    '#### 🟡 `11-6 (1/2)` 첫 스타일',
+    '영향: 낮음 · 확신: 높음 · 교차검증: `대상 아님`',
+    '`src/x.ts:4` — `old()`',
+    '본문: B3',
+    '',
+    '#### 🟡 `11-6 (2/2)` 두 번째',
+    '영향: 낮음 · 확신: 높음 · 교차검증: `대상 아님`',
+    '위치 미확인 사유: 못 찾음',
+    '본문: B2',
+    '',
+    '## 특수 패스',
+    '',
+    '### 예외',
+    '',
+    '#### 🟡 `EX-6` 예외 지적',
+    '영향: 낮음 · 확신: 높음 · 교차검증: `대상 아님`',
+    '위치 미확인 사유: 사유',
+    '본문: B4',
+    '',
+  ].join('\n'))
+})
+
+test('적용 대상인데 지적이 없는 모듈은 지적 없음으로 남는다', () => {
+  const md = render([], new Map(), 'active-deletion',
+    { categoryLabels: {}, crossVerification: {} }, [{ id: '03', title: 'React 규칙' }], true)
+  assert.match(md, /### 03 React 규칙\n\n지적 없음\.\n/)
+})
+
+test('교차검증을 돌리지 않았으면 축을 아예 내지 않는다', () => {
+  const md = render([ok({ eligibility: 'SKIP-VERIFY' })], new Map(), 'active-deletion',
+    { categoryLabels: { 'data-loss': '데이터 손상·유실' }, crossVerification: {} },
+    [{ id: '04', title: '상태와 Effect' }], false)
+  assert.doesNotMatch(md, /교차검증/)
+  assert.match(md, /영향: 높음 \(데이터 손상·유실\) · 확신: 높음\n/)
 })

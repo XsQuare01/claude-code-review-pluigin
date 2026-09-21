@@ -288,16 +288,155 @@ export function labelFor(candidate, verdictByCandidateId, phase, vocabulary) {
   return tokens.upheld
 }
 
-// Task 6이 실제 정렬·묶음을 채운다. 지금은 거부 경로와 renderFinding 단위
-// 테스트만 검증하므로 빈 문자열로 충분하다 — 이 자리를 비워두면(스텁을 두지
-// 않으면) 통과하는 모든 입력에서 ReferenceError로 죽어, 거부 테스트만 보고
-// "됐다"고 착각하게 된다.
-export function render() { return '' }
+/**
+ * 섹션이 될 모듈을 catalog에서 뽑는다.
+ *
+ * 손으로 넘기지 않는 이유는 이 저장소가 후보 수에 대해 이미 내린 결론과 같다 —
+ * 목록을 사람이 적으면 적다가 틀린다. 건너뛴 모듈은 실행 계획에 기록되므로
+ * 그 파일에서 뺀다.
+ */
+export function loadModuleSections(rulesDir, workflow, plannedPath) {
+  let catalog
+  try {
+    catalog = JSON.parse(readFileSync(join(rulesDir, 'catalog.json'), 'utf8'))
+  } catch (error) {
+    return { error: `catalog.json을 읽지 못했다: ${error.message}` }
+  }
+  const skipped = new Set()
+  if (plannedPath) {
+    let planned
+    try {
+      planned = JSON.parse(readFileSync(plannedPath, 'utf8'))
+    } catch (error) {
+      return { error: `--planned를 읽지 못했다: ${plannedPath} — ${error.message}` }
+    }
+    for (const entry of [...(planned.skipped ?? []), ...(planned.unknown ?? [])]) {
+      skipped.add(String(entry.module ?? entry).slice(0, 2))
+    }
+  }
+  const sections = (catalog.modules ?? [])
+    .filter(module => module.role === 'module')
+    .filter(module => (module.workflows ?? []).includes(workflow))
+    .filter(module => module.phaseByWorkflow?.[workflow] !== 'post-verification-synthesis')
+    .filter(module => !skipped.has(module.id))
+    .map(module => ({ id: module.id, title: module.title }))
+    .sort((left, right) => (left.id < right.id ? -1 : 1))
+  return { value: sections }
+}
 
-// render와 같은 이유로 스텁을 둔다. CLI 본문이 항상 호출하므로, 스텁이 없으면
-// 유효한 입력에서 ReferenceError가 나는데 이 태스크의 테스트는 거부 경로만
-// 확인해서 그 결함을 못 잡는다. Task 6이 실제 모듈 섹션 목록으로 교체한다.
-export function loadModuleSections() { return { value: [] } }
+/**
+ * 특수 패스(Props·수학·예외) 섹션 메타데이터를 만든다.
+ *
+ * 표시명과 순서는 catalog에서 읽지 않는다 — 계약 C-7 문서 골격 표가
+ * "Props·수학·예외" 세 이름과 그 순서를 그대로 고정해 두었고, catalog의
+ * title은 "Props 전달 구조"·"선형대수 / 행렬"·"예외 처리"처럼 사람이 읽을
+ * 설명이라 리포트 헤딩과는 다른 문자열이다(리뷰 판정 Ruling 2). 그래서 이름과
+ * 순서는 여기서 직접 적는다.
+ *
+ * `prefixes`만 catalog.json의 `rulePrefixes`에서 읽는다 — math.md가
+ * A-/C- 표기를 바꾸거나 새 specialist 문서가 생기면 이 값도 같이 바뀌어야
+ * 하는데, 여기서 손으로 다시 옮기면 review-rules 쪽만 바뀌고 이 파일은
+ * 조용히 낡은 채로 남는다(파일 맨 위 주석이 경고하는 "같은 사실을 두 번
+ * 코드로 옮기는" 실패).
+ */
+export function loadSpecialistPasses(rulesDir) {
+  let catalog
+  try {
+    catalog = JSON.parse(readFileSync(join(rulesDir, 'catalog.json'), 'utf8'))
+  } catch (error) {
+    return { error: `catalog.json을 읽지 못했다: ${error.message}` }
+  }
+  const byId = new Map((catalog.modules ?? []).map(module => [module.id, module]))
+  const passes = [
+    ['props', 'Props'],
+    ['math', '수학'],
+    ['exception', '예외'],
+  ].map(([id, title]) => ({ id, title, prefixes: byId.get(id)?.rulePrefixes ?? [] }))
+  return { value: passes }
+}
+
+/**
+ * 리포트의 `상세 지적`과 `특수 패스` 두 섹션을 조립한다.
+ *
+ * `sections`는 숫자 모듈 섹션(`loadModuleSections`)과 특수 패스 섹션
+ * (`loadSpecialistPasses`)을 CLI가 합쳐 넘긴다 — id가 두 자리 숫자면 모듈,
+ * `prefixes` 배열을 가지면 특수 패스다. render는 catalog 파일을 직접
+ * 읽지 않는다(rulesDir을 받지 않는다); 그 경로는 CLI 배선 한 곳에만
+ * 있어야 같은 rulesDir 인자를 두 번 파싱하다 어긋나는 일이 없다.
+ */
+export function render(candidates, verdictByCandidateId, phase, vocabulary, sections, crossVerified) {
+  const labelled = []
+  for (const candidate of candidates) {
+    // 교차검증 패스가 없었으면 축 자체가 없다(`undefined`). 돌았는데 판정이
+    // 없는 것과 다른 사건이라 `labelFor`를 부르지 않는다.
+    const label = crossVerified ? labelFor(candidate, verdictByCandidateId, phase, vocabulary) : undefined
+    // `null`은 이 phase에서 리포트에 나타나지 않는다는 뜻이다 — 정렬·순번을
+    // 매기기 전에 걸러야, 지워진 finding이 "(1/3)" 같은 분모를 차지하지 않는다.
+    if (label === null) continue
+    labelled.push({ candidate, label })
+  }
+
+  const numbered = withInstanceNumbers(
+    labelled.map(entry => entry.candidate).sort(compareCandidates))
+  const labelById = new Map(labelled.map(entry => [entry.candidate.candidateId, entry.label]))
+
+  // 숫자 모듈(`04-3`)과 전문 패스(`EX-6`·`P-1`·`A-1`·`C-1`)를 가른다. 전문
+  // 패스 규칙 ID의 접두는 두 자리 숫자가 아니라 문자다.
+  const numberedModules = numbered.filter(candidate => /^\d\d-/.test(candidate.ruleId))
+  const specials = numbered.filter(candidate => !/^\d\d-/.test(candidate.ruleId))
+
+  const lines = ['## 상세 지적', '']
+  const moduleSections = sections.filter(section => /^\d{2}$/.test(section.id))
+  const titleById = new Map(moduleSections.map(section => [section.id, section.title]))
+  // 섹션에 없는 모듈에서 지적이 오면 그 모듈도 낸다. 조용히 버리면 지적이
+  // 사라지는데, 섹션 목록이 틀린 것보다 지적이 없어지는 쪽이 나쁘다.
+  const moduleKeys = [...new Set([
+    ...moduleSections.map(section => section.id),
+    ...numberedModules.map(candidate => candidate.ruleId.slice(0, 2)),
+  ])].sort()
+
+  for (const key of moduleKeys) {
+    lines.push(`### ${key} ${titleById.get(key) ?? ''}`.trimEnd(), '')
+    const inModule = numberedModules.filter(candidate => candidate.ruleId.startsWith(`${key}-`))
+    if (!inModule.length) {
+      lines.push('지적 없음.', '')
+      continue
+    }
+    for (const candidate of inModule) {
+      lines.push(renderFinding(candidate, { label: labelById.get(candidate.candidateId), vocabulary }), '')
+    }
+  }
+
+  if (specials.length) {
+    lines.push('## 특수 패스', '')
+    const specialistSections = sections.filter(section => Array.isArray(section.prefixes))
+    // 규칙 ID 접두(`EX`, `P`, `A`, `C`, …)로 특수 패스 표시명을 찾는다. 못
+    // 찾으면(카탈로그와 CLI 배선이 어긋난 경우) 접두 자체를 헤딩으로 써서
+    // 낸다 — 숫자 모듈에서 이미 쓰는 것과 같은 안전장치로, 조용히 버리지
+    // 않는다.
+    const titleFor = candidate => {
+      const prefix = candidate.ruleId.split('-')[0]
+      return specialistSections.find(pass => pass.prefixes.includes(prefix))?.title ?? prefix
+    }
+    // Map은 삽입 순서를 지킨다 — specialistSections 순서(계약 C-7이 고정한
+    // Props·수학·예외)가 먼저 채워지고, 못 알아본 접두는 등장 순으로 뒤에
+    // 붙는다.
+    const grouped = new Map(specialistSections.map(pass => [pass.title, []]))
+    for (const candidate of specials) {
+      const title = titleFor(candidate)
+      grouped.set(title, [...(grouped.get(title) ?? []), candidate])
+    }
+    for (const [title, inPass] of grouped) {
+      if (!inPass.length) continue
+      lines.push(`### ${title}`, '')
+      for (const candidate of inPass) {
+        lines.push(renderFinding(candidate, { label: labelById.get(candidate.candidateId), vocabulary }), '')
+      }
+    }
+  }
+
+  return lines.join('\n')
+}
 
 // 이 파일이 직접 실행될 때만 CLI로 동작한다. 테스트는 함수를 import한다.
 if (process.argv[1] && process.argv[1].endsWith('render-findings.mjs')) {
@@ -330,6 +469,13 @@ if (process.argv[1] && process.argv[1].endsWith('render-findings.mjs')) {
   const sections = loadModuleSections(rulesDir, workflow, flag('planned'))
   if (sections.error) die(sections.error)
 
+  // 특수 패스(Props·수학·예외) 섹션도 같은 catalog.json에서 나온다. render는
+  // rulesDir을 받지 않으므로 — 그 경로를 두 곳에서 따로 파싱하면 하나만
+  // 바뀌었을 때 조용히 어긋난다 — 모듈 섹션과 합쳐 하나의 `sections`로
+  // 넘긴다.
+  const specialistPasses = loadSpecialistPasses(rulesDir)
+  if (specialistPasses.error) die(specialistPasses.error)
+
   const byCandidateId = new Map()
   for (const path of flagAll('verdicts')) {
     let parsed
@@ -353,5 +499,6 @@ if (process.argv[1] && process.argv[1].endsWith('render-findings.mjs')) {
   const crossVerified = flagAll('verdicts').length > 0
 
   process.stdout.write(render(
-    payload.candidates, byCandidateId, phase, vocabulary.value, sections.value, crossVerified))
+    payload.candidates, byCandidateId, phase, vocabulary.value,
+    [...sections.value, ...specialistPasses.value], crossVerified))
 }
