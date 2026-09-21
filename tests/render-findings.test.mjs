@@ -256,6 +256,25 @@ test('path에 박힌 개행도 위치 줄이 한 줄로 남게 접힌다', () =>
   assert.equal(lines[2], '`src/a.ts x:1` — `const a = 1`')
 })
 
+// 리뷰 라운드 3 — round 2에서 codeSpan에 넣은 `\s+` 전체 공백 접기 + trim은
+// 개행 결함은 고쳤지만 다른 것을 깼다. quote는 실제 소스 한 줄이고, 들여쓰기는
+// 그 줄이 코드에서 얼마나 깊이 있는지를 말해주는 내용이다. escapeProse가
+// 다루는 산문은 공백의 양이 의미를 안 갖지만 quote는 다르다 — 그래서
+// 컨트롤러가 escapeProse의 처방을 그대로 재사용한 판단을 승인하지 않고
+// codeSpan만 되돌리라고 판정했다. 개행(과 개행 연속인 빈 줄)만 한 칸으로
+// 바꾸고, 그 외 공백(들여쓰기 포함)과 trim은 손대지 않는다.
+test('quote의 들여쓰기는 codeSpan 안에서 그대로 보존된다 — 공백의 양 자체가 내용이다', () => {
+  assert.equal(codeSpan('    if (pending) return'), '`    if (pending) return`')
+})
+
+test('들여쓰기가 있는 quote로 실제 위치 줄을 그려도 들여쓰기가 살아남는다', () => {
+  const md = renderFinding(ok({ location: { kind: 'verified', path: 'src/a.ts', line: 1, quote: '    if (pending) return' } }),
+    { label: undefined, vocabulary: VOCAB })
+  const lines = md.split('\n')
+  assert.equal(lines.length, 4, `위치 줄이 여러 줄로 샜다: ${JSON.stringify(lines)}`)
+  assert.equal(lines[2], '`src/a.ts:1` — `    if (pending) return`')
+})
+
 // -------------------------------------------------------------- CLI
 
 const runWith = (candidates, args = []) => {

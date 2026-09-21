@@ -131,22 +131,25 @@ export function escapeProse(text) {
 /**
  * 인용 안의 backtick과 충돌하지 않는 가장 짧은 delimiter를 고른다.
  *
- * escapeProse의 개행 결함과 같은 종류를 여기서도 먼저 막는다 — `path`·
- * `quote`는 producer가 채우는 신뢰하지 않는 값이라 개행이 그대로 들어올 수
- * 있다. 단순 개행은 위치 줄을 여러 물리 줄로 새게 할 뿐이지만, 빈 줄(개행
- * 두 번)은 그보다 나쁘다 — CommonMark의 code span은 빈 줄을 담지 못해 여는
- * backtick의 짝이 사라지고, 그 지점부터 리포트 구조 전체가 깨진다.
+ * `path`·`quote`는 producer가 채우는 신뢰하지 않는 값이라 개행이 그대로
+ * 들어올 수 있다. 단순 개행은 위치 줄을 여러 물리 줄로 새게 할 뿐이지만,
+ * 빈 줄(개행 두 번)은 그보다 나쁘다 — CommonMark의 code span은 빈 줄을
+ * 담지 못해 여는 backtick의 짝이 사라지고, 그 지점부터 리포트 구조 전체가
+ * 깨진다. 그래서 개행(과 개행 연속인 빈 줄)만 한 칸으로 바꾼다.
  *
- * 공백을 먼저 접고 그 결과로 delimiter 길이를 잰다(순서가 반대면 안 된다).
- * 다만 이 정규식 조합에서는 순서를 바꿔도 실제로 다른 값이 나오지 않는다 —
- * `\s+`는 항상 공백 한 칸으로 치환되지 0으로 치환되지 않으므로, 개행으로
- * 갈라져 있던 backtick 연속 두 개가 접힌다고 해서 하나로 합쳐지는 일은
- * 없다. 그래도 "접은 뒤의 값을 재는" 순서로 코드를 짜 둔다 — 다음에 이
- * 정규식이 바뀌어 그 전제가 깨지더라도, 코드 순서 자체가 이미 안전한 쪽을
- * 향해 있게 만든다.
+ * escapeProse처럼 공백 전체를 접거나 trim하지 않는 이유: quote는 실제
+ * 소스 한 줄이고 들여쓰기는 그 줄이 코드에서 얼마나 깊이 있는지를 말해주는
+ * 내용이다. escapeProse가 다루는 producer 산문은 공백의 양 자체가 의미를
+ * 안 갖지만, quote는 다르다 — `    if (pending) return`을 ` if (pending)
+ * return`으로 접으면 quote가 보여주려던 것의 일부(들여쓰기 깊이)가
+ * 사라진다. 개행만 골라 바꾸면 리포트 구조를 깨는 문제(위치 줄이 여러
+ * 물리 줄로 새는 것)는 그대로 막으면서 들여쓰기는 건드리지 않는다.
+ *
+ * delimiter 길이는 개행을 바꾼 뒤의 값으로 잰다 — 순서가 반대면 개행으로
+ * 갈라져 있던 backtick 연속을 실제보다 짧게 셀 수 있다.
  */
 export function codeSpan(text) {
-  const value = String(text).replace(/\s+/g, ' ').trim()
+  const value = String(text).replace(/[\r\n]+/g, ' ')
   const longest = (value.match(/`+/g) ?? []).reduce((max, run) => Math.max(max, run.length), 0)
   const fence = '`'.repeat(longest + 1)
   const pad = longest > 0 ? ' ' : ''
