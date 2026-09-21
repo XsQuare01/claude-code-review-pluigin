@@ -98,9 +98,85 @@ const flagAll = name => process.argv
   .map((arg, at) => (arg === `--${name}` ? process.argv[at + 1] : null))
   .filter(value => value !== null && value !== undefined)
 
-// Task 4가 실제 Markdown을 채운다. 지금은 거부 경로만 검증하므로 빈 문자열로
-// 충분하다 — 이 자리를 비워두면(스텁을 두지 않으면) 통과하는 모든 입력에서
-// ReferenceError로 죽어, 거부 테스트만 보고 "됐다"고 착각하게 된다.
+const IMPACT_WORD = { high: '높음', low: '낮음' }
+
+/** 등급은 규칙이 아니라 지적이 갖는다 — `00-rule.md`의 파생표 그대로다. */
+export function severityOf(impact, confidence) {
+  if (impact === 'high') return confidence === 'high' ? '🔴' : '🟡'
+  return confidence === 'high' ? '🟡' : '🔵'
+}
+
+/**
+ * producer 문자열이 오케스트레이터가 쓴 것처럼 보이는 구조를 만들지 못하게 한다.
+ *
+ * 계약은 이 escape를 요구하면서 "정적 validator는 실제 escaping을 증명하지
+ * 않는다"고 스스로 적어 두었다. 여기가 그 규칙의 첫 실행 주체다.
+ */
+export function escapeProse(text) {
+  return String(text).replace(/[\\`*_[\]()#>|]/g, match => `\\${match}`)
+}
+
+/** 인용 안의 backtick과 충돌하지 않는 가장 짧은 delimiter를 고른다. */
+export function codeSpan(text) {
+  const value = String(text)
+  const longest = (value.match(/`+/g) ?? []).reduce((max, run) => Math.max(max, run.length), 0)
+  const fence = '`'.repeat(longest + 1)
+  const pad = longest > 0 ? ' ' : ''
+  return `${fence}${pad}${value}${pad}${fence}`
+}
+
+const locationLine = location => {
+  if (location.kind === 'unverified') return `위치 미확인 사유: ${escapeProse(location.reason)}`
+  const line = location.kind === 'deleted' ? location.lineBefore : location.line
+  return `${codeSpan(`${location.path}:${line}`)} — ${codeSpan(location.quote)}`
+}
+
+const SLOTS = [
+  ['body', '본문'],
+  ['evidence', '근거'],
+  ['recommendation', '개선 제안'],
+  ['reason', '확신 낮음 사유'],
+]
+
+/**
+ * finding 한 건을 헤딩·축 줄·위치 줄·슬롯 네 부분으로 그린다.
+ *
+ * 슬롯을 배열로 따로 두고 한 줄씩 join하는 이유: 원래 문제는 슬롯이 빠진 게
+ * 아니라 본문·근거·개선 제안이 한 칸으로 뭉개져 나온 것이었다. 문자열을
+ * 이어붙이는 방식이면 다음 사람이 실수로 다시 합칠 수 있지만, 배열 + `\n`
+ * join은 슬롯을 합칠 방법 자체가 없다.
+ */
+export function renderFinding(candidate, { label, vocabulary }) {
+  const severity = severityOf(candidate.impact, candidate.confidence)
+  // category는 계약상 impact가 high일 때만 존재한다(low는 category 자체를
+  // 금지한다) — 그래도 candidate.category를 한 번 더 확인해 방어적으로 둔다.
+  const categoryLabel = candidate.impact === 'high' && candidate.category
+    ? ` (${vocabulary.categoryLabels[candidate.category] ?? candidate.category})`
+    : ''
+  const axes = [
+    `영향: ${IMPACT_WORD[candidate.impact]}${categoryLabel}`,
+    `확신: ${IMPACT_WORD[candidate.confidence]}`,
+    // label이 undefined면 "이 워크플로우에 교차검증 축이 없다"는 뜻이라 줄
+    // 자체를 뺀다 — null("렌더링하지 않음")은 Task 6의 render가 이 함수를
+    // 부르기 전에 걸러내므로 여기까지 오지 않는다.
+    ...(label ? [`교차검증: \`${label}\``] : []),
+  ]
+  const slots = SLOTS
+    .filter(([key]) => typeof candidate.content[key] === 'string' && candidate.content[key])
+    .map(([key, head]) => `${head}: ${escapeProse(candidate.content[key])}`)
+
+  return [
+    `#### ${severity} \`${candidate.renderedRuleId ?? candidate.ruleId}\` ${escapeProse(candidate.content.title)}`,
+    axes.join(' · '),
+    locationLine(candidate.location),
+    ...slots,
+  ].join('\n')
+}
+
+// Task 6이 실제 정렬·묶음을 채운다. 지금은 거부 경로와 renderFinding 단위
+// 테스트만 검증하므로 빈 문자열로 충분하다 — 이 자리를 비워두면(스텁을 두지
+// 않으면) 통과하는 모든 입력에서 ReferenceError로 죽어, 거부 테스트만 보고
+// "됐다"고 착각하게 된다.
 export function render() { return '' }
 
 // render와 같은 이유로 스텁을 둔다. CLI 본문이 항상 호출하므로, 스텁이 없으면
