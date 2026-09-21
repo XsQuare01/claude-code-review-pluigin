@@ -221,6 +221,41 @@ test('인용의 backtick과 충돌하지 않는 delimiter를 고른다', () => {
   assert.equal(codeSpan('``x``'), '``` ``x`` ```')
 })
 
+// 리뷰 라운드 2 — escapeProse에서 고친 것과 같은 종류의 결함이 codeSpan에도
+// 있었다. `location.path`/`location.quote`는 producer가 채우는 신뢰하지 않는
+// 값인데, 그 안의 개행을 codeSpan이 막지 않았다. 단순 개행은 위치 줄을 여러
+// 물리 줄로 새게 하고, 빈 줄(개행 두 번)은 그보다 더 나쁘다 — CommonMark의
+// code span은 빈 줄을 담을 수 없어 여는 backtick과 짝이 되는 닫는 backtick이
+// 없어지고, 그 지점부터 리포트 구조 전체가 깨진다.
+test('quote/path에 박힌 개행은 code span 안에서 한 칸으로 접힌다', () => {
+  assert.equal(codeSpan('a\nb'), '`a b`')
+})
+
+test('quote 안의 빈 줄(개행 두 번)도 한 칸으로 접힌다 — 이건 스팬을 반영하는 게 아니라 깨는 경우다', () => {
+  assert.equal(codeSpan('a\n\nb'), '`a b`')
+})
+
+// 위 둘은 codeSpan 단위 테스트라 delimiter 선택 자체는 건드리지 않는다.
+// renderFinding까지 내려가서 실제 위치 줄이 여전히 한 줄인지, 그리고
+// escapeProse 라운드에서 썼던 것과 같은 방식(line count)으로 확인한다 —
+// substring 매치는 줄이 샌 채로도 통과하기 때문이다.
+test('quote 안의 빈 줄이 있어도 위치 줄이 한 줄로 남고 finding 구조가 깨지지 않는다', () => {
+  const md = renderFinding(ok({ location: { kind: 'verified', path: 'src/a.ts', line: 1, quote: 'a\n\nb' } }),
+    { label: undefined, vocabulary: VOCAB })
+  const lines = md.split('\n')
+  assert.equal(lines.length, 4, `위치 줄이 여러 줄로 샜다: ${JSON.stringify(lines)}`)
+  assert.equal(lines[2], '`src/a.ts:1` — `a b`')
+})
+
+// path도 같은 codeSpan을 타므로 값싼 확인 하나를 더 둔다.
+test('path에 박힌 개행도 위치 줄이 한 줄로 남게 접힌다', () => {
+  const md = renderFinding(ok({ location: { kind: 'verified', path: 'src/a.ts\nx', line: 1, quote: 'const a = 1' } }),
+    { label: undefined, vocabulary: VOCAB })
+  const lines = md.split('\n')
+  assert.equal(lines.length, 4, `위치 줄이 여러 줄로 샜다: ${JSON.stringify(lines)}`)
+  assert.equal(lines[2], '`src/a.ts x:1` — `const a = 1`')
+})
+
 // -------------------------------------------------------------- CLI
 
 const runWith = (candidates, args = []) => {

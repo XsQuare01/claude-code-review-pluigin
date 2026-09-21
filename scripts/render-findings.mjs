@@ -128,9 +128,25 @@ export function escapeProse(text) {
   return collapsed.replace(/[\\`*_[\]()#>|<]/g, match => `\\${match}`)
 }
 
-/** 인용 안의 backtick과 충돌하지 않는 가장 짧은 delimiter를 고른다. */
+/**
+ * 인용 안의 backtick과 충돌하지 않는 가장 짧은 delimiter를 고른다.
+ *
+ * escapeProse의 개행 결함과 같은 종류를 여기서도 먼저 막는다 — `path`·
+ * `quote`는 producer가 채우는 신뢰하지 않는 값이라 개행이 그대로 들어올 수
+ * 있다. 단순 개행은 위치 줄을 여러 물리 줄로 새게 할 뿐이지만, 빈 줄(개행
+ * 두 번)은 그보다 나쁘다 — CommonMark의 code span은 빈 줄을 담지 못해 여는
+ * backtick의 짝이 사라지고, 그 지점부터 리포트 구조 전체가 깨진다.
+ *
+ * 공백을 먼저 접고 그 결과로 delimiter 길이를 잰다(순서가 반대면 안 된다).
+ * 다만 이 정규식 조합에서는 순서를 바꿔도 실제로 다른 값이 나오지 않는다 —
+ * `\s+`는 항상 공백 한 칸으로 치환되지 0으로 치환되지 않으므로, 개행으로
+ * 갈라져 있던 backtick 연속 두 개가 접힌다고 해서 하나로 합쳐지는 일은
+ * 없다. 그래도 "접은 뒤의 값을 재는" 순서로 코드를 짜 둔다 — 다음에 이
+ * 정규식이 바뀌어 그 전제가 깨지더라도, 코드 순서 자체가 이미 안전한 쪽을
+ * 향해 있게 만든다.
+ */
 export function codeSpan(text) {
-  const value = String(text)
+  const value = String(text).replace(/\s+/g, ' ').trim()
   const longest = (value.match(/`+/g) ?? []).reduce((max, run) => Math.max(max, run.length), 0)
   const fence = '`'.repeat(longest + 1)
   const pad = longest > 0 ? ' ' : ''
