@@ -990,25 +990,40 @@ for (const [owner, contextPaths] of Object.entries(STRUCTURED_OWNER_POLICY_BEARI
           failCode('structured-producer', 'E_FULL_SPECIALIST_PROMPT_MISSING', `${relativePath} must define the full-review specialist prompt for ${specialistPrompt}`)
         }
       }
-    }
 
-    // 렌더 단계가 표기를 직접 만들지 않는지 본다. 참조만 있고 호출이 없으면
-    // 모델이 형식을 기억으로 재구성하는 자리가 그대로 남는다. 파일 이름만
-    // 찾는 부분 문자열 검사는 "렌더러가 있다"는 언급 한 줄로도 통과한다 —
-    // 실제 호출과 지나가는 언급을 못 가른 시도가 이 자리에서 실패했었다.
-    // 그래서 `render-findings.mjs` 언급 바로 뒤(500자 창)에 필수 플래그
-    // `--input`·`--rules`·`--phase`·`--workflow`가 모두 있는 호출문을
-    // 찾는다 — CLI 자체가 이 네 개 없이는 실행을 거부하므로(die), 넷이
-    // 함께 있어야 "언급"이 아니라 "그대로 옮길 수 있는 호출"이다.
-    const rendererMentions = [...text.matchAll(/render-findings\.mjs/g)]
-    const rendererRequiredFlags = ['--input', '--rules', '--phase', '--workflow']
-    const rendererActuallyInvoked = rendererMentions.some(mention => {
-      const window = text.slice(mention.index, mention.index + 500)
-      return rendererRequiredFlags.every(flagName => window.includes(flagName))
-    })
-    if (!rendererActuallyInvoked) {
-      failCode('structured-producer', 'E_RENDERER_NOT_CALLED',
-        `${relativePath} must call render-findings.mjs with its required flags (--input, --rules, --phase, --workflow) for the finding sections, not merely mention it`)
+      // 렌더 단계가 표기를 직접 만들지 않는지 본다. 참조만 있고 호출이 없으면
+      // 모델이 형식을 기억으로 재구성하는 자리가 그대로 남는다. 파일 이름만
+      // 찾는 부분 문자열 검사는 "렌더러가 있다"는 언급 한 줄로도 통과한다 —
+      // 실제 호출과 지나가는 언급을 못 가른 시도가 이 자리에서 실패했었다.
+      // 그래서 `render-findings.mjs` 언급 바로 뒤(500자 창)에 필수 플래그
+      // `--input`·`--rules`·`--phase`·`--workflow`가 모두 있는 호출문을
+      // 찾는다 — CLI 자체가 이 네 개 없이는 실행을 거부하므로(die), 넷이
+      // 함께 있어야 "언급"이 아니라 "그대로 옮길 수 있는 호출"이다.
+      //
+      // **이 검사는 `code-review-full`에만 건다.** 나머지 세 standalone
+      // specialist skill(props/math/exception)은 이 renderer가 소유하는
+      // 문서 골격(`상세 지적` 다음에 `특수 패스`가 오는 두 섹션 묶음)을
+      // 만들지 않는다 — 그 세 skill의 공개 섹션 목록에는 `특수 패스`가
+      // 없다. `loadSpecialistPasses`가 지금 `workflow`를 무시하고 항상
+      // Props·수학·예외 세 패스를 다 확인하므로, 그 skill들에서 이 CLI를
+      // 그대로 부르면 자기 workflow의 numbered 모듈 섹션(`상세 지적`)은
+      // 비고, 선언하지 않은 `특수 패스` 헤딩 아래로 모든 finding이 몰린다
+      // — 선언한 섹션은 비고 선언 안 한 섹션에 내용이 실리는, 골격이
+      // 잘못된 리포트다. 세 skill이 이 호출을 하게 만들려면
+      // `loadSpecialistPasses`가 `workflow`를 실제로 받게 하고, 단일
+      // 패스 리포트가 finding을 어느 섹션에 실을지 정하고,
+      // `prepare-verification.mjs`를 안 돌리는 이 skill들에 `candidateId`
+      // 출처를 정하는 별도 변경이 먼저 있어야 한다.
+      const rendererMentions = [...text.matchAll(/render-findings\.mjs/g)]
+      const rendererRequiredFlags = ['--input', '--rules', '--phase', '--workflow']
+      const rendererActuallyInvoked = rendererMentions.some(mention => {
+        const window = text.slice(mention.index, mention.index + 500)
+        return rendererRequiredFlags.every(flagName => window.includes(flagName))
+      })
+      if (!rendererActuallyInvoked) {
+        failCode('structured-producer', 'E_RENDERER_NOT_CALLED',
+          `${relativePath} must call render-findings.mjs with its required flags (--input, --rules, --phase, --workflow) for the finding sections, not merely mention it`)
+      }
     }
   }
 
