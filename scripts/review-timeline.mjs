@@ -26,7 +26,7 @@
 // 고치지 않는다 — 고치면 죽은 실행의 마지막 줄이 무엇이었는지 믿을 수 없다.
 
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { basename, dirname, extname, join, resolve } from 'node:path'
 
 const die = message => {
   process.stderr.write(`${message}\n`)
@@ -486,6 +486,70 @@ if (has('check')) {
     })
   }
 
+  // 디스패치의 끝과 그 수치를 기록에서 다시 세어 본다.
+  //
+  // 한 실행이 `dispatch.start`만 남기고 `dispatch.end` 없이 끝냈는데, 리포트의
+  // 실행 계획에는 "초기 실패 4건 · malformed 1건 · 최종 미회수 0건"이 적혀
+  // 있었다. 그 셋이 정확히 `dispatch.end`가 담는 값이므로 **손으로 옮긴
+  // 수치**다. 기록에는 그 값을 낼 재료가 다 있었다 — `module.done` 27건이
+  // status와 failureClass를 달고 있었다.
+  //
+  // 세는 단위는 **numbered 모듈**이다. 특수 패스(props·math·exception)는
+  // `module.start`/`module.done`으로 남기되 이 집계에는 넣지 않는다. 실제 기록이
+  // 줄곧 그렇게 세어 왔고, 두 단위가 한 필드에서 섞이면 `ok:18`과 `module.done`
+  // 20건이 어긋나던 그 문제로 돌아간다.
+  {
+    const numbered = event => /^\d\d-/.test(String(event.module ?? ''))
+    const attempts = events.filter(event => event.phase === 'module.done' && numbered(event))
+    const terminal = new Map()
+    for (const event of attempts) terminal.set(String(event.module), event.status)
+    const dispatched = events.some(event => ['dispatch.start', 'module.start', 'module.done'].includes(event.phase))
+    const ended = events.find(event => event.phase === 'dispatch.end')
+    const reachedAfterDispatch = events.some(event => ['script.start', 'script.done', 'crossverify.start', 'crossverify.end', 'render.start', 'render.wrote', 'run.end'].includes(event.phase))
+
+    if (dispatched && reachedAfterDispatch && !ended) {
+      problems.push(`\`dispatch.end\`가 없다. 모듈을 ${terminal.size}개 끝내고 다음 단계로 갔는데 수집 결과가 기록되지 않았다 — 그 수치를 리포트에 적었다면 기록이 아니라 기억에서 온 것이다`)
+    }
+
+    if (ended) {
+      const expected = {
+        terminalOk: [...terminal.values()].filter(status => status === 'ok').length,
+        terminalFailed: [...terminal.values()].filter(status => status !== 'ok').length,
+        attemptsTotal: attempts.length,
+        attemptsFailed: attempts.filter(event => event.status !== 'ok').length,
+      }
+      const off = Object.entries(expected)
+        .filter(([key, value]) => Number.isInteger(ended[key]) && ended[key] !== value)
+        .map(([key, value]) => `${key} ${ended[key]} → 기록으로 세면 ${value}`)
+      if (off.length) {
+        problems.push(`\`dispatch.end\`의 수치가 \`module.done\`과 어긋난다: ${off.join(' / ')}. numbered 모듈만 세고 특수 패스는 넣지 않는다`)
+      }
+    }
+  }
+
+  // 사이드카와 리포트가 짝인지 본다.
+  //
+  // C-9는 사이드카를 `<리포트 디렉터리>/.timing/<리포트 basename>.jsonl`로 둔다.
+  // 그런데 한 실행이 리포트를 `…/Docs/code-review-full-refactor-3d-scan-ux-…md`에
+  // 쓰고 사이드카는 워크트리의 `…/first_branch/.timing/code-review-full-…jsonl`에
+  // 남겼다 — **이름도 디렉터리도 달랐다.** 리포트를 손에 든 사람이 자기 실행의
+  // 기록을 찾을 방법이 없어진다. `render.wrote`가 최종 경로를 알고 있으므로
+  // 어긋남을 여기서 짚을 수 있다.
+  {
+    const wrote = events.filter(event => event.phase === 'render.wrote').at(-1)
+    if (wrote && typeof wrote.path === 'string' && wrote.path) {
+      const reportPath = wrote.path.replace(/\\/g, '/')
+      const reportName = basename(reportPath, extname(reportPath))
+      const reportDir = resolve(dirname(reportPath))
+      if (reportName !== run) {
+        problems.push(`사이드카와 리포트의 이름이 다르다: 기록은 \`${run}\`, 리포트는 \`${reportName}\`. 리포트만 가진 사람은 자기 실행의 기록을 찾을 수 없다`)
+      }
+      if (reportDir !== resolve(dir)) {
+        problems.push(`사이드카와 리포트가 다른 디렉터리에 있다: 기록은 \`${resolve(dir)}\`, 리포트는 \`${reportDir}\`. C-9는 사이드카를 리포트 디렉터리 아래 \`.timing\`에 둔다`)
+      }
+    }
+  }
+
   // 검증 대상과 판정 수가 맞는지 본다.
   //
   // 2026-09-18 실행이 대상 16건을 잡고 판정 13건을 남겼다. 나머지 3건은 verifier가
@@ -761,6 +825,20 @@ if (has('summary')) {
     }
   }
   if (malformed) out.push('', `> 읽지 못한 줄 ${malformed}개.`)
+
+  // 이 표가 어디서 왔는지 표 안에 적는다.
+  //
+  // 한 리포트가 71행짜리 표를 실었는데 그중 4행이 사이드카와 달랐다. 66행은
+  // 바이트 단위로 같았고 네 행만 손으로 쓴 것이었는데, 그중 하나는 `clusters:8`
+  // 자리에 `findings:38`이 적혀 **단위가 다른 값**이 그럴듯하게 들어앉았다.
+  // 같은 리포트가 바로 위에서 "출력을 그대로 사용함"이라고 적고 있었다.
+  //
+  // 위조를 막을 수는 없다. 다만 **대조할 수 있게** 만들 수는 있다 — 출처 경로와
+  // 이벤트 수가 표에 함께 실리면, 읽는 쪽이 같은 명령을 돌려 맞춰 볼 수 있다.
+  // 경로가 표에 들어가면서 "리포트가 자기 사이드카를 못 가리킨다"는 문제도 같이
+  // 없어진다.
+  out.push('', `> 출처: \`${path}\` · 이벤트 ${events.length}개 · 마지막 \`${finalPhase}\`. 이 표는 그 기록에서 만든 것이고, 손으로 고치면 대조가 깨진다.`)
+
   process.stdout.write(out.join('\n') + '\n')
   process.exit(0)
 }

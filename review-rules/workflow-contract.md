@@ -1056,6 +1056,14 @@ UTF-16 파일도 읽는다 — PowerShell 5.1의 `Set-Content -Encoding UTF8`은
 
 파일은 `<리포트 디렉터리>/.timing/<run>.jsonl`이고 **append 전용**이다.
 
+**`<run>`은 리포트 basename이고 `<리포트 디렉터리>`는 리포트가 실제로 저장되는
+곳이다.** 이 둘이 어긋나면 리포트를 손에 든 사람이 자기 실행의 기록을 찾을 수 없다.
+실제로 한 실행이 리포트를 `…/Docs/code-review-full-refactor-3d-scan-ux-….md`에 쓰고
+사이드카는 워크트리의 `…/first_branch/.timing/code-review-full-….jsonl`에 남겼다 —
+이름도 디렉터리도 달랐다. `render.wrote`가 최종 경로를 알고 있으므로 `--check`가
+그 어긋남을 짚는다. **`--summary`는 출처 경로와 이벤트 수를 표 아래에 함께 낸다** —
+리포트가 자기 사이드카를 가리키게 하고, 표를 손으로 고쳤는지 대조할 수 있게 한다.
+
 - **시각을 문장으로 적지 않는다.** 모델에게는 시계가 없다. 타임스탬프·순번·
   경과 시간은 스크립트가 만든다. `--data`로 같은 이름의 값을 넘겨도 버려진다
 - **단계를 지날 때마다 즉시 쓴다.** 끝에 몰아 쓰면 죽은 실행에서 아무것도
@@ -1199,6 +1207,17 @@ C-9가 `terminalOk`와 `attemptsTotal`을 나눈 것과 같은 이유다 — 재
 - `attemptsTotal` / `attemptsFailed` — **시도 단위**. 재시도는 별개의 시도다
 - `attemptFailureClasses` — 시도 단위 집계. `terminalFailed`가 0인데 이 맵이
   비지 않는 것은 **모순이 아니라 정상**이다
+
+**네 수치 모두 numbered 모듈만 센다.** 특수 패스(props·math·exception)는
+`module.start`/`module.done`으로 남기되 이 집계에는 넣지 않는다. 실제 기록이 줄곧
+그렇게 세어 왔고, 두 단위가 한 필드에서 섞이면 `ok:18`과 `module.done` 20건이
+어긋나던 그 문제로 돌아간다.
+
+**`dispatch.end`가 없으면 `--check`가 실패로 짚고, 있으면 수치를 `module.done`으로
+다시 센다.** 한 실행이 `dispatch.start`만 남기고 다음 단계로 갔는데, 리포트의 실행
+계획에는 "초기 실패 4건 · malformed 1건 · 최종 미회수 0건"이 적혀 있었다. 그 셋이
+정확히 이 줄이 담는 값이므로 **손으로 옮긴 수치**다. 기록에는 재료가 다 있었다 —
+`module.done` 27건이 status와 failureClass를 달고 있었다.
 
 중첩 값은 `--data-file`로 넘긴다. 실패가 없었으면 그 맵은 생략한다.
 
