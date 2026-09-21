@@ -204,6 +204,77 @@ export function renderFinding(candidate, { label, vocabulary }) {
   ].join('\n')
 }
 
+/** `04-10`이 `04-3`보다 앞에 오지 않게 한다 — 문자열 정렬은 여기서 틀린다. */
+const idParts = ruleId => {
+  const [head, tail] = String(ruleId).split('-')
+  return { prefix: /^\d+$/.test(head) ? '' : head, module: Number(head) || 0, rule: Number(tail) || 0 }
+}
+
+/**
+ * 규칙 ID를 문자열이 아니라 (모듈, 규칙) 정수 쌍으로 비교한다.
+ *
+ * 문자열 정렬이면 `04-10`이 `04-3`보다 앞에 온다("1" < "3"). 숫자 모듈
+ * 사이의 순서만 이 저장소가 실제로 요구하지만, 전문 패스의 문자 접두
+ * ID(`EX-`, `P-`, `A-`, `C-`)가 섞여 들어와도 죽지 않아야 한다 — 숫자로
+ * 안 읽히는 head는 prefix로 보내고 module은 0으로 두어, 죽는 대신 숫자
+ * 모듈 뒤로 결정적으로 정렬한다.
+ */
+export function compareCandidates(left, right) {
+  const a = idParts(left.ruleId)
+  const b = idParts(right.ruleId)
+  if (a.prefix !== b.prefix) return a.prefix < b.prefix ? -1 : 1
+  if (a.module !== b.module) return a.module - b.module
+  if (a.rule !== b.rule) return a.rule - b.rule
+  return String(left.candidateId) < String(right.candidateId) ? -1 : 1
+}
+
+/**
+ * 같은 규칙 ID가 여럿이면 순번을 붙인다.
+ *
+ * `prepare-verification`이 producer가 붙여 온 `(1/3)` 접미사를 떼어내
+ * `ruleIdRepairs`로만 남기므로, 렌더러가 여기서 다시 붙인다. 떼는 쪽과
+ * 붙이는 쪽이 하나씩만 있게 된다. 분모는 렌더링 대상(이 배열에 들어온
+ * candidate)만으로 세므로, active-deletion에서 걸러져 빠진 반박 finding은
+ * 분모에 들어가지 않는다 — "몇 건 중 몇 번째"가 실제로 찍히는 건수와
+ * 어긋나지 않는다.
+ */
+export function withInstanceNumbers(candidates) {
+  const total = new Map()
+  for (const candidate of candidates) {
+    total.set(candidate.ruleId, (total.get(candidate.ruleId) ?? 0) + 1)
+  }
+  const seen = new Map()
+  return candidates.map(candidate => {
+    const count = total.get(candidate.ruleId)
+    if (count < 2) return { ...candidate, renderedRuleId: candidate.ruleId }
+    const index = (seen.get(candidate.ruleId) ?? 0) + 1
+    seen.set(candidate.ruleId, index)
+    return { ...candidate, renderedRuleId: `${candidate.ruleId} (${index}/${count})` }
+  })
+}
+
+/**
+ * 교차검증 축에 찍을 라벨을 고른다.
+ *
+ * `null`이면 이 finding을 렌더링하지 않는다 — 그 필터링은 여기서 하지 않고
+ * Task 6의 `render`가 한다(`renderFinding`은 이미 걸러진 뒤에만 불린다).
+ *
+ * 판정이 없는 검증 대상(`disposition === undefined`)은 입력 오류가 아니라
+ * `검증 실패`다. verifier가 타임아웃 나서 실제로 있었던 일이고, 조용히
+ * 사라지면 안 되는 사실이라 그대로 표기한다.
+ */
+export function labelFor(candidate, verdictByCandidateId, phase, vocabulary) {
+  const tokens = vocabulary.crossVerification
+  if (candidate.eligibility !== 'VERIFY') return tokens['not-eligible']
+  const disposition = verdictByCandidateId.get(candidate.candidateId)
+  if (disposition === undefined) return tokens['verification-unavailable']
+  if (disposition === 'needs-context') return tokens['scope-open']
+  if (disposition === 'rejected') {
+    return phase === 'rollout-shadow' ? tokens['rejected-shadow'] : null
+  }
+  return tokens.upheld
+}
+
 // Task 6이 실제 정렬·묶음을 채운다. 지금은 거부 경로와 renderFinding 단위
 // 테스트만 검증하므로 빈 문자열로 충분하다 — 이 자리를 비워두면(스텁을 두지
 // 않으면) 통과하는 모든 입력에서 ReferenceError로 죽어, 거부 테스트만 보고

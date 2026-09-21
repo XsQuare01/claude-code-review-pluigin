@@ -6,8 +6,10 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { validateCandidates, loadVocabulary, renderFinding, severityOf, escapeProse, codeSpan }
-  from '../scripts/render-findings.mjs'
+import {
+  validateCandidates, loadVocabulary, renderFinding, severityOf, escapeProse, codeSpan,
+  withInstanceNumbers, labelFor, compareCandidates,
+} from '../scripts/render-findings.mjs'
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)))
 const SCRIPT = join(ROOT, 'scripts', 'render-findings.mjs')
@@ -328,4 +330,90 @@ test('멀쩡한 후보는 exit 0으로 끝까지 간다 — render/loadModuleSec
   assert.equal(out.status, 0)
   assert.equal(out.stdout, '')
   assert.equal(out.stderr, '')
+})
+
+// -------------------------------------------------------- 정렬·순번·교차검증 라벨
+//
+// 이 셋은 Task 6이 조립할 render()가 어떤 순서·모양으로 finding을 묶을지를
+// 결정한다. renderFinding 자체(헤딩·축 줄·슬롯)는 이미 위에서 검증했다.
+
+test('같은 규칙 ID가 여럿이면 순번을 붙인다', () => {
+  const out = withInstanceNumbers([
+    ok({ candidateId: '11-6#1', ruleId: '11-6' }),
+    ok({ candidateId: '11-6#2', ruleId: '11-6' }),
+    ok({ candidateId: '04-3#1', ruleId: '04-3' }),
+  ])
+  assert.deepEqual(out.map(c => c.renderedRuleId), ['11-6 (1/2)', '11-6 (2/2)', '04-3'])
+})
+
+test('순번의 분모는 리포트 전체 기준이다', () => {
+  const out = withInstanceNumbers([
+    ok({ candidateId: '07-1#1', ruleId: '07-1' }),
+    ok({ candidateId: '07-1#2', ruleId: '07-1' }),
+    ok({ candidateId: '07-1#3', ruleId: '07-1' }),
+  ])
+  assert.deepEqual(out.map(c => c.renderedRuleId), ['07-1 (1/3)', '07-1 (2/3)', '07-1 (3/3)'])
+})
+
+test('규칙 ID를 문자열이 아니라 숫자로 정렬한다', () => {
+  const sorted = [
+    ok({ candidateId: '04-10#1', ruleId: '04-10' }),
+    ok({ candidateId: '04-3#1', ruleId: '04-3' }),
+  ].sort(compareCandidates)
+  assert.deepEqual(sorted.map(c => c.ruleId), ['04-3', '04-10'])
+})
+
+test('모듈 번호가 규칙 번호보다 먼저다', () => {
+  const sorted = [
+    ok({ candidateId: '11-1#1', ruleId: '11-1' }),
+    ok({ candidateId: '04-9#1', ruleId: '04-9' }),
+  ].sort(compareCandidates)
+  assert.deepEqual(sorted.map(c => c.ruleId), ['04-9', '11-1'])
+})
+
+// 문자 접두 규칙 ID(EX-/P-/A-/C-, 전문 패스)가 섞여도 compareCandidates가
+// 죽지 않는지 본다. 숫자 모듈끼리의 순서만큼 이 저장소가 요구하는 건
+// 아니지만, 크래시하면 Task 6의 render 전체가 죽는다.
+test('문자 접두 규칙 ID가 섞여도 죽지 않고 정렬된다', () => {
+  const sorted = [
+    ok({ candidateId: 'EX-2#1', ruleId: 'EX-2' }),
+    ok({ candidateId: '04-3#1', ruleId: '04-3' }),
+    ok({ candidateId: 'P-1#1', ruleId: 'P-1' }),
+    ok({ candidateId: 'A-1#1', ruleId: 'A-1' }),
+    ok({ candidateId: 'C-1#1', ruleId: 'C-1' }),
+  ].sort(compareCandidates)
+  assert.deepEqual(sorted.map(c => c.ruleId), ['04-3', 'A-1', 'C-1', 'EX-2', 'P-1'])
+})
+
+test('검증 대상이 아니면 대상 아님이다', () => {
+  const label = labelFor(ok({ eligibility: 'SKIP-VERIFY' }), new Map(), 'active-deletion', VOCAB)
+  assert.equal(label, '대상 아님')
+})
+
+test('판정이 없는 검증 대상은 검증 실패다', () => {
+  const label = labelFor(ok({ eligibility: 'VERIFY' }), new Map(), 'active-deletion',
+    { ...VOCAB, crossVerification: { ...VOCAB.crossVerification, 'verification-unavailable': '검증 실패' } })
+  assert.equal(label, '검증 실패')
+})
+
+test('반박된 finding은 active-deletion에서 사라진다', () => {
+  const verdicts = new Map([['04-3#1', 'rejected']])
+  assert.equal(labelFor(ok({ eligibility: 'VERIFY' }), verdicts, 'active-deletion', VOCAB), null)
+})
+
+test('반박된 finding은 rollout-shadow에서 관찰 중으로 남는다', () => {
+  const verdicts = new Map([['04-3#1', 'rejected']])
+  const vocab = { ...VOCAB, crossVerification: { ...VOCAB.crossVerification, 'rejected-shadow': '반박됨 — 관찰 중' } }
+  assert.equal(labelFor(ok({ eligibility: 'VERIFY' }), verdicts, 'rollout-shadow', vocab), '반박됨 — 관찰 중')
+})
+
+test('needs-context 판정은 범위 미확정이다', () => {
+  const verdicts = new Map([['04-3#1', 'needs-context']])
+  const vocab = { ...VOCAB, crossVerification: { ...VOCAB.crossVerification, 'scope-open': '범위 미확정' } }
+  assert.equal(labelFor(ok({ eligibility: 'VERIFY' }), verdicts, 'active-deletion', vocab), '범위 미확정')
+})
+
+test('upheld 판정은 유지다', () => {
+  const verdicts = new Map([['04-3#1', 'upheld']])
+  assert.equal(labelFor(ok({ eligibility: 'VERIFY' }), verdicts, 'active-deletion', VOCAB), '유지')
 })
