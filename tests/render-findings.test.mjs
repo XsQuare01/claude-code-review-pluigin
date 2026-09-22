@@ -375,6 +375,31 @@ test('CLI가 특수 패스 규칙 ID 접두를 실제로 예외 섹션으로 묶
   assert.match(out.stdout, /`EX-1` 예외 통합 테스트/)
 })
 
+// PR #85 리뷰 지적 2a — CLI 전체 경로로도 확인한다. render 단위 테스트는
+// 이미 markdown/movedToOpenQuestions 분리를 보지만, stdout·stderr로 실제
+// 나뉘어 나오는지는 CLI를 직접 돌려야만 드러난다.
+test('CLI가 needs-context finding을 상세 지적에서 빼고 stderr에 이동 알림을 낸다', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'render-'))
+  const input = join(dir, 'targets.json')
+  const verdictsPath = join(dir, 'verdicts.json')
+  writeFileSync(input, JSON.stringify({
+    candidates: [ok({
+      candidateId: '04-3#1', ruleId: '04-3', eligibility: 'VERIFY',
+      content: { title: '범위 미확정 CLI 지적', body: 'B' },
+    })],
+  }), 'utf8')
+  writeFileSync(verdictsPath, JSON.stringify({ verdicts: [{ candidateId: '04-3#1', disposition: 'needs-context' }] }), 'utf8')
+  const out = spawnSync(process.execPath, [
+    SCRIPT, '--input', input, '--rules', RULES, '--phase-high', 'active-deletion', '--phase-low', 'active-deletion',
+    '--workflow', 'full', '--verdicts', verdictsPath,
+  ], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+  rmSync(dir, { recursive: true, force: true })
+  assert.equal(out.status, 0)
+  assert.doesNotMatch(out.stdout, /범위 미확정 CLI 지적/, '상세 지적(stdout)에 그대로 남아있다')
+  assert.match(out.stderr, /04-3/, 'stderr 알림에 ruleId가 없다')
+  assert.match(out.stderr, /범위 미확정 CLI 지적/, 'stderr 알림에 title이 없다')
+})
+
 // -------------------------------------------------------- 정렬·순번·교차검증 라벨
 //
 // 이 셋은 Task 6이 조립할 render()가 어떤 순서·모양으로 finding을 묶을지를
@@ -458,6 +483,27 @@ test('needs-context 판정은 범위 미확정이다', () => {
   const verdicts = new Map([['04-3#1', { disposition: 'needs-context' }]])
   const vocab = { ...VOCAB, crossVerification: { ...VOCAB.crossVerification, 'scope-open': '범위 미확정' } }
   assert.equal(labelFor(ok({ eligibility: 'VERIFY' }), verdicts, { high: 'active-deletion', low: 'active-deletion' }, vocab), '범위 미확정')
+})
+
+// PR #85 리뷰 지적 2a — 계약의 상태표(C-6B)는 scope-open을 "openQuestion으로
+// 이동"이라고 적는다. `labelFor`가 라벨을 낼 수 있다는 것과, `render`가 그
+// finding을 상세 지적에 라벨을 단 채로 남겨도 된다는 것은 다른 이야기다.
+// render는 이 renderer가 소유하지 않는 `미해결 / 후속 확인` 섹션으로 빠져야
+// 할 후보를 상세 지적에서 빼고, 무엇이 빠졌는지를 돌려줘야 한다 — 조용히
+// 사라지면 안 되기 때문이다.
+test('needs-context finding은 상세 지적에서 빠지고 이동 목록으로 돌아온다', () => {
+  const candidates = [
+    ok({ candidateId: '04-3#1', ruleId: '04-3', eligibility: 'VERIFY',
+         content: { title: '범위 미확정 지적', body: 'B' } }),
+  ]
+  const verdicts = new Map([['04-3#1', { disposition: 'needs-context' }]])
+  const vocab = { ...VOCAB, crossVerification: { ...VOCAB.crossVerification, 'scope-open': '범위 미확정' } }
+  const { markdown, movedToOpenQuestions } = render(candidates, verdicts,
+    { high: 'active-deletion', low: 'active-deletion' }, vocab,
+    [{ kind: 'module', id: '04', title: '상태와 Effect' }], true)
+  assert.doesNotMatch(markdown, /범위 미확정 지적/, '상세 지적 본문에 그대로 남아있다')
+  assert.doesNotMatch(markdown, /범위 미확정/, '라벨을 단 채로 상세 지적에 남아있다')
+  assert.deepEqual(movedToOpenQuestions, [{ id: '04-3#1', ruleId: '04-3', title: '범위 미확정 지적' }])
 })
 
 test('upheld 판정은 유지다', () => {
@@ -644,7 +690,7 @@ test('두 섹션 전문을 낸다 — golden', () => {
   const vocab = { categoryLabels: { 'data-loss': '데이터 손상·유실' },
     crossVerification: { upheld: '유지', 'not-eligible': '대상 아님' } }
 
-  assert.equal(render(candidates, verdicts, { high: 'active-deletion', low: 'active-deletion' }, vocab, SECTIONS, true), [
+  assert.equal(render(candidates, verdicts, { high: 'active-deletion', low: 'active-deletion' }, vocab, SECTIONS, true).markdown, [
     '## 상세 지적',
     '',
     '### 04 상태와 Effect',
@@ -681,7 +727,7 @@ test('두 섹션 전문을 낸다 — golden', () => {
 })
 
 test('적용 대상인데 지적이 없는 모듈은 지적 없음으로 남는다', () => {
-  const md = render([], new Map(), { high: 'active-deletion', low: 'active-deletion' },
+  const { markdown: md } = render([], new Map(), { high: 'active-deletion', low: 'active-deletion' },
     { categoryLabels: {}, crossVerification: {} }, [{ kind: 'module', id: '03', title: 'React 규칙' }], true)
   assert.match(md, /### 03 React 규칙\n\n지적 없음\.\n/)
 })
@@ -695,7 +741,7 @@ test('적용 대상인데 지적이 없는 모듈은 지적 없음으로 남는�
 // labelFor를 부르는 회귀가 생기면 "교차검증: `대상 아님`"이 찍혀 이 assert가
 // 실제로 깨진다.
 test('교차검증을 돌리지 않았으면 축을 아예 내지 않는다', () => {
-  const md = render([ok({ eligibility: 'SKIP-VERIFY' })], new Map(), { high: 'active-deletion', low: 'active-deletion' },
+  const { markdown: md } = render([ok({ eligibility: 'SKIP-VERIFY' })], new Map(), { high: 'active-deletion', low: 'active-deletion' },
     VOCAB, [{ kind: 'module', id: '04', title: '상태와 Effect' }], false)
   assert.doesNotMatch(md, /교차검증/)
   assert.match(md, /영향: 높음 \(데이터 손상·유실\) · 확신: 높음\n/)
@@ -718,7 +764,7 @@ test('반박된 형제는 순번 분모에서도 빠진다 — 필터링이 정�
          content: { title: '살아남음2', body: 'B3' } }),
   ]
   const verdicts = new Map([['11-6#2', { disposition: 'rejected', rebuttalKind: 'guard-exists' }]])
-  const md = render(candidates, verdicts, { high: 'active-deletion', low: 'active-deletion' }, VOCAB,
+  const { markdown: md } = render(candidates, verdicts, { high: 'active-deletion', low: 'active-deletion' }, VOCAB,
     [{ kind: 'module', id: '11', title: '스타일링' }], true)
   assert.doesNotMatch(md, /반박됨/, '반박된 finding 자체가 리포트에 남아있다')
   assert.doesNotMatch(md, /\/3\)/, '걸러지기 전 건수(3)가 분모에 남아있다')
@@ -743,7 +789,7 @@ test('phase는 impact별로 독립이다 — high는 관찰 중으로 남고 low
     ['11-6#1', { disposition: 'rejected' }],
   ])
   const vocab = { ...VOCAB, crossVerification: { ...VOCAB.crossVerification, 'rejected-shadow': '반박됨 — 관찰 중' } }
-  const md = render(candidates, verdicts, { high: 'rollout-shadow', low: 'active-deletion' }, vocab,
+  const { markdown: md } = render(candidates, verdicts, { high: 'rollout-shadow', low: 'active-deletion' }, vocab,
     [{ kind: 'module', id: '04', title: '상태와 Effect' }, { kind: 'module', id: '11', title: '스타일링' }], true)
   assert.match(md, /`04-3` 반박된 high/, 'high는 rollout-shadow이므로 남아있어야 한다')
   assert.match(md, /교차검증: `반박됨 — 관찰 중`/)
@@ -764,7 +810,7 @@ test('특수 패스는 Props → 수학 → 예외 순서로 나온다', () => {
     ok({ candidateId: 'P-1#1', ruleId: 'P-1', impact: 'low', category: undefined,
          content: { title: 'Props 후보', body: 'B' } }),
   ]
-  const md = render(candidates, new Map(), { high: 'active-deletion', low: 'active-deletion' }, VOCAB, SECTIONS, false)
+  const { markdown: md } = render(candidates, new Map(), { high: 'active-deletion', low: 'active-deletion' }, VOCAB, SECTIONS, false)
   const order = [...md.matchAll(/^### (Props|수학|예외)$/gm)].map(match => match[1])
   assert.deepEqual(order, ['Props', '수학', '예외'])
 })

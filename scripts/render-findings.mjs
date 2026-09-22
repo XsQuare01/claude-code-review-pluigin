@@ -408,10 +408,29 @@ export function loadSpecialistPasses(rulesDir) {
  * 자체는 이미 loadModuleSections와 loadSpecialistPasses 두 곳에서 각각
  * 파싱된다 — render가 rulesDir을 받지 않는 것은 그 중복을 막으려는 것이
  * 아니라, render를 그 두 loader의 파일 I/O에서 분리해 두려는 것이다.)
+ *
+ * 반환값은 문자열이 아니라 `{ markdown, movedToOpenQuestions }`다. C-6B
+ * 상태표는 `scope-open`(verifier의 `needs-context`)을 "openQuestion으로
+ * 이동"이라고 적는다 — 상세 지적에 라벨을 단 채로 남기는 것이 아니다. 그런데
+ * `미해결 / 후속 확인` 섹션은 이 renderer가 만들지 않는다(모델이 쓴다).
+ * 그래서 render는 그 finding들을 상세 지적에서 빼는 것까지만 하고, 무엇을
+ * 뺐는지(id·ruleId·title)를 `movedToOpenQuestions`로 돌려준다 — 호출자가
+ * 그 목록을 보고 실제로 옮겨 적지 않으면 finding이 조용히 사라진다.
  */
 export function render(candidates, verdictByCandidateId, phaseByImpact, vocabulary, sections, crossVerified) {
   const labelled = []
+  const movedToOpenQuestions = []
   for (const candidate of candidates) {
+    // 교차검증을 돌렸고 이 finding이 `needs-context`로 판정됐으면, 상세
+    // 지적에 라벨을 달아 남기지 않는다 — C-6B가 요구하는 이동 대상이다.
+    // `labelFor`를 부르기 전에 여기서 먼저 갈라야 한다. `labelFor`는 이
+    // disposition에서 `tokens['scope-open']` 문자열을 돌려주도록 그대로
+    // 남아있지만(단독 호출·다른 소비자를 위해), render의 상세 지적 조립
+    // 경로는 그 라벨을 쓰지 않고 대신 이동시킨다.
+    if (crossVerified && verdictByCandidateId.get(candidate.candidateId)?.disposition === 'needs-context') {
+      movedToOpenQuestions.push({ id: candidate.candidateId, ruleId: candidate.ruleId, title: candidate.content.title })
+      continue
+    }
     // 교차검증 패스가 없었으면 축 자체가 없다(`undefined`). 돌았는데 판정이
     // 없는 것과 다른 사건이라 `labelFor`를 부르지 않는다.
     const label = crossVerified ? labelFor(candidate, verdictByCandidateId, phaseByImpact, vocabulary) : undefined
@@ -492,7 +511,7 @@ export function render(candidates, verdictByCandidateId, phaseByImpact, vocabula
     }
   }
 
-  return lines.join('\n')
+  return { markdown: lines.join('\n'), movedToOpenQuestions }
 }
 
 // 이 파일이 직접 실행될 때만 CLI로 동작한다. 테스트는 함수를 import한다.
@@ -578,5 +597,18 @@ if (process.argv[1] && process.argv[1].endsWith('render-findings.mjs')) {
   } catch (error) {
     die(error.message)
   }
-  process.stdout.write(output)
+  // stdout은 Markdown 전용이다 — 두 섹션 자리에 그대로 붙일 값이라, 다른
+  // 텍스트가 섞이면 그 자리에 잡음이 낀다. 이동된 finding 알림은 stderr로
+  // 낸다: 이 렌더러는 `미해결 / 후속 확인`을 쓰지 않으므로, 여기서 빠졌다는
+  // 사실을 알리지 않으면 operator가 stdout만 보고 finding이 그냥 사라졌다고
+  // 오인한다.
+  if (output.movedToOpenQuestions.length > 0) {
+    const notice = output.movedToOpenQuestions
+      .map(entry => `  - ${entry.ruleId} (${entry.id}): ${entry.title}`)
+      .join('\n')
+    process.stderr.write(
+      `needs-context로 판정된 finding ${output.movedToOpenQuestions.length}건을 상세 지적에서 뺐다 — ` +
+      `이 렌더러는 \`미해결 / 후속 확인\`을 쓰지 않으므로 아래 목록을 직접 그 섹션에 옮겨 적어야 한다:\n${notice}\n`)
+  }
+  process.stdout.write(output.markdown)
 }

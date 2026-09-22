@@ -368,7 +368,7 @@ node "$RULES_DIR/../scripts/tally-verdicts.mjs" --dir "$REPORT_DIR" --run "$REPO
 - `malformed-output`이면 **같은 producer에 교정 재시도는 한 번만** 한다. 재시도 prompt에는 잘못된 점만 짧게 적고 다시 `REVIEW_RESULT_CONTRACT_V1` raw JSON 하나만 요구한다.
 - 두 번째도 `malformed-output`이면 그 패스는 `FAILED malformed-output`으로 기록하고, 부분 보정이나 Markdown 해석으로 통과시키지 않는다. dispatch/result handling과 실패 기록은 이 skill이 책임진다.
 - aggregation은 **검증을 통과한 JSON만** 입력으로 받는다. 이 단계에서는 parsed finding/openQuestion을 패스 라벨과 함께 정렬·중복 제거·그룹화할 뿐, Markdown 헤딩이나 severity 문자열을 읽거나 재사용하지 않는다.
-- renderer가 구조화 필드에서 최종 문서를 생성한다. `####` 헤딩, 섹션 이름, 상태 표, `미해결 / 후속 확인` 항목, severity 이모지는 모두 renderer가 만든다.
+- renderer가 구조화 필드에서 `상세 지적`과 `특수 패스`를 생성한다. `####` 헤딩, 섹션 이름, 상태 표, severity 이모지는 renderer가 만든다. **`미해결 / 후속 확인`은 renderer가 만들지 않는다** — `needs-context`(교차검증 `범위 미확정`)로 판정된 finding은 renderer가 상세 지적에서만 빼고, 무엇을 뺐는지(규칙 ID·candidate ID·title)를 stderr로 알린다. 그 알림을 받아 `미해결 / 후속 확인`에 실제로 옮겨 적는 것은 이 skill(오케스트레이터)의 책임이다 — 옮겨 적지 않으면 그 finding은 리포트 어디에도 없는 채로 사라진다.
 - severity는 renderer output 단계에서만 `impact × confidence`로 파생한다. producer나 aggregation 단계에는 severity source field가 없다.
 
 **`상세 지적`과 `특수 패스`의 표기를 직접 만들지 않는다.**
