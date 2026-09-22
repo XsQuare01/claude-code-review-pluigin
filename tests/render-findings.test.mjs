@@ -180,6 +180,29 @@ test('deleted 위치는 lineBefore를 쓴다', () => {
   assert.match(md, /`src\/old\.ts:7` — `gone\(\)`/)
 })
 
+// 계약 스키마(REVIEW_RESULT_CONTRACT_V1의 location.variants)는 verified·
+// deleted 모두에 선택적 endLine을 허용한다. renderer가 start만 쓰면 여러
+// 줄짜리 인용의 끝이 리포트에서 사라진다 — `42-45`가 `42`로 접힌다.
+test('verified 위치에 endLine이 있고 시작과 다르면 범위로 낸다', () => {
+  const md = renderFinding(ok({ location: { kind: 'verified', path: 'src/a.ts', line: 42, endLine: 45, quote: 'x' } }),
+    { label: '대상 아님', vocabulary: VOCAB })
+  assert.match(md, /`src\/a\.ts:42-45` — `x`/)
+})
+
+test('deleted 위치에 endLine이 있고 시작과 다르면 범위로 낸다', () => {
+  const md = renderFinding(
+    ok({ location: { kind: 'deleted', path: 'src/old.ts', lineBefore: 7, endLine: 9, quote: 'gone()' } }),
+    { label: '대상 아님', vocabulary: VOCAB })
+  assert.match(md, /`src\/old\.ts:7-9` — `gone\(\)`/)
+})
+
+test('endLine이 시작 줄과 같으면 범위로 부풀리지 않는다', () => {
+  const md = renderFinding(ok({ location: { kind: 'verified', path: 'src/a.ts', line: 1, endLine: 1, quote: 'const a = 1' } }),
+    { label: '대상 아님', vocabulary: VOCAB })
+  assert.match(md, /`src\/a\.ts:1` — `const a = 1`/)
+  assert.doesNotMatch(md, /:1-1/)
+})
+
 test('unverified 위치는 사유 줄이 대신한다', () => {
   const md = renderFinding(ok({ location: { kind: 'unverified', reason: '경로를 찾지 못했습니다.' } }),
     { label: '대상 아님', vocabulary: VOCAB })

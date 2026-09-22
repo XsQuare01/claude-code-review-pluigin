@@ -166,7 +166,15 @@ export function codeSpan(text) {
 
 const locationLine = location => {
   if (location.kind === 'unverified') return `위치 미확인 사유: ${escapeProse(location.reason)}`
-  const line = location.kind === 'deleted' ? location.lineBefore : location.line
+  const start = location.kind === 'deleted' ? location.lineBefore : location.line
+  // endLine은 계약(REVIEW_RESULT_CONTRACT_V1의 location.variants)이 verified·
+  // deleted 모두에 허용하는 선택 필드다. start만 쓰면 여러 줄짜리 인용의
+  // 끝이 사라진다(`42-45`가 `42`로 접힌다). start와 같으면(단일 줄을
+  // endLine으로도 반복해 보낸 경우) 범위로 부풀리지 않는다 — `1-1`은
+  // `1`이 이미 말하는 것을 더 말하지 않는다.
+  const line = typeof location.endLine === 'number' && location.endLine !== start
+    ? `${start}-${location.endLine}`
+    : `${start}`
   return `${codeSpan(`${location.path}:${line}`)} — ${codeSpan(location.quote)}`
 }
 
