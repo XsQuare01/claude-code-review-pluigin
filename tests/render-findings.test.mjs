@@ -530,6 +530,35 @@ test('CLI가 needs-context finding을 상세 지적에서 빼고 stderr에 이�
   assert.match(out.stderr, /범위 미확정 CLI 지적/, 'stderr 알림에 title이 없다')
 })
 
+// PR #85 리뷰 지적 2 — CLI 전체 경로로도 active-deletion 삭제 채널이
+// stderr에 나오는지 본다. needs-context 알림과 같은 이유로 stdout에는 섞지
+// 않는다 — stdout은 두 섹션 자리에 그대로 붙일 Markdown 전용이다.
+test('CLI가 active-deletion 삭제를 stderr에 낸다', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'render-'))
+  const input = join(dir, 'targets.json')
+  const verdictsPath = join(dir, 'verdicts.json')
+  writeFileSync(input, JSON.stringify({
+    candidates: [ok({
+      candidateId: '04-3#1', ruleId: '04-3', impact: 'high', eligibility: 'VERIFY',
+      location: { kind: 'verified', path: 'src/a.ts', line: 1, quote: 'x' },
+      content: { title: '지워지는 CLI 지적', body: 'B' },
+    })],
+  }), 'utf8')
+  writeFileSync(verdictsPath, JSON.stringify({
+    verdicts: [{ candidateId: '04-3#1', disposition: 'rejected', rebuttal: { kind: 'guard-exists' } }],
+  }), 'utf8')
+  const out = spawnSync(process.execPath, [
+    SCRIPT, '--input', input, '--rules', RULES, '--phase-high', 'active-deletion', '--phase-low', 'active-deletion',
+    '--workflow', 'full', '--verdicts', verdictsPath, '--verification-state', 'ran',
+  ], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+  rmSync(dir, { recursive: true, force: true })
+  assert.equal(out.status, 0)
+  assert.doesNotMatch(out.stdout, /지워지는 CLI 지적/, '상세 지적(stdout)에 그대로 남아있다')
+  assert.match(out.stderr, /04-3/, 'stderr 알림에 ruleId가 없다')
+  assert.match(out.stderr, /src\/a\.ts/, 'stderr 알림에 anchor path가 없다')
+  assert.match(out.stderr, /guard-exists/, 'stderr 알림에 rebuttal.kind가 없다')
+})
+
 // PR #85 리뷰 지적 2b — CLI 전체 경로에서도 disabled가 모든 finding에 같은
 // 꺼짐 토큰을 찍는지 본다. --verdicts를 아예 안 줘도(검증을 껐으므로 판정
 // 파일 자체가 없는 것이 정상) 축이 사라지지 않고 꺼짐으로 남아야 한다.
@@ -960,6 +989,39 @@ test('phase는 impact별로 독립이다 — high는 관찰 중으로 남고 low
   assert.match(md, /`04-3` 반박된 high/, 'high는 rollout-shadow이므로 남아있어야 한다')
   assert.match(md, /교차검증: `반박됨 — 관찰 중`/)
   assert.doesNotMatch(md, /반박된 low/, 'low는 active-deletion인데도 리포트에 남아있다')
+})
+
+// PR #85 리뷰 지적 2 — 계약(C-6B "오판 가시성")은 `active-deletion`에서
+// 지워지는 rejected finding의 흔적을 audit이 아니라 리포트 본문
+// (`미해결 / 후속 확인`)에 남기라고 명시한다: impact=high는 건별로
+// 규칙 ID·anchor path·rebuttal.kind, impact=low는 건수만. 그런데 render는
+// label===null을 만나면 movedToOpenQuestions처럼 돌려주는 채널 없이 그냥
+// continue해 버렸다 — needs-context를 위해 만든 "조용히 사라지지 않는다"
+// 장치가 active-deletion에는 없었다. 두 번째 채널(activeDeletionRemovals)로
+// 이 삭제 사실을 돌려받는지 본다.
+test('active-deletion에서 지워진 rejected finding은 두 번째 채널로 돌아온다', () => {
+  const candidates = [
+    ok({ candidateId: '04-3#1', ruleId: '04-3', impact: 'high', eligibility: 'VERIFY',
+         location: { kind: 'verified', path: 'src/a.ts', line: 1, quote: 'x' },
+         content: { title: '사라지는 high', body: 'B1' } }),
+    ok({ candidateId: '11-6#1', ruleId: '11-6', impact: 'low', category: undefined, eligibility: 'VERIFY',
+         location: { kind: 'verified', path: 'src/b.ts', line: 2, quote: 'y' },
+         content: { title: '사라지는 low 1', body: 'B2' } }),
+    ok({ candidateId: '11-6#2', ruleId: '11-6', impact: 'low', category: undefined, eligibility: 'VERIFY',
+         location: { kind: 'verified', path: 'src/c.ts', line: 3, quote: 'z' },
+         content: { title: '사라지는 low 2', body: 'B3' } }),
+  ]
+  const verdicts = new Map([
+    ['04-3#1', { disposition: 'rejected', rebuttalKind: 'guard-exists' }],
+    ['11-6#1', { disposition: 'rejected', rebuttalKind: 'unreachable' }],
+    ['11-6#2', { disposition: 'rejected', rebuttalKind: 'unreachable' }],
+  ])
+  const { markdown, activeDeletionRemovals } = render(candidates, verdicts,
+    { high: 'active-deletion', low: 'active-deletion' }, VOCAB,
+    [{ kind: 'module', id: '04', title: '상태와 Effect' }, { kind: 'module', id: '11', title: '스타일링' }], 'ran')
+  assert.doesNotMatch(markdown, /사라지는/, '지워진 finding이 상세 지적에 그대로 남아있다')
+  assert.deepEqual(activeDeletionRemovals.high, [{ ruleId: '04-3', path: 'src/a.ts', rebuttalKind: 'guard-exists' }])
+  assert.equal(activeDeletionRemovals.lowCount, 2, 'low는 건수만 남긴다 — 건별 항목이 아니다')
 })
 
 // 리뷰 fix round 1, Important 3 — Ruling 2가 고정한 순서(Props → 수학 →

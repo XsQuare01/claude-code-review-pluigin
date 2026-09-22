@@ -458,13 +458,20 @@ export function loadSpecialistPasses(rulesDir) {
  * 파싱된다 — render가 rulesDir을 받지 않는 것은 그 중복을 막으려는 것이
  * 아니라, render를 그 두 loader의 파일 I/O에서 분리해 두려는 것이다.)
  *
- * 반환값은 문자열이 아니라 `{ markdown, movedToOpenQuestions }`다. C-6B
- * 상태표는 `scope-open`(verifier의 `needs-context`)을 "openQuestion으로
+ * 반환값은 문자열이 아니라 `{ markdown, movedToOpenQuestions, activeDeletionRemovals }`다.
+ * C-6B 상태표는 `scope-open`(verifier의 `needs-context`)을 "openQuestion으로
  * 이동"이라고 적는다 — 상세 지적에 라벨을 단 채로 남기는 것이 아니다. 그런데
  * `미해결 / 후속 확인` 섹션은 이 renderer가 만들지 않는다(모델이 쓴다).
  * 그래서 render는 그 finding들을 상세 지적에서 빼는 것까지만 하고, 무엇을
  * 뺐는지(id·ruleId·title)를 `movedToOpenQuestions`로 돌려준다 — 호출자가
  * 그 목록을 보고 실제로 옮겨 적지 않으면 finding이 조용히 사라진다.
+ *
+ * `activeDeletionRemovals`도 같은 이유로 존재한다 — C-6B "오판 가시성"은
+ * `active-deletion`에서 지워지는 `rejected` finding의 흔적을 audit이 아니라
+ * **리포트**(`미해결 / 후속 확인`)에 남기라고 명시적으로 요구한다: 검증자의
+ * 오판이 진짜 결함의 소멸이 될 수 있고, audit는 아무도 읽지 않기 때문이다.
+ * `needs-context`를 위해 만든 "조용히 사라지지 않는다" 장치(movedToOpenQuestions)를
+ * active-deletion에서 지워지는 finding에는 두지 않았던 것이 그 자체로 회귀였다.
  *
  * `verificationState`는 불리언이 아니라 세 값을 갖는다.
  *   - `'ran'`: 교차검증이 실제로 돌았다. candidate별로 `labelFor`가 판정을
@@ -485,6 +492,11 @@ export function loadSpecialistPasses(rulesDir) {
 export function render(candidates, verdictByCandidateId, phaseByImpact, vocabulary, sections, verificationState) {
   const labelled = []
   const movedToOpenQuestions = []
+  // C-6B "오판 가시성" — active-deletion이 지운 rejected finding의 흔적을
+  // 리포트 본문에 남긴다. impact=high는 건별(규칙 ID·anchor path·rebuttal.kind),
+  // impact=low는 건수만 — 계약이 그렇게 가른 이유는 high 쪽이 차단 후보라
+  // 무엇이 지워졌는지가 더 크게 걸리기 때문이다.
+  const activeDeletionRemovals = { high: [], lowCount: 0 }
   for (const candidate of candidates) {
     // needs-context 이동은 실제로 판정이 있었던 'ran'에서만 의미가 있다.
     // 'disabled'에는 애초에 판정 데이터가 없고, 있어도 무시한다 — 이동은
@@ -505,7 +517,23 @@ export function render(candidates, verdictByCandidateId, phaseByImpact, vocabula
     // 매기기 전에 걸러야, 지워진 finding이 "(1/3)" 같은 분모를 차지하지 않는다.
     // (리뷰 fix round 1, Important 1 — 순번을 먼저 매기고 나중에 거르면
     // 분모가 걸러지기 전 건수로 굳어 남는다.)
-    if (label === null) continue
+    if (label === null) {
+      // labelFor가 null을 내는 유일한 경로는 active-deletion phase에서
+      // rejected(kind!=='other')로 지워지는 경우다(labelFor 참고). 그 삭제를
+      // 조용히 흘려보내지 않고 두 번째 채널로 담아 돌려준다 — movedToOpenQuestions와
+      // 같은 이유다.
+      const verdict = verdictByCandidateId.get(candidate.candidateId)
+      if (candidate.impact === 'high') {
+        activeDeletionRemovals.high.push({
+          ruleId: candidate.ruleId,
+          path: candidate.location?.path ?? null,
+          rebuttalKind: verdict?.rebuttalKind ?? null,
+        })
+      } else {
+        activeDeletionRemovals.lowCount += 1
+      }
+      continue
+    }
     labelled.push({ candidate, label })
   }
 
@@ -578,7 +606,7 @@ export function render(candidates, verdictByCandidateId, phaseByImpact, vocabula
     }
   }
 
-  return { markdown: lines.join('\n'), movedToOpenQuestions }
+  return { markdown: lines.join('\n'), movedToOpenQuestions, activeDeletionRemovals }
 }
 
 // 이 파일이 직접 실행될 때만 CLI로 동작한다. 테스트는 함수를 import한다.
@@ -691,6 +719,17 @@ if (process.argv[1] && process.argv[1].endsWith('render-findings.mjs')) {
     process.stderr.write(
       `needs-context로 판정된 finding ${output.movedToOpenQuestions.length}건을 상세 지적에서 뺐다 — ` +
       `이 렌더러는 \`미해결 / 후속 확인\`을 쓰지 않으므로 아래 목록을 직접 그 섹션에 옮겨 적어야 한다:\n${notice}\n`)
+  }
+  // active-deletion이 지운 rejected finding도 같은 이유로 stderr에 낸다 —
+  // C-6B "오판 가시성"이 요구하는 흔적이고, 이 렌더러는 `미해결 / 후속 확인`을
+  // 쓰지 않으므로 operator가 직접 그 섹션에 옮겨 적어야 한다.
+  const { high, lowCount } = output.activeDeletionRemovals
+  if (high.length > 0 || lowCount > 0) {
+    const highLines = high.map(entry => `  - ${entry.ruleId} (${entry.path ?? '경로 미상'}): ${entry.rebuttalKind ?? '사유 미상'}`)
+    process.stderr.write(
+      `active-deletion phase에서 반박되어 상세 지적에서 지워진 finding이 있다 — ` +
+      `이 렌더러는 \`미해결 / 후속 확인\`을 쓰지 않으므로 아래를 직접 그 섹션에 옮겨 적어야 한다:\n` +
+      [...highLines, lowCount > 0 ? `  - impact 낮음: ${lowCount}건 (건별 내역 없음)` : null].filter(Boolean).join('\n') + '\n')
   }
   process.stdout.write(output.markdown)
 }

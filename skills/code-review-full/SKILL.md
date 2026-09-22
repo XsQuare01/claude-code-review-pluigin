@@ -391,6 +391,8 @@ node "$RULES_DIR/../scripts/render-findings.mjs" \
 
 **`ran`일 때 `needs-context`로 판정된 finding은 상세 지적에서 빠지고 stderr 알림으로 나온다.** 렌더러는 `미해결 / 후속 확인` 섹션을 쓰지 않으므로, 그 알림에 실린 항목(규칙 ID·candidate ID·title)을 실제로 그 섹션에 옮겨 적는다 — 옮겨 적지 않으면 그 finding은 리포트 어디에도 없는 채로 사라진다.
 
+**`active-deletion` phase가 지운 `rejected` finding도 같은 방식으로 stderr에 나온다.** C-6B "오판 가시성"은 이 삭제의 흔적을 audit이 아니라 리포트 본문(`미해결 / 후속 확인`)에 남기라고 명시한다 — 검증자의 오판이 진짜 결함의 소멸이 될 수 있고, audit는 아무도 읽지 않기 때문이다. stderr 알림에는 `impact = high`였던 것은 건별로(규칙 ID·anchor path·`rebuttal.kind`), `impact = low`였던 것은 건수만 실린다 — 그 알림 내용을 그대로 `미해결 / 후속 확인`에 옮겨 적는다. 옮겨 적지 않으면 그 삭제는 리포트 어디에도 없는 채로 사라진다.
+
 ### 상세 지적 작성 규칙
 - 사용자가 다른 언어를 명시하지 않은 한 모든 패스의 상세 지적과 최종 저장 문서는 한국어로 작성한다.
 - 각 이슈는 일반 `code-review`와 같은 상세 스타일로 `문제 → 의도/현재 선택 → 왜 부족한지 → 개선 방향` 순서가 드러나게 쓴다.
