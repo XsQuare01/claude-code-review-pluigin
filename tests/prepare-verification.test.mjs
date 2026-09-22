@@ -15,6 +15,7 @@ import {
   resolveWithinRoot,
   candidatesFromLocations,
 } from '../scripts/prepare-verification.mjs'
+import { renderFinding } from '../scripts/render-findings.mjs'
 
 // ------------------------------------------------------------- normalization
 
@@ -581,4 +582,70 @@ test('prepareVerification의 decided 출력이 memberInstanceIds·source·source
   assert.deepEqual(decided[0].memberInstanceIds, ['i1', 'i2'], '병합된 producer instance ID가 사라졌다')
   assert.equal(decided[0].source, '일반')
   assert.deepEqual(decided[0].sources, ['일반', 'Props'])
+})
+
+// -------------------------------------------------------- provenance envelope
+//
+// PR #85 리뷰(중요 1) — source/sources 배관은 위에서 이미 candidate까지
+// 살아남는다는 것을 확인했다. 그런데 실제 실행에서 그 값을 채우는 경로가
+// 없었다 — `findingsItem.allowed`(계약)는 producer finding에 `source`를
+// 허용하지 않고, SKILL.md는 `results[]`를 producer JSON 그대로 넘기라고만
+// 적었다. Controller ruling: source는 producer가 자기 입으로 말하지 않고
+// 오케스트레이터가 붙인다. candidatesFromResults가 bare 결과 배열뿐 아니라
+// `{ source, result }` envelope도 받아 그 source를 finding에 태그하는지 본다.
+
+const bareResult = (over = {}) => ({
+  schemaVersion: 1, openQuestions: [],
+  findings: [{
+    ruleId: '04-3', title: '같은 결함', body: '같은 본문', impact: 'high', confidence: 'high',
+    category: 'data-loss', location: { kind: 'verified', path: 'src/a.ts', line: 1, quote: 'x' },
+  }],
+  ...over,
+})
+
+test('envelope 형태 { source, result }에서 candidatesFromResults가 source를 채운다', () => {
+  const [candidate] = candidatesFromResults([{ source: '01-fsd', result: bareResult() }])
+  assert.equal(candidate.source, '01-fsd')
+})
+
+test('bare 결과 배열(하위 호환)에는 여전히 source가 없다', () => {
+  const [candidate] = candidatesFromResults([bareResult()])
+  assert.equal(candidate.source, undefined)
+})
+
+test('envelope 두 개가 같은 위치로 병합되면 둘의 source가 모두 sources에 남는다', () => {
+  const [candidate] = candidatesFromResults([
+    { source: '01-fsd', result: bareResult() },
+    { source: '11-styling', result: bareResult() },
+  ])
+  assert.equal(candidate.source, '01-fsd', '최초 기여자의 source가 남아있어야 한다')
+  assert.deepEqual(candidate.sources, ['01-fsd', '11-styling'])
+})
+
+test('envelope과 bare 결과가 섞여도 각자의 source 유무가 유지된다', () => {
+  const [candidate] = candidatesFromResults([
+    bareResult(),
+    { source: 'props', result: bareResult() },
+  ])
+  // 첫 기여자(bare, source 없음)가 대표값을 갖고, 병합된 두 번째의 source만
+  // sources에 실린다 — merge 판정 자체는 dedupKey(다른 로직)의 몫이라 이
+  // 테스트는 그 판정을 재검증하지 않고 provenance 배관만 본다.
+  assert.equal(candidate.source, undefined)
+  assert.deepEqual(candidate.sources, ['props'])
+})
+
+// 리뷰가 요구한 end-to-end 확인 — envelope 입력이 candidatesFromResults →
+// prepareVerification을 지나 render-findings의 renderFinding까지 실제로
+// 도달해 `출처 패스` 줄로 그려지는지 본다. 배관 중간 단계 하나만 봐서는
+// "다음 단계에서도 산다"고 말할 수 없다(이번 리뷰가 지적한 바로 그 결함 —
+// 배관은 있었지만 아무도 채우지 않았다).
+test('envelope이 candidatesFromResults → prepareVerification → renderFinding까지 출처 패스로 그려진다', () => {
+  const candidates = candidatesFromResults([
+    { source: '01-fsd', result: bareResult() },
+    { source: '11-styling', result: bareResult() },
+  ])
+  const { candidates: decided } = prepareVerification(candidates, { head: {}, base: {} })
+  const vocabulary = { categoryLabels: { 'data-loss': '데이터 손상·유실' }, crossVerification: { upheld: '유지' } }
+  const md = renderFinding(decided[0], { label: '유지', vocabulary })
+  assert.match(md, /^출처 패스: 01-fsd, 11-styling$/m)
 })

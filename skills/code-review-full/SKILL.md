@@ -224,7 +224,9 @@ instanceId 부여
 
 **입력을 새로 만들지 않는다.** 검증을 통과한 producer 결과를 그대로 넘긴다.
 
-**payload는 파일로 넘긴다.** 편집 도구로 `{"results":[ … ]}`를 파일에 쓰고 경로만 준다.
+**payload는 파일로 넘긴다.** 편집 도구로 `{"results":[ … ]}`를 파일에 쓰고 경로만 준다. 배열의 각 원소는 producer JSON을 감싼 envelope
+`{ "source": "<모듈/패스 id>", "result": { …REVIEW_RESULT_CONTRACT_V1… } }`다 —
+`source`는 그 결과를 낸 sub-agent가 담당한 모듈/패스 식별자(예: `01-fsd`, `04-state`, `props`, `math`, `exception` — 담당 규칙 문서 파일명에서 `.md`를 뗀 값)이고, **오케스트레이터가 디스패치 기록에서 채운다.** producer 자신이 자기 출처를 자기 입으로 말하게 하지 않는다 — producer 출력 전체가 신뢰하지 않는 content인데(C-6A), 그 안에서 자기 이름표를 스스로 붙이는 것은 출처를 보증하는 가장 약한 방법이다. 어느 producer가 어떤 결과를 냈는지 신뢰성 있게 아는 것은 그 결과를 디스패치한 오케스트레이터뿐이다.
 
 ```bash
 node "$RULES_DIR/../scripts/prepare-verification.mjs" --merge-base "$MERGE_BASE" --dir "$REPORT_DIR" --run "$REPORT_BASENAME" --input "$REPORT_DIR/.timing/$REPORT_BASENAME.candidates.json" > "$REPORT_DIR/.timing/$REPORT_BASENAME.routed.json"
@@ -235,9 +237,10 @@ node "$RULES_DIR/../scripts/prepare-verification.mjs" --merge-base "$MERGE_BASE"
 - **셸에 담지 않는다.** payload에는 한국어 산문·코드 인용·Windows 경로의 역슬래시가 들어 있고, 그것을 인용부호 한 쌍 안에 넣는 구조는 깨지는 쪽이 정상이다. 한 실행이 문서에 적힌 파이프를 **두 번 연달아 실패**하고 세 번째에 우회했다. 경로만 넘기면 셸이 볼 것이 경로 하나뿐이다
 - stdin 파이프도 계속 받는다(`… < candidates.json`). 셸이 payload를 통째로 들고 있지 않은 경우에만 쓴다
 
-- `results[]`는 C-6A validation을 통과한 producer JSON **그대로**다. 필드를 골라 옮기거나 변환하지 않는다
+- `results[].result`는 C-6A validation을 통과한 producer JSON **그대로**다. 필드를 골라 옮기거나 변환하지 않는다. `results[].source`만 오케스트레이터가 envelope에 추가하는 값이다 — `findingsItem.allowed`(계약)에는 `source`가 없으므로, producer가 반환한 JSON 자체에는 이 필드가 없어야 한다
+- 하위 호환으로 envelope 없이 producer 결과를 바로 배열 원소로 넣는 예전 `{"results":[ <REVIEW_RESULT_CONTRACT_V1>, … ]}` 형태도 계속 받는다. 다만 그 경로로 넘긴 결과는 `source`가 비어 리포트의 `출처 패스` 줄이 나오지 않는다 — 이 skill이 새로 만드는 payload는 항상 envelope을 쓴다
 - **`candidateId`는 스크립트가 부여한다.** `{ruleId}#{n}` 형식이고 정규화 위치 순서로 매겨지므로, 같은 입력이면 항상 같은 ID가 나오고 규칙 ID로 리포트에서 바로 추적된다
-- 출력은 candidate별 `locationCheck`·`eligibility`·`route`·`impact`·`confidence`·`category`·`location`·`content`(producer 산문 — `title`·`body`와, 있으면 `evidence`·`recommendation`·`reason`)와 `bundles`, 그리고 `counts`다
+- 출력은 candidate별 `locationCheck`·`eligibility`·`route`·`impact`·`confidence`·`category`·`location`·`content`(producer 산문 — `title`·`body`와, 있으면 `evidence`·`recommendation`·`reason`)·`memberInstanceIds`(병합된 producer instance id 목록)·있으면 `source`/`sources`(기여한 출처 패스 라벨)와 `bundles`, 그리고 `counts`다
 - **coverage 숫자는 이 `counts`를 그대로 옮긴다.** 직접 세지 않는다 — 손으로 센 수치는 `verify + skipVerify = total`을 깨뜨린다
 - **coverage 숫자의 출처를 함께 적는다.** 스크립트를 돌렸으면 `도구 실행 결과`에도 실행을 남기고, 돌리지 않았으면 미실행이라고 적는다. 숫자가 맞더라도 **결정적으로 판정했다고 서술하지 않는다**
 - 플러그인으로 설치된 경우 스크립트는 `RULES_DIR`의 상위에 있다. 경로를 찾지 못하면 그 사실을 `실행 계획`에 적는다

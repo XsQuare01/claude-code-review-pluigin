@@ -530,11 +530,26 @@ export function exactDedup(findings) {
 export function candidatesFromResults(results) {
   const collected = []
   const ruleIdRepairs = []
-  for (const result of results ?? []) {
+  for (const entry of results ?? []) {
+    // envelope 형태 `{ source, result }`와 맨 producer 결과(`{ schemaVersion,
+    // findings, openQuestions }`)를 모두 받는다. `source`는 오케스트레이터만
+    // 붙일 수 있는 값이다 — `findingsItem.allowed`(계약)는 애초에 producer
+    // finding에 `source` 필드를 허용하지 않는다. producer가 자기 출처를
+    // 자기 입으로 말하게 하면, 신뢰하지 않는 producer 출력이 스스로 이름표를
+    // 다는 셈이라 근거로 가장 약하다 — 어느 producer가 어떤 결과를 냈는지
+    // 신뢰성 있게 아는 것은 그 결과를 디스패치한 오케스트레이터뿐이다.
+    const isEnvelope = entry && typeof entry === 'object' && 'result' in entry &&
+      entry.result && typeof entry.result === 'object'
+    const result = isEnvelope ? entry.result : entry
+    const source = isEnvelope ? entry.source : undefined
     for (const finding of result?.findings ?? []) {
       const { ruleId, repairedFrom } = normalizeRuleId(finding?.ruleId)
       if (repairedFrom) ruleIdRepairs.push({ from: repairedFrom, to: ruleId })
-      collected.push(ruleId === finding?.ruleId ? finding : { ...finding, ruleId })
+      const withRuleId = ruleId === finding?.ruleId ? finding : { ...finding, ruleId }
+      // envelope의 source를 finding에 태그한다. finding 자체가 이미
+      // source를 갖고 있을 일은 없다(위 이유) — 있다면 그건 이 함수가
+      // 신뢰하지 않아야 할 producer 출력이 그 필드를 흉내 낸 것이다.
+      collected.push(source !== undefined ? { ...withRuleId, source } : withRuleId)
     }
   }
 
