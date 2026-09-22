@@ -10,7 +10,8 @@
 //
 // Usage:
 //   node scripts/render-findings.mjs --input <prepare-verification 출력> \
-//        [--verdicts <경로> …] --phase <active-deletion|rollout-shadow> --rules <RULES_DIR>
+//        [--verdicts <경로> …] --phase-high <active-deletion|rollout-shadow> \
+//        --phase-low <active-deletion|rollout-shadow> --rules <RULES_DIR>
 
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -278,8 +279,14 @@ export function withInstanceNumbers(candidates) {
  * `other`인 반박은 그래서 `rejected`의 일반 경로(active-deletion에서
  * null, rollout-shadow에서 `rejected-shadow`)를 타지 않고 모든 phase에서
  * `rejected-other`로 남는다.
+ *
+ * `phaseByImpact`는 `{ high, low }` 객체다. phase는 전역이 아니라 `impact`별
+ * 오케스트레이터 설정이다 — 문자열 하나였다면 "high는 아직 rollout-shadow인
+ * 채로 두고 low만 active-deletion으로 옮긴다" 같은 독립 승인을 표현할 수
+ * 없고, 둘을 하나로 묶어 active-deletion을 전역으로 주면 아직 관찰 중이어야
+ * 할 high-impact 반박(차단 후보)까지 함께 사라진다.
  */
-export function labelFor(candidate, verdictByCandidateId, phase, vocabulary) {
+export function labelFor(candidate, verdictByCandidateId, phaseByImpact, vocabulary) {
   const tokens = vocabulary.crossVerification
   if (candidate.eligibility !== 'VERIFY') return tokens['not-eligible']
   const verdict = verdictByCandidateId.get(candidate.candidateId)
@@ -288,6 +295,9 @@ export function labelFor(candidate, verdictByCandidateId, phase, vocabulary) {
   if (disposition === 'needs-context') return tokens['scope-open']
   if (disposition === 'rejected') {
     if (rebuttalKind === 'other') return tokens['rejected-other']
+    // 이 finding의 impact가 속한 phase만 본다 — high/low를 하나의 phase로
+    // 합쳐 읽으면 한쪽의 독립 승인이 다른 쪽 값에 가려진다.
+    const phase = phaseByImpact[candidate.impact]
     return phase === 'rollout-shadow' ? tokens['rejected-shadow'] : null
   }
   // 닫힌 목록은 `upheld`·`rejected`·`needs-context` 셋뿐이다(C-6B). 여기까지
@@ -399,12 +409,12 @@ export function loadSpecialistPasses(rulesDir) {
  * 파싱된다 — render가 rulesDir을 받지 않는 것은 그 중복을 막으려는 것이
  * 아니라, render를 그 두 loader의 파일 I/O에서 분리해 두려는 것이다.)
  */
-export function render(candidates, verdictByCandidateId, phase, vocabulary, sections, crossVerified) {
+export function render(candidates, verdictByCandidateId, phaseByImpact, vocabulary, sections, crossVerified) {
   const labelled = []
   for (const candidate of candidates) {
     // 교차검증 패스가 없었으면 축 자체가 없다(`undefined`). 돌았는데 판정이
     // 없는 것과 다른 사건이라 `labelFor`를 부르지 않는다.
-    const label = crossVerified ? labelFor(candidate, verdictByCandidateId, phase, vocabulary) : undefined
+    const label = crossVerified ? labelFor(candidate, verdictByCandidateId, phaseByImpact, vocabulary) : undefined
     // `null`은 이 phase에서 리포트에 나타나지 않는다는 뜻이다 — 정렬·순번을
     // 매기기 전에 걸러야, 지워진 finding이 "(1/3)" 같은 분모를 차지하지 않는다.
     // (리뷰 fix round 1, Important 1 — 순번을 먼저 매기고 나중에 거르면
@@ -489,14 +499,20 @@ export function render(candidates, verdictByCandidateId, phase, vocabulary, sect
 if (process.argv[1] && process.argv[1].endsWith('render-findings.mjs')) {
   const inputPath = flag('input')
   const rulesDir = flag('rules')
-  const phase = flag('phase')
+  const phaseHigh = flag('phase-high')
+  const phaseLow = flag('phase-low')
   const workflow = flag('workflow')
   if (!inputPath) die('--input <경로>가 필요하다')
   if (!rulesDir) die('--rules <RULES_DIR>가 필요하다')
   if (!workflow) die('--workflow <이름>이 필요하다 — 어느 모듈이 섹션이 되는지가 여기서 갈린다')
   // 기본값을 두지 않는다. 반박된 finding의 처리가 갈리고 그 값이 차단 판정에
-  // 걸리므로, 조용히 틀린 쪽으로 도는 것보다 멈추는 편이 낫다.
-  if (!PHASES.has(phase)) die(`--phase는 ${[...PHASES].join(' 또는 ')} 중 하나여야 한다`)
+  // 걸리므로, 조용히 틀린 쪽으로 도는 것보다 멈추는 편이 낫다. high와 low를
+  // 하나로 묶지 않는 이유도 같다 — phase는 전역이 아니라 impact별 설정이라
+  // (workflow-contract.md), 하나만 받으면 "high는 아직 관찰 중, low는
+  // 삭제로 전환" 같은 독립 승인을 표현할 수 없다.
+  if (!PHASES.has(phaseHigh)) die(`--phase-high는 ${[...PHASES].join(' 또는 ')} 중 하나여야 한다`)
+  if (!PHASES.has(phaseLow)) die(`--phase-low는 ${[...PHASES].join(' 또는 ')} 중 하나여야 한다`)
+  const phaseByImpact = { high: phaseHigh, low: phaseLow }
 
   let payload
   try {
@@ -557,7 +573,7 @@ if (process.argv[1] && process.argv[1].endsWith('render-findings.mjs')) {
   let output
   try {
     output = render(
-      payload.candidates, byCandidateId, phase, vocabulary.value,
+      payload.candidates, byCandidateId, phaseByImpact, vocabulary.value,
       [...sections.value, ...specialistPasses.value], crossVerified)
   } catch (error) {
     die(error.message)

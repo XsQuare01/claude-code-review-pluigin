@@ -294,7 +294,7 @@ const runWith = (candidates, args = []) => {
   const input = join(dir, 'targets.json')
   writeFileSync(input, JSON.stringify({ candidates }), 'utf8')
   const out = spawnSync(process.execPath, [
-    SCRIPT, '--input', input, '--rules', RULES, '--phase', 'active-deletion',
+    SCRIPT, '--input', input, '--rules', RULES, '--phase-high', 'active-deletion', '--phase-low', 'active-deletion',
     '--workflow', 'full', ...args,
   ], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
   rmSync(dir, { recursive: true, force: true })
@@ -308,15 +308,28 @@ test('거부하면 exit 2이고 아무것도 그리지 않는다', () => {
   assert.match(out.stderr, /04-3#1/)
 })
 
-test('--phase가 없으면 거부한다 — 기본값을 두지 않는다', () => {
+test('--phase-high가 없으면 거부한다 — 기본값을 두지 않는다', () => {
   const dir = mkdtempSync(join(tmpdir(), 'render-'))
   const input = join(dir, 'targets.json')
   writeFileSync(input, JSON.stringify({ candidates: [ok()] }), 'utf8')
-  const out = spawnSync(process.execPath, [SCRIPT, '--input', input, '--rules', RULES, '--workflow', 'full'],
-    { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+  const out = spawnSync(process.execPath, [
+    SCRIPT, '--input', input, '--rules', RULES, '--phase-low', 'active-deletion', '--workflow', 'full',
+  ], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
   rmSync(dir, { recursive: true, force: true })
   assert.equal(out.status, 2)
-  assert.match(out.stderr, /--phase/)
+  assert.match(out.stderr, /--phase-high/)
+})
+
+test('--phase-low가 없으면 거부한다 — high만으로는 low의 phase를 정할 수 없다', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'render-'))
+  const input = join(dir, 'targets.json')
+  writeFileSync(input, JSON.stringify({ candidates: [ok()] }), 'utf8')
+  const out = spawnSync(process.execPath, [
+    SCRIPT, '--input', input, '--rules', RULES, '--phase-high', 'active-deletion', '--workflow', 'full',
+  ], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+  rmSync(dir, { recursive: true, force: true })
+  assert.equal(out.status, 2)
+  assert.match(out.stderr, /--phase-low/)
 })
 
 test('--workflow가 없으면 거부한다 — 섹션 목록을 만들 수 없다', () => {
@@ -324,7 +337,7 @@ test('--workflow가 없으면 거부한다 — 섹션 목록을 만들 수 없�
   const input = join(dir, 'targets.json')
   writeFileSync(input, JSON.stringify({ candidates: [ok()] }), 'utf8')
   const out = spawnSync(process.execPath, [
-    SCRIPT, '--input', input, '--rules', RULES, '--phase', 'active-deletion',
+    SCRIPT, '--input', input, '--rules', RULES, '--phase-high', 'active-deletion', '--phase-low', 'active-deletion',
   ], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
   rmSync(dir, { recursive: true, force: true })
   assert.equal(out.status, 2)
@@ -416,12 +429,12 @@ test('문자 접두 규칙 ID가 섞여도 죽지 않고 정렬된다', () => {
 })
 
 test('검증 대상이 아니면 대상 아님이다', () => {
-  const label = labelFor(ok({ eligibility: 'SKIP-VERIFY' }), new Map(), 'active-deletion', VOCAB)
+  const label = labelFor(ok({ eligibility: 'SKIP-VERIFY' }), new Map(), { high: 'active-deletion', low: 'active-deletion' }, VOCAB)
   assert.equal(label, '대상 아님')
 })
 
 test('판정이 없는 검증 대상은 검증 실패다', () => {
-  const label = labelFor(ok({ eligibility: 'VERIFY' }), new Map(), 'active-deletion',
+  const label = labelFor(ok({ eligibility: 'VERIFY' }), new Map(), { high: 'active-deletion', low: 'active-deletion' },
     { ...VOCAB, crossVerification: { ...VOCAB.crossVerification, 'verification-unavailable': '검증 실패' } })
   assert.equal(label, '검증 실패')
 })
@@ -432,24 +445,24 @@ test('판정이 없는 검증 대상은 검증 실패다', () => {
 // 그냥 생략한다.
 test('반박된 finding은 active-deletion에서 사라진다', () => {
   const verdicts = new Map([['04-3#1', { disposition: 'rejected' }]])
-  assert.equal(labelFor(ok({ eligibility: 'VERIFY' }), verdicts, 'active-deletion', VOCAB), null)
+  assert.equal(labelFor(ok({ eligibility: 'VERIFY' }), verdicts, { high: 'active-deletion', low: 'active-deletion' }, VOCAB), null)
 })
 
 test('반박된 finding은 rollout-shadow에서 관찰 중으로 남는다', () => {
   const verdicts = new Map([['04-3#1', { disposition: 'rejected' }]])
   const vocab = { ...VOCAB, crossVerification: { ...VOCAB.crossVerification, 'rejected-shadow': '반박됨 — 관찰 중' } }
-  assert.equal(labelFor(ok({ eligibility: 'VERIFY' }), verdicts, 'rollout-shadow', vocab), '반박됨 — 관찰 중')
+  assert.equal(labelFor(ok({ eligibility: 'VERIFY' }), verdicts, { high: 'rollout-shadow', low: 'rollout-shadow' }, vocab), '반박됨 — 관찰 중')
 })
 
 test('needs-context 판정은 범위 미확정이다', () => {
   const verdicts = new Map([['04-3#1', { disposition: 'needs-context' }]])
   const vocab = { ...VOCAB, crossVerification: { ...VOCAB.crossVerification, 'scope-open': '범위 미확정' } }
-  assert.equal(labelFor(ok({ eligibility: 'VERIFY' }), verdicts, 'active-deletion', vocab), '범위 미확정')
+  assert.equal(labelFor(ok({ eligibility: 'VERIFY' }), verdicts, { high: 'active-deletion', low: 'active-deletion' }, vocab), '범위 미확정')
 })
 
 test('upheld 판정은 유지다', () => {
   const verdicts = new Map([['04-3#1', { disposition: 'upheld' }]])
-  assert.equal(labelFor(ok({ eligibility: 'VERIFY' }), verdicts, 'active-deletion', VOCAB), '유지')
+  assert.equal(labelFor(ok({ eligibility: 'VERIFY' }), verdicts, { high: 'active-deletion', low: 'active-deletion' }, VOCAB), '유지')
 })
 
 // 리뷰 fix round 2 — labelFor의 마지막 줄(`return tokens.upheld`)은 닫힌
@@ -461,7 +474,7 @@ test('upheld 판정은 유지다', () => {
 test('닫힌 목록 밖 disposition은 유지로 흘려보내지 않고 던진다', () => {
   const verdicts = new Map([['04-3#1', { disposition: 'totally-bogus' }]])
   assert.throws(
-    () => labelFor(ok({ eligibility: 'VERIFY' }), verdicts, 'active-deletion', VOCAB),
+    () => labelFor(ok({ eligibility: 'VERIFY' }), verdicts, { high: 'active-deletion', low: 'active-deletion' }, VOCAB),
     /totally-bogus/,
   )
 })
@@ -496,7 +509,7 @@ test('같은 규칙 ID의 형제는 candidateId로 정렬해 순번이 서로 �
 test('rebuttal.kind가 other면 active-deletion에서도 사라지지 않는다', () => {
   const verdicts = new Map([['04-3#1', { disposition: 'rejected', rebuttalKind: 'other' }]])
   const vocab = { ...VOCAB, crossVerification: { ...VOCAB.crossVerification, 'rejected-other': '반박 시도 — 분류 밖' } }
-  assert.equal(labelFor(ok({ eligibility: 'VERIFY' }), verdicts, 'active-deletion', vocab), '반박 시도 — 분류 밖')
+  assert.equal(labelFor(ok({ eligibility: 'VERIFY' }), verdicts, { high: 'active-deletion', low: 'active-deletion' }, vocab), '반박 시도 — 분류 밖')
 })
 
 test('rebuttal.kind가 other면 rollout-shadow에서도 분류 밖으로 남는다 — 관찰 중이 아니다', () => {
@@ -505,12 +518,12 @@ test('rebuttal.kind가 other면 rollout-shadow에서도 분류 밖으로 남는�
     ...VOCAB,
     crossVerification: { ...VOCAB.crossVerification, 'rejected-other': '반박 시도 — 분류 밖', 'rejected-shadow': '반박됨 — 관찰 중' },
   }
-  assert.equal(labelFor(ok({ eligibility: 'VERIFY' }), verdicts, 'rollout-shadow', vocab), '반박 시도 — 분류 밖')
+  assert.equal(labelFor(ok({ eligibility: 'VERIFY' }), verdicts, { high: 'rollout-shadow', low: 'rollout-shadow' }, vocab), '반박 시도 — 분류 밖')
 })
 
 test('rebuttal.kind가 other가 아니면 active-deletion에서 그대로 사라진다', () => {
   const verdicts = new Map([['04-3#1', { disposition: 'rejected', rebuttalKind: 'guard-exists' }]])
-  assert.equal(labelFor(ok({ eligibility: 'VERIFY' }), verdicts, 'active-deletion', VOCAB), null)
+  assert.equal(labelFor(ok({ eligibility: 'VERIFY' }), verdicts, { high: 'active-deletion', low: 'active-deletion' }, VOCAB), null)
 })
 
 // -------------------------------------------------------------- loadModuleSections
@@ -631,7 +644,7 @@ test('두 섹션 전문을 낸다 — golden', () => {
   const vocab = { categoryLabels: { 'data-loss': '데이터 손상·유실' },
     crossVerification: { upheld: '유지', 'not-eligible': '대상 아님' } }
 
-  assert.equal(render(candidates, verdicts, 'active-deletion', vocab, SECTIONS, true), [
+  assert.equal(render(candidates, verdicts, { high: 'active-deletion', low: 'active-deletion' }, vocab, SECTIONS, true), [
     '## 상세 지적',
     '',
     '### 04 상태와 Effect',
@@ -668,7 +681,7 @@ test('두 섹션 전문을 낸다 — golden', () => {
 })
 
 test('적용 대상인데 지적이 없는 모듈은 지적 없음으로 남는다', () => {
-  const md = render([], new Map(), 'active-deletion',
+  const md = render([], new Map(), { high: 'active-deletion', low: 'active-deletion' },
     { categoryLabels: {}, crossVerification: {} }, [{ kind: 'module', id: '03', title: 'React 규칙' }], true)
   assert.match(md, /### 03 React 규칙\n\n지적 없음\.\n/)
 })
@@ -682,7 +695,7 @@ test('적용 대상인데 지적이 없는 모듈은 지적 없음으로 남는�
 // labelFor를 부르는 회귀가 생기면 "교차검증: `대상 아님`"이 찍혀 이 assert가
 // 실제로 깨진다.
 test('교차검증을 돌리지 않았으면 축을 아예 내지 않는다', () => {
-  const md = render([ok({ eligibility: 'SKIP-VERIFY' })], new Map(), 'active-deletion',
+  const md = render([ok({ eligibility: 'SKIP-VERIFY' })], new Map(), { high: 'active-deletion', low: 'active-deletion' },
     VOCAB, [{ kind: 'module', id: '04', title: '상태와 Effect' }], false)
   assert.doesNotMatch(md, /교차검증/)
   assert.match(md, /영향: 높음 \(데이터 손상·유실\) · 확신: 높음\n/)
@@ -705,12 +718,36 @@ test('반박된 형제는 순번 분모에서도 빠진다 — 필터링이 정�
          content: { title: '살아남음2', body: 'B3' } }),
   ]
   const verdicts = new Map([['11-6#2', { disposition: 'rejected', rebuttalKind: 'guard-exists' }]])
-  const md = render(candidates, verdicts, 'active-deletion', VOCAB,
+  const md = render(candidates, verdicts, { high: 'active-deletion', low: 'active-deletion' }, VOCAB,
     [{ kind: 'module', id: '11', title: '스타일링' }], true)
   assert.doesNotMatch(md, /반박됨/, '반박된 finding 자체가 리포트에 남아있다')
   assert.doesNotMatch(md, /\/3\)/, '걸러지기 전 건수(3)가 분모에 남아있다')
   assert.match(md, /`11-6 \(1\/2\)` 살아남음1/)
   assert.match(md, /`11-6 \(2\/2\)` 살아남음2/)
+})
+
+// PR #85 리뷰 지적 1 — phase는 전역이 아니라 impact별 오케스트레이터 설정이다
+// (workflow-contract.md, "candidate ID 표기" 절 바로 뒤 deletionPhase 블록).
+// high가 아직 rollout-shadow인 동안 low만 active-deletion으로 옮기는 것이
+// 정상 구성이고, 그 반대(모두 rollout-shadow)와도 구분돼야 한다. 하나의
+// phase 문자열로는 이 독립 승인을 표현할 수 없다.
+test('phase는 impact별로 독립이다 — high는 관찰 중으로 남고 low는 사라진다', () => {
+  const candidates = [
+    ok({ candidateId: '04-3#1', ruleId: '04-3', impact: 'high', eligibility: 'VERIFY',
+         content: { title: '반박된 high', body: 'B1' } }),
+    ok({ candidateId: '11-6#1', ruleId: '11-6', impact: 'low', category: undefined, eligibility: 'VERIFY',
+         content: { title: '반박된 low', body: 'B2' } }),
+  ]
+  const verdicts = new Map([
+    ['04-3#1', { disposition: 'rejected' }],
+    ['11-6#1', { disposition: 'rejected' }],
+  ])
+  const vocab = { ...VOCAB, crossVerification: { ...VOCAB.crossVerification, 'rejected-shadow': '반박됨 — 관찰 중' } }
+  const md = render(candidates, verdicts, { high: 'rollout-shadow', low: 'active-deletion' }, vocab,
+    [{ kind: 'module', id: '04', title: '상태와 Effect' }, { kind: 'module', id: '11', title: '스타일링' }], true)
+  assert.match(md, /`04-3` 반박된 high/, 'high는 rollout-shadow이므로 남아있어야 한다')
+  assert.match(md, /교차검증: `반박됨 — 관찰 중`/)
+  assert.doesNotMatch(md, /반박된 low/, 'low는 active-deletion인데도 리포트에 남아있다')
 })
 
 // 리뷰 fix round 1, Important 3 — Ruling 2가 고정한 순서(Props → 수학 →
@@ -727,7 +764,7 @@ test('특수 패스는 Props → 수학 → 예외 순서로 나온다', () => {
     ok({ candidateId: 'P-1#1', ruleId: 'P-1', impact: 'low', category: undefined,
          content: { title: 'Props 후보', body: 'B' } }),
   ]
-  const md = render(candidates, new Map(), 'active-deletion', VOCAB, SECTIONS, false)
+  const md = render(candidates, new Map(), { high: 'active-deletion', low: 'active-deletion' }, VOCAB, SECTIONS, false)
   const order = [...md.matchAll(/^### (Props|수학|예외)$/gm)].map(match => match[1])
   assert.deepEqual(order, ['Props', '수학', '예외'])
 })
@@ -738,7 +775,7 @@ test('특수 패스는 Props → 수학 → 예외 순서로 나온다', () => {
 // 돌려도 똑같이 사라진다.
 test('sections 항목의 kind가 module·pass가 아니면 조용히 사라지지 않고 던진다', () => {
   assert.throws(
-    () => render([], new Map(), 'active-deletion', VOCAB, [{ kind: 'mystery', id: 'zz', title: '?' }], false),
+    () => render([], new Map(), { high: 'active-deletion', low: 'active-deletion' }, VOCAB, [{ kind: 'mystery', id: 'zz', title: '?' }], false),
     /kind/,
   )
 })

@@ -1029,14 +1029,19 @@ for (const [owner, contextPaths] of Object.entries(STRUCTURED_OWNER_POLICY_BEARI
       // `prepare-verification.mjs`를 안 돌리는 이 skill들에 `candidateId`
       // 출처를 정하는 별도 변경이 먼저 있어야 한다.
       const rendererInvocations = [...text.matchAll(/\bnode\b[^\n]*render-findings\.mjs/g)]
-      const rendererRequiredFlags = ['--input', '--rules', '--phase', '--workflow']
+      // `--phase`는 더 이상 유효한 플래그가 아니다 — phase는 전역이 아니라
+      // impact별 설정이라(PR #85), high/low를 각각 --phase-high/--phase-low로
+      // 받는다. 여기서 `--phase`만 남겨 두면 두 플래그 중 하나만 있어도(혹은
+      // 둘 다 빠져도 부분 문자열로) 통과해, 문서가 새 필수 플래그 중 하나를
+      // 빠뜨려도 이 검사가 잡지 못한다.
+      const rendererRequiredFlags = ['--input', '--rules', '--phase-high', '--phase-low', '--workflow']
       const rendererActuallyInvoked = rendererInvocations.some(invocation => {
         const window = text.slice(invocation.index, invocation.index + 500)
         return rendererRequiredFlags.every(flagName => window.includes(flagName))
       })
       if (!rendererActuallyInvoked) {
         failCode('structured-producer', 'E_RENDERER_NOT_CALLED',
-          `${relativePath} must call render-findings.mjs with its required flags (--input, --rules, --phase, --workflow) for the finding sections, not merely mention it`)
+          `${relativePath} must call render-findings.mjs with its required flags (${rendererRequiredFlags.join(', ')}) for the finding sections, not merely mention it`)
       }
     }
   }
