@@ -168,6 +168,18 @@ test('source가 없으면 출처 패스 줄 자체를 내지 않는다', () => {
   assert.doesNotMatch(md, /출처 패스/)
 })
 
+// PR #85 리뷰 지적 4 — `출처 패스`는 producer content(escapeProse)나 code
+// slot(codeSpan)을 거치지 않는 유일한 렌더 값이었다. source는 producer가
+// 아니라 오케스트레이터가 붙이는 값이라고 해도, 그 값 자체가 신뢰된
+// 문자열이라는 보장은 없다 — envelope의 source도 결국 문자열이고, 이 슬롯만
+// escape를 건너뛸 이유가 없다. `##`로 시작하면 heading을 새로 열어 이
+// 브랜치가 세 라운드에 걸쳐 막아온 것과 같은 구멍이 된다.
+test('source에 Markdown 제어 문자가 있으면 이스케이프한다', () => {
+  const md = renderFinding(ok({ source: '## 해킹' }), { label: '유지', vocabulary: VOCAB })
+  assert.match(md, /출처 패스: \\#\\# 해킹/)
+  assert.doesNotMatch(md, /^## 해킹/m, '이스케이프되지 않은 헤딩이 새 줄을 열었다')
+})
+
 test('영향이 낮으면 괄호를 붙이지 않는다', () => {
   const md = renderFinding(ok({ impact: 'low', category: undefined }), { label: '대상 아님', vocabulary: VOCAB })
   assert.match(md, /^#### 🟡 /)

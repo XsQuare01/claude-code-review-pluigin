@@ -193,7 +193,12 @@ const locationLine = location => {
  */
 const sourceLine = candidate => {
   const sources = candidate.sources ?? (candidate.source !== undefined ? [candidate.source] : [])
-  return sources.length ? `출처 패스: ${sources.join(', ')}` : null
+  // 다른 모든 렌더 값(producer 산문은 escapeProse, path/quote는 codeSpan)과
+  // 마찬가지로 이스케이프를 거친다. source는 producer가 아니라 오케스트레이터가
+  // 붙이는 값이지만, 그 문자열 자체가 신뢰된 것이라는 보장은 없다 — escape를
+  // 건너뛰면 `##`로 시작하는 source 하나가 이 브랜치가 세 라운드째 막아온
+  // heading 주입 구멍을 그대로 재현한다.
+  return sources.length ? `출처 패스: ${sources.map(escapeProse).join(', ')}` : null
 }
 
 const SLOTS = [
