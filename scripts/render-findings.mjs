@@ -70,7 +70,12 @@ export function validateCandidates(candidates) {
  * 다음 계약 개정에서 어느 경로가 진짜인지 다시 헷갈리게 만든다.
  */
 export function loadVocabulary(rulesDir) {
-  const contract = readFileSync(join(rulesDir, 'workflow-contract.md'), 'utf8')
+  let contract
+  try {
+    contract = readFileSync(join(rulesDir, 'workflow-contract.md'), 'utf8')
+  } catch (error) {
+    return { error: `workflow-contract.md를 읽지 못했다: ${error.message}` }
+  }
   const manifest = markedJson(contract, 'REVIEW_RESULT_CONTRACT_V1')
   if (manifest.error) return { error: manifest.error }
   const tokens = markedJson(contract, 'CROSS_VERIFICATION_RENDER_TOKENS')
@@ -285,6 +290,15 @@ export function labelFor(candidate, verdictByCandidateId, phase, vocabulary) {
     if (rebuttalKind === 'other') return tokens['rejected-other']
     return phase === 'rollout-shadow' ? tokens['rejected-shadow'] : null
   }
+  // 닫힌 목록은 `upheld`·`rejected`·`needs-context` 셋뿐이다(C-6B). 여기까지
+  // 왔다는 것은 disposition이 그 셋 중 하나도 아니라는 뜻이라, 조용히
+  // `upheld`로 흘려보내지 않는다 — 그러면 반박됐거나 판정이 불확실한
+  // finding에 "교차검증: `유지`"라는 거짓 표기가 찍히고, 독자는 리포트만
+  // 보고는 그 사실을 알 방법이 없다. `tally-verdicts.mjs`가 같은 상황(닫힌
+  // 목록 밖 disposition)에서 죽는 것과 같은 이유로 여기서도 던진다.
+  if (disposition !== 'upheld') {
+    throw new Error(`labelFor: disposition이 C-6B의 닫힌 목록 밖이다 (${JSON.stringify(disposition)}) — candidateId: ${candidate.candidateId}`)
+  }
   return tokens.upheld
 }
 
@@ -379,8 +393,11 @@ export function loadSpecialistPasses(rulesDir) {
  * 배열이 있는지)으로 추측하던 이전 버전은 그 추측과 항목이 어긋나면(예:
  * 둘 다 아니거나 둘 다인 항목) 양쪽 분기 모두에서 조용히 빠지거나 두 번
  * 그려질 수 있었다(리뷰 fix round 1, Important 5). render는 catalog 파일을
- * 직접 읽지 않는다(rulesDir을 받지 않는다); 그 경로는 CLI 배선 한 곳에만
- * 있어야 같은 rulesDir 인자를 두 번 파싱하다 어긋나는 일이 없다.
+ * 직접 읽지 않는다(rulesDir을 받지 않는다) — sections를 순수 데이터로만
+ * 받아야 파일시스템 없이 이 함수만 따로 단위 테스트할 수 있다. (catalog.json
+ * 자체는 이미 loadModuleSections와 loadSpecialistPasses 두 곳에서 각각
+ * 파싱된다 — render가 rulesDir을 받지 않는 것은 그 중복을 막으려는 것이
+ * 아니라, render를 그 두 loader의 파일 I/O에서 분리해 두려는 것이다.)
  */
 export function render(candidates, verdictByCandidateId, phase, vocabulary, sections, crossVerified) {
   const labelled = []
@@ -500,9 +517,14 @@ if (process.argv[1] && process.argv[1].endsWith('render-findings.mjs')) {
   if (sections.error) die(sections.error)
 
   // 특수 패스(Props·수학·예외) 섹션도 같은 catalog.json에서 나온다. render는
-  // rulesDir을 받지 않으므로 — 그 경로를 두 곳에서 따로 파싱하면 하나만
-  // 바뀌었을 때 조용히 어긋난다 — 모듈 섹션과 합쳐 하나의 `sections`로
-  // 넘긴다.
+  // rulesDir을 받지 않고 파일 I/O를 하지 않는다 — 접두 표(prefix table)를
+  // 하드코딩해 두지도 않는다 — 그래야 catalog.json이 그 사실들의 유일한
+  // 선언처로 남고, render는 파일시스템 없이 순수 데이터만으로 단위
+  // 테스트할 수 있다. (loadModuleSections와 loadSpecialistPasses는 실제로는
+  // 이미 각자 catalog.json을 따로 읽고 파싱한다 — 그 중복은 존재하고,
+  // 아직 남아 있는 별도 정리 항목이다. 여기서 두 loader의 결과를 합쳐
+  // 하나의 `sections`로 넘기는 것은 그 중복을 막기 위해서가 아니라, render
+  // 자체를 두 loader의 파일 I/O에서 떼어 놓기 위해서다.)
   const specialistPasses = loadSpecialistPasses(rulesDir)
   if (specialistPasses.error) die(specialistPasses.error)
 
@@ -528,7 +550,17 @@ if (process.argv[1] && process.argv[1].endsWith('render-findings.mjs')) {
   // 판정이 없는 것과는 다른 사건이라, 전자는 축 자체를 렌더링하지 않는다.
   const crossVerified = flagAll('verdicts').length > 0
 
-  process.stdout.write(render(
-    payload.candidates, byCandidateId, phase, vocabulary.value,
-    [...sections.value, ...specialistPasses.value], crossVerified))
+  // render는 그릴 수 없는 입력(닫힌 목록 밖 disposition, kind가 module도
+  // pass도 아닌 section)을 만나면 던진다. 여기서 잡지 않으면 CLI가 raw
+  // stack trace와 기본 종료 코드(1)로 죽는다 — 이 파일의 다른 모든
+  // 거부(die)가 exit 2와 짧은 사유 메시지로 끝나는 것과 어긋난다.
+  let output
+  try {
+    output = render(
+      payload.candidates, byCandidateId, phase, vocabulary.value,
+      [...sections.value, ...specialistPasses.value], crossVerified)
+  } catch (error) {
+    die(error.message)
+  }
+  process.stdout.write(output)
 }

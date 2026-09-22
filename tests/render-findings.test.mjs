@@ -100,6 +100,16 @@ test('impact.categoryLabels가 없으면 loadVocabulary가 거부한다', () => 
   assert.match(result.error, /categoryLabels/)
 })
 
+// 잘못된 `--rules`(오타·존재하지 않는 경로)는 사용자가 가장 저지르기 쉬운
+// 실수다. loadModuleSections/loadSpecialistPasses처럼 sibling loader는 이미
+// readFileSync를 감싸 { error }를 낸다 — loadVocabulary만 감싸지 않아 raw
+// ENOENT를 그대로 던지면 CLI가 exit 2 대신 stack trace와 exit 1로 죽는다.
+test('workflow-contract.md를 읽지 못하면 거부한다 — loadVocabulary', () => {
+  const result = loadVocabulary(join(tmpdir(), 'no-such-rules-dir'))
+  assert.ok(result.error, 'error가 없다')
+  assert.match(result.error, /workflow-contract\.md/)
+})
+
 test('실제 review-rules에서는 두 어휘 맵이 모두 채워진다', () => {
   const result = loadVocabulary(RULES)
   assert.ok(result.value, `error가 나왔다: ${result.error}`)
@@ -440,6 +450,20 @@ test('needs-context 판정은 범위 미확정이다', () => {
 test('upheld 판정은 유지다', () => {
   const verdicts = new Map([['04-3#1', { disposition: 'upheld' }]])
   assert.equal(labelFor(ok({ eligibility: 'VERIFY' }), verdicts, 'active-deletion', VOCAB), '유지')
+})
+
+// 리뷰 fix round 2 — labelFor의 마지막 줄(`return tokens.upheld`)은 닫힌
+// 목록 검사 없는 catch-all이었다. 오타나 이 코드가 모르는 disposition이
+// 들어오면 반박됐거나 판정이 불확실한 finding에 "교차검증: `유지`"라는
+// 거짓 표기가 찍히고, 독자는 리포트만 보고는 그 사실을 알 수 없다.
+// tally-verdicts.mjs가 같은 상황(C-6B 닫힌 목록 밖 disposition)에서 죽는
+// 것과 같은 이유로 여기서도 조용히 넘기지 않고 던진다.
+test('닫힌 목록 밖 disposition은 유지로 흘려보내지 않고 던진다', () => {
+  const verdicts = new Map([['04-3#1', { disposition: 'totally-bogus' }]])
+  assert.throws(
+    () => labelFor(ok({ eligibility: 'VERIFY' }), verdicts, 'active-deletion', VOCAB),
+    /totally-bogus/,
+  )
 })
 
 // 리뷰 fix round 1, Important 1 — 위의 정렬 테스트는 전부 ruleId가 다른 후보만

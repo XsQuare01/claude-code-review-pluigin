@@ -227,8 +227,10 @@ instanceId 부여
 **payload는 파일로 넘긴다.** 편집 도구로 `{"results":[ … ]}`를 파일에 쓰고 경로만 준다.
 
 ```bash
-node "$RULES_DIR/../scripts/prepare-verification.mjs" --merge-base "$MERGE_BASE" --dir "$REPORT_DIR" --run "$REPORT_BASENAME" --input "$REPORT_DIR/.timing/$REPORT_BASENAME.candidates.json"
+node "$RULES_DIR/../scripts/prepare-verification.mjs" --merge-base "$MERGE_BASE" --dir "$REPORT_DIR" --run "$REPORT_BASENAME" --input "$REPORT_DIR/.timing/$REPORT_BASENAME.candidates.json" > "$REPORT_DIR/.timing/$REPORT_BASENAME.routed.json"
 ```
+
+이 스크립트는 결과를 **stdout에만** 낸다. 리다이렉트를 빠뜨리면 이 출력을 담을 파일이 저장소 어디에도 없는데, 뒤의 `render-findings.mjs`는 `--input <경로>`만 받고 stdin 경로가 없다 — 그러면 다음 단계에서 붙일 경로를 운영자가 즉석에서 지어내야 한다. `.timing` 아래 다른 실행별 산출물과 같은 자리에 둔다.
 
 - **셸에 담지 않는다.** payload에는 한국어 산문·코드 인용·Windows 경로의 역슬래시가 들어 있고, 그것을 인용부호 한 쌍 안에 넣는 구조는 깨지는 쪽이 정상이다. 한 실행이 문서에 적힌 파이프를 **두 번 연달아 실패**하고 세 번째에 우회했다. 경로만 넘기면 셸이 볼 것이 경로 하나뿐이다
 - stdin 파이프도 계속 받는다(`… < candidates.json`). 셸이 payload를 통째로 들고 있지 않은 경우에만 쓴다
@@ -373,7 +375,7 @@ node "$RULES_DIR/../scripts/tally-verdicts.mjs" --dir "$REPORT_DIR" --run "$REPO
 
 ```bash
 node "$RULES_DIR/../scripts/render-findings.mjs" \
-     --input <prepare-verification 출력 경로> \
+     --input "$REPORT_DIR/.timing/$REPORT_BASENAME.routed.json" \
      [--verdicts <verdicts-bundle.json 경로> --verdicts <verdicts-isolated.json 경로>] \
      --phase <active-deletion|rollout-shadow> \
      --rules "$RULES_DIR" \

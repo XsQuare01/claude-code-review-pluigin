@@ -994,11 +994,25 @@ for (const [owner, contextPaths] of Object.entries(STRUCTURED_OWNER_POLICY_BEARI
       // 렌더 단계가 표기를 직접 만들지 않는지 본다. 참조만 있고 호출이 없으면
       // 모델이 형식을 기억으로 재구성하는 자리가 그대로 남는다. 파일 이름만
       // 찾는 부분 문자열 검사는 "렌더러가 있다"는 언급 한 줄로도 통과한다 —
-      // 실제 호출과 지나가는 언급을 못 가른 시도가 이 자리에서 실패했었다.
-      // 그래서 `render-findings.mjs` 언급 바로 뒤(500자 창)에 필수 플래그
-      // `--input`·`--rules`·`--phase`·`--workflow`가 모두 있는 호출문을
-      // 찾는다 — CLI 자체가 이 네 개 없이는 실행을 거부하므로(die), 넷이
-      // 함께 있어야 "언급"이 아니라 "그대로 옮길 수 있는 호출"이다.
+      // 실제 호출과 지나가는 언급을 못 가른 첫 시도가 이 자리에서 실패했었다.
+      //
+      // 그다음 시도(`render-findings.mjs` 언급 바로 뒤 500자 창에서 필수
+      // 플래그 네 개를 찾는 방식)도 리뷰에서 defeat됐다. 실행 가능한 코드
+      // 블록을 통째로 지우고 "render-findings.mjs 는 --input, --rules,
+      // --phase, --workflow 를 받는다"라는 산문 한 줄만 남겨도, 그 한
+      // 문장이 네 플래그 이름을 전부 담고 있으므로 그대로 통과했다 — 플래그
+      // 이름을 나열한 문장과 그 플래그를 받는 실제 호출문을 못 가른 것은
+      // 첫 시도와 같은 결함이다. 그래서 창의 시작점을 `render-findings.mjs`
+      // 언급이 아니라, `node` 토큰과 `render-findings.mjs`가 같은 줄에 있는
+      // **실제 호출문** 자리로 옮긴다. `node` 없이 파일 이름만 나열한 산문은
+      // 이 앵커에 걸리지 않는다.
+      //
+      // **이 검사가 보장하는 것**: 문서에 `render-findings.mjs`를 네 필수
+      // 플래그와 함께 부르는 명령문이 존재한다는 것뿐이다.
+      // **이 검사가 보장하지 않는 것**: 그 명령이 실행 시점에 실제로
+      // 실행되는지, 그 실행 결과가 편집 없이 `상세 지적`/`특수 패스`
+      // 섹션에 그대로 실리는지 — 둘 다 정적 텍스트 검사로는 증명할 수
+      // 없다. 출력이 최종 리포트에 도달했다는 보장은 이 검사의 범위 밖이다.
       //
       // **이 검사는 `code-review-full`에만 건다.** 나머지 세 standalone
       // specialist skill(props/math/exception)은 이 renderer가 소유하는
@@ -1014,10 +1028,10 @@ for (const [owner, contextPaths] of Object.entries(STRUCTURED_OWNER_POLICY_BEARI
       // 패스 리포트가 finding을 어느 섹션에 실을지 정하고,
       // `prepare-verification.mjs`를 안 돌리는 이 skill들에 `candidateId`
       // 출처를 정하는 별도 변경이 먼저 있어야 한다.
-      const rendererMentions = [...text.matchAll(/render-findings\.mjs/g)]
+      const rendererInvocations = [...text.matchAll(/\bnode\b[^\n]*render-findings\.mjs/g)]
       const rendererRequiredFlags = ['--input', '--rules', '--phase', '--workflow']
-      const rendererActuallyInvoked = rendererMentions.some(mention => {
-        const window = text.slice(mention.index, mention.index + 500)
+      const rendererActuallyInvoked = rendererInvocations.some(invocation => {
+        const window = text.slice(invocation.index, invocation.index + 500)
         return rendererRequiredFlags.every(flagName => window.includes(flagName))
       })
       if (!rendererActuallyInvoked) {
