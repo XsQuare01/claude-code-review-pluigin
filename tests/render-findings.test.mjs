@@ -64,6 +64,26 @@ test('여러 건이면 전부 나열한다', () => {
   assert.equal(why.length, 2)
 })
 
+// PR #85 리뷰 지적 5 — 계약(REVIEW_RESULT_CONTRACT_V1의 location.variants)은
+// endLine에 `positive-and-gte-line`(verified) / `positive-and-gte-lineBefore`
+// (deleted) 제약을 건다. endLine이 시작 줄보다 작으면 위치 줄이 거꾸로
+// 뒤집힌 범위(`10-5`)로 그려지는데, 이 계약 위반을 validateCandidates가
+// 여태 잡지 않았다 — 등급뿐 아니라 위치도 "만들 수 없는" 입력이다.
+test('verified location의 endLine이 line보다 작으면 거부한다', () => {
+  const [why] = validateCandidates([ok({ location: { kind: 'verified', path: 'src/a.ts', line: 10, endLine: 5, quote: 'x' } })])
+  assert.match(why, /endLine/)
+})
+
+test('deleted location의 endLine이 lineBefore보다 작으면 거부한다', () => {
+  const [why] = validateCandidates([ok({ location: { kind: 'deleted', path: 'src/a.ts', lineBefore: 10, endLine: 5, quote: 'x' } })])
+  assert.match(why, /endLine/)
+})
+
+test('endLine이 시작 줄과 같거나 크면 거부하지 않는다', () => {
+  assert.deepEqual(validateCandidates([ok({ location: { kind: 'verified', path: 'src/a.ts', line: 10, endLine: 10, quote: 'x' } })]), [])
+  assert.deepEqual(validateCandidates([ok({ location: { kind: 'verified', path: 'src/a.ts', line: 10, endLine: 12, quote: 'x' } })]), [])
+})
+
 // -------------------------------------------------------------- loadVocabulary
 //
 // 실제 계약 파일이 categoryLabels를 잃는 사고는 리뷰에서 안 걸린다 — Markdown은
@@ -432,6 +452,26 @@ test('--verification-state가 ran/disabled가 아니면 거부한다', () => {
   rmSync(dir, { recursive: true, force: true })
   assert.equal(out.status, 2)
   assert.match(out.stderr, /--verification-state/)
+})
+
+// PR #85 리뷰 지적 5 — `--verification-state disabled`는 "이 실행은 검증
+// 판정이 없다"는 선언이다. 그런데도 `--verdicts`를 함께 주면 CLI는 그 파일을
+// 조용히 무시했다 — 호출자가 모순된 두 신호를 보냈는데 아무 쪽도 듣지
+// 못했다는 사실을 알 수 없었다. 이제는 명시적으로 거부한다.
+test('--verdicts와 --verification-state disabled를 함께 주면 거부한다', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'render-'))
+  const input = join(dir, 'targets.json')
+  const verdictsPath = join(dir, 'verdicts.json')
+  writeFileSync(input, JSON.stringify({ candidates: [ok()] }), 'utf8')
+  writeFileSync(verdictsPath, JSON.stringify({ verdicts: [] }), 'utf8')
+  const out = spawnSync(process.execPath, [
+    SCRIPT, '--input', input, '--rules', RULES, '--phase-high', 'active-deletion', '--phase-low', 'active-deletion',
+    '--workflow', 'full', '--verification-state', 'disabled', '--verdicts', verdictsPath,
+  ], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+  rmSync(dir, { recursive: true, force: true })
+  assert.equal(out.status, 2)
+  assert.match(out.stderr, /--verdicts/)
+  assert.match(out.stderr, /disabled/)
 })
 
 test('멀쩡한 후보는 exit 0이고 실제 모듈 리포트를 낸다', () => {

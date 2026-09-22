@@ -52,6 +52,19 @@ export function validateCandidates(candidates) {
     if (!LOCATION_KINDS.has(candidate?.location?.kind)) {
       problems.push(`${id}: location.kind가 닫힌 목록 밖이다 (${JSON.stringify(candidate?.location?.kind)})`)
     }
+    // 계약(REVIEW_RESULT_CONTRACT_V1의 location.variants)은 endLine에
+    // verified면 `positive-and-gte-line`, deleted면 `positive-and-gte-lineBefore`
+    // 제약을 건다. endLine이 시작 줄보다 작으면 locationLine이 `10-5`처럼
+    // 뒤집힌 범위를 그리는데, 이 계약 위반을 여태 아무도 잡지 않았다 —
+    // 등급뿐 아니라 위치도 "만들 수 없는" 입력이면 여기서 걸러야 한다.
+    if (candidate?.location?.kind === 'verified' || candidate?.location?.kind === 'deleted') {
+      const start = candidate.location.kind === 'verified' ? candidate.location.line : candidate.location.lineBefore
+      const { endLine } = candidate.location
+      if (endLine !== undefined && typeof start === 'number' && (typeof endLine !== 'number' || endLine < start)) {
+        const startField = candidate.location.kind === 'verified' ? 'line' : 'lineBefore'
+        problems.push(`${id}: location.endLine(${JSON.stringify(endLine)})이 ${startField}(${start})보다 작다 — 범위가 뒤집힌다`)
+      }
+    }
     for (const key of ['title', 'body']) {
       if (typeof candidate?.content?.[key] !== 'string' || !candidate.content[key]) {
         problems.push(`${id}: content.${key}가 없다`)
@@ -596,6 +609,14 @@ if (process.argv[1] && process.argv[1].endsWith('render-findings.mjs')) {
   // 여부를 실제와 다르게 보여준다.
   if (!VERIFICATION_STATES.has(verificationState)) {
     die(`--verification-state는 ${[...VERIFICATION_STATES].join(' 또는 ')} 중 하나여야 한다`)
+  }
+  // `disabled`는 "이 실행에는 검증 판정이 없다"는 선언이다. 그런데도
+  // `--verdicts`를 같이 주면 두 신호가 모순된다 — 조용히 무시하면 호출자는
+  // 자기가 준 판정 파일이 실제로는 쓰이지 않았다는 사실을 알 방법이 없다
+  // (disabled 경로는 판정 데이터를 아예 보지 않는다, 아래 render() 참고).
+  // 모순을 흡수하는 대신 여기서 거부한다.
+  if (verificationState === 'disabled' && flagAll('verdicts').length > 0) {
+    die('--verification-state disabled와 --verdicts를 함께 줄 수 없다 — disabled는 판정이 없다는 선언이라 --verdicts가 모순된다')
   }
 
   let payload
