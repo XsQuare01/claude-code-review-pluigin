@@ -540,3 +540,45 @@ test('prepareVerification의 출력이 content를 그대로 통과시킨다', ()
   assert.equal(decided[0].impact, 'high', '최상위 축은 그대로 남는다')
   assert.equal(decided[0].content.impact, undefined, '축을 content에 복제하지 않는다')
 })
+
+// ---------------------------------------------------- dedup provenance 통과
+
+// PR #85 리뷰 지적 3 — exactDedup은 병합된 finding의 seen.sources에 기여한
+// 모든 source label을 보존하지만(prepare-verification-dedup.test.mjs), 그
+// 값이 candidate까지 살아남는지는 다른 질문이다. candidatesFromResults가
+// source/sources를 옮기지 않으면, 병합 판정은 옳아도 그 근거(누가 봤는지)는
+// candidate에 도달하기 전에 사라진다.
+
+const sourced = (source, over = {}) => ({
+  ruleId: '04-3', title: '같은 결함', body: '같은 본문', impact: 'high', confidence: 'high',
+  category: 'data-loss', location: { kind: 'verified', path: 'src/a.ts', line: 1, quote: 'x' },
+  source, ...over,
+})
+
+test('candidatesFromResults가 병합된 finding의 source/sources를 candidate에 싣는다', () => {
+  const [candidate] = candidatesFromResults([{
+    schemaVersion: 1, openQuestions: [],
+    findings: [sourced('일반'), sourced('Props')],
+  }])
+  assert.equal(candidate.source, '일반', '최초 기여자의 source가 남아있어야 한다')
+  assert.deepEqual(candidate.sources, ['일반', 'Props'], '기여한 모든 source label이 남아있어야 한다')
+})
+
+test('병합되지 않은 finding은 sources 없이 source만 갖는다', () => {
+  const [candidate] = candidatesFromResults([{
+    schemaVersion: 1, openQuestions: [], findings: [sourced('일반')],
+  }])
+  assert.equal(candidate.source, '일반')
+  assert.equal(candidate.sources, undefined)
+})
+
+test('prepareVerification의 decided 출력이 memberInstanceIds·source·sources를 통과시킨다', () => {
+  const candidates = candidatesFromResults([{
+    schemaVersion: 1, openQuestions: [],
+    findings: [sourced('일반'), sourced('Props')],
+  }])
+  const { candidates: decided } = prepareVerification(candidates, { head: {}, base: {} })
+  assert.deepEqual(decided[0].memberInstanceIds, ['i1', 'i2'], '병합된 producer instance ID가 사라졌다')
+  assert.equal(decided[0].source, '일반')
+  assert.deepEqual(decided[0].sources, ['일반', 'Props'])
+})

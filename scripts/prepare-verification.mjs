@@ -232,6 +232,14 @@ export function prepareVerification(candidates, blobs, options = {}) {
       category: candidate.category,
       location: candidate.location,
       content: candidate.content,
+      // candidatesFromResults가 실어 보낸 provenance 필드를 여기서 다시
+      // 빠뜨리면(계약 203·244행) candidate는 candidatesFromResults 직후에는
+      // memberInstanceIds·source·sources를 갖고 있다가 이 projection을
+      // 지나는 순간 잃는다 — canonical candidate ↔ producer instance
+      // 관계와 병합된 출처 패스가 렌더 단계에 아예 도달하지 못한다.
+      memberInstanceIds: candidate.memberInstanceIds ?? [],
+      ...(candidate.source !== undefined ? { source: candidate.source } : {}),
+      ...(candidate.sources !== undefined ? { sources: candidate.sources } : {}),
     }
   })
 
@@ -591,6 +599,13 @@ export function candidatesFromResults(results) {
         // 병합된 instance를 candidate에 붙여 보낸다. 이것이 없으면 canonical
         // candidate 하나가 원래 몇 건이었는지 사후에 알 수 없다.
         memberInstanceIds: finding.memberInstanceIds ?? [],
+        // exactDedup이 seen.source/seen.sources에 모은 출처 패스 label을
+        // 여기서 놓치면, 병합 판정 자체는 옳아도 "누가 봤는지"는 candidate에
+        // 도달하기 전에 사라진다(계약 203·244행 — 병합된 finding은 기여한
+        // 모든 source/pass label을 보존해야 한다). 없으면 키를 만들지
+        // 않는다 — content의 선택 필드와 같은 이유다.
+        ...(finding.source !== undefined ? { source: finding.source } : {}),
+        ...(finding.sources !== undefined ? { sources: finding.sources } : {}),
       })
     })
   }

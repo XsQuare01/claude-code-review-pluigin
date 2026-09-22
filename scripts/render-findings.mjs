@@ -170,6 +170,24 @@ const locationLine = location => {
   return `${codeSpan(`${location.path}:${line}`)} — ${codeSpan(location.quote)}`
 }
 
+/**
+ * `출처 패스` 줄을 만든다 — 병합된 finding이 기여한 모든 source/pass label을
+ * 보존해야 한다는 계약(워크플로우 계약 203·244행)을 렌더링에서 지킨다.
+ *
+ * `sources`(exactDedup이 병합할 때만 채우는 배열)가 있으면 그걸 쓰고, 없으면
+ * 단일 기여자인 `source` 하나만 쓴다. 둘 다 없으면 `null`을 돌려줘 이 줄
+ * 자체를 뺀다 — producer가 출처 라벨을 안 붙인 경로(예: 아직 이 필드를
+ * 채우지 않는 워크플로우)에서 빈 줄을 강제로 만들지 않는다.
+ *
+ * 여러 라벨은 쉼표로 나열한다 — 축 줄이 쓰는 " · "는 "서로 다른 종류의
+ * 사실을 한 줄에 나열"하는 구분자이고, 여기는 "같은 종류(출처 패스)의
+ * 값 여러 개"라 구분자를 다르게 써서 둘을 혼동하지 않게 한다.
+ */
+const sourceLine = candidate => {
+  const sources = candidate.sources ?? (candidate.source !== undefined ? [candidate.source] : [])
+  return sources.length ? `출처 패스: ${sources.join(', ')}` : null
+}
+
 const SLOTS = [
   ['body', '본문'],
   ['evidence', '근거'],
@@ -204,9 +222,12 @@ export function renderFinding(candidate, { label, vocabulary }) {
     .filter(([key]) => typeof candidate.content[key] === 'string' && candidate.content[key])
     .map(([key, head]) => `${head}: ${escapeProse(candidate.content[key])}`)
 
+  const source = sourceLine(candidate)
+
   return [
     `#### ${severity} \`${candidate.renderedRuleId ?? candidate.ruleId}\` ${escapeProse(candidate.content.title)}`,
     axes.join(' · '),
+    ...(source ? [source] : []),
     locationLine(candidate.location),
     ...slots,
   ].join('\n')

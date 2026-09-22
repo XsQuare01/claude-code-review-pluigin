@@ -142,6 +142,32 @@ test('verified 위치는 경로와 인용을 낸다', () => {
   ].join('\n'))
 })
 
+// PR #85 리뷰 지적 3 — dedup provenance는 exactDedup의 seen.sources까지만
+// 살아있고 renderer는 출처 패스 줄 자체를 낸 적이 없었다(이전 리포트에는
+// 있었던 줄이라 이는 회귀다). candidate.source/sources가 있으면 축 줄
+// 바로 다음, 위치 줄보다 앞에 낸다 — 실제 리포트(profile-slim-export
+// 2026-09-18 등)에서 이 줄이 있던 자리와 같다.
+test('candidate.source가 있으면 출처 패스 한 줄을 낸다', () => {
+  const md = renderFinding(ok({ source: '일반' }), { label: '유지', vocabulary: VOCAB })
+  assert.equal(md, [
+    '#### 🔴 `04-3` 제목',
+    '영향: 높음 (데이터 손상·유실) · 확신: 높음 · 교차검증: `유지`',
+    '출처 패스: 일반',
+    '`src/a.ts:1` — `const a = 1`',
+    '본문: 본문',
+  ].join('\n'))
+})
+
+test('병합된 finding은 출처 패스에 기여한 라벨을 모두 낸다', () => {
+  const md = renderFinding(ok({ source: '일반', sources: ['일반', 'Props'] }), { label: '유지', vocabulary: VOCAB })
+  assert.match(md, /^출처 패스: 일반, Props$/m)
+})
+
+test('source가 없으면 출처 패스 줄 자체를 내지 않는다', () => {
+  const md = renderFinding(ok(), { label: '유지', vocabulary: VOCAB })
+  assert.doesNotMatch(md, /출처 패스/)
+})
+
 test('영향이 낮으면 괄호를 붙이지 않는다', () => {
   const md = renderFinding(ok({ impact: 'low', category: undefined }), { label: '대상 아님', vocabulary: VOCAB })
   assert.match(md, /^#### 🟡 /)
