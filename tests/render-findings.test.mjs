@@ -559,14 +559,15 @@ test('CLI가 active-deletion 삭제를 stderr에 낸다', () => {
   assert.match(out.stderr, /guard-exists/, 'stderr 알림에 rebuttal.kind가 없다')
 })
 
-// PR #85 리뷰 지적 2b — CLI 전체 경로에서도 disabled가 모든 finding에 같은
-// 꺼짐 토큰을 찍는지 본다. --verdicts를 아예 안 줘도(검증을 껐으므로 판정
-// 파일 자체가 없는 것이 정상) 축이 사라지지 않고 꺼짐으로 남아야 한다.
-test('CLI가 --verification-state disabled에서 모든 finding에 꺼짐을 찍는다', () => {
-  // runWith의 기본 플래그가 이미 --verification-state disabled다(위 정의) —
-  // --verdicts를 하나도 안 줘도(검증을 껐으므로 판정 파일 자체가 없는 것이
-  // 정상) 축이 사라지지 않고 꺼짐으로 남는지를 본다.
-  const out = runWith([ok()])
+// PR #85 리뷰 지적 2b/3 — CLI 전체 경로에서도 disabled가 검증 대상(VERIFY)
+// finding에 꺼짐 토큰을 찍는지 본다. --verdicts를 아예 안 줘도(검증을
+// 껐으므로 판정 파일 자체가 없는 것이 정상) 축이 사라지지 않고 꺼짐으로
+// 남아야 한다. eligibility를 명시적으로 VERIFY로 둔다 — `ok()`의 기본값은
+// SKIP-VERIFY이고(대상 자체가 아니었던 후보), 그 경우는 disabled에서도
+// `대상 아님`을 유지해야 한다(바로 아래 disabled/eligibility 테스트가 그
+// 구분을 본다). 이 테스트는 "검증 대상이었는데 껐다"만 확인한다.
+test('CLI가 --verification-state disabled에서 검증 대상 finding에 꺼짐을 찍는다', () => {
+  const out = runWith([ok({ eligibility: 'VERIFY' })])
   assert.equal(out.status, 0)
   assert.match(out.stdout, /교차검증: `꺼짐`/)
 })
@@ -677,13 +678,20 @@ test('needs-context finding은 상세 지적에서 빠지고 이동 목록으로
   assert.deepEqual(movedToOpenQuestions, [{ id: '04-3#1', ruleId: '04-3', title: '범위 미확정 지적' }])
 })
 
-// PR #85 리뷰 지적 2b — "검증을 껐다"와 "이 리포트에는 검증 축 자체가 없다"는
-// 다른 사실이다(계약이 verification-disabled와 verification-unavailable을
-// 가르는 것과 같은 이유). 종전에는 --verdicts를 안 주면 축 자체가 사라져
-// 두 경우가 구분되지 않았다. verificationState='disabled'는 검증 대상
-// 여부·판정 유무와 무관하게 모든 finding에 동일한 꺼짐 토큰을 찍는다 —
-// eligibility가 SKIP-VERIFY든 VERIFY든, verdicts 맵이 비어 있든 상관없다.
-test('verification-state가 disabled면 모든 finding에 꺼짐 축이 찍힌다', () => {
+// PR #85 리뷰 지적 2b/3 — "검증을 껐다"와 "이 리포트에는 검증 축 자체가
+// 없다"는 다른 사실이다(계약이 verification-disabled와
+// verification-unavailable을 가르는 것과 같은 이유). 종전에는 --verdicts를
+// 안 주면 축 자체가 사라져 두 경우가 구분되지 않았다.
+//
+// 그런데 verificationState='disabled'가 "판정 유무와 무관하다"는 것이
+// "eligibility와도 무관하다"는 뜻은 아니다. disposition 표(C-6B)는
+// `verification-disabled`를 "검증을 끈 실행의 **검증 대상**"에만 부여한다
+// — SKIP-VERIFY 후보는 이 실행이 검증을 껐든 켰든 애초에 대상이 아니다
+// (`not-eligible` — SKIP-VERIFY 후보). eligibility는 후보 자체의 성질이지
+// 그 pass가 실제로 돌았는지에 좌우되지 않는다. 이전 버전은 이 교차를
+// 놓치고 SKIP-VERIFY 후보에도 꺼짐을 찍었다 — 이 테스트가 그 잘못된 읽기를
+// 그대로 하드코딩하고 있었다.
+test('verification-state가 disabled여도 대상 아님은 대상 아님으로 남고 검증 대상만 꺼짐이 찍힌다', () => {
   const candidates = [
     ok({ candidateId: '04-3#1', ruleId: '04-3', eligibility: 'SKIP-VERIFY',
          content: { title: '대상 아님이었던 지적', body: 'B1' } }),
@@ -697,7 +705,7 @@ test('verification-state가 disabled면 모든 finding에 꺼짐 축이 찍힌�
     { high: 'active-deletion', low: 'active-deletion' }, vocab,
     [{ kind: 'module', id: '04', title: '상태와 Effect' }, { kind: 'module', id: '11', title: '스타일링' }], 'disabled')
   const axisLines = [...markdown.matchAll(/교차검증: `([^`]+)`/g)].map(m => m[1])
-  assert.deepEqual(axisLines, ['꺼짐', '꺼짐'])
+  assert.deepEqual(axisLines, ['대상 아님', '꺼짐'])
   assert.deepEqual(movedToOpenQuestions, [], 'disabled는 needs-context 이동 대상이 없다')
 })
 

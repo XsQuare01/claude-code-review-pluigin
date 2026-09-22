@@ -477,10 +477,14 @@ export function loadSpecialistPasses(rulesDir) {
  *   - `'ran'`: 교차검증이 실제로 돌았다. candidate별로 `labelFor`가 판정을
  *     읽어 라벨을 매기고, `needs-context`는 위에서 이동시킨다.
  *   - `'disabled'`: 이 실행에서 교차검증을 **껐다**(사용자의 선택). 판정
- *     데이터가 있든 없든 보지 않고 모든 finding에 `verification-disabled`
- *     토큰(`꺼짐`)을 균일하게 찍는다 — "검증을 껐다"와 "검증이 깨졌다"를
- *     가르는 계약(C-6B)의 요구가 여기서는 "모든 finding이 같은 이유로 같은
- *     상태"라는 뜻이 된다.
+ *     데이터가 있든 없든 보지 않는다 — 하지만 그것이 eligibility까지
+ *     무시한다는 뜻은 아니다. disposition 표(C-6B)는 `verification-disabled`를
+ *     "검증을 끈 실행의 **검증 대상**"에만 준다. `SKIP-VERIFY` 후보는 이
+ *     실행이 검증을 껐든 켰든 애초에 대상이 아니었으므로 `not-eligible`
+ *     (`대상 아님`)을 그대로 유지한다 — eligibility는 candidate 자체의
+ *     성질이지 그 pass가 실제로 돌았는지에 좌우되지 않는다. 계약은 이
+ *     교집합(disabled × SKIP-VERIFY)을 명시하지 않으므로, 판단 근거를
+ *     golden assertion 안에 조용히 묻지 않고 여기 주석으로 남긴다.
  *   - 그 밖의 값(`false`/`undefined` 등): 이 워크플로우는 애초에 교차검증을
  *     하지 않는다. 축 줄 자체를 내지 않는다 — `disabled`와 다른 사실이다.
  *     `disabled`는 "검증 대상인데 껐다"이고, 이 값은 "검증 대상 개념 자체가
@@ -507,10 +511,17 @@ export function render(candidates, verdictByCandidateId, phaseByImpact, vocabula
     }
     const label = verificationState === 'ran'
       ? labelFor(candidate, verdictByCandidateId, phaseByImpact, vocabulary)
-      // disabled는 후보 하나하나의 eligibility·판정을 보지 않는다 — 이
-      // 실행 전체가 검증을 끈 것이지, 후보별로 갈릴 사정이 아니다.
+      // disabled는 판정 데이터(누가 반박했는지)는 보지 않는다 — 이 실행
+      // 전체가 검증을 끈 것이지, 판정 유무로 후보별로 갈릴 사정이 아니다.
+      // 하지만 eligibility는 판정 데이터가 아니라 candidate 자체의 성질이다.
+      // disposition 표(C-6B)가 `verification-disabled`를 "검증 대상"에만
+      // 주듯이, SKIP-VERIFY 후보는 검증을 껐든 켰든 `not-eligible`
+      // (`대상 아님`)로 남는다 — 그 사실은 이 실행이 검증을 돌렸는지와
+      // 무관하다.
       : verificationState === 'disabled'
-        ? vocabulary.crossVerification['verification-disabled']
+        ? (candidate.eligibility === 'VERIFY'
+          ? vocabulary.crossVerification['verification-disabled']
+          : vocabulary.crossVerification['not-eligible'])
         // 그 밖의 값은 "이 워크플로우에 교차검증 축이 없다"는 뜻이라 축 자체를 뺀다.
         : undefined
     // `null`은 이 phase에서 리포트에 나타나지 않는다는 뜻이다 — 정렬·순번을
