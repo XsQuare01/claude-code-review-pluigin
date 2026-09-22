@@ -11,7 +11,8 @@
 // Usage:
 //   node scripts/render-findings.mjs --input <prepare-verification 출력> \
 //        [--verdicts <경로> …] --phase-high <active-deletion|rollout-shadow> \
-//        --phase-low <active-deletion|rollout-shadow> --rules <RULES_DIR>
+//        --phase-low <active-deletion|rollout-shadow> \
+//        --verification-state <ran|disabled> --rules <RULES_DIR> --workflow <이름>
 
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -22,6 +23,7 @@ const IMPACTS = new Set(['high', 'low'])
 const CONFIDENCES = new Set(['high', 'low'])
 const LOCATION_KINDS = new Set(['verified', 'deleted', 'unverified'])
 const PHASES = new Set(['active-deletion', 'rollout-shadow'])
+const VERIFICATION_STATES = new Set(['ran', 'disabled'])
 
 const die = message => {
   process.stderr.write(`${message}\n`)
@@ -416,24 +418,42 @@ export function loadSpecialistPasses(rulesDir) {
  * 그래서 render는 그 finding들을 상세 지적에서 빼는 것까지만 하고, 무엇을
  * 뺐는지(id·ruleId·title)를 `movedToOpenQuestions`로 돌려준다 — 호출자가
  * 그 목록을 보고 실제로 옮겨 적지 않으면 finding이 조용히 사라진다.
+ *
+ * `verificationState`는 불리언이 아니라 세 값을 갖는다.
+ *   - `'ran'`: 교차검증이 실제로 돌았다. candidate별로 `labelFor`가 판정을
+ *     읽어 라벨을 매기고, `needs-context`는 위에서 이동시킨다.
+ *   - `'disabled'`: 이 실행에서 교차검증을 **껐다**(사용자의 선택). 판정
+ *     데이터가 있든 없든 보지 않고 모든 finding에 `verification-disabled`
+ *     토큰(`꺼짐`)을 균일하게 찍는다 — "검증을 껐다"와 "검증이 깨졌다"를
+ *     가르는 계약(C-6B)의 요구가 여기서는 "모든 finding이 같은 이유로 같은
+ *     상태"라는 뜻이 된다.
+ *   - 그 밖의 값(`false`/`undefined` 등): 이 워크플로우는 애초에 교차검증을
+ *     하지 않는다. 축 줄 자체를 내지 않는다 — `disabled`와 다른 사실이다.
+ *     `disabled`는 "검증 대상인데 껐다"이고, 이 값은 "검증 대상 개념 자체가
+ *     없다"이다. 오늘은 `render-findings.mjs`를 code-review-full만 부르므로
+ *     CLI에는 이 값으로 가는 경로가 없지만(그 워크플로우는 항상 C-6B
+ *     안이다), 함수 자체는 다른 워크플로우가 이 값으로 부를 수 있게 열어
+ *     둔다.
  */
-export function render(candidates, verdictByCandidateId, phaseByImpact, vocabulary, sections, crossVerified) {
+export function render(candidates, verdictByCandidateId, phaseByImpact, vocabulary, sections, verificationState) {
   const labelled = []
   const movedToOpenQuestions = []
   for (const candidate of candidates) {
-    // 교차검증을 돌렸고 이 finding이 `needs-context`로 판정됐으면, 상세
-    // 지적에 라벨을 달아 남기지 않는다 — C-6B가 요구하는 이동 대상이다.
-    // `labelFor`를 부르기 전에 여기서 먼저 갈라야 한다. `labelFor`는 이
-    // disposition에서 `tokens['scope-open']` 문자열을 돌려주도록 그대로
-    // 남아있지만(단독 호출·다른 소비자를 위해), render의 상세 지적 조립
-    // 경로는 그 라벨을 쓰지 않고 대신 이동시킨다.
-    if (crossVerified && verdictByCandidateId.get(candidate.candidateId)?.disposition === 'needs-context') {
+    // needs-context 이동은 실제로 판정이 있었던 'ran'에서만 의미가 있다.
+    // 'disabled'에는 애초에 판정 데이터가 없고, 있어도 무시한다 — 이동은
+    // 검증이 실제로 돈 결과에만 따른다.
+    if (verificationState === 'ran' && verdictByCandidateId.get(candidate.candidateId)?.disposition === 'needs-context') {
       movedToOpenQuestions.push({ id: candidate.candidateId, ruleId: candidate.ruleId, title: candidate.content.title })
       continue
     }
-    // 교차검증 패스가 없었으면 축 자체가 없다(`undefined`). 돌았는데 판정이
-    // 없는 것과 다른 사건이라 `labelFor`를 부르지 않는다.
-    const label = crossVerified ? labelFor(candidate, verdictByCandidateId, phaseByImpact, vocabulary) : undefined
+    const label = verificationState === 'ran'
+      ? labelFor(candidate, verdictByCandidateId, phaseByImpact, vocabulary)
+      // disabled는 후보 하나하나의 eligibility·판정을 보지 않는다 — 이
+      // 실행 전체가 검증을 끈 것이지, 후보별로 갈릴 사정이 아니다.
+      : verificationState === 'disabled'
+        ? vocabulary.crossVerification['verification-disabled']
+        // 그 밖의 값은 "이 워크플로우에 교차검증 축이 없다"는 뜻이라 축 자체를 뺀다.
+        : undefined
     // `null`은 이 phase에서 리포트에 나타나지 않는다는 뜻이다 — 정렬·순번을
     // 매기기 전에 걸러야, 지워진 finding이 "(1/3)" 같은 분모를 차지하지 않는다.
     // (리뷰 fix round 1, Important 1 — 순번을 먼저 매기고 나중에 거르면
@@ -533,6 +553,17 @@ if (process.argv[1] && process.argv[1].endsWith('render-findings.mjs')) {
   if (!PHASES.has(phaseLow)) die(`--phase-low는 ${[...PHASES].join(' 또는 ')} 중 하나여야 한다`)
   const phaseByImpact = { high: phaseHigh, low: phaseLow }
 
+  const verificationState = flag('verification-state')
+  // 이 CLI는 code-review-full 전용이고, 그 워크플로우는 항상 C-6B 안에
+  // 있다 — "검증 대상 개념 자체가 없다"(render()의 세 번째 상태)로 가는
+  // 경로가 이 CLI에는 없다. 그래서 여기서는 ran/disabled 둘만 받는다.
+  // 기본값을 두지 않는 이유는 --phase-*와 같다 — "검증을 껐다"와 "검증이
+  // 실제로 돌았다"를 조용히 아무 쪽으로나 흘려보내면, 리포트가 검증
+  // 여부를 실제와 다르게 보여준다.
+  if (!VERIFICATION_STATES.has(verificationState)) {
+    die(`--verification-state는 ${[...VERIFICATION_STATES].join(' 또는 ')} 중 하나여야 한다`)
+  }
+
   let payload
   try {
     payload = JSON.parse(readFileSync(inputPath, 'utf8'))
@@ -581,10 +612,6 @@ if (process.argv[1] && process.argv[1].endsWith('render-findings.mjs')) {
       byCandidateId.set(verdict.candidateId, { disposition: verdict.disposition, rebuttalKind: verdict.rebuttal?.kind })
     }
   }
-  // 하나도 주지 않으면 교차검증 패스가 없었다는 뜻이다. 준 뒤에 어떤 후보의
-  // 판정이 없는 것과는 다른 사건이라, 전자는 축 자체를 렌더링하지 않는다.
-  const crossVerified = flagAll('verdicts').length > 0
-
   // render는 그릴 수 없는 입력(닫힌 목록 밖 disposition, kind가 module도
   // pass도 아닌 section)을 만나면 던진다. 여기서 잡지 않으면 CLI가 raw
   // stack trace와 기본 종료 코드(1)로 죽는다 — 이 파일의 다른 모든
@@ -593,7 +620,7 @@ if (process.argv[1] && process.argv[1].endsWith('render-findings.mjs')) {
   try {
     output = render(
       payload.candidates, byCandidateId, phaseByImpact, vocabulary.value,
-      [...sections.value, ...specialistPasses.value], crossVerified)
+      [...sections.value, ...specialistPasses.value], verificationState)
   } catch (error) {
     die(error.message)
   }

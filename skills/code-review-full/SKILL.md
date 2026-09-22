@@ -379,12 +379,17 @@ node "$RULES_DIR/../scripts/render-findings.mjs" \
      [--verdicts <verdicts-bundle.json 경로> --verdicts <verdicts-isolated.json 경로>] \
      --phase-high <active-deletion|rollout-shadow> \
      --phase-low <active-deletion|rollout-shadow> \
+     --verification-state <ran|disabled> \
      --rules "$RULES_DIR" \
      --workflow full \
      [--planned <modules-planned 페이로드 경로>]
 ```
 
-출력을 두 섹션 자리에 그대로 붙인다. 같은 명령이 실행마다 다른 모양의 지적을 냈고, 규칙은 이미 계약에 다 있었는데도 그랬다 — 문서가 부탁하는 동안에는 지켜지지 않는다. **`--phase-high`와 `--phase-low`는 별개 값이다.** phase는 전역이 아니라 `impact`별 설정이므로(`workflow-contract.md`의 `deletionPhase`), high가 아직 `rollout-shadow`인 동안 low만 `active-deletion`으로 옮기는 것이 정상 구성이다. 둘 다 기본값이 없다 — 반박된 finding의 처리가 갈리고 그 값이 차단 판정에 걸리므로, 조용히 틀린 쪽으로 도는 것보다 멈추는 편이 낫다. `--verdicts`는 교차검증을 껐거나 아직 돌지 않았으면 생략한다(`crossVerified`가 `false`로 남아 `교차검증:` 축 자체가 렌더링되지 않는다) — 준 순서가 정본 순서이므로 `tally-verdicts.mjs`에 넘긴 순서(bundle 다음 isolated)와 같게 둔다. `--planned`는 `실행 계획`에서 건너뛴/미확인 모듈이 있을 때만 주고, 없으면 생략한다.
+출력을 두 섹션 자리에 그대로 붙인다. 같은 명령이 실행마다 다른 모양의 지적을 냈고, 규칙은 이미 계약에 다 있었는데도 그랬다 — 문서가 부탁하는 동안에는 지켜지지 않는다. **`--phase-high`와 `--phase-low`는 별개 값이다.** phase는 전역이 아니라 `impact`별 설정이므로(`workflow-contract.md`의 `deletionPhase`), high가 아직 `rollout-shadow`인 동안 low만 `active-deletion`으로 옮기는 것이 정상 구성이다. 둘 다 기본값이 없다 — 반박된 finding의 처리가 갈리고 그 값이 차단 판정에 걸리므로, 조용히 틀린 쪽으로 도는 것보다 멈추는 편이 낫다.
+
+**`--verification-state`도 기본값이 없다.** `ran`은 교차검증이 실제로 돌았다는 뜻이고, `disabled`는 이번 실행에서 교차검증을 껐다는 뜻이다 — 계약(C-6B)이 "검증을 끈 실행"과 "검증이 깨진 실행"을 가르는 것과 같은 이유로, 이 값을 `--verdicts` 유무로 추측하지 않는다. `ran`이면 후보별 판정에 따라 `대상 아님`·`유지`·`반박됨 — 관찰 중` 등으로 갈리고, `disabled`면 판정 데이터를 보지 않고 모든 finding에 `꺼짐`을 균일하게 찍는다. `--verdicts`는 `ran`일 때만 주고, `disabled`에서는 애초에 판정 파일이 없으므로 생략한다 — 준 순서가 정본 순서이므로 `tally-verdicts.mjs`에 넘긴 순서(bundle 다음 isolated)와 같게 둔다. `--planned`는 `실행 계획`에서 건너뛴/미확인 모듈이 있을 때만 주고, 없으면 생략한다.
+
+**`ran`일 때 `needs-context`로 판정된 finding은 상세 지적에서 빠지고 stderr 알림으로 나온다.** 렌더러는 `미해결 / 후속 확인` 섹션을 쓰지 않으므로, 그 알림에 실린 항목(규칙 ID·candidate ID·title)을 실제로 그 섹션에 옮겨 적는다 — 옮겨 적지 않으면 그 finding은 리포트 어디에도 없는 채로 사라진다.
 
 ### 상세 지적 작성 규칙
 - 사용자가 다른 언어를 명시하지 않은 한 모든 패스의 상세 지적과 최종 저장 문서는 한국어로 작성한다.

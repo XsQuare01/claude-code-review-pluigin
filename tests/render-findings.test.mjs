@@ -295,7 +295,7 @@ const runWith = (candidates, args = []) => {
   writeFileSync(input, JSON.stringify({ candidates }), 'utf8')
   const out = spawnSync(process.execPath, [
     SCRIPT, '--input', input, '--rules', RULES, '--phase-high', 'active-deletion', '--phase-low', 'active-deletion',
-    '--workflow', 'full', ...args,
+    '--workflow', 'full', '--verification-state', 'disabled', ...args,
   ], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
   rmSync(dir, { recursive: true, force: true })
   return out
@@ -314,6 +314,7 @@ test('--phase-high가 없으면 거부한다 — 기본값을 두지 않는다',
   writeFileSync(input, JSON.stringify({ candidates: [ok()] }), 'utf8')
   const out = spawnSync(process.execPath, [
     SCRIPT, '--input', input, '--rules', RULES, '--phase-low', 'active-deletion', '--workflow', 'full',
+    '--verification-state', 'disabled',
   ], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
   rmSync(dir, { recursive: true, force: true })
   assert.equal(out.status, 2)
@@ -326,6 +327,7 @@ test('--phase-low가 없으면 거부한다 — high만으로는 low의 phase를
   writeFileSync(input, JSON.stringify({ candidates: [ok()] }), 'utf8')
   const out = spawnSync(process.execPath, [
     SCRIPT, '--input', input, '--rules', RULES, '--phase-high', 'active-deletion', '--workflow', 'full',
+    '--verification-state', 'disabled',
   ], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
   rmSync(dir, { recursive: true, force: true })
   assert.equal(out.status, 2)
@@ -338,10 +340,37 @@ test('--workflow가 없으면 거부한다 — 섹션 목록을 만들 수 없�
   writeFileSync(input, JSON.stringify({ candidates: [ok()] }), 'utf8')
   const out = spawnSync(process.execPath, [
     SCRIPT, '--input', input, '--rules', RULES, '--phase-high', 'active-deletion', '--phase-low', 'active-deletion',
+    '--verification-state', 'disabled',
   ], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
   rmSync(dir, { recursive: true, force: true })
   assert.equal(out.status, 2)
   assert.match(out.stderr, /--workflow/)
+})
+
+test('--verification-state가 없으면 거부한다', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'render-'))
+  const input = join(dir, 'targets.json')
+  writeFileSync(input, JSON.stringify({ candidates: [ok()] }), 'utf8')
+  const out = spawnSync(process.execPath, [
+    SCRIPT, '--input', input, '--rules', RULES, '--phase-high', 'active-deletion', '--phase-low', 'active-deletion',
+    '--workflow', 'full',
+  ], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+  rmSync(dir, { recursive: true, force: true })
+  assert.equal(out.status, 2)
+  assert.match(out.stderr, /--verification-state/)
+})
+
+test('--verification-state가 ran/disabled가 아니면 거부한다', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'render-'))
+  const input = join(dir, 'targets.json')
+  writeFileSync(input, JSON.stringify({ candidates: [ok()] }), 'utf8')
+  const out = spawnSync(process.execPath, [
+    SCRIPT, '--input', input, '--rules', RULES, '--phase-high', 'active-deletion', '--phase-low', 'active-deletion',
+    '--workflow', 'full', '--verification-state', 'off',
+  ], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+  rmSync(dir, { recursive: true, force: true })
+  assert.equal(out.status, 2)
+  assert.match(out.stderr, /--verification-state/)
 })
 
 test('멀쩡한 후보는 exit 0이고 실제 모듈 리포트를 낸다', () => {
@@ -391,13 +420,25 @@ test('CLI가 needs-context finding을 상세 지적에서 빼고 stderr에 이�
   writeFileSync(verdictsPath, JSON.stringify({ verdicts: [{ candidateId: '04-3#1', disposition: 'needs-context' }] }), 'utf8')
   const out = spawnSync(process.execPath, [
     SCRIPT, '--input', input, '--rules', RULES, '--phase-high', 'active-deletion', '--phase-low', 'active-deletion',
-    '--workflow', 'full', '--verdicts', verdictsPath,
+    '--workflow', 'full', '--verdicts', verdictsPath, '--verification-state', 'ran',
   ], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
   rmSync(dir, { recursive: true, force: true })
   assert.equal(out.status, 0)
   assert.doesNotMatch(out.stdout, /범위 미확정 CLI 지적/, '상세 지적(stdout)에 그대로 남아있다')
   assert.match(out.stderr, /04-3/, 'stderr 알림에 ruleId가 없다')
   assert.match(out.stderr, /범위 미확정 CLI 지적/, 'stderr 알림에 title이 없다')
+})
+
+// PR #85 리뷰 지적 2b — CLI 전체 경로에서도 disabled가 모든 finding에 같은
+// 꺼짐 토큰을 찍는지 본다. --verdicts를 아예 안 줘도(검증을 껐으므로 판정
+// 파일 자체가 없는 것이 정상) 축이 사라지지 않고 꺼짐으로 남아야 한다.
+test('CLI가 --verification-state disabled에서 모든 finding에 꺼짐을 찍는다', () => {
+  // runWith의 기본 플래그가 이미 --verification-state disabled다(위 정의) —
+  // --verdicts를 하나도 안 줘도(검증을 껐으므로 판정 파일 자체가 없는 것이
+  // 정상) 축이 사라지지 않고 꺼짐으로 남는지를 본다.
+  const out = runWith([ok()])
+  assert.equal(out.status, 0)
+  assert.match(out.stdout, /교차검증: `꺼짐`/)
 })
 
 // -------------------------------------------------------- 정렬·순번·교차검증 라벨
@@ -500,10 +541,34 @@ test('needs-context finding은 상세 지적에서 빠지고 이동 목록으로
   const vocab = { ...VOCAB, crossVerification: { ...VOCAB.crossVerification, 'scope-open': '범위 미확정' } }
   const { markdown, movedToOpenQuestions } = render(candidates, verdicts,
     { high: 'active-deletion', low: 'active-deletion' }, vocab,
-    [{ kind: 'module', id: '04', title: '상태와 Effect' }], true)
+    [{ kind: 'module', id: '04', title: '상태와 Effect' }], 'ran')
   assert.doesNotMatch(markdown, /범위 미확정 지적/, '상세 지적 본문에 그대로 남아있다')
   assert.doesNotMatch(markdown, /범위 미확정/, '라벨을 단 채로 상세 지적에 남아있다')
   assert.deepEqual(movedToOpenQuestions, [{ id: '04-3#1', ruleId: '04-3', title: '범위 미확정 지적' }])
+})
+
+// PR #85 리뷰 지적 2b — "검증을 껐다"와 "이 리포트에는 검증 축 자체가 없다"는
+// 다른 사실이다(계약이 verification-disabled와 verification-unavailable을
+// 가르는 것과 같은 이유). 종전에는 --verdicts를 안 주면 축 자체가 사라져
+// 두 경우가 구분되지 않았다. verificationState='disabled'는 검증 대상
+// 여부·판정 유무와 무관하게 모든 finding에 동일한 꺼짐 토큰을 찍는다 —
+// eligibility가 SKIP-VERIFY든 VERIFY든, verdicts 맵이 비어 있든 상관없다.
+test('verification-state가 disabled면 모든 finding에 꺼짐 축이 찍힌다', () => {
+  const candidates = [
+    ok({ candidateId: '04-3#1', ruleId: '04-3', eligibility: 'SKIP-VERIFY',
+         content: { title: '대상 아님이었던 지적', body: 'B1' } }),
+    ok({ candidateId: '11-6#1', ruleId: '11-6', impact: 'low', category: undefined, eligibility: 'VERIFY',
+         content: { title: '검증 대상이었던 지적', body: 'B2' } }),
+  ]
+  const vocab = { ...VOCAB, crossVerification: { ...VOCAB.crossVerification, 'verification-disabled': '꺼짐' } }
+  // verdicts를 하나도 안 줘도(빈 Map) disabled는 라벨을 낸다 — ran과 달리
+  // 판정 데이터에 의존하지 않는다.
+  const { markdown, movedToOpenQuestions } = render(candidates, new Map(),
+    { high: 'active-deletion', low: 'active-deletion' }, vocab,
+    [{ kind: 'module', id: '04', title: '상태와 Effect' }, { kind: 'module', id: '11', title: '스타일링' }], 'disabled')
+  const axisLines = [...markdown.matchAll(/교차검증: `([^`]+)`/g)].map(m => m[1])
+  assert.deepEqual(axisLines, ['꺼짐', '꺼짐'])
+  assert.deepEqual(movedToOpenQuestions, [], 'disabled는 needs-context 이동 대상이 없다')
 })
 
 test('upheld 판정은 유지다', () => {
@@ -690,7 +755,7 @@ test('두 섹션 전문을 낸다 — golden', () => {
   const vocab = { categoryLabels: { 'data-loss': '데이터 손상·유실' },
     crossVerification: { upheld: '유지', 'not-eligible': '대상 아님' } }
 
-  assert.equal(render(candidates, verdicts, { high: 'active-deletion', low: 'active-deletion' }, vocab, SECTIONS, true).markdown, [
+  assert.equal(render(candidates, verdicts, { high: 'active-deletion', low: 'active-deletion' }, vocab, SECTIONS, 'ran').markdown, [
     '## 상세 지적',
     '',
     '### 04 상태와 Effect',
@@ -728,7 +793,7 @@ test('두 섹션 전문을 낸다 — golden', () => {
 
 test('적용 대상인데 지적이 없는 모듈은 지적 없음으로 남는다', () => {
   const { markdown: md } = render([], new Map(), { high: 'active-deletion', low: 'active-deletion' },
-    { categoryLabels: {}, crossVerification: {} }, [{ kind: 'module', id: '03', title: 'React 규칙' }], true)
+    { categoryLabels: {}, crossVerification: {} }, [{ kind: 'module', id: '03', title: 'React 규칙' }], 'ran')
   assert.match(md, /### 03 React 규칙\n\n지적 없음\.\n/)
 })
 
@@ -765,7 +830,7 @@ test('반박된 형제는 순번 분모에서도 빠진다 — 필터링이 정�
   ]
   const verdicts = new Map([['11-6#2', { disposition: 'rejected', rebuttalKind: 'guard-exists' }]])
   const { markdown: md } = render(candidates, verdicts, { high: 'active-deletion', low: 'active-deletion' }, VOCAB,
-    [{ kind: 'module', id: '11', title: '스타일링' }], true)
+    [{ kind: 'module', id: '11', title: '스타일링' }], 'ran')
   assert.doesNotMatch(md, /반박됨/, '반박된 finding 자체가 리포트에 남아있다')
   assert.doesNotMatch(md, /\/3\)/, '걸러지기 전 건수(3)가 분모에 남아있다')
   assert.match(md, /`11-6 \(1\/2\)` 살아남음1/)
@@ -790,7 +855,7 @@ test('phase는 impact별로 독립이다 — high는 관찰 중으로 남고 low
   ])
   const vocab = { ...VOCAB, crossVerification: { ...VOCAB.crossVerification, 'rejected-shadow': '반박됨 — 관찰 중' } }
   const { markdown: md } = render(candidates, verdicts, { high: 'rollout-shadow', low: 'active-deletion' }, vocab,
-    [{ kind: 'module', id: '04', title: '상태와 Effect' }, { kind: 'module', id: '11', title: '스타일링' }], true)
+    [{ kind: 'module', id: '04', title: '상태와 Effect' }, { kind: 'module', id: '11', title: '스타일링' }], 'ran')
   assert.match(md, /`04-3` 반박된 high/, 'high는 rollout-shadow이므로 남아있어야 한다')
   assert.match(md, /교차검증: `반박됨 — 관찰 중`/)
   assert.doesNotMatch(md, /반박된 low/, 'low는 active-deletion인데도 리포트에 남아있다')
