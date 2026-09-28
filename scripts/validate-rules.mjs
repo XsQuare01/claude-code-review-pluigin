@@ -13,7 +13,7 @@ import { checkProducerWriteAccess, parseAgentTools } from './lib/producer-tools.
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { validateEffectiveCommonContext } from './lib/effective-common-context-validator.mjs'
-import { markedBlock } from './lib/contract-blocks.mjs'
+import { markedBlock, CROSS_VERIFICATION_TOKEN_KEYS } from './lib/contract-blocks.mjs'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 const RULES = join(ROOT, 'review-rules')
@@ -1656,6 +1656,16 @@ function validateCrossVerificationRenderTokens() {
   if (allowed.size === 0) {
     failCode('render-tokens', 'E_RENDER_TOKENS_EMPTY', 'CROSS_VERIFICATION_RENDER_TOKENS declares no tokens')
     return
+  }
+  // A non-empty map is not the same as a complete one. Drop a single key and the
+  // renderer's label for that state becomes undefined, which it renders the same
+  // way as "this workflow has no 교차검증 axis at all" — the axis line disappears
+  // and the report still looks well-formed. The reader cannot tell a run that
+  // disabled verification from a workflow that never had it.
+  const missing = CROSS_VERIFICATION_TOKEN_KEYS
+    .filter(key => typeof declared.tokens?.[key] !== 'string' || !declared.tokens[key])
+  if (missing.length) {
+    failCode('render-tokens', 'E_RENDER_TOKENS_INCOMPLETE', `CROSS_VERIFICATION_RENDER_TOKENS is missing a non-empty string for: ${missing.join(', ')} — a missing key silently drops the 교차검증 axis instead of failing`)
   }
   for (const dir of skillDirs) {
     const text = read(join(SKILLS, dir, 'SKILL.md'))

@@ -371,7 +371,7 @@ node "$RULES_DIR/../scripts/tally-verdicts.mjs" --dir "$REPORT_DIR" --run "$REPO
 - `malformed-output`이면 **같은 producer에 교정 재시도는 한 번만** 한다. 재시도 prompt에는 잘못된 점만 짧게 적고 다시 `REVIEW_RESULT_CONTRACT_V1` raw JSON 하나만 요구한다.
 - 두 번째도 `malformed-output`이면 그 패스는 `FAILED malformed-output`으로 기록하고, 부분 보정이나 Markdown 해석으로 통과시키지 않는다. dispatch/result handling과 실패 기록은 이 skill이 책임진다.
 - aggregation은 **검증을 통과한 JSON만** 입력으로 받는다. 이 단계에서는 parsed finding/openQuestion을 패스 라벨과 함께 정렬·중복 제거·그룹화할 뿐, Markdown 헤딩이나 severity 문자열을 읽거나 재사용하지 않는다.
-- renderer가 구조화 필드에서 `상세 지적`과 `특수 패스`를 생성한다. `####` 헤딩, 섹션 이름, 상태 표, severity 이모지는 renderer가 만든다. **`미해결 / 후속 확인`은 renderer가 만들지 않는다** — `needs-context`(교차검증 `범위 미확정`)로 판정된 finding은 renderer가 상세 지적에서만 빼고, 무엇을 뺐는지(규칙 ID·candidate ID·title)를 stderr로 알린다. 그 알림을 받아 `미해결 / 후속 확인`에 실제로 옮겨 적는 것은 이 skill(오케스트레이터)의 책임이다 — 옮겨 적지 않으면 그 finding은 리포트 어디에도 없는 채로 사라진다.
+- renderer가 구조화 필드에서 `상세 지적`과 `특수 패스`를 생성한다. `####` 헤딩, 섹션 이름, 상태 표, severity 이모지는 renderer가 만든다. **`미해결 / 후속 확인`은 renderer가 만들지 않는다** — `needs-context`(교차검증 `범위 미확정`)로 판정된 finding은 renderer가 상세 지적에서만 빼고, 무엇을 뺐는지를 **옮겨 적을 재료와 함께** stderr로 알린다 — 규칙 ID·candidate ID·title에 더해 verifier가 낸 `reason`, 본문·근거, 위치 줄, 출처 패스까지 이스케이프를 거친 상태로 나온다. 그 알림을 받아 `미해결 / 후속 확인`에 실제로 옮겨 적는 것은 이 skill(오케스트레이터)의 책임이다 — 옮겨 적지 않으면 그 finding은 리포트 어디에도 없는 채로 사라진다.
 - severity는 renderer output 단계에서만 `impact × confidence`로 파생한다. producer나 aggregation 단계에는 severity source field가 없다.
 
 **`상세 지적`과 `특수 패스`의 표기를 직접 만들지 않는다.**
@@ -392,7 +392,9 @@ node "$RULES_DIR/../scripts/render-findings.mjs" \
 
 **`--verification-state`도 기본값이 없다.** `ran`은 교차검증이 실제로 돌았다는 뜻이고, `disabled`는 이번 실행에서 교차검증을 껐다는 뜻이다 — 계약(C-6B)이 "검증을 끈 실행"과 "검증이 깨진 실행"을 가르는 것과 같은 이유로, 이 값을 `--verdicts` 유무로 추측하지 않는다. `ran`이면 후보별 판정에 따라 `대상 아님`·`유지`·`반박됨 — 관찰 중` 등으로 갈리고, `disabled`면 판정 데이터(누가 반박했는지)는 보지 않는다 — 하지만 **eligibility까지 무시하지는 않는다.** disposition 표(C-6B)는 `verification-disabled`를 "검증을 끈 실행의 **검증 대상**"에만 준다: SKIP-VERIFY였던 후보는 검증을 껐든 켰든 애초에 대상이 아니었으므로 `대상 아님`을 그대로 유지하고, VERIFY 대상이었던 후보에만 `꺼짐`을 찍는다. `--verdicts`는 `ran`일 때만 주고, `disabled`에서는 애초에 판정 파일이 없으므로 생략한다 — 준 순서가 정본 순서이므로 `tally-verdicts.mjs`에 넘긴 순서(bundle 다음 isolated)와 같게 둔다. `disabled`에서 `--verdicts`를 함께 주면 렌더러가 거부한다(모순된 두 신호). `--planned`는 `실행 계획`에서 건너뛴/미확인 모듈이 있을 때만 주고, 없으면 생략한다.
 
-**`ran`일 때 `needs-context`로 판정된 finding은 상세 지적에서 빠지고 stderr 알림으로 나온다.** 렌더러는 `미해결 / 후속 확인` 섹션을 쓰지 않으므로, 그 알림에 실린 항목(규칙 ID·candidate ID·title)을 실제로 그 섹션에 옮겨 적는다 — 옮겨 적지 않으면 그 finding은 리포트 어디에도 없는 채로 사라진다.
+**`ran`일 때 `needs-context`로 판정된 finding은 상세 지적에서 빠지고 stderr 알림으로 나온다.** 렌더러는 `미해결 / 후속 확인` 섹션을 쓰지 않으므로, 그 알림에 실린 내용을 실제로 그 섹션에 옮겨 적는다 — 옮겨 적지 않으면 그 finding은 리포트 어디에도 없는 채로 사라진다.
+
+알림에는 **그 항목을 쓰는 데 필요한 것이 전부** 실려 있다 — `추가 확인 이유`(verifier의 `reason`), `출처 패스`, 위치 줄, 본문과 근거. 전부 상세 지적과 같은 이스케이프를 거친 값이므로 **그대로 옮겨 적는다.** producer 결과나 판정 파일을 다시 열어 조립하지 않는다 — 그 왕복이 이 렌더러가 없애려는 수작업이고, 한 번 더 손을 타면 그 자리에서 다시 갈린다. `reason` 자리에 "verifier가 reason을 내지 않았다"가 찍혀 있으면 그것은 계약 위반(`needs-context`는 `reason`이 필수)이므로, 지어내지 말고 그 사실을 그대로 적는다.
 
 **위치 확인에 실패한 finding의 위치 줄은 렌더러가 다르게 그린다.** `prepare-verification.mjs`가 후보마다 붙인 `locationCheck`를 렌더러가 읽어, 주장된 경로를 읽지 못했거나 인용이 실제 내용과 다르면 `위치 확인 실패: …` 줄을 낸다 (C-7 **확인에 실패한 위치**). **그 문장을 직접 쓰지 않는다** — 한 실행이 손으로 `위치 미확인 사유`를 적었고, 그것은 계약이 `location.kind = "unverified"`에만 주는 다른 줄이다. `locationCheck`가 없는 입력은 렌더러가 거부하므로, `--input`에는 항상 `prepare-verification.mjs`의 출력을 그대로 넘긴다.
 

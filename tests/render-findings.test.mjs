@@ -151,6 +151,64 @@ test('impact.categoryLabels가 없으면 loadVocabulary가 거부한다', () => 
 // 실수다. loadModuleSections/loadSpecialistPasses처럼 sibling loader는 이미
 // readFileSync를 감싸 { error }를 낸다 — loadVocabulary만 감싸지 않아 raw
 // ENOENT를 그대로 던지면 CLI가 exit 2 대신 stack trace와 exit 1로 죽는다.
+// 2026-09-28 라운드 리뷰 지적 2 — categoryLabels는 맵의 존재만 봐도 됐다.
+// 라벨이 빠지면 원시 enum이 그려져 리포트에 흔적이 남기 때문이다. 교차검증
+// 토큰은 다르다. 키 하나가 빠지면 라벨이 undefined가 되고 축 줄이 통째로
+// 사라져, 검증을 끈 실행이 "교차검증 축 자체가 없는 워크플로우"와 구분되지
+// 않는다. 그 상태로도 렌더는 성공한다.
+const writeTokenRulesDir = tokens => {
+  const dir = mkdtempSync(join(tmpdir(), 'render-rules-'))
+  writeFileSync(join(dir, 'workflow-contract.md'), [
+    '<!-- REVIEW_RESULT_CONTRACT_V1:BEGIN -->',
+    '```json',
+    JSON.stringify({ impact: { categoryLabels: { 'data-loss': '데이터 손상·유실' } } }),
+    '```',
+    '<!-- REVIEW_RESULT_CONTRACT_V1:END -->',
+    '',
+    '<!-- CROSS_VERIFICATION_RENDER_TOKENS:BEGIN -->',
+    '```json',
+    JSON.stringify({ label: '교차검증', tokens }),
+    '```',
+    '<!-- CROSS_VERIFICATION_RENDER_TOKENS:END -->',
+  ].join('\n'), 'utf8')
+  return dir
+}
+
+const ALL_TOKENS = {
+  upheld: '유지',
+  'rejected-shadow': '반박됨 — 관찰 중',
+  'rejected-other': '반박 시도 — 분류 밖',
+  'scope-open': '범위 미확정',
+  'verification-unavailable': '검증 실패',
+  'not-eligible': '대상 아님',
+  'verification-disabled': '꺼짐',
+}
+
+test('교차검증 토큰이 하나라도 빠지면 loadVocabulary가 거부한다', () => {
+  const { 'verification-disabled': _dropped, ...partial } = ALL_TOKENS
+  const dir = writeTokenRulesDir(partial)
+  const result = loadVocabulary(dir)
+  rmSync(dir, { recursive: true, force: true })
+  assert.ok(result.error, '키가 빠졌는데 통과했다 — 축 줄이 조용히 사라진다')
+  assert.match(result.error, /verification-disabled/)
+})
+
+test('교차검증 토큰이 빈 문자열이어도 거부한다', () => {
+  const dir = writeTokenRulesDir({ ...ALL_TOKENS, 'scope-open': '' })
+  const result = loadVocabulary(dir)
+  rmSync(dir, { recursive: true, force: true })
+  assert.ok(result.error, '빈 문자열이 통과했다')
+  assert.match(result.error, /scope-open/)
+})
+
+test('교차검증 토큰이 전부 있으면 통과한다', () => {
+  const dir = writeTokenRulesDir(ALL_TOKENS)
+  const result = loadVocabulary(dir)
+  rmSync(dir, { recursive: true, force: true })
+  assert.ok(!result.error, `거부하면 안 되는데 거부했다: ${result.error}`)
+  assert.equal(result.value.crossVerification['verification-disabled'], '꺼짐')
+})
+
 test('workflow-contract.md를 읽지 못하면 거부한다 — loadVocabulary', () => {
   const result = loadVocabulary(join(tmpdir(), 'no-such-rules-dir'))
   assert.ok(result.error, 'error가 없다')
@@ -588,6 +646,60 @@ test('CLI가 needs-context finding을 상세 지적에서 빼고 stderr에 이�
   assert.match(out.stderr, /범위 미확정 CLI 지적/, 'stderr 알림에 title이 없다')
 })
 
+// 2026-09-28 라운드 리뷰 지적 1 — CLI 전체 경로에서 verdict 파일의 reason이
+// stderr 알림까지 살아 오는지 본다. 판정 파일을 읽는 자리는 이 loader 하나뿐이라,
+// 거기서 버리면 뒤에서 되찾을 방법이 없다. `정확히 한 번`까지 보는 이유는
+// 같은 값을 두 자리에 찍으면 옮겨 적는 쪽이 중복을 만들기 때문이다.
+test('CLI가 needs-context의 reason·출처·위치·본문을 stderr로 넘긴다', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'render-'))
+  const input = join(dir, 'targets.json')
+  const verdictsPath = join(dir, 'verdicts.json')
+  writeFileSync(input, JSON.stringify({
+    candidates: [ok({
+      candidateId: '04-3#1', ruleId: '04-3', eligibility: 'VERIFY', source: '04-state',
+      content: { title: '범위 미확정 CLI 지적', body: '본문 문장', evidence: '근거 문장' },
+    })],
+  }), 'utf8')
+  writeFileSync(verdictsPath, JSON.stringify({
+    verdicts: [{ candidateId: '04-3#1', disposition: 'needs-context', reason: '호출자 확인 필요' }],
+  }), 'utf8')
+  const out = spawnSync(process.execPath, [
+    SCRIPT, '--input', input, '--rules', RULES, '--phase-high', 'active-deletion', '--phase-low', 'active-deletion',
+    '--workflow', 'full', '--verdicts', verdictsPath, '--verification-state', 'ran',
+  ], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+  rmSync(dir, { recursive: true, force: true })
+  assert.equal(out.status, 0)
+  const once = (text, needle) => text.split(needle).length - 1
+  assert.equal(once(out.stderr, '추가 확인 이유: 호출자 확인 필요'), 1, 'verifier의 reason이 정확히 한 번 나오지 않는다')
+  assert.equal(once(out.stderr, '출처 패스: 04-state'), 1, '출처 패스가 정확히 한 번 나오지 않는다')
+  assert.equal(once(out.stderr, '본문: 본문 문장'), 1, '본문이 정확히 한 번 나오지 않는다')
+  assert.equal(once(out.stderr, '근거: 근거 문장'), 1, '근거가 정확히 한 번 나오지 않는다')
+  assert.match(out.stderr, /`src\/a\.ts:1` — `const a = 1`/, '위치 줄이 없다')
+  // stdout은 두 섹션 자리에 그대로 붙일 Markdown 전용이다 — 옮겨 적을 재료가
+  // 거기 섞이면 상세 지적에 없는 finding의 본문이 그 자리에 들어간다.
+  assert.doesNotMatch(out.stdout, /호출자 확인 필요|본문 문장/, 'stdout에 이동 항목이 샜다')
+})
+
+// verifier가 계약을 어겨 reason 없이 needs-context를 내면, 알림이 조용히
+// 빈 칸으로 나가지 않고 그 사실을 적는다 — 옮겨 적는 쪽이 "사유가 없다"와
+// "사유를 옮기지 못했다"를 구분할 수 있어야 한다.
+test('CLI는 reason 없는 needs-context를 빈 칸이 아니라 사실로 적는다', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'render-'))
+  const input = join(dir, 'targets.json')
+  const verdictsPath = join(dir, 'verdicts.json')
+  writeFileSync(input, JSON.stringify({
+    candidates: [ok({ candidateId: '04-3#1', ruleId: '04-3', eligibility: 'VERIFY' })],
+  }), 'utf8')
+  writeFileSync(verdictsPath, JSON.stringify({ verdicts: [{ candidateId: '04-3#1', disposition: 'needs-context' }] }), 'utf8')
+  const out = spawnSync(process.execPath, [
+    SCRIPT, '--input', input, '--rules', RULES, '--phase-high', 'active-deletion', '--phase-low', 'active-deletion',
+    '--workflow', 'full', '--verdicts', verdictsPath, '--verification-state', 'ran',
+  ], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+  rmSync(dir, { recursive: true, force: true })
+  assert.equal(out.status, 0)
+  assert.match(out.stderr, /추가 확인 이유: \(verifier가 reason을 내지 않았다/)
+})
+
 // PR #85 리뷰 지적 2 — CLI 전체 경로로도 active-deletion 삭제 채널이
 // stderr에 나오는지 본다. needs-context 알림과 같은 이유로 stdout에는 섞지
 // 않는다 — stdout은 두 섹션 자리에 그대로 붙일 Markdown 전용이다.
@@ -726,14 +838,55 @@ test('needs-context finding은 상세 지적에서 빠지고 이동 목록으로
     ok({ candidateId: '04-3#1', ruleId: '04-3', eligibility: 'VERIFY',
          content: { title: '범위 미확정 지적', body: 'B' } }),
   ]
-  const verdicts = new Map([['04-3#1', { disposition: 'needs-context' }]])
+  const verdicts = new Map([['04-3#1', { disposition: 'needs-context', reason: '호출자를 diff 밖에서 확인해야 한다' }]])
   const vocab = { ...VOCAB, crossVerification: { ...VOCAB.crossVerification, 'scope-open': '범위 미확정' } }
   const { markdown, movedToOpenQuestions } = render(candidates, verdicts,
     { high: 'active-deletion', low: 'active-deletion' }, vocab,
     [{ kind: 'module', id: '04', title: '상태와 Effect' }], 'ran')
   assert.doesNotMatch(markdown, /범위 미확정 지적/, '상세 지적 본문에 그대로 남아있다')
   assert.doesNotMatch(markdown, /범위 미확정/, '라벨을 단 채로 상세 지적에 남아있다')
-  assert.deepEqual(movedToOpenQuestions, [{ id: '04-3#1', ruleId: '04-3', title: '범위 미확정 지적' }])
+  assert.deepEqual(movedToOpenQuestions, [{
+    id: '04-3#1', ruleId: '04-3', title: '범위 미확정 지적',
+    reason: '호출자를 diff 밖에서 확인해야 한다',
+    content: { title: '범위 미확정 지적', body: 'B' },
+    location: { kind: 'verified', path: 'src/a.ts', line: 1, quote: 'const a = 1' },
+    locationCheck: 'location-ok',
+    sources: [],
+  }])
+})
+
+// 2026-09-28 라운드 리뷰 지적 1 — 이 채널은 needs-context finding의 **유일한
+// 출구**다. 상세 지적에서 빠진 뒤 여기에 없는 것은 리포트 어디에도 없다.
+// 그런데 id·ruleId·title만 실어 보내면 받는 쪽이 producer JSON을 다시 열어
+// 사유와 본문을 찾아야 하고, 그 왕복이 이 렌더러가 없애려는 수작업이다.
+test('needs-context 이동 항목은 옮겨 적을 재료를 전부 들고 나온다', () => {
+  const candidates = [
+    ok({ candidateId: '04-3#1', ruleId: '04-3', eligibility: 'VERIFY',
+         source: '04-state', sources: ['04-state', 'props'],
+         content: { title: '제목', body: '본문', evidence: '근거', recommendation: '제안' } }),
+  ]
+  const verdicts = new Map([['04-3#1', { disposition: 'needs-context', reason: '범위 밖 호출자 확인 필요' }]])
+  const vocab = { ...VOCAB, crossVerification: { ...VOCAB.crossVerification, 'scope-open': '범위 미확정' } }
+  const [moved] = render(candidates, verdicts, { high: 'active-deletion', low: 'active-deletion' },
+    vocab, [{ kind: 'module', id: '04', title: '상태와 Effect' }], 'ran').movedToOpenQuestions
+  assert.equal(moved.reason, '범위 밖 호출자 확인 필요', 'verifier가 낸 reason이 유실됐다')
+  assert.equal(moved.content.evidence, '근거', '본문 슬롯이 유실됐다')
+  assert.deepEqual(moved.sources, ['04-state', 'props'], '출처 패스가 유실됐다')
+  assert.equal(moved.location.path, 'src/a.ts', '위치가 유실됐다')
+  assert.equal(moved.locationCheck, 'location-ok', '위치 확인 결과가 유실됐다')
+})
+
+// source 하나만 있는 경로(exactDedup이 병합하지 않은 보통의 finding)에서도
+// sources 배열로 정규화해 돌려준다 — 받는 쪽이 두 모양을 다시 가르지 않게 한다.
+test('needs-context 이동 항목은 source 하나도 배열로 정규화한다', () => {
+  const candidates = [
+    ok({ candidateId: '04-3#1', ruleId: '04-3', eligibility: 'VERIFY', source: '04-state' }),
+  ]
+  const verdicts = new Map([['04-3#1', { disposition: 'needs-context', reason: 'r' }]])
+  const vocab = { ...VOCAB, crossVerification: { ...VOCAB.crossVerification, 'scope-open': '범위 미확정' } }
+  const [moved] = render(candidates, verdicts, { high: 'active-deletion', low: 'active-deletion' },
+    vocab, [{ kind: 'module', id: '04', title: '상태와 Effect' }], 'ran').movedToOpenQuestions
+  assert.deepEqual(moved.sources, ['04-state'])
 })
 
 // PR #85 리뷰 지적 2b/3 — "검증을 껐다"와 "이 리포트에는 검증 축 자체가

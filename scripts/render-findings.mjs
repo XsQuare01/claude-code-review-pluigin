@@ -17,7 +17,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
-import { markedJson } from './lib/contract-blocks.mjs'
+import { markedJson, CROSS_VERIFICATION_TOKEN_KEYS } from './lib/contract-blocks.mjs'
 
 const IMPACTS = new Set(['high', 'low'])
 const CONFIDENCES = new Set(['high', 'low'])
@@ -121,10 +121,25 @@ export function loadVocabulary(rulesDir) {
   if (categoryLabels === null || typeof categoryLabels !== 'object') {
     return { error: 'REVIEW_RESULT_CONTRACT_V1의 impact.categoryLabels 맵을 찾지 못했다' }
   }
+  // categoryLabels는 맵의 **존재**만 봐도 됐다 — 라벨이 빠지면 원시 enum이
+  // 그려져 리포트에 흔적이 남는다. 교차검증 토큰은 그렇지 않다. 키 하나가
+  // 빠지면 라벨이 undefined가 되고, 축 줄은 "이 워크플로우에 교차검증 축이
+  // 없다"와 같은 방식으로 **통째로 빠진다.** 검증을 끈 실행이 검증 축 자체가
+  // 없는 워크플로우처럼 보이는데, 리포트만 보고는 그 차이를 알 수 없다.
+  // 그래서 존재가 아니라 키 하나하나를 본다.
+  const crossVerification = tokens.value?.tokens
+  if (crossVerification === null || typeof crossVerification !== 'object') {
+    return { error: 'CROSS_VERIFICATION_RENDER_TOKENS의 tokens 맵을 찾지 못했다' }
+  }
+  const badTokens = CROSS_VERIFICATION_TOKEN_KEYS
+    .filter(key => typeof crossVerification[key] !== 'string' || !crossVerification[key])
+  if (badTokens.length) {
+    return { error: `CROSS_VERIFICATION_RENDER_TOKENS에 비어 있지 않은 문자열이 아닌 키가 있다: ${badTokens.join(', ')}` }
+  }
   return {
     value: {
       categoryLabels,
-      crossVerification: tokens.value?.tokens,
+      crossVerification,
     },
   }
 }
@@ -557,7 +572,27 @@ export function render(candidates, verdictByCandidateId, phaseByImpact, vocabula
     // 'disabled'에는 애초에 판정 데이터가 없고, 있어도 무시한다 — 이동은
     // 검증이 실제로 돈 결과에만 따른다.
     if (verificationState === 'ran' && verdictByCandidateId.get(candidate.candidateId)?.disposition === 'needs-context') {
-      movedToOpenQuestions.push({ id: candidate.candidateId, ruleId: candidate.ruleId, title: candidate.content.title })
+      // 이 채널이 그 finding의 **유일한 출구**다. 상세 지적에서 빠진 뒤 이
+      // 목록에 없는 것은 리포트 어디에도 없다. 그런데 id·ruleId·title만
+      // 실어 보내면 받는 쪽이 왜 범위가 닫히지 않았는지도, 원래 무슨
+      // 주장이었는지도 모른 채 `미해결 / 후속 확인`을 써야 한다 — 결국
+      // producer JSON을 다시 찾아 손으로 조립하게 되고, 그것이 이 렌더러가
+      // 없애려는 경로 그 자체다. 그릴 재료를 전부 함께 보낸다.
+      //
+      // `reason`은 계약이 `needs-context`에 **필수**로 요구하는 필드다
+      // (disposition.requires). 그 값이 "무엇을 더 봐야 하는가"이므로,
+      // 빠지면 후속 확인 항목이 후속 확인을 안내하지 못한다.
+      const verdict = verdictByCandidateId.get(candidate.candidateId)
+      movedToOpenQuestions.push({
+        id: candidate.candidateId,
+        ruleId: candidate.ruleId,
+        title: candidate.content.title,
+        reason: verdict?.reason ?? null,
+        content: candidate.content,
+        location: candidate.location,
+        locationCheck: candidate.locationCheck,
+        sources: candidate.sources ?? (candidate.source !== undefined ? [candidate.source] : []),
+      })
       continue
     }
     const label = verificationState === 'ran'
@@ -753,8 +788,18 @@ if (process.argv[1] && process.argv[1].endsWith('render-findings.mjs')) {
     // { disposition, rebuttalKind } 객체를 싣는다. rebuttal이 없는
     // disposition(upheld·needs-context)에서는 rebuttalKind가 그냥
     // undefined로 남고 labelFor는 그 값을 보지 않는다.
+    //
+    // `reason`도 함께 싣는다. labelFor는 이 값을 쓰지 않지만, 계약이
+    // `needs-context`에 필수로 요구하는 필드이고(disposition.requires)
+    // 그 finding이 `미해결 / 후속 확인`으로 옮겨질 때 "무엇을 더 봐야
+    // 하는가"를 말하는 유일한 값이다. 여기서 버리면 뒤에서 되찾을 방법이
+    // 없다 — 이 loader가 판정 파일을 읽는 유일한 자리다.
     for (const verdict of parsed.verdicts ?? []) {
-      byCandidateId.set(verdict.candidateId, { disposition: verdict.disposition, rebuttalKind: verdict.rebuttal?.kind })
+      byCandidateId.set(verdict.candidateId, {
+        disposition: verdict.disposition,
+        rebuttalKind: verdict.rebuttal?.kind,
+        reason: verdict.reason,
+      })
     }
   }
   // render는 그릴 수 없는 입력(닫힌 목록 밖 disposition, kind가 module도
@@ -775,12 +820,25 @@ if (process.argv[1] && process.argv[1].endsWith('render-findings.mjs')) {
   // 사실을 알리지 않으면 operator가 stdout만 보고 finding이 그냥 사라졌다고
   // 오인한다.
   if (output.movedToOpenQuestions.length > 0) {
+    // 항목마다 옮겨 적을 재료를 전부 편다. ruleId와 title만 내던 때에는
+    // 받는 쪽이 producer JSON을 다시 열어 사유와 본문을 찾아야 했고, 그
+    // 왕복이 바로 이 렌더러가 없애려는 수작업이다.
     const notice = output.movedToOpenQuestions
-      .map(entry => `  - ${entry.ruleId} (${entry.id}): ${entry.title}`)
+      .map(entry => [
+        `  - ${entry.ruleId} (${entry.id}): ${entry.title}`,
+        // 여기 실린 값은 그대로 리포트에 붙는다. 상세 지적과 같은 이유로
+        // 같은 escape를 거친다 — 개행 하나가 슬롯을 여러 줄로 쪼개고
+        // `<div>`가 0열에 나앉는 구멍은 이 경로에도 똑같이 있다.
+        `    추가 확인 이유: ${entry.reason ? escapeProse(entry.reason) : '(verifier가 reason을 내지 않았다 — 계약상 needs-context에는 필수다)'}`,
+        ...(entry.sources.length ? [`    출처 패스: ${entry.sources.map(escapeProse).join(', ')}`] : []),
+        `    ${locationLine(entry)}`,
+        `    본문: ${escapeProse(entry.content.body)}`,
+        ...(entry.content.evidence ? [`    근거: ${escapeProse(entry.content.evidence)}`] : []),
+      ].join('\n'))
       .join('\n')
     process.stderr.write(
       `needs-context로 판정된 finding ${output.movedToOpenQuestions.length}건을 상세 지적에서 뺐다 — ` +
-      `이 렌더러는 \`미해결 / 후속 확인\`을 쓰지 않으므로 아래 목록을 직접 그 섹션에 옮겨 적어야 한다:\n${notice}\n`)
+      `이 렌더러는 \`미해결 / 후속 확인\`을 쓰지 않으므로 아래 내용을 직접 그 섹션에 옮겨 적어야 한다:\n${notice}\n`)
   }
   // active-deletion이 지운 rejected finding도 같은 이유로 stderr에 낸다 —
   // C-6B "오판 가시성"이 요구하는 흔적이고, 이 렌더러는 `미해결 / 후속 확인`을
