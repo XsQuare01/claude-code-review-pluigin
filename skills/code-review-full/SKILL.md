@@ -394,6 +394,8 @@ node "$RULES_DIR/../scripts/render-findings.mjs" \
 
 **`ran`일 때 `needs-context`로 판정된 finding은 상세 지적에서 빠지고 stderr 알림으로 나온다.** 렌더러는 `미해결 / 후속 확인` 섹션을 쓰지 않으므로, 그 알림에 실린 항목(규칙 ID·candidate ID·title)을 실제로 그 섹션에 옮겨 적는다 — 옮겨 적지 않으면 그 finding은 리포트 어디에도 없는 채로 사라진다.
 
+**위치 확인에 실패한 finding의 위치 줄은 렌더러가 다르게 그린다.** `prepare-verification.mjs`가 후보마다 붙인 `locationCheck`를 렌더러가 읽어, 주장된 경로를 읽지 못했거나 인용이 실제 내용과 다르면 `위치 확인 실패: …` 줄을 낸다 (C-7 **확인에 실패한 위치**). **그 문장을 직접 쓰지 않는다** — 한 실행이 손으로 `위치 미확인 사유`를 적었고, 그것은 계약이 `location.kind = "unverified"`에만 주는 다른 줄이다. `locationCheck`가 없는 입력은 렌더러가 거부하므로, `--input`에는 항상 `prepare-verification.mjs`의 출력을 그대로 넘긴다.
+
 **`active-deletion` phase가 지운 `rejected` finding도 같은 방식으로 stderr에 나온다.** C-6B "오판 가시성"은 이 삭제의 흔적을 audit이 아니라 리포트 본문(`미해결 / 후속 확인`)에 남기라고 명시한다 — 검증자의 오판이 진짜 결함의 소멸이 될 수 있고, audit는 아무도 읽지 않기 때문이다. stderr 알림에는 `impact = high`였던 것은 건별로(규칙 ID·anchor path·`rebuttal.kind`), `impact = low`였던 것은 건수만 실린다 — 그 알림 내용을 그대로 `미해결 / 후속 확인`에 옮겨 적는다. 옮겨 적지 않으면 그 삭제는 리포트 어디에도 없는 채로 사라진다.
 
 ### 상세 지적 작성 규칙
