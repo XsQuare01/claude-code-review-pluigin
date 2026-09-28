@@ -224,7 +224,22 @@ export function prepareVerification(candidates, blobs, options = {}) {
       eligibility,
       reasons,
       route,
+      // 축(impact/confidence/category)은 그동안 checkLocation·decideEligibility의
+      // 입력으로만 쓰이고 출력에는 없었다. 렌더러가 같은 배열을 --input으로 받아
+      // 등급을 매기므로(Task 3), 여기서 빠지면 렌더 단계에서 등급을 만들 수 없다.
+      impact: candidate.impact,
+      confidence: candidate.confidence,
+      category: candidate.category,
       location: candidate.location,
+      content: candidate.content,
+      // candidatesFromResults가 실어 보낸 provenance 필드를 여기서 다시
+      // 빠뜨리면(계약 203·244행) candidate는 candidatesFromResults 직후에는
+      // memberInstanceIds·source·sources를 갖고 있다가 이 projection을
+      // 지나는 순간 잃는다 — canonical candidate ↔ producer instance
+      // 관계와 병합된 출처 패스가 렌더 단계에 아예 도달하지 못한다.
+      memberInstanceIds: candidate.memberInstanceIds ?? [],
+      ...(candidate.source !== undefined ? { source: candidate.source } : {}),
+      ...(candidate.sources !== undefined ? { sources: candidate.sources } : {}),
     }
   })
 
@@ -515,11 +530,26 @@ export function exactDedup(findings) {
 export function candidatesFromResults(results) {
   const collected = []
   const ruleIdRepairs = []
-  for (const result of results ?? []) {
+  for (const entry of results ?? []) {
+    // envelope 형태 `{ source, result }`와 맨 producer 결과(`{ schemaVersion,
+    // findings, openQuestions }`)를 모두 받는다. `source`는 오케스트레이터만
+    // 붙일 수 있는 값이다 — `findingsItem.allowed`(계약)는 애초에 producer
+    // finding에 `source` 필드를 허용하지 않는다. producer가 자기 출처를
+    // 자기 입으로 말하게 하면, 신뢰하지 않는 producer 출력이 스스로 이름표를
+    // 다는 셈이라 근거로 가장 약하다 — 어느 producer가 어떤 결과를 냈는지
+    // 신뢰성 있게 아는 것은 그 결과를 디스패치한 오케스트레이터뿐이다.
+    const isEnvelope = entry && typeof entry === 'object' && 'result' in entry &&
+      entry.result && typeof entry.result === 'object'
+    const result = isEnvelope ? entry.result : entry
+    const source = isEnvelope ? entry.source : undefined
     for (const finding of result?.findings ?? []) {
       const { ruleId, repairedFrom } = normalizeRuleId(finding?.ruleId)
       if (repairedFrom) ruleIdRepairs.push({ from: repairedFrom, to: ruleId })
-      collected.push(ruleId === finding?.ruleId ? finding : { ...finding, ruleId })
+      const withRuleId = ruleId === finding?.ruleId ? finding : { ...finding, ruleId }
+      // envelope의 source를 finding에 태그한다. finding 자체가 이미
+      // source를 갖고 있을 일은 없다(위 이유) — 있다면 그건 이 함수가
+      // 신뢰하지 않아야 할 producer 출력이 그 필드를 흉내 낸 것이다.
+      collected.push(source !== undefined ? { ...withRuleId, source } : withRuleId)
     }
   }
 
@@ -564,6 +594,13 @@ export function candidatesFromResults(results) {
       return left < right ? -1 : left > right ? 1 : 0
     })
     group.forEach((finding, index) => {
+      const content = { title: finding.title, body: finding.body }
+      // 선택 필드는 없으면 키를 만들지 않는다. 빈 문자열을 넣으면 렌더러가
+      // "값이 없다"와 "값이 빈 문자열이다"를 구분할 수 없다.
+      if (finding.evidence !== undefined) content.evidence = finding.evidence
+      if (finding.recommendation !== undefined) content.recommendation = finding.recommendation
+      if (finding.reason !== undefined) content.reason = finding.reason
+
       candidates.push({
         candidateId: `${ruleId}#${index + 1}`,
         ruleId,
@@ -571,9 +608,19 @@ export function candidatesFromResults(results) {
         confidence: finding.confidence,
         category: finding.category,
         location: finding.location,
+        // 산문은 렌더러가 쓴다. 축과 위치를 여기 복제하지 않는 이유는 같은 값이
+        // 두 벌이 되면 나중에 한쪽만 고쳐져 어긋나기 때문이다.
+        content,
         // 병합된 instance를 candidate에 붙여 보낸다. 이것이 없으면 canonical
         // candidate 하나가 원래 몇 건이었는지 사후에 알 수 없다.
         memberInstanceIds: finding.memberInstanceIds ?? [],
+        // exactDedup이 seen.source/seen.sources에 모은 출처 패스 label을
+        // 여기서 놓치면, 병합 판정 자체는 옳아도 "누가 봤는지"는 candidate에
+        // 도달하기 전에 사라진다(계약 203·244행 — 병합된 finding은 기여한
+        // 모든 source/pass label을 보존해야 한다). 없으면 키를 만들지
+        // 않는다 — content의 선택 필드와 같은 이유다.
+        ...(finding.source !== undefined ? { source: finding.source } : {}),
+        ...(finding.sources !== undefined ? { sources: finding.sources } : {}),
       })
     })
   }

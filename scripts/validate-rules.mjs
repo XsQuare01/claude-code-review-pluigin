@@ -13,6 +13,7 @@ import { checkProducerWriteAccess, parseAgentTools } from './lib/producer-tools.
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { validateEffectiveCommonContext } from './lib/effective-common-context-validator.mjs'
+import { markedBlock, CROSS_VERIFICATION_TOKEN_KEYS } from './lib/contract-blocks.mjs'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 const RULES = join(ROOT, 'review-rules')
@@ -36,22 +37,16 @@ function walkFiles(dir) {
   return files.sort()
 }
 
+// 블록을 자르는 실제 로직은 scripts/lib/contract-blocks.mjs 에 있다. 렌더러도
+// 같은 계약 파일을 읽어야 해서 그 헬퍼는 순수 함수(예외 대신 값 반환)로
+// 뺐고, 여기서는 validator의 실패 수집 방식(failCode)에 감싸 쓴다.
 function extractMarkedBlock(text, label, check, code) {
-  const begin = `<!-- ${label}:BEGIN -->`
-  const end = `<!-- ${label}:END -->`
-  const beginCount = text.split(begin).length - 1
-  const endCount = text.split(end).length - 1
-  if (beginCount !== 1 || endCount !== 1) {
-    failCode(check, code, `${label} block must appear exactly once (found BEGIN=${beginCount}, END=${endCount})`)
+  const out = markedBlock(text, label)
+  if (out.error) {
+    failCode(check, code, out.error)
     return null
   }
-  const start = text.indexOf(begin)
-  const finish = text.indexOf(end)
-  if (finish <= start) {
-    failCode(check, code, `${label} block end appears before begin`)
-    return null
-  }
-  return text.slice(start + begin.length, finish).trim()
+  return out.value
 }
 
 function parseJsonCodeBlock(block, label, check, code) {
@@ -995,6 +990,59 @@ for (const [owner, contextPaths] of Object.entries(STRUCTURED_OWNER_POLICY_BEARI
           failCode('structured-producer', 'E_FULL_SPECIALIST_PROMPT_MISSING', `${relativePath} must define the full-review specialist prompt for ${specialistPrompt}`)
         }
       }
+
+      // 렌더 단계가 표기를 직접 만들지 않는지 본다. 참조만 있고 호출이 없으면
+      // 모델이 형식을 기억으로 재구성하는 자리가 그대로 남는다. 파일 이름만
+      // 찾는 부분 문자열 검사는 "렌더러가 있다"는 언급 한 줄로도 통과한다 —
+      // 실제 호출과 지나가는 언급을 못 가른 첫 시도가 이 자리에서 실패했었다.
+      //
+      // 그다음 시도(`render-findings.mjs` 언급 바로 뒤 500자 창에서 필수
+      // 플래그 네 개를 찾는 방식)도 리뷰에서 defeat됐다. 실행 가능한 코드
+      // 블록을 통째로 지우고 "render-findings.mjs 는 --input, --rules,
+      // --phase, --workflow 를 받는다"라는 산문 한 줄만 남겨도, 그 한
+      // 문장이 네 플래그 이름을 전부 담고 있으므로 그대로 통과했다 — 플래그
+      // 이름을 나열한 문장과 그 플래그를 받는 실제 호출문을 못 가른 것은
+      // 첫 시도와 같은 결함이다. 그래서 창의 시작점을 `render-findings.mjs`
+      // 언급이 아니라, `node` 토큰과 `render-findings.mjs`가 같은 줄에 있는
+      // **실제 호출문** 자리로 옮긴다. `node` 없이 파일 이름만 나열한 산문은
+      // 이 앵커에 걸리지 않는다.
+      //
+      // **이 검사가 보장하는 것**: 문서에 `render-findings.mjs`를 네 필수
+      // 플래그와 함께 부르는 명령문이 존재한다는 것뿐이다.
+      // **이 검사가 보장하지 않는 것**: 그 명령이 실행 시점에 실제로
+      // 실행되는지, 그 실행 결과가 편집 없이 `상세 지적`/`특수 패스`
+      // 섹션에 그대로 실리는지 — 둘 다 정적 텍스트 검사로는 증명할 수
+      // 없다. 출력이 최종 리포트에 도달했다는 보장은 이 검사의 범위 밖이다.
+      //
+      // **이 검사는 `code-review-full`에만 건다.** 나머지 세 standalone
+      // specialist skill(props/math/exception)은 이 renderer가 소유하는
+      // 문서 골격(`상세 지적` 다음에 `특수 패스`가 오는 두 섹션 묶음)을
+      // 만들지 않는다 — 그 세 skill의 공개 섹션 목록에는 `특수 패스`가
+      // 없다. `loadSpecialistPasses`가 지금 `workflow`를 무시하고 항상
+      // Props·수학·예외 세 패스를 다 확인하므로, 그 skill들에서 이 CLI를
+      // 그대로 부르면 자기 workflow의 numbered 모듈 섹션(`상세 지적`)은
+      // 비고, 선언하지 않은 `특수 패스` 헤딩 아래로 모든 finding이 몰린다
+      // — 선언한 섹션은 비고 선언 안 한 섹션에 내용이 실리는, 골격이
+      // 잘못된 리포트다. 세 skill이 이 호출을 하게 만들려면
+      // `loadSpecialistPasses`가 `workflow`를 실제로 받게 하고, 단일
+      // 패스 리포트가 finding을 어느 섹션에 실을지 정하고,
+      // `prepare-verification.mjs`를 안 돌리는 이 skill들에 `candidateId`
+      // 출처를 정하는 별도 변경이 먼저 있어야 한다.
+      const rendererInvocations = [...text.matchAll(/\bnode\b[^\n]*render-findings\.mjs/g)]
+      // `--phase`는 더 이상 유효한 플래그가 아니다 — phase는 전역이 아니라
+      // impact별 설정이라(PR #85), high/low를 각각 --phase-high/--phase-low로
+      // 받는다. 여기서 `--phase`만 남겨 두면 두 플래그 중 하나만 있어도(혹은
+      // 둘 다 빠져도 부분 문자열로) 통과해, 문서가 새 필수 플래그 중 하나를
+      // 빠뜨려도 이 검사가 잡지 못한다.
+      const rendererRequiredFlags = ['--input', '--rules', '--phase-high', '--phase-low', '--verification-state', '--workflow']
+      const rendererActuallyInvoked = rendererInvocations.some(invocation => {
+        const window = text.slice(invocation.index, invocation.index + 500)
+        return rendererRequiredFlags.every(flagName => window.includes(flagName))
+      })
+      if (!rendererActuallyInvoked) {
+        failCode('structured-producer', 'E_RENDERER_NOT_CALLED',
+          `${relativePath} must call render-findings.mjs with its required flags (${rendererRequiredFlags.join(', ')}) for the finding sections, not merely mention it`)
+      }
     }
   }
 
@@ -1608,6 +1656,16 @@ function validateCrossVerificationRenderTokens() {
   if (allowed.size === 0) {
     failCode('render-tokens', 'E_RENDER_TOKENS_EMPTY', 'CROSS_VERIFICATION_RENDER_TOKENS declares no tokens')
     return
+  }
+  // A non-empty map is not the same as a complete one. Drop a single key and the
+  // renderer's label for that state becomes undefined, which it renders the same
+  // way as "this workflow has no 교차검증 axis at all" — the axis line disappears
+  // and the report still looks well-formed. The reader cannot tell a run that
+  // disabled verification from a workflow that never had it.
+  const missing = CROSS_VERIFICATION_TOKEN_KEYS
+    .filter(key => typeof declared.tokens?.[key] !== 'string' || !declared.tokens[key])
+  if (missing.length) {
+    failCode('render-tokens', 'E_RENDER_TOKENS_INCOMPLETE', `CROSS_VERIFICATION_RENDER_TOKENS is missing a non-empty string for: ${missing.join(', ')} — a missing key silently drops the 교차검증 axis instead of failing`)
   }
   for (const dir of skillDirs) {
     const text = read(join(SKILLS, dir, 'SKILL.md'))

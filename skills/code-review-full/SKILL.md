@@ -224,18 +224,23 @@ instanceId 부여
 
 **입력을 새로 만들지 않는다.** 검증을 통과한 producer 결과를 그대로 넘긴다.
 
-**payload는 파일로 넘긴다.** 편집 도구로 `{"results":[ … ]}`를 파일에 쓰고 경로만 준다.
+**payload는 파일로 넘긴다.** 편집 도구로 `{"results":[ … ]}`를 파일에 쓰고 경로만 준다. 배열의 각 원소는 producer JSON을 감싼 envelope
+`{ "source": "<모듈/패스 id>", "result": { …REVIEW_RESULT_CONTRACT_V1… } }`다 —
+`source`는 그 결과를 낸 sub-agent가 담당한 모듈/패스 식별자(예: `01-fsd`, `04-state`, `props`, `math`, `exception` — 담당 규칙 문서 파일명에서 `.md`를 뗀 값)이고, **오케스트레이터가 디스패치 기록에서 채운다.** producer 자신이 자기 출처를 자기 입으로 말하게 하지 않는다 — producer 출력 전체가 신뢰하지 않는 content인데(C-6A), 그 안에서 자기 이름표를 스스로 붙이는 것은 출처를 보증하는 가장 약한 방법이다. 어느 producer가 어떤 결과를 냈는지 신뢰성 있게 아는 것은 그 결과를 디스패치한 오케스트레이터뿐이다.
 
 ```bash
-node "$RULES_DIR/../scripts/prepare-verification.mjs" --merge-base "$MERGE_BASE" --dir "$REPORT_DIR" --run "$REPORT_BASENAME" --input "$REPORT_DIR/.timing/$REPORT_BASENAME.candidates.json"
+node "$RULES_DIR/../scripts/prepare-verification.mjs" --merge-base "$MERGE_BASE" --dir "$REPORT_DIR" --run "$REPORT_BASENAME" --input "$REPORT_DIR/.timing/$REPORT_BASENAME.candidates.json" > "$REPORT_DIR/.timing/$REPORT_BASENAME.routed.json"
 ```
+
+이 스크립트는 결과를 **stdout에만** 낸다. 리다이렉트를 빠뜨리면 이 출력을 담을 파일이 저장소 어디에도 없는데, 뒤의 `render-findings.mjs`는 `--input <경로>`만 받고 stdin 경로가 없다 — 그러면 다음 단계에서 붙일 경로를 운영자가 즉석에서 지어내야 한다. `.timing` 아래 다른 실행별 산출물과 같은 자리에 둔다.
 
 - **셸에 담지 않는다.** payload에는 한국어 산문·코드 인용·Windows 경로의 역슬래시가 들어 있고, 그것을 인용부호 한 쌍 안에 넣는 구조는 깨지는 쪽이 정상이다. 한 실행이 문서에 적힌 파이프를 **두 번 연달아 실패**하고 세 번째에 우회했다. 경로만 넘기면 셸이 볼 것이 경로 하나뿐이다
 - stdin 파이프도 계속 받는다(`… < candidates.json`). 셸이 payload를 통째로 들고 있지 않은 경우에만 쓴다
 
-- `results[]`는 C-6A validation을 통과한 producer JSON **그대로**다. 필드를 골라 옮기거나 변환하지 않는다
+- `results[].result`는 C-6A validation을 통과한 producer JSON **그대로**다. 필드를 골라 옮기거나 변환하지 않는다. `results[].source`만 오케스트레이터가 envelope에 추가하는 값이다 — `findingsItem.allowed`(계약)에는 `source`가 없으므로, producer가 반환한 JSON 자체에는 이 필드가 없어야 한다
+- 하위 호환으로 envelope 없이 producer 결과를 바로 배열 원소로 넣는 예전 `{"results":[ <REVIEW_RESULT_CONTRACT_V1>, … ]}` 형태도 계속 받는다. 다만 그 경로로 넘긴 결과는 `source`가 비어 리포트의 `출처 패스` 줄이 나오지 않는다 — 이 skill이 새로 만드는 payload는 항상 envelope을 쓴다
 - **`candidateId`는 스크립트가 부여한다.** `{ruleId}#{n}` 형식이고 정규화 위치 순서로 매겨지므로, 같은 입력이면 항상 같은 ID가 나오고 규칙 ID로 리포트에서 바로 추적된다
-- 출력은 candidate별 `locationCheck`·`eligibility`·`route`와 `bundles`, 그리고 `counts`다
+- 출력은 candidate별 `locationCheck`·`eligibility`·`route`·`impact`·`confidence`·`category`·`location`·`content`(producer 산문 — `title`·`body`와, 있으면 `evidence`·`recommendation`·`reason`)·`memberInstanceIds`(병합된 producer instance id 목록)·있으면 `source`/`sources`(기여한 출처 패스 라벨)와 `bundles`, 그리고 `counts`다
 - **coverage 숫자는 이 `counts`를 그대로 옮긴다.** 직접 세지 않는다 — 손으로 센 수치는 `verify + skipVerify = total`을 깨뜨린다
 - **coverage 숫자의 출처를 함께 적는다.** 스크립트를 돌렸으면 `도구 실행 결과`에도 실행을 남기고, 돌리지 않았으면 미실행이라고 적는다. 숫자가 맞더라도 **결정적으로 판정했다고 서술하지 않는다**
 - 플러그인으로 설치된 경우 스크립트는 `RULES_DIR`의 상위에 있다. 경로를 찾지 못하면 그 사실을 `실행 계획`에 적는다
@@ -366,8 +371,34 @@ node "$RULES_DIR/../scripts/tally-verdicts.mjs" --dir "$REPORT_DIR" --run "$REPO
 - `malformed-output`이면 **같은 producer에 교정 재시도는 한 번만** 한다. 재시도 prompt에는 잘못된 점만 짧게 적고 다시 `REVIEW_RESULT_CONTRACT_V1` raw JSON 하나만 요구한다.
 - 두 번째도 `malformed-output`이면 그 패스는 `FAILED malformed-output`으로 기록하고, 부분 보정이나 Markdown 해석으로 통과시키지 않는다. dispatch/result handling과 실패 기록은 이 skill이 책임진다.
 - aggregation은 **검증을 통과한 JSON만** 입력으로 받는다. 이 단계에서는 parsed finding/openQuestion을 패스 라벨과 함께 정렬·중복 제거·그룹화할 뿐, Markdown 헤딩이나 severity 문자열을 읽거나 재사용하지 않는다.
-- renderer가 구조화 필드에서 최종 문서를 생성한다. `####` 헤딩, 섹션 이름, 상태 표, `미해결 / 후속 확인` 항목, severity 이모지는 모두 renderer가 만든다.
+- renderer가 구조화 필드에서 `상세 지적`과 `특수 패스`를 생성한다. `####` 헤딩, 섹션 이름, 상태 표, severity 이모지는 renderer가 만든다. **`미해결 / 후속 확인`은 renderer가 만들지 않는다** — `needs-context`(교차검증 `범위 미확정`)로 판정된 finding은 renderer가 상세 지적에서만 빼고, 무엇을 뺐는지를 **옮겨 적을 재료와 함께** stderr로 알린다 — 규칙 ID·candidate ID·title에 더해 verifier가 낸 `reason`, 본문·근거, 위치 줄, 출처 패스까지 이스케이프를 거친 상태로 나온다. 그 알림을 받아 `미해결 / 후속 확인`에 실제로 옮겨 적는 것은 이 skill(오케스트레이터)의 책임이다 — 옮겨 적지 않으면 그 finding은 리포트 어디에도 없는 채로 사라진다.
 - severity는 renderer output 단계에서만 `impact × confidence`로 파생한다. producer나 aggregation 단계에는 severity source field가 없다.
+
+**`상세 지적`과 `특수 패스`의 표기를 직접 만들지 않는다.**
+
+```bash
+node "$RULES_DIR/../scripts/render-findings.mjs" \
+     --input "$REPORT_DIR/.timing/$REPORT_BASENAME.routed.json" \
+     [--verdicts <verdicts-bundle.json 경로> --verdicts <verdicts-isolated.json 경로>] \
+     --phase-high <active-deletion|rollout-shadow> \
+     --phase-low <active-deletion|rollout-shadow> \
+     --verification-state <ran|disabled> \
+     --rules "$RULES_DIR" \
+     --workflow full \
+     [--planned <modules-planned 페이로드 경로>]
+```
+
+출력을 두 섹션 자리에 그대로 붙인다. 같은 명령이 실행마다 다른 모양의 지적을 냈고, 규칙은 이미 계약에 다 있었는데도 그랬다 — 문서가 부탁하는 동안에는 지켜지지 않는다. **`--phase-high`와 `--phase-low`는 별개 값이다.** phase는 전역이 아니라 `impact`별 설정이므로(`workflow-contract.md`의 `deletionPhase`), high가 아직 `rollout-shadow`인 동안 low만 `active-deletion`으로 옮기는 것이 정상 구성이다. 둘 다 기본값이 없다 — 반박된 finding의 처리가 갈리고 그 값이 차단 판정에 걸리므로, 조용히 틀린 쪽으로 도는 것보다 멈추는 편이 낫다.
+
+**`--verification-state`도 기본값이 없다.** `ran`은 교차검증이 실제로 돌았다는 뜻이고, `disabled`는 이번 실행에서 교차검증을 껐다는 뜻이다 — 계약(C-6B)이 "검증을 끈 실행"과 "검증이 깨진 실행"을 가르는 것과 같은 이유로, 이 값을 `--verdicts` 유무로 추측하지 않는다. `ran`이면 후보별 판정에 따라 `대상 아님`·`유지`·`반박됨 — 관찰 중` 등으로 갈리고, `disabled`면 판정 데이터(누가 반박했는지)는 보지 않는다 — 하지만 **eligibility까지 무시하지는 않는다.** disposition 표(C-6B)는 `verification-disabled`를 "검증을 끈 실행의 **검증 대상**"에만 준다: SKIP-VERIFY였던 후보는 검증을 껐든 켰든 애초에 대상이 아니었으므로 `대상 아님`을 그대로 유지하고, VERIFY 대상이었던 후보에만 `꺼짐`을 찍는다. `--verdicts`는 `ran`일 때만 주고, `disabled`에서는 애초에 판정 파일이 없으므로 생략한다 — 준 순서가 정본 순서이므로 `tally-verdicts.mjs`에 넘긴 순서(bundle 다음 isolated)와 같게 둔다. `disabled`에서 `--verdicts`를 함께 주면 렌더러가 거부한다(모순된 두 신호). `--planned`는 `실행 계획`에서 건너뛴/미확인 모듈이 있을 때만 주고, 없으면 생략한다.
+
+**`ran`일 때 `needs-context`로 판정된 finding은 상세 지적에서 빠지고 stderr 알림으로 나온다.** 렌더러는 `미해결 / 후속 확인` 섹션을 쓰지 않으므로, 그 알림에 실린 내용을 실제로 그 섹션에 옮겨 적는다 — 옮겨 적지 않으면 그 finding은 리포트 어디에도 없는 채로 사라진다.
+
+알림에는 **그 항목을 쓰는 데 필요한 것이 전부** 실려 있다 — `추가 확인 이유`(verifier의 `reason`), `출처 패스`, 위치 줄, 본문과 근거. 전부 상세 지적과 같은 이스케이프를 거친 값이므로 **그대로 옮겨 적는다.** producer 결과나 판정 파일을 다시 열어 조립하지 않는다 — 그 왕복이 이 렌더러가 없애려는 수작업이고, 한 번 더 손을 타면 그 자리에서 다시 갈린다. `reason` 자리에 "verifier가 reason을 내지 않았다"가 찍혀 있으면 그것은 계약 위반(`needs-context`는 `reason`이 필수)이므로, 지어내지 말고 그 사실을 그대로 적는다.
+
+**위치 확인에 실패한 finding의 위치 줄은 렌더러가 다르게 그린다.** `prepare-verification.mjs`가 후보마다 붙인 `locationCheck`를 렌더러가 읽어, 주장된 경로를 읽지 못했거나 인용이 실제 내용과 다르면 `위치 확인 실패: …` 줄을 낸다 (C-7 **확인에 실패한 위치**). **그 문장을 직접 쓰지 않는다** — 한 실행이 손으로 `위치 미확인 사유`를 적었고, 그것은 계약이 `location.kind = "unverified"`에만 주는 다른 줄이다. `locationCheck`가 없는 입력은 렌더러가 거부하므로, `--input`에는 항상 `prepare-verification.mjs`의 출력을 그대로 넘긴다.
+
+**`active-deletion` phase가 지운 `rejected` finding도 같은 방식으로 stderr에 나온다.** C-6B "오판 가시성"은 이 삭제의 흔적을 audit이 아니라 리포트 본문(`미해결 / 후속 확인`)에 남기라고 명시한다 — 검증자의 오판이 진짜 결함의 소멸이 될 수 있고, audit는 아무도 읽지 않기 때문이다. stderr 알림에는 `impact = high`였던 것은 건별로(규칙 ID·anchor path·`rebuttal.kind`), `impact = low`였던 것은 건수만 실린다 — 그 알림 내용을 그대로 `미해결 / 후속 확인`에 옮겨 적는다. 옮겨 적지 않으면 그 삭제는 리포트 어디에도 없는 채로 사라진다.
 
 ### 상세 지적 작성 규칙
 - 사용자가 다른 언어를 명시하지 않은 한 모든 패스의 상세 지적과 최종 저장 문서는 한국어로 작성한다.

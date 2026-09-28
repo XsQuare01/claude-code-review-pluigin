@@ -631,7 +631,10 @@
         "props"
       ],
       "requires": [],
-      "idFormat": "P-{n}"
+      "idFormat": "P-{n}",
+      "rulePrefixes": [
+        "P"
+      ]
     },
     {
       "id": "math",
@@ -645,7 +648,11 @@
       "requires": [
         "three"
       ],
-      "idFormat": "A-{n} / C-{n}"
+      "idFormat": "A-{n} / C-{n}",
+      "rulePrefixes": [
+        "A",
+        "C"
+      ]
     },
     {
       "id": "exception",
@@ -657,7 +664,10 @@
         "exception"
       ],
       "requires": [],
-      "idFormat": "EX-{n}"
+      "idFormat": "EX-{n}",
+      "rulePrefixes": [
+        "EX"
+      ]
     }
   ]
 }

@@ -216,7 +216,7 @@ SDK 드리프트로 원래부터 그만큼 실패하고 있었고, 그 브랜치
 - `location.quote`는 **안전한 code slot** 으로 렌더링한다. quote 안의 backtick/fence delimiter와 충돌하지 않도록 delimiter를 escape하거나 더 긴 delimiter를 선택한다. quote 내용의 정상적인 코드 문자 자체를 금지하지 않는다
 - `location.path`는 항상 code로 렌더링한다
 - URL이 필드 안에 있더라도 Markdown 링크로 승격하지 않고 **plain text** 로 렌더링한다
-- slot별 렌더링은 canonical order `body → evidence → recommendation → findingConfidenceReason → locationUnverifiedReason → openQuestionReason`만 사용하고, 값이 없는 slot은 생략한다. 한 field를 여러 slot에 중복 렌더링하지 않는다
+- slot별 렌더링은 canonical order `body → evidence → recommendation → findingConfidenceReason → locationUnverifiedReason → openQuestionReason`만 사용하고, 값이 없는 slot은 생략한다. **존재하는 슬롯은 각자 한 줄을 갖는다 — 합치지 않는다.** 한 칸으로 합치면 무엇을 왜 어떻게 고쳐야 하는지가 사라진다. `evidence`와 `recommendation`을 필수로 올리지 않는 이유는, 덧붙일 것이 정말 없는 지적에 필수 필드가 군더더기로 채워지기 때문이다. **여섯 슬롯 전부가 이 방식으로 구조적으로 강제되는 것은 아니다.** `render-findings.mjs`가 실제로 구조적으로 막는 것은 `body`·`evidence`·`recommendation`·`findingConfidenceReason` 네 슬롯이다 — 배열 원소 + 줄바꿈 join이라 합칠 방법 자체가 없다. `locationUnverifiedReason`은 이 네 슬롯과 같은 배열이 아니라 위치 줄 자체에 실려 별도로 강제되고, `openQuestionReason`은 이 렌더러의 범위 밖이다 — open question은 finding이 아니므로 `미해결 / 후속 확인` 섹션에서 따로 다룬다. 한 field를 여러 slot에 중복 렌더링하지 않는다
 - `findingConfidenceReason`은 finding의 `confidence = low` 때문에 필요한 `reason`이고, `locationUnverifiedReason`은 `location.kind = "unverified"` 에 붙는 location reason이며, `openQuestionReason`은 open question 자체가 아직 닫히지 않은 이유다. 셋은 서로 다른 의미를 가지므로 합치거나 서로 대체하지 않는다
 - 이 계약은 renderer의 책임을 정의할 뿐이다. 정적 validator는 관련 contract token의 존재와 문서 간 동기화만 검사하며, 실제 escaping/renderer 실행을 증명하지 않는다
 
@@ -851,10 +851,10 @@ H1은 **`# {대상} {워크플로우 이름} 리포트`** 형식이며, 대상�
 | `##` | 리뷰 기준 | 범위, base, merge-base, `RULES_DIR`, 플러그인 버전, 프로젝트 프로파일 | 전체 |
 | `##` | 판정 | 결론 한 줄과 차단 사유. 길어야 서너 줄 | 전체 |
 | `##` | 실행 계획 | 후보 N / 적용 M / `SKIPPED`·`UNKNOWN` 목록과 사유 / 실패 클래스별 건수 | 모듈을 쓰는 워크플로우 |
-| `##` | 상세 지적 | 아래 모듈 섹션을 담는다 | 전체 |
+| `##` | 상세 지적 | 아래 모듈 섹션을 담는다. `full`은 `render-findings.mjs` 출력을 그대로 붙인다 — 표기를 직접 만들지 않는다. 다른 워크플로우는 각자의 기존 producer 계약과 표 형식을 그대로 유지한다 | 전체 (`render-findings.mjs` 호출은 `full`만) |
 | `###` | `{NN} {모듈 제목}` | 모듈 하나당 하나 | 모듈을 쓰는 워크플로우 |
 | `####` | `{severity} {규칙 ID} {제목}` | finding 하나당 하나 | 전체 |
-| `##` | 특수 패스 | Props·수학·예외를 `###`로 | `full` |
+| `##` | 특수 패스 | Props·수학·예외를 `###`로. `render-findings.mjs` 출력을 그대로 붙인다. 표기를 직접 만들지 않는다 | `full` |
 | `##` | 요약 | 중복 제거된 지적을 severity 순으로 | `full`, `default` |
 | `##` | 도구 실행 결과 | C-6 / `00-rule.md` 00-9 | 전체 |
 | `##` | 실행 타임라인 | C-9 `--summary` 출력 표를 그대로. 표를 직접 만들지 않는다 | 전체 |
@@ -913,8 +913,26 @@ finding 헤딩 **바로 다음 줄**에 영향도와 확신도를 적는다. `00
 - `rejected`는 `active-deletion` phase에서 active 리포트에 나타나지 않으므로 표기 대상이 아니다. `rollout-shadow`에서만 `반박됨 — 관찰 중`으로 나타난다 (C-6B)
 - **검증 대상이 아니었던 finding에도 `대상 아님`을 적는다.** 축을 비워두면 "검증했는데 결과가 없음"과 "검증 대상이 아님"이 구분되지 않는다
 - 반박 사실을 heading에 접미사로 덧붙이지 않는다. 상태는 축 줄 한 곳에서만 표현한다
+- **위 일곱 키는 전부 있어야 하고, 각 값은 비어 있지 않은 문자열이어야 한다.** 하나가 빠져도 블록은 여전히 유효한 JSON이고 렌더는 **성공한다** — 그 상태의 라벨이 `undefined`가 되면서 교차검증 축이 "이 워크플로우에는 축이 없다"와 **같은 방식으로 통째로 빠지기** 때문이다. 그러면 검증을 끈 실행이 검증 축 자체가 없는 워크플로우처럼 보이고, 리포트만 보고는 그 차이를 알 수 없다. 맵이 비어 있지 않은지만 보는 검사로는 이 경우를 잡지 못하므로 키 하나하나를 본다
 
 `location.kind = "unverified"` 인 finding은 같은 자리에서 위치 줄 대신 `위치 미확인 사유: …`를 렌더링한다. `openQuestions`는 `미해결 / 후속 확인` 섹션에서 `추가 확인 이유: …` label을 쓴다. 둘 다 `reason` field를 사용하지만 slot 의미는 다르다.
+
+### 확인에 실패한 위치
+
+**`location.kind`와 `locationCheck`는 다른 사실이다.** 앞의 것은 producer가 **주장한** 위치의 종류이고, 뒤의 것은 그 주장을 실제 트리에 맞춰 본 결과다(`prepare-verification.mjs`). 주장만 보고 그리면 확인되지 않은 위치가 확인된 위치와 같은 모양으로 찍힌다.
+
+| `locationCheck` | 위치 줄 |
+|---|---|
+| `location-ok` | `` `path:line` `` — `` `인용` `` |
+| `location-unresolvable` | 위치 확인 실패: `` `path:line` `` — 리뷰 대상 트리에서 그 경로를 읽지 못했습니다 |
+| `location-mismatch` | 위치 확인 실패: `` `path:line` `` — 인용과 실제 내용이 다릅니다 · 실제 `` `실제 내용` `` |
+| `not-applicable` | `location.kind = "unverified"`의 짝. 위 `위치 미확인 사유: …` 줄을 쓴다 |
+
+- **확인에 실패하면 인용을 다시 찍지 않는다.** 그 인용이 그 자리에 없다는 것이 지금 말하고 있는 사실인데, 같은 줄에 한 번 더 찍으면 읽는 사람이 그것을 코드로 읽는다. 대신 실제로 그 자리에 있던 것을 찍는다. 읽은 내용 자체가 없었으면(줄 범위가 파일 밖) `· 실제 …` 칸을 통째로 뺀다 — 빈 code span은 무엇을 봤다는 뜻으로 읽힌다
+- **`locationCheck`가 없는 입력은 그리지 않고 거부한다.** 없는 것은 "확인하지 않았다"가 아니라 **"확인했는지 알 수 없다"**이고, 그 상태에서 기본값으로 흘려보내면 00-10이 🔴로 막는 것 — 틀린 위치를 가리키는 지적 — 이 그대로 나온다. `not-applicable`이 `verified`·`deleted`에 붙은 조합도 같은 이유로 거부한다
+- **이것은 finding을 지우거나 등급을 내리는 규칙이 아니다.** 위치 확인 실패는 C-6B의 disposition이 아니며, 그 후보의 거취는 검증 결과가 정한다(`prepare-verification.mjs`는 확인에 실패한 후보를 `isolated` 검증 대상으로 보낸다). 여기서 정하는 것은 **살아남은 finding의 위치 줄을 어떻게 적는가** 하나뿐이다
+
+**왜.** 2026-09-28 실행이 후보 5건 중 **4건**을 이 상태로 냈다 — 3건은 주장된 경로가 HEAD에도 merge-base에도 없었고, 1건은 인용이 실제 내용과 달랐다. 그 사실은 `routed.json`에 이미 기록돼 렌더러의 입력으로 들어가고 있었는데 렌더러가 읽지 않았다. 그 실행의 리포트는 사람이 손으로 "위치 미확인 사유"를 적어 넘어갔지만, 렌더러가 그리면 **없는 파일의 줄 번호가 확인된 위치와 구분되지 않는다.**
 
 - 판정 기준은 `00-rule.md`의 **Severity 기준**을 따른다. 여기에 복제하지 않는다
 - severity는 두 축에서 파생한 **계산값**이다. 헤딩의 이모지가 두 축과 어긋나면 그 자체가 오류다
