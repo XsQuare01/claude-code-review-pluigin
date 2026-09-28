@@ -27,6 +27,10 @@ const ok = extra => ({
   candidateId: '04-3#1', ruleId: '04-3', impact: 'high', confidence: 'high',
   category: 'data-loss', eligibility: 'SKIP-VERIFY', route: 'none',
   location: { kind: 'verified', path: 'src/a.ts', line: 1, quote: 'const a = 1' },
+  // `prepare-verification.mjs`가 이 위치를 실제 트리에 맞춰 본 결과다.
+  // 렌더러가 요구하는 필드이며, `location`을 갈아끼우는 테스트는 이 값도
+  // 같이 갈아끼워야 한다 — `unverified`에는 `not-applicable`이 짝이다.
+  locationCheck: 'location-ok',
   content: { title: '제목', body: '본문' },
   ...extra,
 })
@@ -82,6 +86,29 @@ test('deleted location의 endLine이 lineBefore보다 작으면 거부한다', (
 test('endLine이 시작 줄과 같거나 크면 거부하지 않는다', () => {
   assert.deepEqual(validateCandidates([ok({ location: { kind: 'verified', path: 'src/a.ts', line: 10, endLine: 10, quote: 'x' } })]), [])
   assert.deepEqual(validateCandidates([ok({ location: { kind: 'verified', path: 'src/a.ts', line: 10, endLine: 12, quote: 'x' } })]), [])
+})
+
+// 2026-09-28 실행 리뷰 — `locationCheck`는 렌더러의 입력(routed.json)에 이미
+// 들어 있었는데 렌더러가 보지 않았다. 없으면 "확인 안 함"이 아니라 "확인했는지
+// 알 수 없다"이므로, 기본값으로 흘려보내면 확인되지 않은 주장이 확인된 위치처럼
+// 찍힌다.
+test('locationCheck가 없으면 거부한다 — 확인했는지 알 수 없다', () => {
+  const candidate = ok()
+  delete candidate.locationCheck
+  const [why] = validateCandidates([candidate])
+  assert.match(why, /locationCheck/)
+})
+
+test('locationCheck가 닫힌 목록 밖이면 거부한다', () => {
+  const [why] = validateCandidates([ok({ locationCheck: 'maybe' })])
+  assert.match(why, /locationCheck/)
+})
+
+// `not-applicable`은 checkLocation이 `unverified`에만 주는 값이다. 맞춰 볼 수
+// 있는 위치에 이 값이 붙으면 검사를 요구한 의미가 그대로 사라진다.
+test('verified 위치에 not-applicable이 붙으면 거부한다', () => {
+  const [why] = validateCandidates([ok({ locationCheck: 'not-applicable' })])
+  assert.match(why, /not-applicable/)
 })
 
 // -------------------------------------------------------------- loadVocabulary
@@ -236,9 +263,40 @@ test('endLine이 시작 줄과 같으면 범위로 부풀리지 않는다', () =
 })
 
 test('unverified 위치는 사유 줄이 대신한다', () => {
-  const md = renderFinding(ok({ location: { kind: 'unverified', reason: '경로를 찾지 못했습니다.' } }),
+  const md = renderFinding(ok({ location: { kind: 'unverified', reason: '경로를 찾지 못했습니다.' }, locationCheck: 'not-applicable' }),
     { label: '대상 아님', vocabulary: VOCAB })
   assert.match(md, /위치 미확인 사유: 경로를 찾지 못했습니다\./)
+})
+
+// 2026-09-28 실행 — 후보 5건 중 3건은 주장된 경로가 HEAD에도 merge-base에도
+// 없었고, 1건은 인용이 실제 내용과 달랐다. 그 사실을 `prepare-verification`이
+// 이미 계산해 뒀는데 렌더러가 보지 않으면 없는 파일의 줄 번호가 사실처럼
+// 찍힌다 — 00-10이 🔴로 막는 "틀린 위치를 가리키는 지적".
+test('읽지 못한 경로는 확인된 위치처럼 그리지 않는다', () => {
+  const md = renderFinding(
+    ok({ location: { kind: 'verified', path: 'src/gone.ts', line: 9, endLine: 10, quote: 'precisionValue: 0.3,' },
+         locationCheck: 'location-unresolvable' }),
+    { label: '검증 실패', vocabulary: VOCAB })
+  assert.match(md, /위치 확인 실패: `src\/gone\.ts:9-10` — 리뷰 대상 트리에서 그 경로를 읽지 못했습니다/)
+  // 인용을 다시 찍지 않는다 — 그 자리에 없다는 것이 지금 말하는 사실인데,
+  // 같은 줄에 한 번 더 찍으면 읽는 사람이 그것을 코드로 읽는다.
+  assert.doesNotMatch(md, /precisionValue/)
+})
+
+test('인용 불일치는 실제로 그 자리에 있던 것을 함께 낸다', () => {
+  const md = renderFinding(
+    ok({ location: { kind: 'verified', path: 'src/shared/api/index.ts', line: 1, quote: "export type { CameraDevice } from './types'" },
+         locationCheck: 'location-mismatch', observed: '// shared/api 공개 API' }),
+    { label: '반박됨', vocabulary: VOCAB })
+  assert.match(md, /위치 확인 실패: `src\/shared\/api\/index\.ts:1` — 인용과 실제 내용이 다릅니다 · 실제 `\/\/ shared\/api 공개 API`/)
+  assert.doesNotMatch(md, /CameraDevice/)
+})
+
+test('인용 불일치인데 읽은 내용이 없으면 실제 칸을 비워 두지 않는다', () => {
+  const md = renderFinding(ok({ locationCheck: 'location-mismatch', observed: null }),
+    { label: '반박됨', vocabulary: VOCAB })
+  assert.match(md, /위치 확인 실패: `src\/a\.ts:1` — 인용과 실제 내용이 다릅니다$/m)
+  assert.doesNotMatch(md, /실제 ``/)
 })
 
 test('있는 슬롯만 각자 한 줄로 낸다', () => {
@@ -879,7 +937,7 @@ test('두 섹션 전문을 낸다 — golden', () => {
   const candidates = [
     ok({ candidateId: '11-6#2', ruleId: '11-6', impact: 'low', category: undefined,
          content: { title: '두 번째', body: 'B2' },
-         location: { kind: 'unverified', reason: '못 찾음' } }),
+         location: { kind: 'unverified', reason: '못 찾음' }, locationCheck: 'not-applicable' }),
     ok({ candidateId: '04-3#1', ruleId: '04-3', eligibility: 'VERIFY',
          content: { title: '첫 번째', body: 'B1', evidence: 'E1', recommendation: 'R1' } }),
     ok({ candidateId: '11-6#1', ruleId: '11-6', impact: 'low', category: undefined,
@@ -887,7 +945,7 @@ test('두 섹션 전문을 낸다 — golden', () => {
          location: { kind: 'deleted', path: 'src/x.ts', lineBefore: 4, quote: 'old()' } }),
     ok({ candidateId: 'EX-6#1', ruleId: 'EX-6', impact: 'low', category: undefined,
          content: { title: '예외 지적', body: 'B4' },
-         location: { kind: 'unverified', reason: '사유' } }),
+         location: { kind: 'unverified', reason: '사유' }, locationCheck: 'not-applicable' }),
   ]
   const verdicts = new Map([['04-3#1', { disposition: 'upheld' }]])
   const vocab = { categoryLabels: { 'data-loss': '데이터 손상·유실' },

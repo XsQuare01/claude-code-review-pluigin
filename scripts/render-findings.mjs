@@ -22,6 +22,10 @@ import { markedJson } from './lib/contract-blocks.mjs'
 const IMPACTS = new Set(['high', 'low'])
 const CONFIDENCES = new Set(['high', 'low'])
 const LOCATION_KINDS = new Set(['verified', 'deleted', 'unverified'])
+// `prepare-verification.mjs`의 checkLocation이 내는 닫힌 목록이다. 이 값이
+// 렌더러의 --input(routed.json)에 이미 들어 있는데 여태 쓰이지 않았다 —
+// 2026-09-28 실행은 후보 5건 중 4건이 여기서 실패한 상태로 리포트까지 갔다.
+const LOCATION_CHECKS = new Set(['location-ok', 'location-mismatch', 'location-unresolvable', 'not-applicable'])
 const PHASES = new Set(['active-deletion', 'rollout-shadow'])
 const VERIFICATION_STATES = new Set(['ran', 'disabled'])
 
@@ -51,6 +55,20 @@ export function validateCandidates(candidates) {
     }
     if (!LOCATION_KINDS.has(candidate?.location?.kind)) {
       problems.push(`${id}: location.kind가 닫힌 목록 밖이다 (${JSON.stringify(candidate?.location?.kind)})`)
+    }
+    // `location.kind`는 producer가 **주장한** 위치의 종류고, `locationCheck`는
+    // 그 주장을 실제 트리에 대고 맞춰 본 결과다. 둘은 다른 사실이며, 여기서
+    // 후자가 없으면 렌더러는 확인되지 않은 주장을 확인된 위치처럼 그린다 —
+    // 00-10이 🔴로 막는 바로 그것이다. 없으면 "확인하지 않았다"가 아니라
+    // "확인했는지 알 수 없다"이므로 기본값으로 흘려보내지 않고 거부한다.
+    if (!LOCATION_CHECKS.has(candidate?.locationCheck)) {
+      problems.push(`${id}: locationCheck가 닫힌 목록 밖이다 (${JSON.stringify(candidate?.locationCheck)}) — 주장된 위치를 확인했는지 알 수 없다`)
+    } else if (candidate.locationCheck === 'not-applicable'
+      && (candidate?.location?.kind === 'verified' || candidate?.location?.kind === 'deleted')) {
+      // `not-applicable`은 checkLocation이 `unverified`에만 주는 값이다.
+      // 맞춰 볼 수 있는 위치를 맞춰 보지 않았다는 조합이라, 통과시키면
+      // locationCheck를 요구한 의미가 그대로 사라진다.
+      problems.push(`${id}: location.kind가 ${candidate.location.kind}인데 locationCheck가 not-applicable이다 — 확인할 수 있는 위치를 확인하지 않았다`)
     }
     // 계약(REVIEW_RESULT_CONTRACT_V1의 location.variants)은 endLine에
     // verified면 `positive-and-gte-line`, deleted면 `positive-and-gte-lineBefore`
@@ -177,7 +195,27 @@ export function codeSpan(text) {
   return `${fence}${pad}${value}${pad}${fence}`
 }
 
-const locationLine = location => {
+/**
+ * 위치 줄을 만든다. **확인된 위치와 확인에 실패한 위치를 같은 모양으로 그리지
+ * 않는다.**
+ *
+ * 원래는 `location`만 받아 경로와 인용을 그대로 찍었다. 그런데 그 위치를 실제
+ * 트리에 대고 맞춰 본 결과(`locationCheck`)는 `prepare-verification.mjs`가
+ * 이미 계산해 렌더러의 입력에 실어 보내고 있었다. 그것을 보지 않으면 렌더러는
+ * **파이프라인이 이미 틀렸다고 판정한 위치를 확인된 위치처럼 찍는다.**
+ *
+ * 2026-09-28 실행이 그 상태였다 — 후보 5건 중 3건은 주장된 경로가 HEAD에도
+ * merge-base에도 없었고 1건은 인용이 실제 내용과 달랐다. 그 실행의 리포트는
+ * 사람이 손으로 써서 위치를 못 찾았다는 사실을 적었지만, 렌더러가 그리면
+ * 없는 파일의 줄 번호가 사실처럼 찍힌다. 00-10이 🔴로 막는 것이 정확히
+ * 그것이다 — "틀린 위치를 가리키는 지적은 지적이 아니다".
+ *
+ * 인용(`quote`)은 확인 실패 시 다시 찍지 않는다. 그 인용이 그 자리에 없다는
+ * 것이 지금 말하는 사실인데, 같은 줄에 한 번 더 찍으면 읽는 사람이 그것을
+ * 코드로 읽는다. 대신 실제로 그 자리에 있던 것(`observed`)을 찍는다.
+ */
+const locationLine = candidate => {
+  const location = candidate.location
   if (location.kind === 'unverified') return `위치 미확인 사유: ${escapeProse(location.reason)}`
   const start = location.kind === 'deleted' ? location.lineBefore : location.line
   // endLine은 계약(REVIEW_RESULT_CONTRACT_V1의 location.variants)이 verified·
@@ -188,7 +226,20 @@ const locationLine = location => {
   const line = typeof location.endLine === 'number' && location.endLine !== start
     ? `${start}-${location.endLine}`
     : `${start}`
-  return `${codeSpan(`${location.path}:${line}`)} — ${codeSpan(location.quote)}`
+  const anchor = codeSpan(`${location.path}:${line}`)
+  if (candidate.locationCheck === 'location-unresolvable') {
+    return `위치 확인 실패: ${anchor} — 리뷰 대상 트리에서 그 경로를 읽지 못했습니다`
+  }
+  if (candidate.locationCheck === 'location-mismatch') {
+    // observed가 없는 경우는 줄 범위가 파일 밖이라 읽을 내용 자체가 없었던
+    // 때다. 그때는 "실제" 칸을 비워 두지 않고 줄에서 뺀다 — 빈 code span은
+    // 무엇을 봤다는 뜻으로 읽힌다.
+    const observed = typeof candidate.observed === 'string' && candidate.observed
+      ? ` · 실제 ${codeSpan(candidate.observed)}`
+      : ''
+    return `위치 확인 실패: ${anchor} — 인용과 실제 내용이 다릅니다${observed}`
+  }
+  return `${anchor} — ${codeSpan(location.quote)}`
 }
 
 /**
@@ -254,7 +305,7 @@ export function renderFinding(candidate, { label, vocabulary }) {
     `#### ${severity} \`${candidate.renderedRuleId ?? candidate.ruleId}\` ${escapeProse(candidate.content.title)}`,
     axes.join(' · '),
     ...(source ? [source] : []),
-    locationLine(candidate.location),
+    locationLine(candidate),
     ...slots,
   ].join('\n')
 }
