@@ -46,6 +46,11 @@ const flag = (name, fallback) => {
   return at === -1 ? fallback : process.argv[at + 1]
 }
 
+const noteText = parts => {
+  const present = parts.filter(part => typeof part === 'string' && part.trim())
+  return present.length ? present.join(' · ') : undefined
+}
+
 const flagAll = name => process.argv
   .map((arg, at) => (arg === `--${name}` ? process.argv[at + 1] : null))
   .filter(value => value !== null && value !== undefined)
@@ -177,6 +182,10 @@ if (targetsPath !== undefined) {
   }
 }
 
+// `--note`는 다시 센 이유다. 교차검증의 끝이 두 번 남으면 `--check`는 `note`가
+// 있는 두 번째 끝만 정정으로 받는다 — 없으면 판정을 다시 받은 것으로 읽는다.
+const note = noteText([flag('note'), weakNote])
+
 logPhase(dir, run, 'crossverify.end', {
   upheld: counts.upheld,
   rejected: counts.rejected,
@@ -184,7 +193,7 @@ logPhase(dir, run, 'crossverify.end', {
   ...(noVerdict === undefined ? {} : { noVerdict }),
   ...(malformedTasksCorrected === undefined ? {} : { malformedTasksCorrected }),
   countsFrom: 'tally-verdicts.mjs',
-  ...(weakNote === undefined ? {} : { note: weakNote }),
+  ...(note === undefined ? {} : { note }),
 })
 
 // `judged`는 집합 차이를 내려고 들고 다닌 것이라 stdout에는 싣지 않는다.

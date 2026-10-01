@@ -257,3 +257,13 @@ test('stdout에 판정 집합을 빈 객체로 흘리지 않는다', t => {
   assert.equal(printed.upheld, 1)
   assert.equal(printed.noVerdict, 1)
 })
+
+// 교차검증의 끝은 시작과 짝이다. 잘못 센 수치를 바로잡으려고 다시 돌리면 끝이 둘이
+// 되는데, append 전용 기록에서 그것은 `note`를 단 정정 줄이어야 한다 — 그래야
+// `--check`가 "판정을 다시 받았다"와 "다시 셌다"를 가른다.
+test('--note를 주면 crossverify.end에 정정 사유를 남긴다', t => {
+  const dir = started(t)
+  const out = tally(dir, { schemaVersion: 1, verdicts: [verdict('04-3#1', 'upheld')] }, ['--note', '교정 횟수를 빠뜨려 다시 셌다'])
+  assert.equal(out.status, 0, out.stderr)
+  assert.equal(timelineOf(dir).at(-1).note, '교정 횟수를 빠뜨려 다시 셌다')
+})

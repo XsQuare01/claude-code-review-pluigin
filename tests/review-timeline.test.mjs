@@ -1334,8 +1334,10 @@ test('--summary는 최장 구간이 끝 표시에 붙으면 그 문장을 붙이
 const withVerify = (verify, verdicts) => ([
   { at: '2026-09-18T00:00:00.000Z', seq: 1, phase: 'run.start', host: 'opencode', rules: 'r', version: '2.13.3', branch: 'b', changedFiles: 22 },
   { at: '2026-09-18T00:01:00.000Z', seq: 2, phase: 'script.done', ran: true, counts: { total: 35, verify } },
-  { at: '2026-09-18T01:00:00.000Z', seq: 3, phase: 'crossverify.end', ...verdicts },
-  { at: '2026-09-18T01:01:00.000Z', seq: 4, phase: 'run.end', verdict: 'MERGE_BLOCKED' },
+  // 교차검증은 시작과 끝이 짝이다(아래 `crossverify.start` 없이 끝난 교차검증 참고).
+  { at: '2026-09-18T00:02:00.000Z', seq: 3, phase: 'crossverify.start', targets: verify },
+  { at: '2026-09-18T01:00:00.000Z', seq: 4, phase: 'crossverify.end', ...verdicts },
+  { at: '2026-09-18T01:01:00.000Z', seq: 5, phase: 'run.end', verdict: 'MERGE_BLOCKED' },
 ])
 
 test('noVerdict는 닫힌 목록에 있다', t => {
@@ -1375,8 +1377,9 @@ test('--check는 대상 수가 없으면 대조하지 않는다', t => {
   const dir = freshDir(t)
   plant(dir, [
     { at: '2026-09-18T00:00:00.000Z', seq: 1, phase: 'run.start', host: 'opencode', rules: 'r', version: '2.13.3', branch: 'b', changedFiles: 22 },
-    { at: '2026-09-18T01:00:00.000Z', seq: 2, phase: 'crossverify.end', upheld: 13, rejected: 0 },
-    { at: '2026-09-18T01:01:00.000Z', seq: 3, phase: 'run.end', verdict: 'WARN' },
+    { at: '2026-09-18T00:02:00.000Z', seq: 2, phase: 'crossverify.start', targets: 13 },
+    { at: '2026-09-18T01:00:00.000Z', seq: 3, phase: 'crossverify.end', upheld: 13, rejected: 0 },
+    { at: '2026-09-18T01:01:00.000Z', seq: 4, phase: 'run.end', verdict: 'WARN' },
   ])
   const out = check(dir)
   assert.equal(out.status, 0, out.stdout)
@@ -1399,9 +1402,10 @@ test('--check는 나중에 적힌 crossverify.end를 정본으로 쓴다', t => 
   plant(dir, [
     { at: '2026-09-18T00:00:00.000Z', seq: 1, phase: 'run.start', host: 'opencode', rules: 'r', version: '2.13.3', branch: 'b', changedFiles: 22 },
     { at: '2026-09-18T00:01:00.000Z', seq: 2, phase: 'script.done', ran: true, counts: { total: 35, verify: 16 } },
-    { at: '2026-09-18T01:00:00.000Z', seq: 3, phase: 'crossverify.end', upheld: 13, rejected: 0, needsContext: 0 },
-    { at: '2026-09-18T01:00:44.000Z', seq: 4, phase: 'crossverify.end', upheld: 13, rejected: 0, needsContext: 0, noVerdict: 3, note: '다시 셌다' },
-    { at: '2026-09-18T01:01:00.000Z', seq: 5, phase: 'run.end', verdict: 'WARN' },
+    { at: '2026-09-18T00:02:00.000Z', seq: 3, phase: 'crossverify.start', targets: 16 },
+    { at: '2026-09-18T01:00:00.000Z', seq: 4, phase: 'crossverify.end', upheld: 13, rejected: 0, needsContext: 0 },
+    { at: '2026-09-18T01:00:44.000Z', seq: 5, phase: 'crossverify.end', upheld: 13, rejected: 0, needsContext: 0, noVerdict: 3, note: '다시 셌다' },
+    { at: '2026-09-18T01:01:00.000Z', seq: 6, phase: 'run.end', verdict: 'WARN' },
   ])
   const out = check(dir)
   assert.equal(out.status, 0, out.stdout)
@@ -1689,4 +1693,63 @@ test('--check는 닫힌 목록 밖 status를 어휘 문제로 짚고 수치 불�
   assert.equal(out.status, 1)
   assert.match(out.stdout, /`module\.done`의 status가 닫힌 목록 밖이다: COMPLETED/)
   assert.doesNotMatch(out.stdout, /기록으로 세면/)
+})
+
+// ── 교차검증 시작·끝의 짝과 순서 ──────────────────────────────────────────
+//
+// 같은 실행이 `crossverify.start` 하나에 `crossverify.end` 둘을 남겼고, 두 번째
+// 끝은 `render.start` 뒤에 있었다 — 리포트를 조립하다가 판정 하나를 다시 받아
+// 집계를 바꾼 것이다. `--check`는 둘 다 짚지 않았다.
+
+const verified = middle => ([
+  { at: '2026-09-30T00:00:00.000Z', seq: 1, phase: 'run.start', host: 'opencode', rules: 'r', version: '2.14.0', branch: 'b', changedFiles: 52 },
+  { at: '2026-09-30T00:01:00.000Z', seq: 2, phase: 'script.done', ran: true, counts: { total: 3, verify: 2 } },
+  ...middle,
+  { at: '2026-09-30T02:00:00.000Z', seq: 90, phase: 'run.end', verdict: 'MERGE_BLOCKED' },
+])
+const cvStart = (seq, minute) => ({ at: `2026-09-30T00:${String(minute).padStart(2, '0')}:00.000Z`, seq, phase: 'crossverify.start', targets: 2 })
+const cvEnd = (seq, minute) => ({ at: `2026-09-30T00:${String(minute).padStart(2, '0')}:00.000Z`, seq, phase: 'crossverify.end', upheld: 2, rejected: 0, needsContext: 0, noVerdict: 0 })
+const renderStart = (seq, minute) => ({ at: `2026-09-30T00:${String(minute).padStart(2, '0')}:00.000Z`, seq, phase: 'render.start', findings: 3 })
+
+test('--check는 시작 없이 남은 crossverify.end를 짚는다', t => {
+  const dir = freshDir(t)
+  plant(dir, verified([cvStart(3, 2), cvEnd(4, 20), cvEnd(5, 40)]))
+  const out = check(dir)
+  assert.equal(out.status, 1)
+  assert.match(out.stdout, /`crossverify\.start` 없이 끝난 교차검증: seq 5/)
+})
+
+test('--check는 끝을 남기지 않은 crossverify.start를 짚는다', t => {
+  const dir = freshDir(t)
+  plant(dir, verified([cvStart(3, 2)]))
+  const out = check(dir)
+  assert.equal(out.status, 1)
+  assert.match(out.stdout, /끝을 남기지 않은 교차검증: seq 3/)
+})
+
+test('--check는 render.start 뒤에 온 교차검증 기록을 짚는다', t => {
+  const dir = freshDir(t)
+  plant(dir, verified([cvStart(3, 2), cvEnd(4, 20), renderStart(5, 30), cvStart(6, 40), cvEnd(7, 50)]))
+  const out = check(dir)
+  assert.equal(out.status, 1)
+  assert.match(out.stdout, /`render\.start`\(seq 5\) 뒤에 교차검증 기록이 있다: seq 6, 7/)
+})
+
+test('--check는 짝이 맞고 렌더 앞에서 끝난 교차검증은 짚지 않는다', t => {
+  const dir = freshDir(t)
+  plant(dir, verified([cvStart(3, 2), cvEnd(4, 20), renderStart(5, 30)]))
+  const out = check(dir)
+  assert.equal(out.status, 0, out.stdout)
+})
+
+// `feat/scene-graph-undo-redo` 실행(2026-09-30)은 synthesis를 시작한 뒤 판정 하나를
+// 다시 받아 유지를 반박으로 바꿨다. synthesis는 반박된 지적을 입력에서 빼므로(C-6B),
+// 시작한 뒤에 판정이 바뀌면 synthesis의 입력과 최종 판정이 어긋난다.
+test('--check는 synthesis.start 뒤에 온 교차검증 기록을 짚는다', t => {
+  const dir = freshDir(t)
+  const synthesisStart = { at: '2026-09-30T00:30:00.000Z', seq: 5, phase: 'synthesis.start', findings: 3 }
+  plant(dir, verified([cvStart(3, 2), cvEnd(4, 20), synthesisStart, cvStart(6, 40), cvEnd(7, 50)]))
+  const out = check(dir)
+  assert.equal(out.status, 1)
+  assert.match(out.stdout, /`synthesis\.start`\(seq 5\) 뒤에 교차검증 기록이 있다: seq 6, 7/)
 })

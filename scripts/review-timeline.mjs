@@ -618,6 +618,53 @@ if (has('check')) {
     }
   }
 
+  // 교차검증도 시작과 끝이 짝을 이루고, 렌더보다 앞에서 끝난다.
+  //
+  // 2026-09-30 실행이 `crossverify.start` 하나에 `crossverify.end` 둘을 남겼고, 두
+  // 번째 끝은 `render.start` 뒤에 있었다 — 리포트를 조립하다가 판정 하나를 다시
+  // 받아 집계를 바꾼 것이다. 그 재판정에는 시작 기록이 없어 언제 돌았는지도 없었다.
+  //
+  // **정정 줄은 짝의 예외다.** append 전용 기록에서 잘못 센 끝은 고치는 대신 바로
+  // 다음 줄에 `note`를 달아 다시 쓴다(위 ALWAYS_ALLOWED). 앞 끝 바로 뒤에 `note`와
+  // 함께 온 끝은 새 교차검증이 아니라 그 정정이다.
+  {
+    let open = null
+    let previous = null
+    const unclosed = []
+    const unmatched = []
+    for (const event of events) {
+      if (event.phase === 'crossverify.start') {
+        if (open) unclosed.push(open.seq)
+        open = event
+      } else if (event.phase === 'crossverify.end') {
+        if (open) open = null
+        else if (!(previous?.phase === 'crossverify.end' && event.note !== undefined)) unmatched.push(event.seq)
+      } else {
+        continue
+      }
+      previous = event
+    }
+    if (open) unclosed.push(open.seq)
+    if (unmatched.length) {
+      problems.push(`\`crossverify.start\` 없이 끝난 교차검증: seq ${unmatched.join(', ')}. 정정이면 앞 끝 바로 뒤에 \`note\`를 달아 남기고, 판정을 다시 받았다면 그 교차검증도 시작부터 남긴다`)
+    }
+    if (unclosed.length) {
+      problems.push(`끝을 남기지 않은 교차검증: seq ${unclosed.join(', ')}. 판정을 세지 않았으면 리포트의 교차검증 수치는 기록에서 온 것이 아니다`)
+    }
+
+    // 판정을 입력으로 쓰는 단계는 synthesis와 렌더다. 둘 중 먼저 시작한 쪽 뒤에
+    // 교차검증 기록이 있으면, 그 단계는 바뀌기 전의 판정으로 돈 것이다 —
+    // synthesis는 반박된 지적을 입력에서 빼고(C-6B), 렌더는 판정을 축 줄에 찍는다.
+    const consumerAt = events.findIndex(event => event.phase === 'synthesis.start' || event.phase === 'render.start')
+    const late = consumerAt === -1
+      ? []
+      : events.slice(consumerAt + 1).filter(event => event.phase === 'crossverify.start' || event.phase === 'crossverify.end')
+    if (late.length) {
+      const consumer = events[consumerAt]
+      problems.push(`\`${consumer.phase}\`(seq ${consumer.seq}) 뒤에 교차검증 기록이 있다: seq ${late.map(event => event.seq).join(', ')}. 판정을 입력으로 쓰는 단계를 시작한 뒤 판정이 바뀌면 그 단계의 결과와 최종 판정이 어긋난다 — 교차검증을 끝낸 뒤 synthesis와 렌더를 시작한다`)
+    }
+  }
+
   // 도구는 시작과 끝이 짝을 이뤄야 한다.
   //
   // `tool.start`를 닫힌 목록에 넣는 것만으로는 아무것도 강제되지 않는다 —
