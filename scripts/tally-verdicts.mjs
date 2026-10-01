@@ -26,6 +26,7 @@
 import { readFileSync } from 'node:fs'
 
 import { lastPhase, logPhase, requireStartedTimeline } from './lib/run-record.mjs'
+import { collectVerdicts } from './lib/verdicts.mjs'
 
 // C-6B의 닫힌 목록이다. 목록 밖 값을 만나면 세지 않고 멈춘다 — 모르는 값을 0으로
 // 흘려보내면 합계는 그럴듯하고 판정만 틀린다.
@@ -48,25 +49,6 @@ const flag = (name, fallback) => {
 const flagAll = name => process.argv
   .map((arg, at) => (arg === `--${name}` ? process.argv[at + 1] : null))
   .filter(value => value !== null && value !== undefined)
-
-/**
- * payload가 어떤 모양으로 오든 verdict 목록 하나로 편다.
- *
- * 검증 패스는 작업을 여러 개 띄우고 각자 payload를 낸다. 그 여러 벌을 합치는
- * 일이 곧 모델이 하던 일이고, 틀렸던 자리다.
- */
-export function collectVerdicts(payloads) {
-  const verdicts = []
-  const walk = value => {
-    if (Array.isArray(value)) { value.forEach(walk); return }
-    if (!value || typeof value !== 'object') return
-    if (Array.isArray(value.verdicts)) { verdicts.push(...value.verdicts); return }
-    if (Array.isArray(value.tasks)) { value.tasks.forEach(walk); return }
-    die(`verdicts도 tasks도 없는 payload다: ${JSON.stringify(Object.keys(value))}`)
-  }
-  walk(payloads)
-  return verdicts
-}
 
 /**
  * 검증 대상 후보 ID를 `prepare-verification.mjs` 출력에서 읽는다.
@@ -136,7 +118,15 @@ const payloads = inputs.map(path => {
   }
 })
 
-const counts = tally(collectVerdicts(payloads))
+// 판정 파일을 읽는 규칙은 렌더러와 같은 함수 하나다(`lib/verdicts.mjs`). 여기서만
+// 받아 주는 모양이 생기면, 여기서 센 판정을 렌더러가 못 읽는 일이 다시 생긴다.
+let verdicts
+try {
+  verdicts = collectVerdicts(payloads)
+} catch (error) {
+  die(`${inputs.join(', ')}: ${error.message}`)
+}
+const counts = tally(verdicts)
 
 // 교정 횟수는 verdict payload가 모르는 값이다 — 그것은 dispatch 쪽 사실이라
 // 호출자가 넘긴다. 이름에 **세는 단위**를 담는다: verdict가 아니라 task 수다.

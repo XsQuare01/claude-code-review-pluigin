@@ -18,6 +18,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 import { markedJson, CROSS_VERIFICATION_TOKEN_KEYS } from './lib/contract-blocks.mjs'
+import { collectVerdicts } from './lib/verdicts.mjs'
 
 const IMPACTS = new Set(['high', 'low'])
 const CONFIDENCES = new Set(['high', 'low'])
@@ -794,7 +795,18 @@ if (process.argv[1] && process.argv[1].endsWith('render-findings.mjs')) {
     // 그 finding이 `미해결 / 후속 확인`으로 옮겨질 때 "무엇을 더 봐야
     // 하는가"를 말하는 유일한 값이다. 여기서 버리면 뒤에서 되찾을 방법이
     // 없다 — 이 loader가 판정 파일을 읽는 유일한 자리다.
-    for (const verdict of parsed.verdicts ?? []) {
+    //
+    // 파일의 모양은 `tally-verdicts.mjs`와 같은 함수로 푼다. 한때 여기서
+    // `parsed.verdicts`만 봤는데, tally가 받는 `{ tasks: [...] }` 파일을
+    // 넘기면 판정이 0건이 되어 검증 대상 전부가 `검증 실패`로 찍혔다 —
+    // 두 스크립트가 같은 파일을 서로 다르게 읽었고, 오류는 나지 않았다.
+    let verdicts
+    try {
+      verdicts = collectVerdicts(parsed)
+    } catch (error) {
+      die(`--verdicts에서 판정 목록을 찾지 못했다: ${path} — ${error.message}`)
+    }
+    for (const verdict of verdicts) {
       byCandidateId.set(verdict.candidateId, {
         disposition: verdict.disposition,
         rebuttalKind: verdict.rebuttal?.kind,

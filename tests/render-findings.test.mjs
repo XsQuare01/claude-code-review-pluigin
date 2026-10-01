@@ -1272,3 +1272,49 @@ test('sections 항목의 kind가 module·pass가 아니면 조용히 사라지�
     /kind/,
   )
 })
+
+// -------------------------------------------------------------- 판정 파일 모양
+
+// 2026-09-30 실행(2.14.0) — 오케스트레이터가 판정 파일을 `{ tasks: [ …payload… ] }`로
+// 만들었다. `tally-verdicts.mjs`는 그 모양을 받아 유지 19건으로 셌는데, 렌더러는
+// 최상위 `verdicts`만 봐서 **같은 파일을 판정 0건으로 읽었다.** 그대로 그렸으면
+// 검증 대상 23건이 전부 `검증 실패`로 찍혔고, 집계와 리포트가 말없이 어긋났다.
+// 오케스트레이터가 렌더러 소스를 읽고 파일 모양을 바꿔서 겨우 피했다.
+const runWithVerdicts = verdictsPayload => {
+  const dir = mkdtempSync(join(tmpdir(), 'render-'))
+  const input = join(dir, 'targets.json')
+  const verdictsPath = join(dir, 'verdicts.json')
+  writeFileSync(input, JSON.stringify({
+    candidates: [ok({ candidateId: '04-3#1', ruleId: '04-3', eligibility: 'VERIFY', route: 'bundle' })],
+  }), 'utf8')
+  writeFileSync(verdictsPath, JSON.stringify(verdictsPayload), 'utf8')
+  const out = spawnSync(process.execPath, [
+    SCRIPT, '--input', input, '--rules', RULES, '--phase-high', 'rollout-shadow', '--phase-low', 'rollout-shadow',
+    '--workflow', 'full', '--verdicts', verdictsPath, '--verification-state', 'ran',
+  ], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+  rmSync(dir, { recursive: true, force: true })
+  return out
+}
+
+const UPHELD = { candidateId: '04-3#1', disposition: 'upheld', evidence: 'e',
+  location: { kind: 'verified', path: 'src/a.ts', line: 1, quote: 'const a = 1' } }
+
+test('CLI가 tally-verdicts가 받는 { tasks: [...] } 판정 파일을 같은 판정으로 읽는다', () => {
+  const out = runWithVerdicts({ tasks: [{ schemaVersion: 1, verdicts: [UPHELD] }] })
+  assert.equal(out.status, 0, out.stderr)
+  assert.match(out.stdout, /교차검증: `유지`/)
+  assert.doesNotMatch(out.stdout, /검증 실패/)
+})
+
+test('CLI가 payload 배열로 된 판정 파일도 같은 판정으로 읽는다', () => {
+  const out = runWithVerdicts([{ schemaVersion: 1, verdicts: [UPHELD] }])
+  assert.equal(out.status, 0, out.stderr)
+  assert.match(out.stdout, /교차검증: `유지`/)
+})
+
+test('CLI가 판정 목록을 찾지 못한 판정 파일을 0건으로 흘리지 않고 거부한다', () => {
+  const out = runWithVerdicts({ results: [UPHELD] })
+  assert.equal(out.status, 2)
+  assert.equal(out.stdout, '')
+  assert.match(out.stderr, /verdicts\.json/)
+})
