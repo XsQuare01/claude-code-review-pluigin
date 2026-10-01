@@ -688,7 +688,10 @@ function conditionKeywords(qualifier) {
     }
   }
 
-  for (const file of allFiles.filter(f => f.endsWith('.md') && f !== 'workflow-contract.md')) {
+  // 규칙 모듈이 아닌 문서다. `workflow-contract.md`는 공통 계약이고,
+  // `verifier-prompt.md`는 prepare-verification.mjs가 읽는 검증자 지시문 템플릿이다.
+  const NOT_RULE_DOCS = new Set(['workflow-contract.md', 'verifier-prompt.md'])
+  for (const file of allFiles.filter(f => f.endsWith('.md') && !NOT_RULE_DOCS.has(f))) {
     if (!byPath.has(file)) fail('catalog', `catalog.json: no entry for ${file}`)
   }
 
@@ -1489,17 +1492,29 @@ function validateVerdictOwnerSync() {
   const manifest = getVerdictManifest()
   if (!manifest) return
 
-  // A contract nobody injects drifts silently. The owner skill must carry the runtime
+  // A contract nobody injects drifts silently. The owner must carry the runtime
   // placeholder, the same way the structured-result owners carry theirs.
-  const OWNER = 'skills/code-review-full/SKILL.md'
+  //
+  // 검증자 지시문의 정본은 SKILL이 아니라 이 템플릿이다. 2.15.0부터
+  // prepare-verification.mjs가 이 파일의 VERIFIER_PROMPT 블록을 읽어 작업마다
+  // 프롬프트 파일을 만든다 — 오케스트레이터가 지시를 자기 말로 다시 쓰던
+  // 2026-09-30 실행의 실패를 막으려는 것이다. 그래서 검사도 그 블록을 본다.
+  const OWNER = 'review-rules/verifier-prompt.md'
   const ownerPath = join(ROOT, OWNER)
   if (!existsSync(ownerPath)) {
     failCode('verdict-contract', 'E_VERDICT_OWNER_MISSING', `${OWNER} is missing`)
     return
   }
-  const owner = read(ownerPath)
-  if (!owner.includes('REVIEW_VERDICT_CONTRACT_V1_MANIFEST')) {
-    failCode('verdict-contract', 'E_VERDICT_OWNER_NO_MANIFEST_INJECTION', `${OWNER} must inject REVIEW_VERDICT_CONTRACT_V1_MANIFEST — a verdict contract with no producer instruction cannot be reached at runtime`)
+  const block = markedBlock(read(ownerPath), 'VERIFIER_PROMPT')
+  if (block.error) {
+    failCode('verdict-contract', 'E_VERDICT_OWNER_BLOCK', `${OWNER}: ${block.error}`)
+    return
+  }
+  const owner = block.value
+  // 스크립트는 중괄호까지 포함한 자리 표시를 정확히 한 번 바꾼다. 이름만 있고 자리
+  // 표시가 없으면 manifest 없는 프롬프트가 나간다.
+  if (owner.split('{REVIEW_VERDICT_CONTRACT_V1_MANIFEST}').length - 1 !== 1) {
+    failCode('verdict-contract', 'E_VERDICT_OWNER_NO_MANIFEST_INJECTION', `${OWNER} must carry the {REVIEW_VERDICT_CONTRACT_V1_MANIFEST} placeholder exactly once — a verdict contract with no producer instruction cannot be reached at runtime`)
   }
 
   // The closed lists live in the manifest. Guessing which words are contract tokens by

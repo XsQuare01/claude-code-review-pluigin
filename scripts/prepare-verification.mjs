@@ -1,9 +1,13 @@
 import { execFileSync } from 'node:child_process'
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, isAbsolute, join, resolve, sep } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
+import { markedBlock } from './lib/contract-blocks.mjs'
 import { logPhase, readEvents, requireStartedTimeline } from './lib/run-record.mjs'
+import {
+  buildTaskPrompt, docPathForRule, extractClause, instructionsWithManifest, planVerifierTasks,
+} from './lib/verifier-tasks.mjs'
 
 // Deterministic preparation for the cross-verification pass.
 //
@@ -262,8 +266,22 @@ export function prepareVerification(candidates, blobs, options = {}) {
 
 // ---------------------------------------------------------------------- CLI
 //
-//   node scripts/prepare-verification.mjs --merge-base <sha> --input candidates.json
-//   node scripts/prepare-verification.mjs --merge-base <sha> < candidates.json
+//   node scripts/prepare-verification.mjs --merge-base <sha> --dir <d> --run <r> --collect
+//   node scripts/prepare-verification.mjs --merge-base <sha> --dir <d> --run <r> --input candidates.json
+//   node scripts/prepare-verification.mjs --merge-base <sha> --dir <d> --run <r> < candidates.json
+//
+// --collect      : gather `<d>/.timing/<r>.<module>.json` — each producer result written
+//                  verbatim as it arrived — against the timeline's `module.done` records.
+//                  `/code-review-full` uses this; the orchestrator never assembles an
+//                  envelope by hand. Cannot be combined with --input.
+// --rules <dir>  : the RULES_DIR the producers read (catalog, module docs, verifier
+//                  template, verdict manifest). Defaults to this plugin's review-rules.
+// --verify off   : no verifier prompt files and no `crossverify.start`. Default selective.
+//
+// Unless --locations-only or --verify off, one prompt file per verifier task is written to
+// `<d>/.timing/<r>.verify/` and listed as `verifierTasks` / `promotions`, each with the
+// `verdict` path the orchestrator writes the verifier's JSON to. `crossverify.start` is
+// logged here when there is at least one task.
 //
 // --input <path> : read the payload from a file. **Prefer this.** The payload carries
 //                  prose, code quotes and Windows paths, and a shell that has to hold
@@ -275,7 +293,8 @@ export function prepareVerification(candidates, blobs, options = {}) {
 //          { "locations": [ {ruleId, path, line, quote}, … ] }  light form for a
 //                                                              consolidated pass
 //          { "candidates": [ … ] }                            when the caller owns the ids
-// stdout : { "candidates": [ … ], "bundles": [ … ], "counts": { … } }
+// stdout : { "candidates": [ … ], "bundles": [ … ], "counts": { … },
+//            "verifierTasks": [ … ], "promotions": { … }, "collected": { … } (--collect) }
 //
 // --locations-only : location checks and their counts, with no eligibility, route or
 //                    bundle. For workflows that have no rebuttal pass.
@@ -461,6 +480,12 @@ async function main() {
     process.stderr.write('--collect와 --input을 함께 줄 수 없다. 모듈별 결과 파일을 모으거나 입력 파일 하나를 넘긴다\n')
     process.exit(2)
   }
+  const verifyIndex = argv.indexOf('--verify')
+  const verifyMode = verifyIndex === -1 ? 'selective' : argv[verifyIndex + 1]
+  if (!['selective', 'off'].includes(verifyMode)) {
+    process.stderr.write(`--verify는 selective 또는 off다 (받은 값: ${JSON.stringify(verifyMode)}). exhaustive 라우팅은 이 스크립트가 아직 하지 않는다\n`)
+    process.exit(2)
+  }
 
   // 인자를 먼저 본다. 입력을 다 읽고 나서 거부하면 실패 메시지가 파이프 오류에
   // 묻히고, 무엇을 고쳐야 하는지가 가려진다.
@@ -537,7 +562,22 @@ async function main() {
   const result = prepareVerification(candidates, collectBlobs(candidates, gitReaders(mergeBase)), { locationsOnly })
   if (collected) result.collected = collected
 
+  // 검증자 프롬프트는 여기서 파일로 만든다. 오케스트레이터는 그 내용을 넘기기만
+  // 한다 — 다시 쓰지 않는다(`lib/verifier-tasks.mjs` 머리말).
+  let written = { tasks: [], promotions: {} }
+  if (!locationsOnly) {
+    if (verifyMode !== 'off') {
+      written = writeVerifierTasks({ result, rulesDir, mergeBase, outDir: resolve(dir, '.timing', `${run}.verify`), fail })
+    }
+    result.verifierTasks = written.tasks
+    result.promotions = written.promotions
+  }
+
   logPhase(dir, run, 'script.done', { ran: true, counts: result.counts })
+  // 교차검증의 시작은 **검증자를 띄울 준비가 끝난 이 자리**에서 남긴다. 오케스트레이터가
+  // 남기게 두었더니 2026-09-30 실행이 검증자 19개가 다 끝난 뒤에야 찍었고, 80분
+  // 검증이 "무엇이 돌았는지 기록에 없는 5173초"로 보였다.
+  if (written.tasks.length) logPhase(dir, run, 'crossverify.start', { targets: result.counts.verify })
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`)
 }
 
@@ -590,6 +630,71 @@ export function collectResultFiles({ events, sourceNames, pathOf, read }) {
   }
   return { payload: { results }, problems, warnings, collected }
 }
+
+/**
+ * verifier 작업마다 프롬프트 파일을 쓰고, 그 목록을 돌려준다.
+ *
+ * 지시문·manifest·규칙 문서는 모두 `rulesDir`에서 읽는다 — producer가 읽은 규칙과
+ * 검증자가 받는 규칙이 같아야 한다. 디렉터리는 실행마다 새로 만든다. 앞 실행의
+ * 파일이 남으면 이번 목록에 없는 작업이 디렉터리에는 있게 된다.
+ */
+function writeVerifierTasks({ result, rulesDir, mergeBase, outDir, fail }) {
+  const planned = planVerifierTasks(result)
+  if (!planned.tasks.length) return { tasks: [], promotions: {} }
+
+  const readRule = name => {
+    try {
+      return readFileSync(join(rulesDir, name), 'utf8')
+    } catch (error) {
+      fail(`${join(rulesDir, name)}를 읽지 못했다: ${error.message}`)
+    }
+  }
+  const template = markedBlock(readRule('verifier-prompt.md'), 'VERIFIER_PROMPT')
+  if (template.error) fail(`verifier-prompt.md: ${template.error}`)
+  const manifest = markedBlock(readRule('workflow-contract.md'), 'REVIEW_VERDICT_CONTRACT_V1')
+  if (manifest.error) fail(`workflow-contract.md: ${manifest.error}`)
+  const instructions = instructionsWithManifest(template.value, manifest.value)
+  if (instructions.error) fail(instructions.error)
+
+  const catalog = JSON.parse(readRule('catalog.json'))
+  const docs = new Map()
+  const clauses = new Map()
+  for (const candidate of result.candidates) {
+    if (clauses.has(candidate.ruleId)) continue
+    const docPath = docPathForRule(candidate.ruleId, catalog)
+    if (docPath && !docs.has(docPath)) docs.set(docPath, readRule(docPath))
+    clauses.set(candidate.ruleId, docPath ? extractClause(docs.get(docPath), candidate.ruleId) : null)
+  }
+
+  rmSync(outDir, { recursive: true, force: true })
+  mkdirSync(outDir, { recursive: true })
+  const candidatesById = new Map(result.candidates.map(candidate => [candidate.candidateId, candidate]))
+  // 검증자가 돌려준 JSON을 남길 자리(`verdict`)도 여기서 정한다. 오케스트레이터가
+  // 이름을 지으면 실행마다 달라지고, `tally-verdicts.mjs --collect`가 찾지 못한다.
+  const write = task => {
+    const { prompt, missingClauses } = buildTaskPrompt({ instructions: instructions.value, task, candidatesById, clauses, mergeBase })
+    const path = join(outDir, `${task.taskId}.md`)
+    writeFileSync(path, prompt, 'utf8')
+    return { prompt: path, verdict: join(outDir, `${task.taskId}.verdict.json`), missingClauses }
+  }
+  const tasks = planned.tasks.map(task => {
+    const { prompt, verdict, missingClauses } = write(task)
+    return {
+      taskId: task.taskId,
+      route: task.kind,
+      candidateIds: task.candidateIds,
+      prompt,
+      verdict,
+      ...(missingClauses.length ? { missingClauses } : {}),
+    }
+  })
+  const promotions = Object.fromEntries(planned.promotions.map(task => {
+    const { prompt, verdict } = write(task)
+    return [task.candidateIds[0], { taskId: task.taskId, prompt, verdict }]
+  }))
+  return { tasks, promotions }
+}
+
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   await main()
 }

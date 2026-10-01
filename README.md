@@ -219,6 +219,7 @@ Non-numbered files are excluded from the automatic scan:
 - `math.md` — `A-x` / `C-x` rules for `/code-review-math`
 - `exception.md` — `EX-x` rules for `/code-review-exception`
 - `workflow-contract.md` — shared execution contract (not a rule module)
+- `verifier-prompt.md` — cross-verification instructions that `scripts/prepare-verification.mjs` turns into one prompt file per verifier task (not a rule module)
 - `catalog.json` — applicability metadata (not a rule module)
 
 ## Shared workflow contract
