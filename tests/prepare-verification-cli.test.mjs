@@ -437,3 +437,27 @@ test('--verify off면 프롬프트도 crossverify.start도 만들지 않는다',
   assert.deepEqual(JSON.parse(out.stdout).verifierTasks, [])
   assert.deepEqual(timelineOf(dir).map(event => event.phase), ['run.start', 'script.start', 'script.done'])
 })
+
+test('--verify exhaustive는 검증 대상이 아니던 후보도 검증 작업으로 만든다', t => {
+  const dir = started(t)
+  const input = join(dir, 'candidates.json')
+  writeFileSync(input, JSON.stringify(withHigh([LOW_ELSEWHERE])), 'utf8')
+  const out = spawnSync('node', [SCRIPT, '--merge-base', 'HEAD', '--dir', dir, '--run', RUN, '--input', input, '--verify', 'exhaustive'],
+    { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+  assert.equal(out.status, 0, out.stderr)
+  const result = JSON.parse(out.stdout)
+  assert.equal(result.counts.verify, 1)
+  assert.equal(result.counts.skipVerify, 0)
+  assert.deepEqual(result.candidates[0].reasons, ['exhaustive'])
+  assert.equal(result.verifierTasks.length, 1)
+  assert.equal(timelineOf(dir).at(-1).phase, 'crossverify.start')
+})
+
+test('--verify에 모르는 모드를 주면 쓸 수 있는 값을 보이고 거부한다', t => {
+  const dir = started(t)
+  const out = spawnSync('node', [SCRIPT, '--merge-base', 'HEAD', '--dir', dir, '--run', RUN, '--verify', 'all'],
+    { input: JSON.stringify({ candidates: [] }), encoding: 'utf8' })
+  assert.equal(out.status, 2)
+  assert.match(out.stderr, /selective/)
+  assert.match(out.stderr, /exhaustive/)
+})

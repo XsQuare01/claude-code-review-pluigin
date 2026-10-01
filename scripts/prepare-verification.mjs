@@ -129,9 +129,16 @@ function eligibilityReasons({ candidate, locationCheck, ownerCollision }) {
   return reasons
 }
 
-/** Decide whether a candidate gets verified at all. Five schema fields plus the two derived signals — no model involved. */
-export function decideEligibility(input) {
+/**
+ * Decide whether a candidate gets verified at all. Five schema fields plus the two derived signals — no model involved.
+ *
+ * `exhaustive` (`--verify exhaustive`) verifies every candidate. A candidate that had a
+ * reason keeps it; one that had none is marked `exhaustive`, so the routed output still
+ * says why each candidate was sent rather than leaving an empty reason list next to VERIFY.
+ */
+export function decideEligibility(input, options = {}) {
   const reasons = eligibilityReasons(input)
+  if (options.exhaustive && reasons.length === 0) reasons.push('exhaustive')
   return { eligibility: reasons.length > 0 ? 'VERIFY' : 'SKIP-VERIFY', reasons }
 }
 
@@ -142,9 +149,9 @@ export function decideEligibility(input) {
  * approximation is deliberately conservative: over-isolating costs tokens,
  * while under-isolating can produce a wrong rejection that no later step undoes.
  */
-export function routeCandidate(input) {
+export function routeCandidate(input, options = {}) {
   const { candidate, locationCheck, ownerCollision } = input
-  const { eligibility, reasons } = decideEligibility(input)
+  const { eligibility, reasons } = decideEligibility(input, options)
   if (eligibility === 'SKIP-VERIFY') return { route: 'none', reasons }
 
   const isolationReasons = []
@@ -217,8 +224,8 @@ export function prepareVerification(candidates, blobs, options = {}) {
   const decided = list.map(candidate => {
     const check = checkLocation(candidate.location, blobs)
     const input = { candidate, locationCheck: check.status, ownerCollision: collisions.has(candidate.candidateId) }
-    const { eligibility, reasons } = decideEligibility(input)
-    const { route } = routeCandidate(input)
+    const { eligibility, reasons } = decideEligibility(input, options)
+    const { route } = routeCandidate(input, options)
     return {
       candidateId: candidate.candidateId,
       ruleId: candidate.ruleId,
@@ -277,6 +284,9 @@ export function prepareVerification(candidates, blobs, options = {}) {
 // --rules <dir>  : the RULES_DIR the producers read (catalog, module docs, verifier
 //                  template, verdict manifest). Defaults to this plugin's review-rules.
 // --verify off   : no verifier prompt files and no `crossverify.start`. Default selective.
+// --verify exhaustive : every candidate is a verification target (reason `exhaustive` when
+//                  it had none); bundle/isolated routing is unchanged. The audit sidecar
+//                  stays the orchestrator's job (contract C-6B).
 //
 // Unless --locations-only or --verify off, one prompt file per verifier task is written to
 // `<d>/.timing/<r>.verify/` and listed as `verifierTasks` / `promotions`, each with the
@@ -482,8 +492,8 @@ async function main() {
   }
   const verifyIndex = argv.indexOf('--verify')
   const verifyMode = verifyIndex === -1 ? 'selective' : argv[verifyIndex + 1]
-  if (!['selective', 'off'].includes(verifyMode)) {
-    process.stderr.write(`--verify는 selective 또는 off다 (받은 값: ${JSON.stringify(verifyMode)}). exhaustive 라우팅은 이 스크립트가 아직 하지 않는다\n`)
+  if (!['selective', 'exhaustive', 'off'].includes(verifyMode)) {
+    process.stderr.write(`--verify는 selective, exhaustive, off 중 하나다 (받은 값: ${JSON.stringify(verifyMode)})\n`)
     process.exit(2)
   }
 
@@ -559,7 +569,7 @@ async function main() {
       : payload.results
         ? candidatesFromResults(payload.results)
         : (payload.candidates ?? [])
-  const result = prepareVerification(candidates, collectBlobs(candidates, gitReaders(mergeBase)), { locationsOnly })
+  const result = prepareVerification(candidates, collectBlobs(candidates, gitReaders(mergeBase)), { locationsOnly, exhaustive: verifyMode === 'exhaustive' })
   if (collected) result.collected = collected
 
   // 검증자 프롬프트는 여기서 파일로 만든다. 오케스트레이터는 그 내용을 넘기기만

@@ -177,6 +177,41 @@ test('a location mismatch is promoted to isolated verification', () => {
   assert.equal(route.route, 'isolated')
 })
 
+// ----------------------------------------------------------- --verify exhaustive
+//
+// The README and the skill promise `exhaustive`: every candidate is a verification
+// target. Verifier prompts are written by this script now, so a mode the script does
+// not route is a mode nobody can run — the orchestrator has no prompt to hand over.
+
+test('exhaustive makes a settled candidate eligible and says why', () => {
+  const input = { candidate: { impact: 'low', confidence: 'high', location: verifiedLocation }, ...settled }
+  assert.deepEqual(decideEligibility(input, { exhaustive: true }), { eligibility: 'VERIFY', reasons: ['exhaustive'] })
+})
+
+test('exhaustive keeps the reasons a candidate already had', () => {
+  const input = { candidate: { impact: 'high', confidence: 'high', category: 'user-malfunction', location: verifiedLocation }, ...settled }
+  assert.deepEqual(decideEligibility(input, { exhaustive: true }).reasons, ['impact-high'])
+})
+
+test('exhaustive still isolates what the anchor file cannot settle', () => {
+  const input = { candidate: { impact: 'low', confidence: 'high', location: { kind: 'deleted', path: 'src/x.ts', lineBefore: 3, quote: 'q' } }, ...settled }
+  assert.equal(routeCandidate(input).route, 'none')
+  assert.equal(routeCandidate(input, { exhaustive: true }).route, 'isolated')
+})
+
+test('exhaustive counts every candidate as a verification target', () => {
+  const candidates = [
+    { candidateId: 'a#1', ruleId: '01-1', impact: 'low', confidence: 'high', location: { kind: 'verified', path: 'src/hooks/use-camera.ts', line: 2, quote: 'if (pending) return' } },
+    { candidateId: 'b#1', ruleId: '01-2', impact: 'high', confidence: 'high', category: 'user-malfunction', location: { kind: 'verified', path: 'src/wide.ts', line: 1, quote: 'first' } },
+  ]
+  const selective = prepareVerification(candidates, blobs)
+  const exhaustive = prepareVerification(candidates, blobs, { exhaustive: true })
+  assert.equal(selective.counts.skipVerify, 1)
+  assert.equal(exhaustive.counts.verify, 2)
+  assert.equal(exhaustive.counts.skipVerify, 0)
+  assert.equal(exhaustive.counts.bundle + exhaustive.counts.isolated, 2)
+})
+
 // ----------------------------------------------------------------- bundling
 
 test('bundles group eligible candidates by anchor file', () => {

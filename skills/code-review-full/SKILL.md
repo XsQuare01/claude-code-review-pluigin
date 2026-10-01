@@ -242,7 +242,7 @@ node "$RULES_DIR/../scripts/prepare-verification.mjs" --merge-base "$MERGE_BASE"
 - 파일 하나를 넘기는 `--input <경로>`(`{"results":[{"source","result"}, …]}`)도 계속 받는다. envelope에는 `source`와 `result`만 있어야 하고 `source`는 규칙 문서 이름이어야 한다 — 어긋나면 스크립트가 거부한다. **셸에 담지 않는다** — payload의 한국어 산문·코드 인용·역슬래시 경로를 인용부호 한 쌍에 넣는 구조는 깨지는 쪽이 정상이다
 - **`candidateId`는 스크립트가 부여한다.** `{ruleId}#{n}` 형식이고 정규화 위치 순서로 매겨지므로, 같은 입력이면 항상 같은 ID가 나오고 규칙 ID로 리포트에서 바로 추적된다
 - 출력은 candidate별 `locationCheck`·`eligibility`·`route`·`impact`·`confidence`·`category`·`location`·`content`(producer 산문 — `title`·`body`와, 있으면 `evidence`·`recommendation`·`reason`)·`memberInstanceIds`(병합된 producer instance id 목록)·있으면 `source`/`sources`(기여한 출처 패스 라벨)와 `bundles`, `counts`, 그리고 검증자 작업 목록 `verifierTasks`·`promotions`(아래 `verifier producer prompt`)와 `--collect`로 모은 모듈 `collected`다
-- **검증 대상이 있으면 스크립트가 `crossverify.start`를 남긴다.** 따로 기록하지 않는다 — 오케스트레이터가 남기던 때 2026-09-30 실행이 검증자 19개가 다 끝난 뒤에야 찍었고, 80분 검증이 "무엇이 돌았는지 기록에 없는 5173초"로 보였다. 검증을 끄는 실행은 `--verify off`를 준다
+- **검증 대상이 있으면 스크립트가 `crossverify.start`를 남긴다.** 따로 기록하지 않는다 — 오케스트레이터가 남기던 때 2026-09-30 실행이 검증자 19개가 다 끝난 뒤에야 찍었고, 80분 검증이 "무엇이 돌았는지 기록에 없는 5173초"로 보였다. 검증을 끄는 실행은 `--verify off`를, 모든 후보를 검증하는 실행은 `--verify exhaustive`를 준다(아래 `--verify` 모드)
 - **coverage 숫자는 이 `counts`를 그대로 옮긴다.** 직접 세지 않는다 — 손으로 센 수치는 `verify + skipVerify = total`을 깨뜨린다
 - **coverage 숫자의 출처를 함께 적는다.** 스크립트를 돌렸으면 `도구 실행 결과`에도 실행을 남기고, 돌리지 않았으면 미실행이라고 적는다. 숫자가 맞더라도 **결정적으로 판정했다고 서술하지 않는다**
 - 플러그인으로 설치된 경우 스크립트는 `RULES_DIR`의 상위에 있다. 경로를 찾지 못하면 그 사실을 `실행 계획`에 적는다
@@ -272,7 +272,7 @@ isolated 11)을 동시에 background dispatch한 결과, 1건만 2분 25초에 �
 | 모드 | 동작 |
 |------|------|
 | `selective` (기본) | eligibility 판정을 적용해 대상만 검증 |
-| `exhaustive` | 모든 candidate를 검증 대상으로. audit sidecar를 **기본 저장**한다 |
+| `exhaustive` | 모든 candidate를 검증 대상으로(`prepare-verification.mjs --verify exhaustive`). audit sidecar를 **기본 저장**한다 |
 | `off` | 위치 대조까지만 수행하고 verifier를 띄우지 않는다 |
 
 `off`를 두는 이유는 위치 대조가 추가 sub-agent 호출 없이 값이 크기 때문이다. 검증을 전부 꺼도 위치 대조는 남긴다.
