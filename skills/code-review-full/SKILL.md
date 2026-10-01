@@ -165,6 +165,8 @@ Trigger 섹션이 있는 모듈(`12`, `14`, `16`, `17`, `18`, `21`)은 diff에 �
   이 에이전트가 셸 없이 일할 수 있는 이유는 3a(3)에 있다. diff를 스스로 뜨지 않고 받아 쓰며, **삭제된 파일의 옛 내용도 그 diff의 `-` 줄에 전부 들어 있다.** 런타임이 도구 제한을 지원하지 않으면 C-6의 대체 경로를 따른다.
 - 적용 대상 모듈마다 별도의 sub-agent 하나를 반드시 유지한다. in-flight 상한은 정확히 4이며, fast review, generic summary, 또는 다른 모듈이 누락된 숫자 모듈을 대체할 수 없다. 특히 `01-fsd.md`와 `20-deletion-regression.md`는 다른 architecture/deletion-regression 요약으로 대체하지 않는다.
 - 각 모듈 상태는 `PENDING → DISPATCHED → COMPLETED or fresh retry → FAILED_ORCHESTRATION` 순서로 기록한다.
+  **이 이름은 실행 타임라인에 쓰지 않는다.** `module.done`의 `status`는 `ok`/`failed` 둘뿐이다(C-9) — `COMPLETED`는 `ok`, `FAILED_ORCHESTRATION`은 `failed`로 적는다. 2026-09-30 실행이 `module.done` 22줄 전부에 `COMPLETED`를 적었고, `--check`는 그 실행을 "성공 0 · 실패 19"로 읽었다.
+- **producer 결과는 받는 즉시 파일로 남긴다.** C-6A validation을 통과하면, `module.done`을 남기기 **전에** producer가 돌려준 JSON을 한 글자도 고치지 않고 `$REPORT_DIR/.timing/$REPORT_BASENAME.<모듈>.json`에 쓴다. `<모듈>`은 `module.done`의 `module`과 같은 값(`01-fsd`, `04-state`, `props`, `math`, `exception`)이다. 결과를 대화에만 들고 있으면 context가 압축될 때 잃는다 — 2026-09-30 실행은 그렇게 잃은 22개를 서브에이전트가 세션 기록에서 다시 긁어 조립했고(13분), 그 과정에서 인용 하나가 잘려 교정에 8.5분이 더 들었다. 파일 없이 `module.done status=ok`를 남기면 `review-timeline.mjs`가 경고한다.
 - no-start, timeout, inactivity timeout, queue expiry, empty/missing result, `Task not found for session` 또는 session loss가 발생하면 해당 모듈은 죽은 세션으로 간주하고, fresh `rule-module-reviewer` background task로 최대 1회만 retry한다. dead/no-event/lost session은 `session_id`로 resume하지 않으며, synchronous task를 background task로 변환하지 않는다.
 - 정상 완료된 응답이 clarification만 요구하는 경우에는 live session을 재사용할 수 있다. 단, no-start, timeout, inactivity timeout, queue expiry, empty/missing result, `Task not found for session`, session loss 클래스는 live session으로 보지 않으며 재사용하지 않는다.
 - 런타임이 first-event 또는 heartbeat 관측을 지원하면 bounded startup window 안에서 첫 이벤트를 확인한다. 현재 task API처럼 completion/error notification만 노출되는 런타임에서는 첫 timeout, expiry, error에 반응하고 같은 session에 두 번째 long wait를 쓰지 않는다.
@@ -208,13 +210,15 @@ Trigger 섹션이 있는 모듈(`12`, `14`, `16`, `17`, `18`, `21`)은 diff에 �
 
 ```
 instanceId 부여
-  → scripts/prepare-verification.mjs        추가 sub-agent 호출 0회
-      위치 대조 · exact dedup + candidateId · ownerCollision
-      eligibility 판정 · bundle/isolated 라우팅 · context bundle 구성
-  → bundle verifier      (in-flight 최대 4, isolated와 공유)
+  → scripts/prepare-verification.mjs --collect   추가 sub-agent 호출 0회
+      모듈별 결과 파일 수집 · 위치 대조 · exact dedup + candidateId · ownerCollision
+      eligibility 판정 · bundle/isolated 라우팅 · 검증자 프롬프트 파일 · crossverify.start 기록
+  → bundle verifier      (in-flight 최대 4, isolated와 공유 · 판정은 작업별 파일로)
   → isolated verifier    (승격분 + bundle이 needs-context로 돌린 것 · 같은 상한)
-  → scripts/tally-verdicts.mjs              추가 sub-agent 호출 0회
-      후보별 마지막 판정 집계 · crossverify.end 기록
+  → scripts/tally-verdicts.mjs --validate        판정 형식 검사 · 어긴 작업의 교정 프롬프트(<taskId>.retry.md)
+  → 교정 verifier        (retry 파일 내용 그대로 · 작업당 1회)
+  → scripts/tally-verdicts.mjs --collect         추가 sub-agent 호출 0회
+      작업별 판정 파일 수집 · 후보별 마지막 판정 집계 · verdicts.json · crossverify.end 기록
   → disposition 적용
   → 10-principles synthesis
   → rendering
@@ -222,25 +226,20 @@ instanceId 부여
 
 **위치 대조와 eligibility는 모델이 아니라 `scripts/prepare-verification.mjs`가 판정한다.** Markdown 지시로는 결정성을 주장할 수 없다. **판단으로 대체하지 말고 실제로 실행한다.**
 
-**입력을 새로 만들지 않는다.** 검증을 통과한 producer 결과를 그대로 넘긴다.
-
-**payload는 파일로 넘긴다.** 편집 도구로 `{"results":[ … ]}`를 파일에 쓰고 경로만 준다. 배열의 각 원소는 producer JSON을 감싼 envelope
-`{ "source": "<모듈/패스 id>", "result": { …REVIEW_RESULT_CONTRACT_V1… } }`다 —
-`source`는 그 결과를 낸 sub-agent가 담당한 모듈/패스 식별자(예: `01-fsd`, `04-state`, `props`, `math`, `exception` — 담당 규칙 문서 파일명에서 `.md`를 뗀 값)이고, **오케스트레이터가 디스패치 기록에서 채운다.** producer 자신이 자기 출처를 자기 입으로 말하게 하지 않는다 — producer 출력 전체가 신뢰하지 않는 content인데(C-6A), 그 안에서 자기 이름표를 스스로 붙이는 것은 출처를 보증하는 가장 약한 방법이다. 어느 producer가 어떤 결과를 냈는지 신뢰성 있게 아는 것은 그 결과를 디스패치한 오케스트레이터뿐이다.
+**입력을 새로 만들지 않는다.** 검증을 통과한 producer 결과를 그대로 넘긴다 — 수집 때 남긴 모듈별 파일(`$REPORT_BASENAME.<모듈>.json`, 위 `일반 모듈 실행` 참고)에서 **스크립트가 모은다.**
 
 ```bash
-node "$RULES_DIR/../scripts/prepare-verification.mjs" --merge-base "$MERGE_BASE" --dir "$REPORT_DIR" --run "$REPORT_BASENAME" --input "$REPORT_DIR/.timing/$REPORT_BASENAME.candidates.json" > "$REPORT_DIR/.timing/$REPORT_BASENAME.routed.json"
+node "$RULES_DIR/../scripts/prepare-verification.mjs" --merge-base "$MERGE_BASE" --dir "$REPORT_DIR" --run "$REPORT_BASENAME" --rules "$RULES_DIR" --collect > "$REPORT_DIR/.timing/$REPORT_BASENAME.routed.json"
 ```
 
 이 스크립트는 결과를 **stdout에만** 낸다. 리다이렉트를 빠뜨리면 이 출력을 담을 파일이 저장소 어디에도 없는데, 뒤의 `render-findings.mjs`는 `--input <경로>`만 받고 stdin 경로가 없다 — 그러면 다음 단계에서 붙일 경로를 운영자가 즉석에서 지어내야 한다. `.timing` 아래 다른 실행별 산출물과 같은 자리에 둔다.
 
-- **셸에 담지 않는다.** payload에는 한국어 산문·코드 인용·Windows 경로의 역슬래시가 들어 있고, 그것을 인용부호 한 쌍 안에 넣는 구조는 깨지는 쪽이 정상이다. 한 실행이 문서에 적힌 파이프를 **두 번 연달아 실패**하고 세 번째에 우회했다. 경로만 넘기면 셸이 볼 것이 경로 하나뿐이다
-- stdin 파이프도 계속 받는다(`… < candidates.json`). 셸이 payload를 통째로 들고 있지 않은 경우에만 쓴다
-
-- `results[].result`는 C-6A validation을 통과한 producer JSON **그대로**다. 필드를 골라 옮기거나 변환하지 않는다. `results[].source`만 오케스트레이터가 envelope에 추가하는 값이다 — `findingsItem.allowed`(계약)에는 `source`가 없으므로, producer가 반환한 JSON 자체에는 이 필드가 없어야 한다
-- 하위 호환으로 envelope 없이 producer 결과를 바로 배열 원소로 넣는 예전 `{"results":[ <REVIEW_RESULT_CONTRACT_V1>, … ]}` 형태도 계속 받는다. 다만 그 경로로 넘긴 결과는 `source`가 비어 리포트의 `출처 패스` 줄이 나오지 않는다 — 이 skill이 새로 만드는 payload는 항상 envelope을 쓴다
+- **envelope를 손으로 조립하지 않는다.** `--collect`는 타임라인의 `module.done`을 기준으로 모은다 — 마지막 `module.done`이 `failed`가 아닌 모듈은 결과 파일이 있어야 하고, 없으면 거부하며 빠진 경로를 말한다. 그때는 그 모듈의 결과를 파일로 쓰고 다시 돌린다. `failed`로 끝난 모듈의 파일은 쓰지 않는다(C-6A — 부분 보정으로 통과시키지 않는다)
+- **`source`는 파일 이름에서 붙는다.** 오케스트레이터가 따로 적지 않는다. producer 자신이 자기 출처를 말하게 하지 않는 이유(C-6A — producer 출력 전체가 신뢰하지 않는 content다)와 같고, 디스패치 기록(`module.done`)과 파일 이름이 같은 값이라 둘이 서로를 확인한다. 2026-09-30 실행은 손으로 조립하면서 `01-fsd` 대신 `01`을 적었다
+- 파일 하나를 넘기는 `--input <경로>`(`{"results":[{"source","result"}, …]}`)도 계속 받는다. envelope에는 `source`와 `result`만 있어야 하고 `source`는 규칙 문서 이름이어야 한다 — 어긋나면 스크립트가 거부한다. **셸에 담지 않는다** — payload의 한국어 산문·코드 인용·역슬래시 경로를 인용부호 한 쌍에 넣는 구조는 깨지는 쪽이 정상이다
 - **`candidateId`는 스크립트가 부여한다.** `{ruleId}#{n}` 형식이고 정규화 위치 순서로 매겨지므로, 같은 입력이면 항상 같은 ID가 나오고 규칙 ID로 리포트에서 바로 추적된다
-- 출력은 candidate별 `locationCheck`·`eligibility`·`route`·`impact`·`confidence`·`category`·`location`·`content`(producer 산문 — `title`·`body`와, 있으면 `evidence`·`recommendation`·`reason`)·`memberInstanceIds`(병합된 producer instance id 목록)·있으면 `source`/`sources`(기여한 출처 패스 라벨)와 `bundles`, 그리고 `counts`다
+- 출력은 candidate별 `locationCheck`·`eligibility`·`route`·`impact`·`confidence`·`category`·`location`·`content`(producer 산문 — `title`·`body`와, 있으면 `evidence`·`recommendation`·`reason`)·`memberInstanceIds`(병합된 producer instance id 목록)·있으면 `source`/`sources`(기여한 출처 패스 라벨)와 `bundles`, `counts`, 그리고 검증자 작업 목록 `verifierTasks`·`promotions`(아래 `verifier producer prompt`)와 `--collect`로 모은 모듈 `collected`다
+- **검증 대상이 있으면 스크립트가 `crossverify.start`를 남긴다.** 따로 기록하지 않는다 — 오케스트레이터가 남기던 때 2026-09-30 실행이 검증자 19개가 다 끝난 뒤에야 찍었고, 80분 검증이 "무엇이 돌았는지 기록에 없는 5173초"로 보였다. 검증을 끄는 실행은 `--verify off`를 준다
 - **coverage 숫자는 이 `counts`를 그대로 옮긴다.** 직접 세지 않는다 — 손으로 센 수치는 `verify + skipVerify = total`을 깨뜨린다
 - **coverage 숫자의 출처를 함께 적는다.** 스크립트를 돌렸으면 `도구 실행 결과`에도 실행을 남기고, 돌리지 않았으면 미실행이라고 적는다. 숫자가 맞더라도 **결정적으로 판정했다고 서술하지 않는다**
 - 플러그인으로 설치된 경우 스크립트는 `RULES_DIR`의 상위에 있다. 경로를 찾지 못하면 그 사실을 `실행 계획`에 적는다
@@ -277,30 +276,16 @@ isolated 11)을 동시에 background dispatch한 결과, 1건만 2분 25초에 �
 
 ### verifier producer prompt
 
-bundle verifier와 isolated verifier는 **같은 prompt 계약**을 쓴다. 단계마다 다른 enum을 두면 호출자가 verifier 종류를 알아야 결과를 해석하게 된다.
+**프롬프트는 `prepare-verification.mjs`가 만든다. 오케스트레이터는 쓰지 않는다.** routed 출력의 `verifierTasks[]`마다 `prompt` 경로에 프롬프트 파일이 있다(`$REPORT_DIR/.timing/$REPORT_BASENAME.verify/`). 지시문의 정본은 `review-rules/verifier-prompt.md`이고, 스크립트가 거기에 verdict manifest 전문(`REVIEW_VERDICT_CONTRACT_V1_MANIFEST`)과 그 작업의 후보·위치 대조 결과·해당 `## NN-x` 조항 본문을 붙인다. bundle verifier와 isolated verifier는 같은 지시를 받는다.
 
-**둘 다 `subagent_type=react-code-review-plugin:rule-module-reviewer`로 띄운다.** verifier는 지적을 추가하지 않지만 지적의 생사를 판정하므로, 코드를 고칠 동기가 생기는 것은 producer와 같다.
+2026-09-30 실행의 오케스트레이터는 이 지시를 자기 형식으로 다시 썼다. manifest도 조항도 빠진 프롬프트를 받은 검증자들은 디스크 전체에서 routed payload를 찾았고, 한 검증자는 거기서 자기 후보의 `impact`·`confidence`를 읽었다 — "확신: 높음"을 보면 검증자가 그쪽으로 기운다. 그래서 1차의 `impact`·`confidence`·`category`·`recommendation`·모듈 라벨은 스크립트가 뺀다.
 
-셸이 필요 없다. 입력은 오케스트레이터가 만들어 넘기는 context bundle이고, `scripts/prepare-verification.mjs`는 오케스트레이터가 돌린다. **merge-base 기준 `deleted` 인용도 그 스크립트가 base blob에서 읽어 bundle에 담는다** — verifier가 직접 조회할 일이 없다. anchor file 밖을 봐야 하는 경우(`usedCrossFileContext`)는 `Read`로 충분하다.
-
-에이전트에 주는 것과 주지 않는 것을 구분한다. **1차의 `impact`·`confidence`·`recommendation`·모듈 라벨은 주지 않는다** — "확신: 높음"을 보면 검증자가 그쪽으로 기운다. 규칙은 모듈 전문이 아니라 해당 `## NN-x` 조항 본문만 준다.
-
-> `REVIEW_VERDICT_CONTRACT_V1_MANIFEST`는 `workflow-contract.md`의 verdict manifest sentinel JSON block 전문을 그대로 주입한 런타임 placeholder입니다. partial token 목록이나 요약본으로 대체하지 마세요.
->
-> `{REVIEW_VERDICT_CONTRACT_V1_MANIFEST}`
->
-> 이 finding을 **기각할 반례나 방어 장치를 찾으세요. 찾지 못했을 때만 유지하세요.** 기본 입장은 반박입니다.
-> 다른 문제를 새로 찾지 마세요. 이 패스에 신규 finding 보고 경로는 없습니다.
-> 응답은 Markdown/코드펜스/서문 없이 `REVIEW_VERDICT_CONTRACT_V1` raw JSON 객체 하나만 반환하세요.
-> 요청받은 `candidateId` **전부에 대해 각각** verdict를 반환하세요. 파일이나 cluster 단위로 한꺼번에 판정하지 마세요.
-> verdict 하나에는 `candidateId`, `disposition`, `evidence`, `location`을 **항상** 넣으세요. `disposition`이 `upheld`여도 넷 다 필요합니다 — `evidence`는 무엇을 읽고 그렇게 판정했는지이고, `location`은 판정 대상 anchor입니다. 유지 판정이라 쓸 것이 없다고 생각되면 그것은 확인하지 않았다는 뜻입니다.
-> verdict의 `location`은 `REVIEW_RESULT_CONTRACT_V1`의 location variant를 그대로 씁니다. 위치를 확인하지 못했으면 `unverified`와 `reason`을 쓰세요. **`unverified`를 금지하는 것은 아래 `rebuttal.location`뿐입니다** — 위치를 확인하지 못한 반박으로 지적을 지울 수는 없기 때문입니다.
-> `severity`는 어떤 depth에도 넣지 마세요. 등급은 판정하지 않습니다.
-> `disposition`이 `rejected`면 `rebuttal`이 필수입니다. 무엇이 이 주장을 막는지와 **그 코드의 위치**를 대세요. 위치를 댈 수 없으면 반박이 아니라 의견이며, 그때는 `rebuttal.kind`를 `other`로 두고 `note`에 사유를 적으세요.
-> `rebuttal.location`은 `verified` 또는 `deleted`만 허용합니다. `unverified`는 허용하지 않습니다.
-> location은 두 형태뿐입니다. `verified`는 `path`·`line`·`quote`(선택 `endLine`)를 HEAD 기준으로, `deleted`는 `path`·`lineBefore`·`quote`(선택 `endLine`)를 merge-base 기준으로 씁니다. `line`과 `lineBefore`를 섞지 말고, 허용되지 않은 key를 넣지 마세요.
-> 이 파일 안에서 닫아 말할 수 없으면 `needs-context`와 `reason`을 쓰세요.
-> isolated verifier는 anchor file 밖을 실제로 봐야 했는지 `usedCrossFileContext`로 보고하세요. 판정에는 영향을 주지 않는 지표 전용 필드입니다.
+- **파일 내용을 그대로 프롬프트로 넘긴다.** 요약하거나 자기 형식으로 감싸 다시 쓰지 않는다. 런타임이 서브에이전트의 파일 읽기를 허용하면 "이 파일을 Read로 읽고 그 지시를 그대로 따르라"는 한 줄과 경로만 넘겨도 된다 — 어느 쪽이든 내용을 고치지 않는다
+- **둘 다 `subagent_type=react-code-review-plugin:rule-module-reviewer`로 띄운다.** verifier는 지적을 추가하지 않지만 지적의 생사를 판정하므로, 코드를 고칠 동기가 생기는 것은 producer와 같다. 이름이 검증처럼 들리는 다른 에이전트(`correctness-reviewer` 등)로 띄우지 않는다 — 그 에이전트는 셸을 가진다. 2026-09-30 실행은 검증자 19개를 `correctness-reviewer`로 띄웠고, 한 검증자는 셸로 다른 에이전트의 세션 기록에서 자기 후보 ID를 검색했다
+- 셸이 필요 없다. **merge-base 기준 `deleted` 인용도 스크립트가 base blob에서 읽어 위치 대조 결과에 담는다** — verifier가 직접 조회할 일이 없다. anchor file 밖을 봐야 하는 경우(`usedCrossFileContext`)는 `Read`로 충분하다
+- **판정은 받는 즉시 파일로 남긴다.** 검증자가 돌려준 JSON을 C-6A와 같은 방식으로 검사한 뒤, 그 작업의 `verdict` 경로(`<taskId>.verdict.json`)에 한 글자도 고치지 않고 쓴다. 모으고 순서를 정하는 일은 `tally-verdicts.mjs --collect`가 한다(아래 `검증 결과 집계`)
+- bundle이 `needs-context`로 돌린 후보는 `promotions[<candidateId>]`의 `prompt`로 isolated verifier를 띄우고, 판정은 그 항목의 `verdict` 경로에 쓴다. 승격 프롬프트를 새로 쓰지 않는다
+- **isolated에서도 `needs-context`인 후보는 C-6B의 `scope-open`이다.** 다시 묻지 않고 `미해결 / 후속 확인`으로 옮긴다. 다른 판정과 모순돼 보이면 그 모순도 거기 함께 적는다 — 결론을 담은 프롬프트로 다시 물으면 그것은 검증이 아니라 유도다. 2026-09-30 실행은 리포트를 조립한 뒤 "이전 결론을 반복하지 말라"는 프롬프트로 다시 물어 판정을 뒤집었다
 
 ### disposition 적용
 
@@ -330,21 +315,26 @@ bundle verifier와 isolated verifier는 **같은 prompt 계약**을 쓴다. 단�
 - **검증 에이전트 실패는 `FAILED orchestration`이 아니다.** 해당 candidate에 `verification-unavailable`을 부여하고 coverage에 건수를 남긴다. 보조 단계의 실패가 전체 리뷰를 실패로 만들면, 새로 붙인 단계가 리뷰 전체의 신뢰성을 떨어뜨린다
 - retry 1회 / in-flight 상한 공유 / 실패 클래스별 건수 기록 — 일반 모듈 정책을 그대로 재사용한다
 - verdict `malformed-output` → C-6A와 동일 (교정 재시도 1회, 두 번째 실패 시 확정). 반환된 `candidateId` 집합이 요청과 다르면 그것도 `malformed-output`이다
+- **형식 검사와 교정 프롬프트는 스크립트가 만든다.** 판정 파일을 다 받으면 `tally-verdicts.mjs --validate --targets <routed>`를 돌린다(기록에는 아무것도 남기지 않는다). 계약을 어긴 작업마다 `<taskId>.retry.md`가 생기고 — 원래 지시에 오류 목록과 직전 응답 원문을 붙인 것이다 — 그 **파일 내용을 그대로** 새 `rule-module-reviewer`에게 넘긴다. 돌아온 JSON으로 같은 판정 파일을 덮어쓴다. 교정 프롬프트를 직접 쓰지 않고, 판정 근거를 요약해 불러 주지 않는다 — 2026-09-30 실행은 세션 재개가 `task-not-found`로 막히자 새 작업에 "이 근거를 보존하라"며 근거를 불러 줬고, 그 판정은 검증자가 아니라 오케스트레이터가 쓴 것이 됐다
 - `exhaustive` release-gate 실행에서 **차단 후보(`impact = high`)의 검증이 실패하면 최종 판정은 `INCONCLUSIVE`** 다. 개별 finding의 차단 여부와 gate 전체의 완결성 판정은 다른 값이다
 
 ### 검증 결과 집계
 
-**`upheld`·`rejected`를 직접 세지 않는다.** 검증 작업이 낸 verdict payload를 파일로 쓰고 집계 스크립트에 넘긴다.
+**`upheld`·`rejected`를 직접 세지 않는다.** 검증자가 낸 verdict payload는 작업마다 `verdict` 경로에 이미 파일로 있다(위 `verifier producer prompt`). 모으는 일도 스크립트가 한다.
 
 ```bash
-node "$RULES_DIR/../scripts/tally-verdicts.mjs" --dir "$REPORT_DIR" --run "$REPORT_BASENAME" --input <verdicts-bundle.json> --input <verdicts-isolated.json> --targets <prepare-verification 출력> --malformed-tasks-corrected <N>
+node "$RULES_DIR/../scripts/tally-verdicts.mjs" --dir "$REPORT_DIR" --run "$REPORT_BASENAME" --rules "$RULES_DIR" --collect --targets "$REPORT_DIR/.timing/$REPORT_BASENAME.routed.json"
 ```
 
-- **이 스크립트가 `crossverify.end`를 남긴다.** 같은 줄을 따로 기록하지 않는다
+- **이 스크립트가 `crossverify.end`를 남긴다.** 같은 줄을 따로 기록하지 않는다. 수치를 바로잡으려고 다시 돌릴 때는 `--note <사유>`를 준다 — 사유 없는 두 번째 `crossverify.end`는 `--check`가 "판정을 다시 받았다"로 짚는다
+- **판정 파일을 손으로 합치지 않는다.** `--collect`는 bundle 작업 → isolated 작업 → 승격 작업 순서로 읽는다. 후보별로 마지막 판정만 세므로, bundle이 `needs-context`로 돌리고 isolated가 다시 판정한 후보가 두 번 세어지지 않는다. 2026-09-30 실행은 서브에이전트가 세션 기록에서 판정을 긁어 파일 두 개를 만들었고(17분), 그 파일을 렌더러가 읽지 못해 모양을 다시 바꿨다(5분)
+- 모은 판정은 `$REPORT_BASENAME.verdicts.json` 한 파일로 남는다(stdout의 `verdictsFile`). 렌더러의 `--verdicts`에는 이 파일을 준다
+- 판정 파일이 없는 작업은 검증자가 결과를 내지 못한 것이다. 스크립트는 멈추지 않고 그 작업 이름을 알리며, 그 후보는 `noVerdict`로 센다(C-6B `verification-unavailable`)
 - **`--targets`를 빠뜨리지 않는다.** 판정을 받지 못한 후보를 개수가 아니라 ID로 센다. 개수만 맞추면 대상 밖 후보의 판정이 빠진 대상을 가리는데, 한 실행에서 verifier 타임아웃으로 판정을 못 받은 3건이 기록에서 통째로 사라진 적이 있다
-- `--input`을 준 순서가 정본 순서다. 후보별로 마지막 판정만 세므로, bundle이 `needs-context`로 돌리고 isolated가 다시 판정한 후보가 두 번 세어지지 않는다
+- 판정 파일을 직접 넘기는 `--input <파일>`(여러 번, 준 순서가 정본 순서)도 계속 받는다. 받는 모양은 payload 하나, 그 배열, `{"tasks":[…]}`이고 렌더러도 같은 규칙으로 읽는다
 - coverage 숫자는 이 출력을 그대로 옮긴다. 한 실행이 손으로 세어 `upheld 13 / rejected 3`으로 적고 44초 뒤 `upheld 12 / rejected 4`로 정정했다 — 후보 수는 스크립트가 세면서 검증 결과만 눈으로 세고 있었다
-- `--malformed-tasks-corrected`는 **verdict가 아니라 verifier task 수**다. verdict payload가 모르는 dispatch 쪽 사실이라 여기서 넘긴다
+- `--collect`는 판정 파일도 계약대로 검사한다. 교정 뒤에도 어긴 판정은 세지 않고 그 작업을 알리며, 그 후보는 `noVerdict`다(C-6A — 두 번째 `malformed-output`은 확정 실패). **교정한 작업 수(`malformedTasksCorrected`)는 `<taskId>.retry.md`가 있는 작업을 스크립트가 센다** — verdict가 아니라 verifier task 수다. `--input` 경로에서만 `--malformed-tasks-corrected <N>`으로 넘긴다
+- **교차검증은 synthesis보다 먼저 끝낸다.** synthesis는 반박된 지적을 입력에서 빼므로(C-6B), `synthesis.start` 뒤에 판정을 다시 받으면 synthesis의 입력과 최종 판정이 어긋난다. `--check`가 그 기록을 문제로 짚는다
 
 ## 리포팅
 - 문서 골격(섹션 이름·순서·헤딩 레벨)은 `workflow-contract.md` C-7의 **문서 골격** 표를 따른다. 매 실행마다 다른 골격을 만들지 않는다.
@@ -363,7 +353,7 @@ node "$RULES_DIR/../scripts/tally-verdicts.mjs" --dir "$REPORT_DIR" --run "$REPO
 - 리포트를 저장하고 `run.end`를 남긴 뒤 `review-timeline.mjs --check`를 돌린다. 종료 코드 1은 리뷰 실패가 아니지만, 지적된 빈 곳은 `실행 타임라인` 섹션에 함께 적는다 (C-9).
 - 개별 패스의 구조화 결과는 출력 전에 임의 축약하거나 버리지 않는다. aggregation은 parsed field를 유지한 채 병합·정렬만 하고, 최종 헤딩/섹션/표현은 renderer가 새로 만든다.
 - 같은 규칙 ID로 finding이 둘 이상이면 C-7에 따라 `17-3 (1/2)` 형태로 순번을 붙인다.
-- 패스에 적용 범위가 없으면 패스 이름, 사유, 그리고 `SKIPPED`가 비차단임을 명시해 `SKIPPED`로 출력한다.
+- 패스에 적용 범위가 없으면 패스 이름, 사유, 그리고 `SKIPPED`가 비차단임을 명시해 `SKIPPED`로 출력한다. **특수 패스(Props·수학·예외)의 SKIPPED는 실행 계획 파일(`--planned`)의 `skipped`에 그 패스 이름으로 적는다** — `{"module":"math","reasonCode":"…","reason":"…"}`. 렌더러가 그 사유를 `특수 패스` 절의 그 자리에 옮기고, 지적이 0건인 패스에는 "지적 없음."을 찍는다. **건너뛴 패스의 결과 파일을 만들지 않는다** — 2026-09-30 실행은 SKIPPED인 수학 패스에 빈 `math.json`을 써 두었고, 리포트에는 Props(실행·0건)와 수학(SKIPPED)이 모두 빠졌다. 특수 패스가 하나라도 건너뛰어졌으면 `--planned`를 반드시 준다. **렌더러는 `--collect`가 남긴 `collected.sources`와 대조한다** — 지적이 없는데 결과 파일도 수집되지 않은 모듈·패스는 "지적 없음."이 아니라 "결과 없음"으로 찍힌다. 그 표시는 실행이 실패했거나 결과가 빠졌다는 뜻이므로, `실행 계획`에 그 모듈의 실패를 적는다(`FAILED orchestration`).
 - 모든 패스가 끝난 뒤에는 사용자가 다른 언어를 명시하지 않은 한 한국어로 전체 요약 리포트를 출력한다.
 - 요약 저장은 `workflow-contract.md` C-7을 따른다 (`workflow-name`은 `full`).
 - 프로젝트가 이미 다른 문서 저장 관례를 따르고 있으면 절대 경로를 강제하지 않는다.
@@ -379,7 +369,7 @@ node "$RULES_DIR/../scripts/tally-verdicts.mjs" --dir "$REPORT_DIR" --run "$REPO
 ```bash
 node "$RULES_DIR/../scripts/render-findings.mjs" \
      --input "$REPORT_DIR/.timing/$REPORT_BASENAME.routed.json" \
-     [--verdicts <verdicts-bundle.json 경로> --verdicts <verdicts-isolated.json 경로>] \
+     [--verdicts "$REPORT_DIR/.timing/$REPORT_BASENAME.verdicts.json"] \
      --phase-high <active-deletion|rollout-shadow> \
      --phase-low <active-deletion|rollout-shadow> \
      --verification-state <ran|disabled> \
@@ -388,9 +378,11 @@ node "$RULES_DIR/../scripts/render-findings.mjs" \
      [--planned <modules-planned 페이로드 경로>]
 ```
 
+**교차검증을 끝낸 뒤에 렌더한다.** `render.start`를 남긴 뒤 판정을 다시 받으면 이미 그린 지적과 판정이 어긋나고, `review-timeline.mjs --check`가 그 기록을 문제로 짚는다.
+
 출력을 두 섹션 자리에 그대로 붙인다. 같은 명령이 실행마다 다른 모양의 지적을 냈고, 규칙은 이미 계약에 다 있었는데도 그랬다 — 문서가 부탁하는 동안에는 지켜지지 않는다. **`--phase-high`와 `--phase-low`는 별개 값이다.** phase는 전역이 아니라 `impact`별 설정이므로(`workflow-contract.md`의 `deletionPhase`), high가 아직 `rollout-shadow`인 동안 low만 `active-deletion`으로 옮기는 것이 정상 구성이다. 둘 다 기본값이 없다 — 반박된 finding의 처리가 갈리고 그 값이 차단 판정에 걸리므로, 조용히 틀린 쪽으로 도는 것보다 멈추는 편이 낫다.
 
-**`--verification-state`도 기본값이 없다.** `ran`은 교차검증이 실제로 돌았다는 뜻이고, `disabled`는 이번 실행에서 교차검증을 껐다는 뜻이다 — 계약(C-6B)이 "검증을 끈 실행"과 "검증이 깨진 실행"을 가르는 것과 같은 이유로, 이 값을 `--verdicts` 유무로 추측하지 않는다. `ran`이면 후보별 판정에 따라 `대상 아님`·`유지`·`반박됨 — 관찰 중` 등으로 갈리고, `disabled`면 판정 데이터(누가 반박했는지)는 보지 않는다 — 하지만 **eligibility까지 무시하지는 않는다.** disposition 표(C-6B)는 `verification-disabled`를 "검증을 끈 실행의 **검증 대상**"에만 준다: SKIP-VERIFY였던 후보는 검증을 껐든 켰든 애초에 대상이 아니었으므로 `대상 아님`을 그대로 유지하고, VERIFY 대상이었던 후보에만 `꺼짐`을 찍는다. `--verdicts`는 `ran`일 때만 주고, `disabled`에서는 애초에 판정 파일이 없으므로 생략한다 — 준 순서가 정본 순서이므로 `tally-verdicts.mjs`에 넘긴 순서(bundle 다음 isolated)와 같게 둔다. `disabled`에서 `--verdicts`를 함께 주면 렌더러가 거부한다(모순된 두 신호). `--planned`는 `실행 계획`에서 건너뛴/미확인 모듈이 있을 때만 주고, 없으면 생략한다.
+**`--verification-state`도 기본값이 없다.** `ran`은 교차검증이 실제로 돌았다는 뜻이고, `disabled`는 이번 실행에서 교차검증을 껐다는 뜻이다 — 계약(C-6B)이 "검증을 끈 실행"과 "검증이 깨진 실행"을 가르는 것과 같은 이유로, 이 값을 `--verdicts` 유무로 추측하지 않는다. `ran`이면 후보별 판정에 따라 `대상 아님`·`유지`·`반박됨 — 관찰 중` 등으로 갈리고, `disabled`면 판정 데이터(누가 반박했는지)는 보지 않는다 — 하지만 **eligibility까지 무시하지는 않는다.** disposition 표(C-6B)는 `verification-disabled`를 "검증을 끈 실행의 **검증 대상**"에만 준다: SKIP-VERIFY였던 후보는 검증을 껐든 켰든 애초에 대상이 아니었으므로 `대상 아님`을 그대로 유지하고, VERIFY 대상이었던 후보에만 `꺼짐`을 찍는다. `--verdicts`는 `ran`일 때만 주고, `disabled`에서는 애초에 판정 파일이 없으므로 생략한다 — `tally-verdicts.mjs --collect`가 정본 순서로 모아 남긴 `verdicts.json`을 준다. 판정 파일을 직접 넘길 때는 `tally-verdicts.mjs`에 넘긴 순서(bundle 다음 isolated)와 같게 둔다. 두 스크립트는 같은 로더(`scripts/lib/verdicts.mjs`)로 판정 파일을 읽으므로 tally가 받은 모양은 렌더러도 받고, 판정 목록을 찾지 못하는 파일은 둘 다 거부한다 — 2.14.0까지 렌더러는 `{"tasks":[…]}`를 판정 0건으로 읽어 검증 대상 전부를 `검증 실패`로 찍을 수 있었다. `disabled`에서 `--verdicts`를 함께 주면 렌더러가 거부한다(모순된 두 신호). `--planned`는 `실행 계획`에서 건너뛴/미확인 모듈이 있을 때만 주고, 없으면 생략한다.
 
 **`ran`일 때 `needs-context`로 판정된 finding은 상세 지적에서 빠지고 stderr 알림으로 나온다.** 렌더러는 `미해결 / 후속 확인` 섹션을 쓰지 않으므로, 그 알림에 실린 내용을 실제로 그 섹션에 옮겨 적는다 — 옮겨 적지 않으면 그 finding은 리포트 어디에도 없는 채로 사라진다.
 

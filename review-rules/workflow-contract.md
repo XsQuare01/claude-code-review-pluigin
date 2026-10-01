@@ -343,11 +343,12 @@ Verification coverage: 대상 10 중 7 검증 … · counts 출처: 미실행 (�
 
 ```
 node <RULES_DIR>/../scripts/tally-verdicts.mjs --dir <리포트 디렉터리> --run <리포트 basename> \
-     --input verdicts-bundle.json --input verdicts-isolated.json \
-     --targets <prepare-verification 출력> [--malformed-tasks-corrected N]
+     --collect --targets <prepare-verification 출력> [--malformed-tasks-corrected N]
 ```
 
-- 입력은 `REVIEW_VERDICT_CONTRACT_V1` payload 하나, 그 배열, 또는 `{ "tasks": [ … ] }`다
+- **`--collect`는 작업별 판정 파일을 모은다.** `prepare-verification.mjs`가 작업마다 판정 파일 자리(`verifierTasks[].verdict`, `promotions[].verdict`)를 정하고, 오케스트레이터는 검증자가 돌려준 JSON을 받는 즉시 그 자리에 그대로 쓴다. 읽는 순서는 bundle 작업 → isolated 작업 → 승격 작업이다. 모은 판정은 `<리포트 basename>.verdicts.json` 한 파일로 남고 렌더러가 그 파일을 읽는다. 판정 파일이 없는 작업은 `noVerdict`로 세고 작업 이름을 알린다
+- **`--validate`는 작업별 판정 파일을 계약과 요청한 candidateId 집합에 맞춰 보고, 어긴 작업마다 교정 프롬프트(`<taskId>.retry.md`: 원래 지시 + 오류 목록 + 직전 응답 원문)를 만든다.** 기록은 남기지 않는다. 계약 검사는 `validate-rules.mjs`와 같은 함수(`scripts/lib/contract-validate.mjs`)다. `--collect`도 같은 검사를 하고, 교정 뒤에도 어긴 판정은 세지 않으며, 교정한 작업 수는 retry 파일로 센다
+- 판정 파일을 직접 넘기는 `--input`도 받는다. 받는 모양은 `REVIEW_VERDICT_CONTRACT_V1` payload 하나, 그 배열, 또는 `{ "tasks": [ … ] }`다 — **`render-findings.mjs`도 같은 로더(`scripts/lib/verdicts.mjs`)로 읽는다.** 2.14.0까지 렌더러는 최상위 `verdicts`만 봐서, tally가 센 `{ "tasks": [ … ] }` 파일을 판정 0건으로 읽었다
 - **`--targets`에 `prepare-verification.mjs`의 출력을 넘긴다.** 판정을 받지 못한 후보를 개수가 아니라 ID로 가려내므로, 대상 밖 후보의 판정이 빠진 대상을 가리지 못한다. 넘기지 않으면 뺄셈으로만 세고 그 한계가 `note`로 기록에 남는다
 - **`--input`을 준 순서가 정본 순서다.** 후보별로 마지막 판정만 세고, 뒤집힌 건수는 `reverdicted`로 따로 낸다
 - 이 스크립트가 `crossverify.end`를 직접 남긴다. `countsFrom`이 그 줄에 함께 남으므로, 손으로 센 실행과 구분된다
@@ -1120,17 +1121,21 @@ UTF-16 파일도 읽는다 — PowerShell 5.1의 `Set-Content -Encoding UTF8`은
 | `modules.planned` | 적용 모듈 확정(C-3) | `candidates`, `applied` · `skipped`, `unknown`(중첩, `--data-file`) |
 | `dispatch.start` | **첫 sub-agent를 실제로 띄운 직후** | `modules`, `inflight` |
 | `module.start` | **모듈 하나를 띄운 직후** | `module`, `attempt`, `taskId`, (재시도면) `retryOf` |
-| `module.done` | **모듈 하나가 끝날 때마다** | `module`, `attempt`, `status`(ok/failed), `findings`, `failureClass`, `taskId`, (있으면) `tokensIn`·`tokensOut` |
-| `dispatch.end` | 전부 수집 후 | `terminalOk`, `terminalFailed`(최종 모듈 단위) · `attemptsTotal`, `attemptsFailed`(시도 단위) · `attemptFailureClasses`(중첩, `--data-file`), (있으면) `tokensIn`·`tokensOut` |
+| `module.done` | **모듈 하나가 끝날 때마다** (full은 결과 파일을 먼저 쓴 뒤) | `module`, `attempt`, `status`(**`ok`/`failed`만** — SKILL의 상태 이름 `COMPLETED`가 아니다), `findings`, `failureClass`, `taskId`, (있으면) `tokensIn`·`tokensOut` |
+| `dispatch.end` | 전부 수집 후 | `terminalOk`, `terminalFailed`(최종 모듈 단위) · `attemptsTotal`, `attemptsFailed`(시도 단위) — **이 넷은 스크립트가 `module.done`에서 센다.** 넘기지 않아도 되고, 넘긴 값이 기록과 다르면 경고하고 센 값을 남긴다 · `attemptFailureClasses`(중첩, `--data-file`), (있으면) `tokensIn`·`tokensOut` |
 | `script.start` | `prepare-verification.mjs` 진입 직후 (스크립트가 직접 남긴다) | `script` |
 | `script.done` | `prepare-verification.mjs` 실행 후 | `ran`, `counts`(중첩, 스크립트가 직접 남긴다) |
 | `tool.start` | **도구 하나를 돌리기 직전** | `name`, (재시도면) `attempt` |
 | `tool.done` | lint/typecheck/test를 돌린 직후 | `name`, `exit`, `treeSha` · `failedNow`, `failedBaseline`(재지 못했으면 `null`) · `failing`(중첩, `--data-file`) · (재시도면) `attempt` |
-| `crossverify.start` / `.end` | 교차검증 패스 | `targets` / `upheld`, `rejected`, `needsContext`, `noVerdict`, `countsFrom`, (있으면) `malformedTasksCorrected`·`tokensIn`·`tokensOut` |
-| `synthesis.start` / `.end` | synthesis 패스 | `clusters`, (있으면) `tokensIn`·`tokensOut` |
+| `crossverify.start` / `.end` | 교차검증 패스 — 시작은 `prepare-verification.mjs`가 검증 작업을 만든 직후, 끝은 `tally-verdicts.mjs`가 **직접 남긴다** | `targets` / `upheld`, `rejected`, `needsContext`, `noVerdict`, `countsFrom`, (있으면) `malformedTasksCorrected`·`tokensIn`·`tokensOut` |
+| `synthesis.start` / `.end` | synthesis 패스 | `findings` / `clusters`, (있으면) `tokensIn`·`tokensOut` |
 | `render.start` | **문서를 쓰기 직전** | `findings`(중복 제거 후) |
 | `render.wrote` | 파일을 쓴 직후 | `path`, `lines`, (있으면) `tokensIn`·`tokensOut` |
 | `run.end` | 마지막 | `verdict`, `usageSource`, (있으면) `tokensIn`·`tokensOut`·`tokensCacheRead`·`costUsd` |
+
+**교차검증은 시작과 끝이 짝을 이루고, 판정을 입력으로 쓰는 단계(`synthesis.start`·`render.start` 중 먼저 온 것)보다 앞에서 끝난다.** `--check`는 시작 없이 남은 끝, 끝나지 않은 시작, 그 단계 뒤의 교차검증 기록을 문제로 짚는다. 같은 날 다른 실행은 `synthesis.start` 뒤에 판정 하나를 다시 받아 유지를 반박으로 바꿨다. 2026-09-30 실행이 시작 하나에 끝 둘을 남겼고, 두 번째 끝은 리포트를 조립하다 판정 하나를 다시 받아 집계를 바꾼 것이었다. 잘못 센 끝을 바로잡는 줄은 예외다 — 앞 끝 바로 뒤에 `note`를 달아 다시 쓴다(append 전용 기록의 정정).
+
+**full 워크플로우의 `module.done`은 결과 파일 뒤에 온다.** producer 결과는 C-6A validation을 통과하면 곧바로 `<리포트 basename>.<module>.json`에 그대로 쓰이고, `prepare-verification.mjs --collect`가 그 파일에서 검증 입력을 모은다. 결과 파일 없이 `status: ok`를 남기면 스크립트가 경고한다 — 결과를 대화에만 들고 있던 2026-09-30 실행은 context 압축으로 그것을 잃었다.
 
 **`module`에는 번호가 아니라 모듈 파일 이름을 적는다** — `review-rules/03-react-rules.md`면
 `03-react-rules`, `review-rules/20-deletion-regression.md`면 `20-deletion-regression`이다.
