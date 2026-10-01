@@ -26,7 +26,8 @@ export function requireStartedTimeline(dir, run) {
     process.stderr.write(`--dir와 --run이 필요하다. 실행 타임라인(C-9) 없이 진행하지 않는다.\n먼저: ${HOW}\n`)
     process.exit(2)
   }
-  if (/[\/]/.test(run)) {
+  // 역슬래시도 막는다 — Windows에서는 경로 구분자다. preflight·review-timeline과 같은 검사다.
+  if (/[\\/]/.test(run)) {
     process.stderr.write(`--run must be a bare basename, got ${JSON.stringify(run)}\n`)
     process.exit(2)
   }

@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { dirname, isAbsolute, join, resolve, sep } from 'node:path'
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
 import { markedBlock } from './lib/contract-blocks.mjs'
@@ -577,7 +577,9 @@ async function main() {
   let written = { tasks: [], promotions: {} }
   if (!locationsOnly) {
     if (verifyMode !== 'off') {
-      written = writeVerifierTasks({ result, rulesDir, mergeBase, outDir: resolve(dir, '.timing', `${run}.verify`), fail })
+      const outDir = verifyDirOf(dir, run)
+      if (outDir.error) fail(outDir.error)
+      written = writeVerifierTasks({ result, rulesDir, mergeBase, outDir: outDir.path, fail })
     }
     result.verifierTasks = written.tasks
     result.promotions = written.promotions
@@ -655,6 +657,23 @@ export function collectResultFiles({ events, sourceNames, pathOf, read }) {
     collected.sources.push(name)
   }
   return { payload: { results }, problems, warnings, collected }
+}
+
+/**
+ * 검증자 프롬프트 디렉터리(`<dir>/.timing/<run>.verify`)를 정한다.
+ *
+ * 이 디렉터리는 실행마다 **재귀로 지우고** 다시 만든다. 그래서 지우기 전에 경로가
+ * `.timing` 안인지 본다. `--run`의 구분자 검사만으로는 부족하다 — Windows에서
+ * `D:evil`은 구분자가 없는데도 다른 드라이브로 풀린다.
+ */
+export function verifyDirOf(dir, run) {
+  const timing = resolve(dir, '.timing')
+  const path = resolve(timing, `${run}.verify`)
+  const rel = relative(timing, path)
+  if (!rel || rel.startsWith('..') || isAbsolute(rel)) {
+    return { error: `검증자 프롬프트 디렉터리가 ${timing} 밖으로 풀린다: ${path} — --run은 경로가 아니라 리포트 basename이어야 한다` }
+  }
+  return { path }
 }
 
 /**

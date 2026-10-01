@@ -14,6 +14,7 @@ import {
   collectBlobs,
   resolveWithinRoot,
   candidatesFromLocations,
+  verifyDirOf,
 } from '../scripts/prepare-verification.mjs'
 import { renderFinding } from '../scripts/render-findings.mjs'
 
@@ -210,6 +211,21 @@ test('exhaustive counts every candidate as a verification target', () => {
   assert.equal(exhaustive.counts.verify, 2)
   assert.equal(exhaustive.counts.skipVerify, 0)
   assert.equal(exhaustive.counts.bundle + exhaustive.counts.isolated, 2)
+})
+
+// ------------------------------------------------------- verifier prompt directory
+
+test('the verifier prompt directory resolves inside .timing', () => {
+  const base = resolve('reports')
+  assert.equal(verifyDirOf(base, 'code-review-full-x').path, resolve(base, '.timing', 'code-review-full-x.verify'))
+})
+
+test('a run name that resolves outside .timing is refused before anything is wiped', { skip: process.platform !== 'win32' && 'drive-relative names exist only on Windows' }, () => {
+  // No separator, yet resolve() puts `D:evil.verify` on another drive. The directory is
+  // removed recursively before it is rebuilt, so the check has to come first.
+  const outcome = verifyDirOf(resolve('reports'), 'D:evil')
+  assert.equal(outcome.path, undefined)
+  assert.match(outcome.error, /\.timing/)
 })
 
 // ----------------------------------------------------------------- bundling
