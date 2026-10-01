@@ -330,6 +330,7 @@ node "$RULES_DIR/../scripts/tally-verdicts.mjs" --dir "$REPORT_DIR" --run "$REPO
 - **판정 파일을 손으로 합치지 않는다.** `--collect`는 bundle 작업 → isolated 작업 → 승격 작업 순서로 읽는다. 후보별로 마지막 판정만 세므로, bundle이 `needs-context`로 돌리고 isolated가 다시 판정한 후보가 두 번 세어지지 않는다. 2026-09-30 실행은 서브에이전트가 세션 기록에서 판정을 긁어 파일 두 개를 만들었고(17분), 그 파일을 렌더러가 읽지 못해 모양을 다시 바꿨다(5분)
 - 모은 판정은 `$REPORT_BASENAME.verdicts.json` 한 파일로 남는다(stdout의 `verdictsFile`). 렌더러의 `--verdicts`에는 이 파일을 준다
 - 판정 파일이 없는 작업은 검증자가 결과를 내지 못한 것이다. 스크립트는 멈추지 않고 그 작업 이름을 알리며, 그 후보는 `noVerdict`로 센다(C-6B `verification-unavailable`)
+- **승격 판정은 bundle이 `needs-context`로 돌린 후보에만 쓰인다.** 그 후보의 승격 판정이 없거나 교정 뒤에도 계약을 어겼으면, 스크립트는 bundle의 `needs-context`도 최종 판정으로 쓰지 않고 `noVerdict`로 센다 — `미해결 / 후속 확인`은 isolated에서도 닫히지 않은 후보의 자리다. bundle이 이미 닫은 후보의 승격 판정은 세지 않고 알린다(계약에 없는 재검증)
 - **`--targets`를 빠뜨리지 않는다.** 판정을 받지 못한 후보를 개수가 아니라 ID로 센다. 개수만 맞추면 대상 밖 후보의 판정이 빠진 대상을 가리는데, 한 실행에서 verifier 타임아웃으로 판정을 못 받은 3건이 기록에서 통째로 사라진 적이 있다
 - 판정 파일을 직접 넘기는 `--input <파일>`(여러 번, 준 순서가 정본 순서)도 계속 받는다. 받는 모양은 payload 하나, 그 배열, `{"tasks":[…]}`이고 렌더러도 같은 규칙으로 읽는다
 - coverage 숫자는 이 출력을 그대로 옮긴다. 한 실행이 손으로 세어 `upheld 13 / rejected 3`으로 적고 44초 뒤 `upheld 12 / rejected 4`로 정정했다 — 후보 수는 스크립트가 세면서 검증 결과만 눈으로 세고 있었다

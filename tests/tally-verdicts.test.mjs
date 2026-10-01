@@ -418,3 +418,59 @@ test('--collect는 교정 뒤에도 계약을 어긴 판정을 세지 않고, �
   assert.match(out.stderr, /isolated-A-8-1/)
   assert.equal(timelineOf(dir).at(-1).malformedTasksCorrected, 2)
 })
+
+// ── 승격은 bundle의 needs-context에만 따른다 ────────────────────────────────
+//
+// bundle이 `needs-context`로 돌린 후보는 isolated로 다시 판정받아야 한다(SKILL).
+// 승격 판정이 없을 때 bundle의 `needs-context`를 최종 판정으로 세면, 계약이 isolated에서도
+// 닫히지 않은 후보에만 주는 `미해결 / 후속 확인`으로 그려지고 판정 없음은 0으로 보인다 —
+// 해야 할 검증을 건너뛴 사실이 어디에도 남지 않는다. 반대로 bundle이 이미 닫은 후보의
+// 승격 판정을 세면, 그것은 계약에 없는 재검증으로 판정을 뒤집는 경로가 된다.
+
+test('--collect는 bundle의 needs-context에 승격 판정이 없으면 판정 없음으로 세고 그 후보를 알린다', t => {
+  const dir = started(t)
+  const { routedPath, answer } = verifyTasks(dir)
+  answer('bundle-1', verdict('04-3#1', 'needs-context'))
+  answer('isolated-A-8-1', verdict('A-8#1', 'upheld'))
+  const out = collectTally(dir, ['--targets', routedPath])
+  assert.equal(out.status, 0, out.stderr)
+  const counts = JSON.parse(out.stdout)
+  assert.equal(counts.needsContext, 0)
+  assert.equal(counts.upheld, 1)
+  assert.equal(counts.noVerdict, 1)
+  assert.match(out.stderr, /승격/)
+  assert.match(out.stderr, /04-3#1/)
+  // 렌더러가 읽을 파일에도 bundle의 needs-context가 남지 않아야 둘이 같은 결론을 낸다.
+  const combined = JSON.parse(readFileSync(counts.verdictsFile, 'utf8'))
+  const ids = combined.tasks.flatMap(payload => payload.verdicts.map(entry => entry.candidateId))
+  assert.deepEqual(ids, ['A-8#1'])
+})
+
+test('--collect는 승격 판정이 계약을 어겼으면 bundle의 needs-context도 최종 판정으로 쓰지 않는다', t => {
+  const dir = started(t)
+  const { routedPath, answer } = verifyTasks(dir)
+  answer('bundle-1', verdict('04-3#1', 'needs-context'))
+  answer('isolated-A-8-1', verdict('A-8#1', 'upheld'))
+  answer('isolated-04-3-1', { ...verdict('04-3#1', 'upheld'), location: 'src/a.ts:1' })
+  const out = collectTally(dir, ['--targets', routedPath])
+  assert.equal(out.status, 0, out.stderr)
+  const counts = JSON.parse(out.stdout)
+  assert.equal(counts.needsContext, 0)
+  assert.equal(counts.noVerdict, 1)
+  assert.match(out.stderr, /isolated-04-3-1/)
+})
+
+test('--collect는 bundle이 이미 닫은 후보의 승격 판정을 세지 않고 그 사실을 알린다', t => {
+  const dir = started(t)
+  const { routedPath, answer } = verifyTasks(dir)
+  answer('bundle-1', verdict('04-3#1', 'upheld'))
+  answer('isolated-A-8-1', verdict('A-8#1', 'upheld'))
+  answer('isolated-04-3-1', verdict('04-3#1', 'rejected'))
+  const out = collectTally(dir, ['--targets', routedPath])
+  assert.equal(out.status, 0, out.stderr)
+  const counts = JSON.parse(out.stdout)
+  assert.equal(counts.upheld, 2)
+  assert.equal(counts.rejected, 0)
+  assert.equal(counts.reverdicted, 0)
+  assert.match(out.stderr, /isolated-04-3-1/)
+})
