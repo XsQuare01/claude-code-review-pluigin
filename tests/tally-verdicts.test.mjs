@@ -419,6 +419,21 @@ test('--collect는 교정 뒤에도 계약을 어긴 판정을 세지 않고, �
   assert.equal(timelineOf(dir).at(-1).malformedTasksCorrected, 2)
 })
 
+test('--validate는 한 작업이 같은 candidateId를 두 번 판정하면 형식 위반으로 본다', t => {
+  // 집합으로만 맞춰 보면 [A 유지, A 반박]도 요청 [A]와 같아 보이고, 집계에서는
+  // 나중 판정이 조용히 이긴다. 검증자 하나가 한 후보에 두 결론을 낸 것은 판정이 아니다.
+  const dir = started(t)
+  const { routedPath, answer } = withPrompts(dir)
+  answer('bundle-1', verdict('04-3#1', 'upheld'), verdict('04-3#1', 'rejected'))
+  answer('isolated-A-8-1', verdict('A-8#1', 'upheld'))
+  const out = validateRun(dir, routedPath)
+  assert.equal(out.status, 1)
+  const [entry] = JSON.parse(out.stdout).malformed
+  assert.equal(entry.taskId, 'bundle-1')
+  assert.match(entry.problems.join('\n'), /04-3#1/)
+  assert.match(entry.problems.join('\n'), /두 번 이상/)
+})
+
 // ── 승격은 bundle의 needs-context에만 따른다 ────────────────────────────────
 //
 // bundle이 `needs-context`로 돌린 후보는 isolated로 다시 판정받아야 한다(SKILL).
