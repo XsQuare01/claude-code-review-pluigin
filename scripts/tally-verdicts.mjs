@@ -24,10 +24,14 @@
 // 든 payload를 셸 인용부호 하나에 넣는 구조는 깨지는 쪽이 정상이다.
 
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
+import { markedJson } from './lib/contract-blocks.mjs'
+import { validateVerdictPayload } from './lib/contract-validate.mjs'
 import { lastPhase, logPhase, requireStartedTimeline } from './lib/run-record.mjs'
-import { collectVerdicts } from './lib/verdicts.mjs'
+import { checkTaskVerdict, collectVerdicts } from './lib/verdicts.mjs'
+import { buildRetryPrompt } from './lib/verifier-tasks.mjs'
 
 // C-6B의 닫힌 목록이다. 목록 밖 값을 만나면 세지 않고 멈춘다 — 모르는 값을 0으로
 // 흘려보내면 합계는 그럴듯하고 판정만 틀린다.
@@ -109,12 +113,14 @@ const sidecar = requireStartedTimeline(dir, run)
 
 const inputs = flagAll('input')
 const collectMode = process.argv.includes('--collect')
+const validateMode = process.argv.includes('--validate')
 const targetsPath = flag('targets')
-if (collectMode && inputs.length) die('--collect와 --input을 함께 줄 수 없다. 작업별 판정 파일을 모으거나 판정 파일을 직접 넘긴다')
-if (collectMode && targetsPath === undefined) {
-  die('--collect에는 --targets <prepare-verification 출력>이 필요하다 — 어느 작업의 판정 파일을 어떤 순서로 읽을지가 거기 있다')
+if ((collectMode || validateMode) && inputs.length) die('--collect·--validate와 --input을 함께 줄 수 없다. 작업별 판정 파일을 모으거나 판정 파일을 직접 넘긴다')
+if (collectMode && validateMode) die('--collect와 --validate는 따로 돌린다. --validate로 형식을 고친 뒤 --collect로 센다')
+if ((collectMode || validateMode) && targetsPath === undefined) {
+  die(`${collectMode ? '--collect' : '--validate'}에는 --targets <prepare-verification 출력>이 필요하다 — 어느 작업의 판정 파일을 어떤 순서로 읽을지가 거기 있다`)
 }
-if (!collectMode && !inputs.length) die('--input <경로>가 필요하다. 검증 작업이 낸 verdict payload를 파일로 넘긴다')
+if (!collectMode && !validateMode && !inputs.length) die('--input <경로>가 필요하다. 검증 작업이 낸 verdict payload를 파일로 넘긴다')
 
 const readJson = (path, what) => {
   let raw
@@ -132,6 +138,64 @@ const readJson = (path, what) => {
 
 const routed = targetsPath === undefined ? undefined : readJson(targetsPath, '--targets')
 
+// 계약 검사에 쓰는 manifest는 규칙 문서에서 읽는다. 기본은 이 스크립트와 같은
+// 플러그인의 것이고, `--rules`를 주면 검증자가 받은 그 디렉터리를 쓴다.
+const manifests = () => {
+  const rulesDir = flag('rules') ?? join(dirname(fileURLToPath(import.meta.url)), '..', 'review-rules')
+  let contract
+  try {
+    contract = readFileSync(join(rulesDir, 'workflow-contract.md'), 'utf8')
+  } catch (error) {
+    die(`workflow-contract.md를 읽지 못했다: ${rulesDir} — ${error.message}`)
+  }
+  const verdict = markedJson(contract, 'REVIEW_VERDICT_CONTRACT_V1')
+  const result = markedJson(contract, 'REVIEW_RESULT_CONTRACT_V1')
+  if (verdict.error) die(`workflow-contract.md: ${verdict.error}`)
+  if (result.error) die(`workflow-contract.md: ${result.error}`)
+  return payload => validateVerdictPayload(payload, verdict.value, result.value)
+}
+
+// 작업 목록 — bundle, isolated, 그다음 승격 순서가 정본 순서다.
+// 승격 작업은 `promotions[<candidateId>]`로 오므로 맡긴 후보는 그 키 하나다.
+const tasksOf = plan => [
+  ...(plan?.verifierTasks ?? []).map(task => ({ ...task, promotion: false })),
+  ...Object.entries(plan?.promotions ?? {}).map(([candidateId, task]) => ({ ...task, candidateIds: [candidateId], promotion: true })),
+]
+const retryPathOf = task => task.prompt.replace(/\.md$/, '.retry.md')
+
+/**
+ * 작업별 판정 파일을 계약과 요청에 맞춰 본다.
+ *
+ * 형식을 어긴 작업마다 교정 프롬프트(`<taskId>.retry.md`)를 만든다 — 원래 지시에
+ * 오류 목록과 직전 응답 원문을 붙인 것이다. 오케스트레이터는 그 파일 내용을 그대로
+ * 새 검증자에게 넘기고, 돌아온 JSON으로 같은 판정 파일을 덮어쓴다. 기록에는 아무것도
+ * 남기지 않는다 — 검사일 뿐이고, 교차검증의 끝은 `--collect`가 남긴다.
+ */
+const validateTasks = plan => {
+  const validate = manifests()
+  const malformed = []
+  let checked = 0
+  for (const task of tasksOf(plan)) {
+    if (!existsSync(task.verdict)) continue
+    checked += 1
+    const raw = readFileSync(task.verdict, 'utf8')
+    const ids = task.candidateIds
+    const { problems } = checkTaskVerdict(raw, ids, validate)
+    if (!problems) continue
+    const original = existsSync(task.prompt) ? readFileSync(task.prompt, 'utf8') : ''
+    const retryPrompt = retryPathOf(task)
+    writeFileSync(retryPrompt, buildRetryPrompt(original, problems, raw), 'utf8')
+    malformed.push({ taskId: task.taskId, problems, retryPrompt })
+  }
+  return { checked, malformed }
+}
+
+if (validateMode) {
+  const report = validateTasks(routed)
+  process.stdout.write(`${JSON.stringify(report, null, 2)}\n`)
+  process.exit(report.malformed.length ? 1 : 0)
+}
+
 /**
  * `prepare-verification.mjs`가 정한 자리에서 판정 파일을 모은다.
  *
@@ -142,25 +206,39 @@ const routed = targetsPath === undefined ? undefined : readJson(targetsPath, '--
  * 필요할 때만 띄우므로 파일이 없는 것이 정상이다.
  */
 const collectFromTasks = plan => {
+  const validate = manifests()
   const found = []
   const missing = []
-  for (const task of plan?.verifierTasks ?? []) {
-    if (existsSync(task.verdict)) found.push(readJson(task.verdict, '판정 파일'))
-    else missing.push(task.taskId)
+  const malformed = []
+  let corrected = 0
+  for (const task of tasksOf(plan)) {
+    if (existsSync(retryPathOf(task))) corrected += 1
+    if (!existsSync(task.verdict)) {
+      if (!task.promotion) missing.push(task.taskId)
+      continue
+    }
+    const ids = task.candidateIds
+    const { payload, problems } = checkTaskVerdict(readFileSync(task.verdict, 'utf8'), ids, validate)
+    // 교정 뒤에도 계약을 어긴 판정은 세지 않는다(C-6A: 두 번째 malformed-output은
+    // 확정 실패다). 그 후보는 판정 없음으로 남고, 차단은 C-6B대로 fail-open이다.
+    if (problems) malformed.push(task.taskId)
+    else found.push(payload)
   }
-  for (const promotion of Object.values(plan?.promotions ?? {})) {
-    if (existsSync(promotion.verdict)) found.push(readJson(promotion.verdict, '판정 파일'))
-  }
-  return { found, missing }
+  return { found, missing, malformed, corrected }
 }
 
 let payloads
 let verdictsFile
+let correctedByFiles
 if (collectMode) {
-  const { found, missing } = collectFromTasks(routed)
+  const { found, missing, malformed, corrected } = collectFromTasks(routed)
   if (missing.length) {
     process.stderr.write(`경고: 판정 파일이 없는 검증 작업 ${missing.length}개: ${missing.join(', ')} — 그 후보는 판정 없음(noVerdict)으로 센다\n`)
   }
+  if (malformed.length) {
+    process.stderr.write(`경고: 계약을 어긴 판정 파일 ${malformed.length}개를 세지 않았다: ${malformed.join(', ')} — --validate로 교정 프롬프트를 만들 수 있다. 교정 뒤에도 어겼다면 그 후보는 판정 없음(noVerdict)이다\n`)
+  }
+  correctedByFiles = corrected
   payloads = found
   // 렌더러는 판정 파일을 `--verdicts`로 받는다. 여러 파일을 순서대로 넘기게 하면
   // 순서를 다시 사람이 정하게 되므로, 모은 순서 그대로 한 파일에 남긴다.
@@ -182,7 +260,9 @@ const counts = tally(verdicts)
 
 // 교정 횟수는 verdict payload가 모르는 값이다 — 그것은 dispatch 쪽 사실이라
 // 호출자가 넘긴다. 이름에 **세는 단위**를 담는다: verdict가 아니라 task 수다.
-const corrected = flag('malformed-tasks-corrected')
+// `--collect`는 교정 프롬프트 파일(`<taskId>.retry.md`)이 있는 작업을 교정한 작업으로
+// 센다. 손으로 넘긴 값이 있으면 그것을 쓴다.
+const corrected = flag('malformed-tasks-corrected') ?? (correctedByFiles === undefined ? undefined : String(correctedByFiles))
 const malformedTasksCorrected = corrected === undefined ? undefined : Number(corrected)
 if (corrected !== undefined && !Number.isInteger(malformedTasksCorrected)) {
   die(`--malformed-tasks-corrected는 정수여야 한다: ${JSON.stringify(corrected)}`)

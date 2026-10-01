@@ -32,3 +32,32 @@ export function collectVerdicts(payloads) {
   walk(payloads)
   return verdicts
 }
+
+/**
+ * 검증 작업 하나가 돌려준 판정 파일의 내용을 계약과 요청에 맞춰 본다.
+ *
+ * 계약(`REVIEW_VERDICT_CONTRACT_V1`)은 `validateVerdict`가 본다 — 호출자가
+ * `lib/contract-validate.mjs`의 `validateVerdictPayload`에 manifest를 묶어 넘긴다.
+ * 여기서 더 보는 것은 **요청과의 대응**이다: 판정한 candidateId 집합이 그 작업에
+ * 맡긴 집합과 다르면 C-6B는 그것도 malformed-output으로 친다. 이름표가 어긋난
+ * 판정은 형식이 맞아도 다른 지적의 판정이 될 수 있기 때문이다.
+ *
+ * 문제가 없으면 `payload`를, 있으면 `problems`(사람이 읽을 문장 목록)를 돌려준다.
+ */
+export function checkTaskVerdict(raw, candidateIds, validateVerdict) {
+  let payload
+  try {
+    payload = JSON.parse(raw)
+  } catch (error) {
+    return { problems: [`JSON으로 읽지 못했다: ${error.message} — 코드펜스나 서문 없이 JSON 객체 하나만 돌려준다`] }
+  }
+  const problems = validateVerdict(payload).map(error => `${error.code}: ${error.message}`)
+  if (Array.isArray(payload?.verdicts)) {
+    const returned = payload.verdicts.map(verdict => verdict?.candidateId)
+    const missing = candidateIds.filter(id => !returned.includes(id))
+    const extra = returned.filter(id => typeof id === 'string' && !candidateIds.includes(id))
+    if (missing.length) problems.push(`요청한 candidateId의 판정이 없다: ${missing.join(', ')}`)
+    if (extra.length) problems.push(`요청하지 않은 candidateId를 판정했다: ${extra.join(', ')}`)
+  }
+  return problems.length ? { problems } : { payload }
+}

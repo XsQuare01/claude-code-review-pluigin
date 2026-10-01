@@ -14,6 +14,10 @@ import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { validateEffectiveCommonContext } from './lib/effective-common-context-validator.mjs'
 import { markedBlock, CROSS_VERIFICATION_TOKEN_KEYS } from './lib/contract-blocks.mjs'
+import {
+  addError, hasOwn, manifestAllowedSet, scanForbiddenSeverity, validateLocationAgainst, validatePlainObject,
+  validateRequiredString, validateUnknownKeys, validateVerdictPayload,
+} from './lib/contract-validate.mjs'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 const RULES = join(ROOT, 'review-rules')
@@ -63,14 +67,6 @@ function parseJsonCodeBlock(block, label, check, code) {
   }
 }
 
-function addError(target, code, message) {
-  target.push({ code, message })
-}
-
-function hasOwn(object, key) {
-  return Object.prototype.hasOwnProperty.call(object, key)
-}
-
 const STRUCTURED_PRODUCER_MARKER = 'REVIEW_RESULT_CONTRACT_V1_PRODUCER_OUTPUT'
 const STRUCTURED_OWNER_CONSUMERS = {
   'skills/code-review-full/SKILL.md': ['validation', 'aggregation', 'rendering'],
@@ -100,10 +96,6 @@ function getContractManifest() {
   if (!manifest) return null
   CONTRACT_MANIFEST_CACHE = manifest
   return CONTRACT_MANIFEST_CACHE
-}
-
-function manifestAllowedSet(list) {
-  return new Set(Array.isArray(list) ? list : [])
 }
 
 function getManifestDerivedSchema() {
@@ -169,78 +161,8 @@ function validateMarkdownBlocks(relativePath, text, check) {
   }
 }
 
-function validatePlainObject(value, errors, code, where) {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    addError(errors, code, `${where} must be an object`)
-    return false
-  }
-  return true
-}
-
-function scanForbiddenSeverity(value, errors, where) {
-  if (!value || typeof value !== 'object') return
-  if (Array.isArray(value)) {
-    value.forEach((item, index) => scanForbiddenSeverity(item, errors, `${where}[${index}]`))
-    return
-  }
-  if (hasOwn(value, 'severity')) addError(errors, 'E_FORBIDDEN_SEVERITY', `${where} must not contain severity`)
-  for (const [key, nested] of Object.entries(value)) scanForbiddenSeverity(nested, errors, `${where}.${key}`)
-}
-
-function validateRequiredString(object, key, errors, code, where) {
-  if (!hasOwn(object, key) || typeof object[key] !== 'string' || object[key].trim() === '') {
-    addError(errors, code, `${where}.${key} must be a non-empty string`)
-  }
-}
-
-function validateUnknownKeys(object, allowedKeys, errors, code, where, ignoredKeys = new Set()) {
-  for (const key of Object.keys(object)) {
-    if (ignoredKeys.has(key)) continue
-    if (!allowedKeys.has(key)) addError(errors, code, `${where} contains unknown key "${key}"`)
-  }
-}
-
 function validateLocation(location, errors, where) {
-  const schema = getManifestDerivedSchema()
-  if (!validatePlainObject(location, errors, 'E_LOCATION_NOT_OBJECT', where)) return
-  if (typeof location.kind !== 'string') {
-    addError(errors, 'E_LOCATION_MISSING_KIND', `${where}.kind must be a string`)
-    return
-  }
-  const variants = schema?.manifest?.location?.variants ?? {}
-  const variant = variants[location.kind]
-  const allowed = schema?.locationAllowed?.[location.kind]
-  if (!allowed) {
-    addError(errors, 'E_LOCATION_INVALID_KIND', `${where}.kind must be one of verified, deleted, unverified`)
-    return
-  }
-  const ignoreSeverity = new Set(['severity'])
-  if (location.kind === 'verified') {
-    validateUnknownKeys(location, allowed, errors, 'E_LOCATION_UNKNOWN_KEY', where, ignoreSeverity)
-    validateRequiredString(location, 'path', errors, 'E_LOCATION_VERIFIED_REQUIRES_PATH', where)
-    if (!Number.isInteger(location.line) || location.line < 1) addError(errors, 'E_LOCATION_VERIFIED_REQUIRES_LINE', `${where}.line must be a positive integer`)
-    if (hasOwn(location, 'endLine') && (!Number.isInteger(location.endLine) || location.endLine < 1 || location.endLine < location.line)) addError(errors, 'E_LOCATION_VERIFIED_INVALID_END_LINE', `${where}.endLine must be a positive integer >= line`)
-    validateRequiredString(location, 'quote', errors, 'E_LOCATION_VERIFIED_REQUIRES_QUOTE', where)
-    return
-  }
-  if (location.kind === 'deleted') {
-    validateUnknownKeys(location, allowed, errors, 'E_LOCATION_UNKNOWN_KEY', where, ignoreSeverity)
-    validateRequiredString(location, 'path', errors, 'E_LOCATION_DELETED_REQUIRES_PATH', where)
-    if (!Number.isInteger(location.lineBefore) || location.lineBefore < 1) addError(errors, 'E_LOCATION_DELETED_REQUIRES_LINE_BEFORE', `${where}.lineBefore must be a positive integer`)
-    if (hasOwn(location, 'endLine') && (!Number.isInteger(location.endLine) || location.endLine < 1 || location.endLine < location.lineBefore)) addError(errors, 'E_LOCATION_DELETED_INVALID_END_LINE', `${where}.endLine must be a positive integer >= lineBefore`)
-    validateRequiredString(location, 'quote', errors, 'E_LOCATION_DELETED_REQUIRES_QUOTE', where)
-    return
-  }
-  const forbiddenAwareAllowed = new Set([...allowed, ...(variant?.forbidden ?? [])])
-  validateUnknownKeys(location, forbiddenAwareAllowed, errors, 'E_LOCATION_UNKNOWN_KEY', where, ignoreSeverity)
-  validateRequiredString(location, 'reason', errors, 'E_LOCATION_UNVERIFIED_REQUIRES_REASON', where)
-  for (const forbiddenKey of variant?.forbidden ?? []) {
-    if (hasOwn(location, forbiddenKey)) {
-      if (forbiddenKey === 'path') addError(errors, 'E_LOCATION_UNVERIFIED_FORBIDS_PATH', `${where}.path is forbidden when kind is unverified`)
-      else if (forbiddenKey === 'line' || forbiddenKey === 'lineBefore') addError(errors, 'E_LOCATION_UNVERIFIED_FORBIDS_LINE', `${where}.line and .lineBefore are forbidden when kind is unverified`)
-      else if (forbiddenKey === 'quote') addError(errors, 'E_LOCATION_UNVERIFIED_FORBIDS_QUOTE', `${where}.quote is forbidden when kind is unverified`)
-    }
-  }
+  validateLocationAgainst(getContractManifest(), location, errors, where)
 }
 
 function validateFinding(item, errors, where) {
@@ -1369,63 +1291,6 @@ function getVerdictManifest() {
   return VERDICT_MANIFEST_CACHE
 }
 
-function validateRebuttal(rebuttal, manifest, errors, where) {
-  if (!validatePlainObject(rebuttal, errors, 'E_REBUTTAL_NOT_OBJECT', where)) return
-  const spec = manifest.rebuttal ?? {}
-  validateUnknownKeys(rebuttal, manifestAllowedSet(spec.allowed), errors, 'E_REBUTTAL_UNKNOWN_KEY', where, new Set(['severity']))
-  const kindEnum = spec.kindEnum ?? []
-  if (typeof rebuttal.kind !== 'string' || !kindEnum.includes(rebuttal.kind)) {
-    addError(errors, 'E_REBUTTAL_UNKNOWN_KIND', `${where}.kind must be one of ${kindEnum.join(', ')}`)
-    return
-  }
-  const requiredByKind = spec.kindRequires?.[rebuttal.kind]
-  if (requiredByKind === 'note') validateRequiredString(rebuttal, 'note', errors, 'E_REBUTTAL_OTHER_REQUIRES_NOTE', where)
-  const locationOptional = (spec.locationOptionalKinds ?? []).includes(rebuttal.kind)
-  if (!hasOwn(rebuttal, 'location')) {
-    if (!locationOptional) addError(errors, 'E_REBUTTAL_REQUIRES_LOCATION', `${where}.location is required unless kind is ${(spec.locationOptionalKinds ?? []).join(', ')}`)
-    return
-  }
-  const allowedVariants = spec.locationVariants ?? []
-  if (rebuttal.location && typeof rebuttal.location === 'object' && typeof rebuttal.location.kind === 'string' && !allowedVariants.includes(rebuttal.location.kind)) {
-    addError(errors, 'E_REBUTTAL_LOCATION_FORBIDS_UNVERIFIED', `${where}.location.kind must be one of ${allowedVariants.join(', ')} — an unverified rebuttal cannot delete a finding`)
-    return
-  }
-  validateLocation(rebuttal.location, errors, `${where}.location`)
-}
-
-function validateVerdictItem(item, manifest, errors, where) {
-  if (!validatePlainObject(item, errors, 'E_VERDICT_ITEM_NOT_OBJECT', where)) return
-  const spec = manifest.verdictsItem ?? {}
-  validateUnknownKeys(item, manifestAllowedSet(spec.allowed), errors, 'E_VERDICT_ITEM_UNKNOWN_KEY', where, new Set(['severity']))
-  validateRequiredString(item, 'candidateId', errors, 'E_VERDICT_ITEM_REQUIRES_CANDIDATE_ID', where)
-  validateRequiredString(item, 'evidence', errors, 'E_VERDICT_ITEM_REQUIRES_EVIDENCE', where)
-
-  const dispositionEnum = manifest.disposition?.enum ?? []
-  if (typeof item.disposition !== 'string' || !dispositionEnum.includes(item.disposition)) {
-    addError(errors, 'E_VERDICT_UNKNOWN_DISPOSITION', `${where}.disposition must be one of ${dispositionEnum.join(', ')}`)
-  } else {
-    const requiredField = manifest.disposition?.requires?.[item.disposition]
-    if (requiredField === 'rebuttal' && !hasOwn(item, 'rebuttal')) {
-      addError(errors, 'E_VERDICT_REJECTED_REQUIRES_REBUTTAL', `${where}.rebuttal is required when disposition is rejected`)
-    }
-    if (requiredField === 'reason') validateRequiredString(item, 'reason', errors, 'E_VERDICT_NEEDS_CONTEXT_REQUIRES_REASON', where)
-  }
-
-  if (hasOwn(item, 'rebuttal')) validateRebuttal(item.rebuttal, manifest, errors, `${where}.rebuttal`)
-  if (hasOwn(item, 'usedCrossFileContext') && typeof item.usedCrossFileContext !== 'boolean') {
-    addError(errors, 'E_VERDICT_USED_CROSS_FILE_CONTEXT_INVALID', `${where}.usedCrossFileContext must be a boolean`)
-  }
-  const axisEnum = manifest.observedAxes?.enum ?? []
-  if (hasOwn(item, 'observedImpact') && !axisEnum.includes(item.observedImpact)) {
-    addError(errors, 'E_VERDICT_OBSERVED_IMPACT_INVALID', `${where}.observedImpact must be one of ${axisEnum.join(', ')}`)
-  }
-  if (hasOwn(item, 'observedConfidence') && !axisEnum.includes(item.observedConfidence)) {
-    addError(errors, 'E_VERDICT_OBSERVED_CONFIDENCE_INVALID', `${where}.observedConfidence must be one of ${axisEnum.join(', ')}`)
-  }
-  if (hasOwn(item, 'location')) validateLocation(item.location, errors, `${where}.location`)
-  else addError(errors, 'E_VERDICT_ITEM_REQUIRES_LOCATION', `${where}.location is required`)
-}
-
 function validateReviewVerdictContract(value) {
   const errors = []
   const manifest = getVerdictManifest()
@@ -1433,18 +1298,8 @@ function validateReviewVerdictContract(value) {
     addError(errors, 'E_VERDICT_MANIFEST_MISSING', 'REVIEW_VERDICT_CONTRACT_V1 manifest is unavailable')
     return errors
   }
-  if (!validatePlainObject(value, errors, 'E_VERDICT_NOT_OBJECT', 'result')) return errors
-  scanForbiddenSeverity(value, errors, 'result')
-  validateUnknownKeys(value, manifestAllowedSet(manifest.topLevel?.allowed), errors, 'E_VERDICT_TOP_LEVEL_UNKNOWN_KEY', 'result', new Set(['severity']))
-  if (value.schemaVersion !== manifest.schemaVersion) {
-    addError(errors, 'E_VERDICT_SCHEMA_VERSION_INVALID', `result.schemaVersion must be ${manifest.schemaVersion}`)
-  }
-  if (!Array.isArray(value.verdicts)) {
-    addError(errors, 'E_VERDICT_TOP_LEVEL_REQUIRES_VERDICTS', 'result.verdicts must always be an array')
-    return errors
-  }
-  value.verdicts.forEach((item, index) => validateVerdictItem(item, manifest, errors, `result.verdicts[${index}]`))
-  return errors
+  // 실행 중 판정을 검사하는 tally-verdicts.mjs --validate와 같은 함수다.
+  return validateVerdictPayload(value, manifest, getContractManifest())
 }
 
 function validateVerdictContractAndFixtures() {

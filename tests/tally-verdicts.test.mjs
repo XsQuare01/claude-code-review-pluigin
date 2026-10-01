@@ -341,3 +341,80 @@ test('--note를 주면 crossverify.end에 정정 사유를 남긴다', t => {
   assert.equal(out.status, 0, out.stderr)
   assert.equal(timelineOf(dir).at(-1).note, '교정 횟수를 빠뜨려 다시 셌다')
 })
+
+// ── 판정 형식 검증과 교정 프롬프트 (--validate) ──────────────────────────────
+//
+// `feat/scene-graph-undo-redo` 실행(2026-09-30)의 검증자 10개 중 5개가 형식을
+// 어겼다 — `location`을 문자열로 쓰거나 `kind`를 빠뜨렸다. 오케스트레이터가 같은
+// 세션으로 교정하려 하자 런타임이 `task-not-found`를 냈고, 새 작업으로 "수리"할 때는
+// 오케스트레이터가 "이 근거를 보존하라"며 판정 근거를 직접 불러 줬다 — 판정을
+// 검증자가 아니라 오케스트레이터가 쓴 셈이다. 형식 검사와 교정 프롬프트를 스크립트가
+// 만들면, 교정은 같은 지시 + 오류 목록 + 직전 응답 원문으로만 이뤄진다.
+
+const withPrompts = dir => {
+  const setup = verifyTasks(dir)
+  const routed = JSON.parse(readFileSync(setup.routedPath, 'utf8'))
+  for (const task of [...routed.verifierTasks, ...Object.values(routed.promotions)]) {
+    writeFileSync(task.prompt, `# 원래 지시 ${task.taskId}\n`, 'utf8')
+  }
+  return { ...setup, routed }
+}
+const validateRun = (dir, routedPath) => spawnSync(process.execPath, [SCRIPT, '--dir', dir, '--run', RUN, '--validate', '--targets', routedPath],
+  { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+
+test('--validate는 계약을 어긴 판정 파일을 작업 이름으로 짚고 교정 프롬프트를 만든다', t => {
+  const dir = started(t)
+  const { routedPath, answer, routed } = withPrompts(dir)
+  answer('bundle-1', { ...verdict('04-3#1', 'upheld'), location: 'src/a.ts:1' })
+  answer('isolated-A-8-1', verdict('A-8#1', 'upheld'))
+  const out = validateRun(dir, routedPath)
+  assert.equal(out.status, 1)
+  const report = JSON.parse(out.stdout)
+  assert.deepEqual(report.malformed.map(entry => entry.taskId), ['bundle-1'])
+  const retry = readFileSync(report.malformed[0].retryPrompt, 'utf8')
+  assert.match(retry, /^# 원래 지시 bundle-1\n/)
+  assert.match(retry, /location/)
+  assert.match(retry, /src\/a\.ts:1/)
+  assert.equal(report.malformed[0].retryPrompt, routed.verifierTasks[0].prompt.replace(/\.md$/, '.retry.md'))
+  // 검사만 한다 — 교차검증의 끝을 기록하지 않는다.
+  assert.equal(timelineOf(dir).some(event => event.phase === 'crossverify.end'), false)
+})
+
+test('--validate는 요청하지 않은 candidateId를 돌려준 판정도 형식 위반으로 본다', t => {
+  const dir = started(t)
+  const { routedPath, answer } = withPrompts(dir)
+  answer('bundle-1', verdict('04-3#1', 'upheld'), verdict('A-8#1', 'upheld'))
+  answer('isolated-A-8-1', verdict('A-8#1', 'upheld'))
+  const out = validateRun(dir, routedPath)
+  assert.equal(out.status, 1)
+  const [entry] = JSON.parse(out.stdout).malformed
+  assert.equal(entry.taskId, 'bundle-1')
+  assert.match(entry.problems.join('\n'), /A-8#1/)
+})
+
+test('--validate는 판정이 모두 계약에 맞으면 0으로 끝나고 교정 프롬프트를 만들지 않는다', t => {
+  const dir = started(t)
+  const { routedPath, answer } = withPrompts(dir)
+  answer('bundle-1', verdict('04-3#1', 'upheld'))
+  answer('isolated-A-8-1', verdict('A-8#1', 'rejected'))
+  const out = validateRun(dir, routedPath)
+  assert.equal(out.status, 0, out.stdout)
+  assert.deepEqual(JSON.parse(out.stdout).malformed, [])
+})
+
+test('--collect는 교정 뒤에도 계약을 어긴 판정을 세지 않고, 교정한 작업 수를 스스로 센다', t => {
+  const dir = started(t)
+  const { routedPath, answer, routed } = withPrompts(dir)
+  // bundle-1은 한 번 교정됐고(retry 파일이 있다) 이제 맞다. isolated는 교정 뒤에도 틀렸다.
+  writeFileSync(routed.verifierTasks[0].prompt.replace(/\.md$/, '.retry.md'), '교정 지시', 'utf8')
+  writeFileSync(routed.verifierTasks[1].prompt.replace(/\.md$/, '.retry.md'), '교정 지시', 'utf8')
+  answer('bundle-1', verdict('04-3#1', 'upheld'))
+  answer('isolated-A-8-1', { ...verdict('A-8#1', 'upheld'), location: { path: 'src/a.ts', line: 1, quote: 'q' } })
+  const out = collectTally(dir, ['--targets', routedPath])
+  assert.equal(out.status, 0, out.stderr)
+  const counts = JSON.parse(out.stdout)
+  assert.equal(counts.upheld, 1)
+  assert.equal(counts.noVerdict, 1)
+  assert.match(out.stderr, /isolated-A-8-1/)
+  assert.equal(timelineOf(dir).at(-1).malformedTasksCorrected, 2)
+})
