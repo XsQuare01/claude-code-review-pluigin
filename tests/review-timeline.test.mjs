@@ -1753,3 +1753,40 @@ test('--check는 synthesis.start 뒤에 온 교차검증 기록을 짚는다', t
   assert.equal(out.status, 1)
   assert.match(out.stdout, /`synthesis\.start`\(seq 5\) 뒤에 교차검증 기록이 있다: seq 6, 7/)
 })
+
+// ── dispatch.end 수치는 스크립트가 센다 ────────────────────────────────────
+//
+// 2026-09-30의 두 실행이 모두 `dispatch.end`에 특수 패스까지 넣어 셌다(22, 21 —
+// 계약은 numbered 모듈만 센다). 규칙을 두 번 어긴 것은 규칙이 직관과 반대이기
+// 때문이고, 세는 재료(`module.done`)는 이미 기록에 다 있다. `seq`·`at`처럼 이
+// 스크립트가 센다.
+
+const doneLine = (seq, module, attempt, status) => ({ at: `2026-09-30T00:0${seq}:00.000Z`, seq, phase: 'module.done', module, attempt, status })
+const dispatchedRecord = () => [
+  { at: '2026-09-30T00:00:00.000Z', seq: 1, phase: 'run.start', host: 'h', rules: 'r', version: 'v', branch: 'b', changedFiles: 1 },
+  doneLine(2, '01-fsd', 1, 'failed'),
+  doneLine(3, '01-fsd', 2, 'ok'),
+  doneLine(4, '02-type', 1, 'ok'),
+  doneLine(5, 'props', 1, 'ok'),
+]
+
+test('dispatch.end를 수치 없이 남기면 module.done에서 numbered 모듈만 센다', t => {
+  const dir = freshDir(t)
+  plant(dir, dispatchedRecord())
+  const out = log(dir, 'dispatch.end', {})
+  assert.equal(out.status, 0, out.stderr)
+  const ended = linesOf(dir).at(-1)
+  assert.deepEqual(
+    [ended.terminalOk, ended.terminalFailed, ended.attemptsTotal, ended.attemptsFailed],
+    [2, 0, 3, 1],
+  )
+})
+
+test('dispatch.end에 넘긴 수치가 기록과 다르면 경고하고 기록으로 센 값을 남긴다', t => {
+  const dir = freshDir(t)
+  plant(dir, dispatchedRecord())
+  const out = log(dir, 'dispatch.end', { terminalOk: 3, terminalFailed: 0, attemptsTotal: 4, attemptsFailed: 1 })
+  assert.equal(out.status, 0, out.stderr)
+  assert.match(out.stderr, /terminalOk 3 → 기록으로 세면 2/)
+  assert.equal(linesOf(dir).at(-1).terminalOk, 2)
+})

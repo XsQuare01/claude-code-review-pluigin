@@ -204,6 +204,32 @@ const FAILURE_CLASSES = new Set([
 ])
 
 /**
+ * `dispatch.end`의 네 수치를 `module.done`에서 센다.
+ *
+ * 세는 단위는 **numbered 모듈**이다(C-9). 2026-09-30의 두 실행이 모두 특수 패스까지
+ * 넣어 셌다 — 규칙이 직관과 반대인데 세는 일을 모델에게 맡겼기 때문이다. 재료는
+ * 기록에 다 있으므로 `seq`·`at`처럼 이 스크립트가 센다. status가 닫힌 목록 밖이면
+ * 그 시도가 성공인지 실패인지 기록이 말하지 않으므로 세지 않는다(`countable: false`).
+ */
+const dispatchCounts = events => {
+  const attempts = events.filter(event => event.phase === 'module.done' && /^\d\d-/.test(String(event.module ?? '')))
+  const terminal = new Map()
+  for (const event of attempts) terminal.set(String(event.module), event.status)
+  return {
+    countable: attempts.every(event => ['ok', 'failed'].includes(event.status)),
+    modules: terminal.size,
+    counts: {
+      terminalOk: [...terminal.values()].filter(status => status === 'ok').length,
+      terminalFailed: [...terminal.values()].filter(status => status !== 'ok').length,
+      attemptsTotal: attempts.length,
+      attemptsFailed: attempts.filter(event => event.status !== 'ok').length,
+    },
+  }
+}
+
+const DISPATCH_COUNT_KEYS = ['terminalOk', 'terminalFailed', 'attemptsTotal', 'attemptsFailed']
+
+/**
  * 모듈 시도를 구간으로 접는다. **끝나지 않은 시도도 구간으로 낸다.**
  *
  * 처음에는 끝난 시도만 셌다. 그랬더니 `module.start` 넷을 남기고 죽은 실행에서
@@ -534,29 +560,19 @@ if (has('check')) {
   // 줄곧 그렇게 세어 왔고, 두 단위가 한 필드에서 섞이면 `ok:18`과 `module.done`
   // 20건이 어긋나던 그 문제로 돌아간다.
   {
-    const numbered = event => /^\d\d-/.test(String(event.module ?? ''))
-    const attempts = events.filter(event => event.phase === 'module.done' && numbered(event))
-    const terminal = new Map()
-    for (const event of attempts) terminal.set(String(event.module), event.status)
+    const { countable, modules, counts: expected } = dispatchCounts(events)
     const dispatched = events.some(event => ['dispatch.start', 'module.start', 'module.done'].includes(event.phase))
     const ended = events.find(event => event.phase === 'dispatch.end')
     const reachedAfterDispatch = events.some(event => ['script.start', 'script.done', 'crossverify.start', 'crossverify.end', 'render.start', 'render.wrote', 'run.end'].includes(event.phase))
 
     if (dispatched && reachedAfterDispatch && !ended) {
-      problems.push(`\`dispatch.end\`가 없다. 모듈을 ${terminal.size}개 끝내고 다음 단계로 갔는데 수집 결과가 기록되지 않았다 — 그 수치를 리포트에 적었다면 기록이 아니라 기억에서 온 것이다`)
+      problems.push(`\`dispatch.end\`가 없다. 모듈을 ${modules}개 끝내고 다음 단계로 갔는데 수집 결과가 기록되지 않았다 — 그 수치를 리포트에 적었다면 기록이 아니라 기억에서 온 것이다`)
     }
 
     // status가 닫힌 목록 밖이면 다시 셀 수 없다 — 그 값이 성공인지 실패인지는
     // 기록이 말하지 않는다. 위에서 어휘 문제로 이미 짚었으므로 여기서 수치를
     // 지어내지 않는다.
-    const countable = attempts.every(event => ['ok', 'failed'].includes(event.status))
     if (ended && countable) {
-      const expected = {
-        terminalOk: [...terminal.values()].filter(status => status === 'ok').length,
-        terminalFailed: [...terminal.values()].filter(status => status !== 'ok').length,
-        attemptsTotal: attempts.length,
-        attemptsFailed: attempts.filter(event => event.status !== 'ok').length,
-      }
       const off = Object.entries(expected)
         .filter(([key, value]) => Number.isInteger(ended[key]) && ended[key] !== value)
         .map(([key, value]) => `${key} ${ended[key]} → 기록으로 세면 ${value}`)
@@ -1042,7 +1058,10 @@ const data = (() => {
   }
   // 빠진 필수 필드는 경고만 한다. 줄을 거부하면 그 단계가 통째로 사라지는데,
   // 필드 하나 빠진 기록이 없는 기록보다 낫다. `--check`가 종료 전에 다시 짚는다.
-  const absent = spec.required.filter(key => data[key] === undefined)
+  // `dispatch.end`의 수치는 아래에서 이 스크립트가 센다 — 빠졌다고 경고하지 않는다.
+  const absent = spec.required
+    .filter(key => !(phase === 'dispatch.end' && DISPATCH_COUNT_KEYS.includes(key)))
+    .filter(key => data[key] === undefined)
   if (absent.length) {
     process.stderr.write(`경고: \`${phase}\`에 ${absent.join(', ')}가 없다 (C-9 표가 요구한다)\n`)
   }
@@ -1061,6 +1080,24 @@ const data = (() => {
 }
 
 const { events } = readLines()
+
+// numbered `module.done`이 한 줄도 없으면 셀 재료가 없다. 0으로 덮지 않고 넘긴
+// 값을 둔다 — 디스패치 기록이 없다는 사실은 `--check`가 따로 짚는다.
+const dispatchRecord = phase === 'dispatch.end' ? dispatchCounts(events) : null
+if (dispatchRecord && dispatchRecord.counts.attemptsTotal > 0) {
+  const { countable, counts } = dispatchRecord
+  if (countable) {
+    const off = DISPATCH_COUNT_KEYS
+      .filter(key => data[key] !== undefined && data[key] !== counts[key])
+      .map(key => `${key} ${data[key]} → 기록으로 세면 ${counts[key]}`)
+    if (off.length) {
+      process.stderr.write(`경고: \`dispatch.end\`에 넘긴 수치가 기록과 다르다: ${off.join(' / ')}. numbered 모듈만 센 기록의 값을 남긴다\n`)
+    }
+    Object.assign(data, counts)
+  } else {
+    process.stderr.write('경고: `module.done`의 status가 닫힌 목록 밖이라 `dispatch.end`를 기록으로 셀 수 없다. 넘긴 수치를 그대로 남긴다\n')
+  }
+}
 
 // 끝난 타임라인에 새 실행을 이어붙이지 않는다.
 //
