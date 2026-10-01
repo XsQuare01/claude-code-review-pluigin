@@ -258,6 +258,80 @@ test('stdout에 판정 집합을 빈 객체로 흘리지 않는다', t => {
   assert.equal(printed.noVerdict, 1)
 })
 
+// ── 작업별 판정 파일 모으기 (--collect) ─────────────────────────────────────
+//
+// 2026-09-30 실행은 검증자 19개의 판정을 대화에서 들고 있다가, 서브에이전트에게
+// 세션 기록을 긁어 판정 파일 두 개를 만들게 했다(17분). 그 파일은 `{ tasks: [...] }`
+// 모양이라 렌더러가 읽지 못해 모양을 다시 바꿨다(5분). 검증자가 돌려준 JSON을
+// `prepare-verification.mjs`가 정해 준 자리(`verifierTasks[].verdict`)에 받는 즉시
+// 남기면, 모으는 일과 순서를 정하는 일은 스크립트의 몫이 된다.
+
+const verifyTasks = dir => {
+  const verify = join(dir, '.timing', `${RUN}.verify`)
+  mkdirSync(verify, { recursive: true })
+  const at = name => ({ prompt: join(verify, `${name}.md`), verdict: join(verify, `${name}.verdict.json`) })
+  const routed = {
+    candidates: [{ candidateId: '04-3#1', route: 'bundle' }, { candidateId: 'A-8#1', route: 'isolated' }],
+    verifierTasks: [
+      { taskId: 'bundle-1', route: 'bundle', candidateIds: ['04-3#1'], ...at('bundle-1') },
+      { taskId: 'isolated-A-8-1', route: 'isolated', candidateIds: ['A-8#1'], ...at('isolated-A-8-1') },
+    ],
+    promotions: { '04-3#1': { taskId: 'isolated-04-3-1', ...at('isolated-04-3-1') } },
+  }
+  const routedPath = join(dir, '.timing', `${RUN}.routed.json`)
+  writeFileSync(routedPath, JSON.stringify(routed), 'utf8')
+  const answer = (name, ...verdicts) => writeFileSync(at(name).verdict, JSON.stringify({ schemaVersion: 1, verdicts }), 'utf8')
+  return { routedPath, answer }
+}
+
+const collectTally = (dir, extra) => spawnSync(process.execPath, [SCRIPT, '--dir', dir, '--run', RUN, '--collect', ...extra],
+  { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+
+test('--collect는 작업별 판정 파일을 bundle → isolated → 승격 순서로 모은다', t => {
+  const dir = started(t)
+  const { routedPath, answer } = verifyTasks(dir)
+  answer('bundle-1', verdict('04-3#1', 'needs-context'))
+  answer('isolated-A-8-1', verdict('A-8#1', 'rejected'))
+  answer('isolated-04-3-1', verdict('04-3#1', 'upheld'))
+  const out = collectTally(dir, ['--targets', routedPath])
+  assert.equal(out.status, 0, out.stderr)
+  const counts = JSON.parse(out.stdout)
+  // 승격 판정이 bundle 판정보다 먼저 읽혔다면 04-3#1은 needs-context로 남는다.
+  assert.equal(counts.upheld, 1)
+  assert.equal(counts.rejected, 1)
+  assert.equal(counts.needsContext, 0)
+  assert.equal(counts.reverdicted, 1)
+  assert.equal(counts.noVerdict, 0)
+})
+
+test('--collect는 모은 판정을 렌더러가 읽을 파일 하나로 남긴다', t => {
+  const dir = started(t)
+  const { routedPath, answer } = verifyTasks(dir)
+  answer('bundle-1', verdict('04-3#1', 'upheld'))
+  answer('isolated-A-8-1', verdict('A-8#1', 'upheld'))
+  const out = collectTally(dir, ['--targets', routedPath])
+  assert.equal(out.status, 0, out.stderr)
+  const combined = JSON.parse(readFileSync(JSON.parse(out.stdout).verdictsFile, 'utf8'))
+  assert.deepEqual(combined.tasks.map(payload => payload.verdicts[0].candidateId), ['04-3#1', 'A-8#1'])
+})
+
+test('--collect는 판정 파일이 없는 작업을 noVerdict로 세고 어느 작업인지 알린다', t => {
+  const dir = started(t)
+  const { routedPath, answer } = verifyTasks(dir)
+  answer('bundle-1', verdict('04-3#1', 'upheld'))
+  const out = collectTally(dir, ['--targets', routedPath])
+  assert.equal(out.status, 0, out.stderr)
+  assert.equal(JSON.parse(out.stdout).noVerdict, 1)
+  assert.match(out.stderr, /isolated-A-8-1/)
+})
+
+test('--collect에는 어느 작업을 읽을지 담은 --targets가 필요하다', t => {
+  const dir = started(t)
+  const out = collectTally(dir, [])
+  assert.equal(out.status, 2)
+  assert.match(out.stderr, /--targets/)
+})
+
 // 교차검증의 끝은 시작과 짝이다. 잘못 센 수치를 바로잡으려고 다시 돌리면 끝이 둘이
 // 되는데, append 전용 기록에서 그것은 `note`를 단 정정 줄이어야 한다 — 그래야
 // `--check`가 "판정을 다시 받았다"와 "다시 셌다"를 가른다.

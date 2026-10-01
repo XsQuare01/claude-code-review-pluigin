@@ -23,7 +23,8 @@
 // 파일로 받는 이유는 `prepare-verification.mjs --input`과 같다 — 산문과 코드 인용이
 // 든 payload를 셸 인용부호 하나에 넣는 구조는 깨지는 쪽이 정상이다.
 
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
 
 import { lastPhase, logPhase, requireStartedTimeline } from './lib/run-record.mjs'
 import { collectVerdicts } from './lib/verdicts.mjs'
@@ -107,21 +108,67 @@ const run = flag('run')
 const sidecar = requireStartedTimeline(dir, run)
 
 const inputs = flagAll('input')
-if (!inputs.length) die('--input <경로>가 필요하다. 검증 작업이 낸 verdict payload를 파일로 넘긴다')
+const collectMode = process.argv.includes('--collect')
+const targetsPath = flag('targets')
+if (collectMode && inputs.length) die('--collect와 --input을 함께 줄 수 없다. 작업별 판정 파일을 모으거나 판정 파일을 직접 넘긴다')
+if (collectMode && targetsPath === undefined) {
+  die('--collect에는 --targets <prepare-verification 출력>이 필요하다 — 어느 작업의 판정 파일을 어떤 순서로 읽을지가 거기 있다')
+}
+if (!collectMode && !inputs.length) die('--input <경로>가 필요하다. 검증 작업이 낸 verdict payload를 파일로 넘긴다')
 
-const payloads = inputs.map(path => {
+const readJson = (path, what) => {
   let raw
   try {
     raw = readFileSync(path, 'utf8')
   } catch (error) {
-    die(`--input을 읽지 못했다: ${path} — ${error.message}`)
+    die(`${what}을 읽지 못했다: ${path} — ${error.message}`)
   }
   try {
     return JSON.parse(raw)
   } catch (error) {
     die(`${path} is not valid JSON: ${error.message}`)
   }
-})
+}
+
+const routed = targetsPath === undefined ? undefined : readJson(targetsPath, '--targets')
+
+/**
+ * `prepare-verification.mjs`가 정한 자리에서 판정 파일을 모은다.
+ *
+ * 순서가 곧 정본 순서다 — bundle 작업, isolated 작업, 그다음 승격 작업. 승격은
+ * bundle이 `needs-context`로 돌린 후보를 다시 판정한 것이므로 반드시 bundle 뒤에
+ * 와야 한다. 판정 파일이 없는 작업은 검증자가 결과를 내지 못한 것이다 — 실패로
+ * 멈추지 않고(C-6B: verification-unavailable) 어느 작업인지 알린다. 승격 작업은
+ * 필요할 때만 띄우므로 파일이 없는 것이 정상이다.
+ */
+const collectFromTasks = plan => {
+  const found = []
+  const missing = []
+  for (const task of plan?.verifierTasks ?? []) {
+    if (existsSync(task.verdict)) found.push(readJson(task.verdict, '판정 파일'))
+    else missing.push(task.taskId)
+  }
+  for (const promotion of Object.values(plan?.promotions ?? {})) {
+    if (existsSync(promotion.verdict)) found.push(readJson(promotion.verdict, '판정 파일'))
+  }
+  return { found, missing }
+}
+
+let payloads
+let verdictsFile
+if (collectMode) {
+  const { found, missing } = collectFromTasks(routed)
+  if (missing.length) {
+    process.stderr.write(`경고: 판정 파일이 없는 검증 작업 ${missing.length}개: ${missing.join(', ')} — 그 후보는 판정 없음(noVerdict)으로 센다\n`)
+  }
+  payloads = found
+  // 렌더러는 판정 파일을 `--verdicts`로 받는다. 여러 파일을 순서대로 넘기게 하면
+  // 순서를 다시 사람이 정하게 되므로, 모은 순서 그대로 한 파일에 남긴다.
+  verdictsFile = join(dir, '.timing', `${run}.verdicts.json`)
+  writeFileSync(verdictsFile, `${JSON.stringify({ tasks: payloads }, null, 2)}\n`, 'utf8')
+} else {
+  payloads = inputs.map(path => readJson(path, '--input'))
+}
 
 // 판정 파일을 읽는 규칙은 렌더러와 같은 함수 하나다(`lib/verdicts.mjs`). 여기서만
 // 받아 주는 모양이 생기면, 여기서 센 판정을 렌더러가 못 읽는 일이 다시 생긴다.
@@ -129,7 +176,7 @@ let verdicts
 try {
   verdicts = collectVerdicts(payloads)
 } catch (error) {
-  die(`${inputs.join(', ')}: ${error.message}`)
+  die(`${collectMode ? '작업별 판정 파일' : inputs.join(', ')}: ${error.message}`)
 }
 const counts = tally(verdicts)
 
@@ -152,18 +199,11 @@ if (corrected !== undefined && !Number.isInteger(malformedTasksCorrected)) {
  * 들어 있으므로, 여기서 뺄셈만 하면 된다 — 모델에게 다시 세게 하지 않는다.
  * 대상 수를 못 읽으면 필드를 만들지 않는다. **0과 미측정은 다르다.**
  */
-const targetsPath = flag('targets')
 let noVerdict
 let weakNote
 
-if (targetsPath !== undefined) {
+if (routed !== undefined) {
   // ID로 본다. 빠진 것과 대상 밖의 것이 함께 드러난다.
-  let routed
-  try {
-    routed = JSON.parse(readFileSync(targetsPath, 'utf8'))
-  } catch (error) {
-    die(`--targets를 읽지 못했다: ${targetsPath} — ${error.message}`)
-  }
   const targets = targetIds(routed)
   if (!targets.size) die(`--targets에 검증 대상이 없다: ${targetsPath} — prepare-verification.mjs의 출력을 넘긴다`)
 
@@ -199,4 +239,8 @@ logPhase(dir, run, 'crossverify.end', {
 // `judged`는 집합 차이를 내려고 들고 다닌 것이라 stdout에는 싣지 않는다.
 // `JSON.stringify`가 Set을 `{}`로 내보내 호출자에게 빈 값처럼 보이기 때문이다.
 const { judged: _judged, ...reported } = counts
-process.stdout.write(`${JSON.stringify({ ...reported, ...(noVerdict === undefined ? {} : { noVerdict }) }, null, 2)}\n`)
+process.stdout.write(`${JSON.stringify({
+  ...reported,
+  ...(noVerdict === undefined ? {} : { noVerdict }),
+  ...(verdictsFile === undefined ? {} : { verdictsFile }),
+}, null, 2)}\n`)
