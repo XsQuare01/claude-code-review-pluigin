@@ -239,3 +239,75 @@ test('규칙 문서 이름을 source로 단 envelope는 그 출처를 후보에 
   assert.equal(out.status, 0, out.stderr)
   assert.equal(JSON.parse(out.stdout).candidates[0].source, '04-state')
 })
+
+// ------------------------------------------------------ 모듈별 결과 수집 (--collect)
+//
+// 같은 실행은 producer 22개를 다 받은 직후 context가 압축됐다. 원본 JSON은 대화에만
+// 있었으므로, 오케스트레이터는 서브에이전트에게 세션 기록을 긁어 envelope를 다시
+// 조립하게 했다(13분). 그 과정에서 `16-2` 인용의 `${name}`이 잘렸고, 교정에 8.5분이
+// 더 들었다. 결과를 **받는 즉시** 모듈별 파일로 남기면 조립은 스크립트의 일이 된다 —
+// 출처(`source`)도 파일 이름에서 나오므로 누가 다시 적을 일이 없다.
+
+const startedWith = (t, events) => {
+  const dir = started(t)
+  const path = join(dir, '.timing', `${RUN}.jsonl`)
+  const lines = events.map((event, at) => JSON.stringify({ at: '2026-09-30T00:01:00.000Z', seq: at + 2, ...event }))
+  writeFileSync(path, `${readFileSync(path, 'utf8')}${lines.join('\n')}\n`, 'utf8')
+  return dir
+}
+const done = (module, status) => ({ phase: 'module.done', module, attempt: 1, status })
+const resultFile = (dir, name, value) => writeFileSync(join(dir, '.timing', `${RUN}.${name}.json`),
+  typeof value === 'string' ? value : JSON.stringify(value), 'utf8')
+const collect = (dir, extra = []) => spawnSync('node', [SCRIPT, '--merge-base', 'HEAD', '--dir', dir, '--run', RUN, '--collect', ...extra],
+  { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+
+test('--collect는 모듈별 결과 파일을 모으고 source를 파일 이름에서 붙인다', t => {
+  const dir = startedWith(t, [done('01-fsd', 'ok'), done('props', 'ok')])
+  resultFile(dir, '01-fsd', RESULT)
+  resultFile(dir, 'props', { ...RESULT, findings: [] })
+  const out = collect(dir)
+  assert.equal(out.status, 0, out.stderr)
+  const result = JSON.parse(out.stdout)
+  assert.equal(result.counts.total, 1)
+  assert.equal(result.candidates[0].source, '01-fsd')
+  assert.deepEqual(result.collected.sources, ['01-fsd', 'props'])
+})
+
+test('--collect는 끝났다고 기록된 모듈의 결과 파일이 없으면 거부한다', t => {
+  const dir = startedWith(t, [done('01-fsd', 'ok'), done('04-state', 'ok')])
+  resultFile(dir, '01-fsd', RESULT)
+  const out = collect(dir)
+  assert.equal(out.status, 2)
+  assert.match(out.stderr, /04-state/)
+  assert.match(out.stderr, /\.04-state\.json/)
+})
+
+test('--collect는 최종 상태가 failed인 모듈의 파일을 쓰지 않고 그 사실을 알린다', t => {
+  const dir = startedWith(t, [done('01-fsd', 'ok'), done('02-type', 'failed')])
+  resultFile(dir, '01-fsd', { ...RESULT, findings: [] })
+  resultFile(dir, '02-type', { ...RESULT, findings: [{ ...FINDING, ruleId: '02-1' }] })
+  const out = collect(dir)
+  assert.equal(out.status, 0, out.stderr)
+  const result = JSON.parse(out.stdout)
+  assert.equal(result.counts.total, 0)
+  assert.deepEqual(result.collected.excludedFailed, ['02-type'])
+  assert.match(out.stderr, /02-type/)
+})
+
+test('--collect는 읽을 수 없는 결과 파일을 이름으로 짚는다', t => {
+  const dir = startedWith(t, [done('01-fsd', 'ok')])
+  resultFile(dir, '01-fsd', '{"findings": [')
+  const out = collect(dir)
+  assert.equal(out.status, 2)
+  assert.match(out.stderr, /\.01-fsd\.json/)
+})
+
+test('--collect와 --input을 함께 주면 어느 입력을 쓸지 정하지 않고 거부한다', t => {
+  const dir = startedWith(t, [done('01-fsd', 'ok')])
+  resultFile(dir, '01-fsd', RESULT)
+  const input = join(dir, 'candidates.json')
+  writeFileSync(input, JSON.stringify({ results: [] }), 'utf8')
+  const out = collect(dir, ['--input', input])
+  assert.equal(out.status, 2)
+  assert.match(out.stderr, /--collect/)
+})

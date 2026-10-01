@@ -3,7 +3,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { dirname, isAbsolute, join, resolve, sep } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
-import { logPhase, requireStartedTimeline } from './lib/run-record.mjs'
+import { logPhase, readEvents, requireStartedTimeline } from './lib/run-record.mjs'
 
 // Deterministic preparation for the cross-verification pass.
 //
@@ -454,6 +454,13 @@ async function main() {
   const rulesDir = rulesIndex === -1
     ? join(dirname(fileURLToPath(import.meta.url)), '..', 'review-rules')
     : argv[rulesIndex + 1]
+  // 모듈별 결과 파일에서 입력을 모은다. `--input`과 함께 주면 어느 쪽이 입력인지
+  // 호출자만 알고 스크립트는 모른다 — 고르지 않고 거부한다.
+  const collect = argv.includes('--collect')
+  if (collect && inputPath !== undefined) {
+    process.stderr.write('--collect와 --input을 함께 줄 수 없다. 모듈별 결과 파일을 모으거나 입력 파일 하나를 넘긴다\n')
+    process.exit(2)
+  }
 
   // 인자를 먼저 본다. 입력을 다 읽고 나서 거부하면 실패 메시지가 파이프 오류에
   // 묻히고, 무엇을 고쳐야 하는지가 가려진다.
@@ -463,7 +470,7 @@ async function main() {
   // 지시였고, 2026-09-08의 한 실행은 계약을 읽고도 타임라인을 한 줄도 남기지
   // 않았다. 디스패치 이후라 부팅을 강제할 수는 없지만, 타임라인 없이 검증까지
   // 가는 경로는 여기서 닫힌다. 시작 자체를 강제하는 것은 `review-preflight.mjs`의 몫이다.
-  requireStartedTimeline(dir, run)
+  const sidecar = requireStartedTimeline(dir, run)
 
   // 부른 사실을 먼저 남긴다. `script.start`만 있고 `script.done`이 없는 기록은
   // "불렀고 끝내지 못했다"는 뜻이고, 아무 줄도 없는 것은 "부르지 않았다"는 뜻이다.
@@ -471,37 +478,52 @@ async function main() {
   // 한 실행에서 그 구간이 1086초로 전체 최장이었는데 무엇이 오래 걸렸는지 알 수 없었다.
   logPhase(dir, run, 'script.start', { script: 'prepare-verification' })
 
-  const source = inputPath === undefined ? 'stdin' : inputPath
-  let raw = ''
-  if (inputPath === undefined) {
-    for await (const chunk of process.stdin) raw += chunk
-  } else {
-    try {
-      raw = readFileSync(inputPath, 'utf8')
-    } catch (error) {
-      process.stderr.write(`--input을 읽지 못했다: ${inputPath} — ${error.message}\n`)
-      process.exit(2)
-    }
-  }
-  let payload
-  try {
-    payload = JSON.parse(raw)
-  } catch (error) {
-    process.stderr.write(`${source} is not valid JSON: ${error.message}\n`)
+  const fail = message => {
+    process.stderr.write(`${message}\n`)
     process.exit(2)
   }
+
   // 규칙 문서 목록은 이 스크립트와 같은 플러그인의 것을 기본으로 쓴다. 호출자가
   // `--rules`를 주면 producer가 읽은 그 디렉터리를 쓴다.
   const sourceNames = loadSourceNames(rulesDir)
-  if (sourceNames.error) {
-    process.stderr.write(`${sourceNames.error}\n`)
-    process.exit(2)
+  if (sourceNames.error) fail(sourceNames.error)
+
+  let source
+  let payload
+  let collected
+  if (collect) {
+    source = '--collect'
+    const gathered = collectResultFiles({
+      events: readEvents(sidecar),
+      sourceNames: sourceNames.value,
+      pathOf: name => join(dir, '.timing', `${run}.${name}.json`),
+      read: path => (existsSync(path) ? readFileSync(path, 'utf8') : undefined),
+    })
+    if (gathered.problems.length) fail(`모듈별 결과를 모으지 못했다:\n  - ${gathered.problems.join('\n  - ')}`)
+    for (const warning of gathered.warnings) process.stderr.write(`경고: ${warning}\n`)
+    payload = gathered.payload
+    collected = gathered.collected
+  } else {
+    source = inputPath === undefined ? 'stdin' : inputPath
+    let raw = ''
+    if (inputPath === undefined) {
+      for await (const chunk of process.stdin) raw += chunk
+    } else {
+      try {
+        raw = readFileSync(inputPath, 'utf8')
+      } catch (error) {
+        fail(`--input을 읽지 못했다: ${inputPath} — ${error.message}`)
+      }
+    }
+    try {
+      payload = JSON.parse(raw)
+    } catch (error) {
+      fail(`${source} is not valid JSON: ${error.message}`)
+    }
   }
+
   const problems = payloadProblems(payload, sourceNames.value)
-  if (problems.length) {
-    process.stderr.write(`${source}를 검증 준비 입력으로 받을 수 없다:\n  - ${problems.join('\n  - ')}\n`)
-    process.exit(2)
-  }
+  if (problems.length) fail(`${source}를 검증 준비 입력으로 받을 수 없다:\n  - ${problems.join('\n  - ')}`)
 
   // Producer results are what the orchestrator already holds, so that is the cheap shape.
   // The candidates shape stays accepted for callers that assign their own ids.
@@ -513,10 +535,61 @@ async function main() {
         ? candidatesFromResults(payload.results)
         : (payload.candidates ?? [])
   const result = prepareVerification(candidates, collectBlobs(candidates, gitReaders(mergeBase)), { locationsOnly })
+  if (collected) result.collected = collected
+
   logPhase(dir, run, 'script.done', { ran: true, counts: result.counts })
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`)
 }
 
+/**
+ * 모듈별 결과 파일(`<run>.<규칙 문서 이름>.json`)을 envelope 입력으로 모은다.
+ *
+ * 기준은 파일이 아니라 **기록**이다. 마지막 `module.done`이 `failed`가 아닌 모듈은
+ * 결과 파일이 반드시 있어야 하고, 없으면 거부한다 — 모은 것만 보고 넘어가면 빠진
+ * 모듈이 "지적 0건"과 구분되지 않는다. `failed`로 끝난 모듈의 파일은 쓰지 않는다
+ * (C-6A: 실패한 패스를 부분 보정으로 통과시키지 않는다). 기록 없이 파일만 있으면
+ * 쓰되 경고한다.
+ */
+export function collectResultFiles({ events, sourceNames, pathOf, read }) {
+  const finalStatus = new Map()
+  for (const event of events) {
+    if (event?.phase === 'module.done') finalStatus.set(String(event.module), event.status)
+  }
+  const results = []
+  const problems = []
+  const warnings = []
+  const collected = { sources: [], excludedFailed: [], withoutModuleDone: [] }
+  for (const name of sourceNames) {
+    const path = pathOf(name)
+    const raw = read(path)
+    const status = finalStatus.get(name)
+    if (status === 'failed') {
+      if (raw !== undefined) {
+        collected.excludedFailed.push(name)
+        warnings.push(`${name}는 마지막 module.done이 failed라 결과 파일을 쓰지 않는다: ${path}`)
+      }
+      continue
+    }
+    if (raw === undefined) {
+      if (status !== undefined) problems.push(`${name}는 module.done이 있는데 결과 파일이 없다: ${path}`)
+      continue
+    }
+    let parsed
+    try {
+      parsed = JSON.parse(raw)
+    } catch (error) {
+      problems.push(`${path}를 JSON으로 읽지 못했다: ${error.message}`)
+      continue
+    }
+    if (status === undefined) {
+      collected.withoutModuleDone.push(name)
+      warnings.push(`${name}는 module.done 없이 결과 파일만 있다 — 쓰지만 기록에 그 모듈이 끝난 흔적이 없다: ${path}`)
+    }
+    results.push({ source: name, result: parsed })
+    collected.sources.push(name)
+  }
+  return { payload: { results }, problems, warnings, collected }
+}
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   await main()
 }

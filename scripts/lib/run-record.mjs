@@ -46,19 +46,22 @@ export function requireStartedTimeline(dir, run) {
  * `null`이고, 그것은 "그 단계가 없었다"는 뜻이지 0이 아니다.
  */
 export function lastPhase(sidecar, phase) {
-  if (!existsSync(sidecar)) return null
-  let found = null
+  return readEvents(sidecar).filter(event => event?.phase === phase).at(-1) ?? null
+}
+
+/** 사이드카의 줄을 순서대로 읽는다. 깨진 줄은 건너뛴다. 파일이 없으면 빈 배열이다. */
+export function readEvents(sidecar) {
+  if (!existsSync(sidecar)) return []
+  const events = []
   for (const line of readFileSync(sidecar, 'utf8').split('\n')) {
     if (!line.trim()) continue
-    let event
     try {
-      event = JSON.parse(line)
+      events.push(JSON.parse(line))
     } catch {
       continue
     }
-    if (event?.phase === phase) found = event
   }
-  return found
+  return events
 }
 
 /**

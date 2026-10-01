@@ -1742,6 +1742,49 @@ test('--check는 짝이 맞고 렌더 앞에서 끝난 교차검증은 짚지 �
   assert.equal(out.status, 0, out.stdout)
 })
 
+// ── 모듈 결과 파일 ────────────────────────────────────────────────────────
+//
+// 2026-09-30 실행은 producer 결과를 대화에만 들고 있다가 context 압축으로 잃었고,
+// 서브에이전트가 세션 기록을 긁어 다시 조립하다 인용 하나를 망가뜨렸다. full
+// 워크플로우는 결과를 받는 즉시 `<run>.<모듈>.json`으로 남기고, 그 파일에서
+// `prepare-verification.mjs --collect`가 입력을 모은다. `module.done`은 모델이
+// 반드시 남기는 줄이므로, 파일이 없다는 사실을 **그 자리에서** 알린다 — 압축 뒤에
+// 알게 되면 되찾을 방법이 없다.
+
+const startFull = (dir, workflow = 'full') => log(dir, 'run.start', { host: 'h', rules: 'r', version: 'v', branch: 'b', changedFiles: 1, workflow })
+
+test('full 실행에서 결과 파일 없이 module.done ok를 남기면 경고한다', t => {
+  const dir = freshDir(t)
+  startFull(dir)
+  const out = log(dir, 'module.done', { module: '01-fsd', attempt: 1, status: 'ok' })
+  assert.equal(out.status, 0, out.stderr)
+  assert.match(out.stderr, new RegExp(`${RUN}\\.01-fsd\\.json`))
+  assert.equal(linesOf(dir).at(-1).phase, 'module.done')
+})
+
+test('결과 파일이 먼저 있으면 module.done에 경고하지 않는다', t => {
+  const dir = freshDir(t)
+  startFull(dir)
+  writeFileSync(join(dir, '.timing', `${RUN}.01-fsd.json`), '{"schemaVersion":1,"findings":[],"openQuestions":[]}', 'utf8')
+  const out = log(dir, 'module.done', { module: '01-fsd', attempt: 1, status: 'ok' })
+  assert.equal(out.status, 0, out.stderr)
+  assert.equal(out.stderr, '')
+})
+
+test('실패로 끝난 모듈에는 결과 파일을 요구하지 않는다', t => {
+  const dir = freshDir(t)
+  startFull(dir)
+  const out = log(dir, 'module.done', { module: '01-fsd', attempt: 1, status: 'failed', failureClass: 'malformed-output' })
+  assert.equal(out.stderr, '')
+})
+
+test('full이 아닌 워크플로우에는 결과 파일을 요구하지 않는다', t => {
+  const dir = freshDir(t)
+  startFull(dir, 'default')
+  const out = log(dir, 'module.done', { module: '01-fsd', attempt: 1, status: 'ok' })
+  assert.equal(out.stderr, '')
+})
+
 // `feat/scene-graph-undo-redo` 실행(2026-09-30)은 synthesis를 시작한 뒤 판정 하나를
 // 다시 받아 유지를 반박으로 바꿨다. synthesis는 반박된 지적을 입력에서 빼므로(C-6B),
 // 시작한 뒤에 판정이 바뀌면 synthesis의 입력과 최종 판정이 어긋난다.

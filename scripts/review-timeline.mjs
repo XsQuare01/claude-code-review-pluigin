@@ -1081,6 +1081,19 @@ const data = (() => {
 
 const { events } = readLines()
 
+// full 워크플로우의 producer 결과는 받는 즉시 `<run>.<모듈>.json`으로 남는다 —
+// `prepare-verification.mjs --collect`가 그 파일에서 입력을 모은다. 2026-09-30 실행은
+// 결과를 대화에만 들고 있다가 context 압축으로 잃었고, 세션 기록을 긁어 다시
+// 조립하다 인용 하나를 망가뜨렸다. `module.done`은 모델이 반드시 남기는 줄이므로
+// 파일이 없다는 사실을 여기서 알린다. 줄은 그대로 남긴다 — 경고일 뿐이다.
+if (phase === 'module.done' && data.status === 'ok' && typeof data.module === 'string') {
+  const workflow = events.find(event => event.phase === 'run.start')?.workflow
+  const resultPath = join(timingDir, `${run}.${data.module}.json`)
+  if (workflow === 'full' && !existsSync(resultPath)) {
+    process.stderr.write(`경고: ${data.module}의 결과 파일이 없다: ${resultPath} — producer가 돌려준 JSON을 module.done보다 먼저 그대로 저장한다. prepare-verification.mjs --collect가 그 파일을 읽는다\n`)
+  }
+}
+
 // numbered `module.done`이 한 줄도 없으면 셀 재료가 없다. 0으로 덮지 않고 넘긴
 // 값을 둔다 — 디스패치 기록이 없다는 사실은 `--check`가 따로 짚는다.
 const dispatchRecord = phase === 'dispatch.end' ? dispatchCounts(events) : null
