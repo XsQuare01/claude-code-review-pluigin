@@ -1695,6 +1695,58 @@ test('--check는 닫힌 목록 밖 status를 어휘 문제로 짚고 수치 불�
   assert.doesNotMatch(out.stdout, /기록으로 세면/)
 })
 
+// 기록은 고치지 않고 덧붙인다. 목록 밖 status를 적은 줄은 같은 모듈·시도의 `module.done`을
+// `note`와 함께 한 줄 더 남겨 바로잡는다 — `crossverify.end`의 정정 줄과 같은 규칙이다.
+// `prepare-verification.mjs --collect`가 목록 밖 status를 거부하므로, 바로잡은 기록이
+// `--check`를 통과하지 못하면 바로잡을 길이 없는 것과 같다.
+const miscounted = extra => [
+  { at: '2026-09-30T00:00:00.000Z', seq: 1, phase: 'run.start', host: 'opencode', rules: 'r', version: '2.15.0', branch: 'b', changedFiles: 52, candidates: 20 },
+  { at: '2026-09-30T00:00:10.000Z', seq: 2, phase: 'modules.planned', candidates: 20, applied: 1 },
+  { at: '2026-09-30T00:00:20.000Z', seq: 3, phase: 'dispatch.start', modules: 1, inflight: 4 },
+  { at: '2026-09-30T00:00:21.000Z', seq: 4, phase: 'module.start', module: '01-fsd', attempt: 1 },
+  { at: '2026-09-30T00:05:00.000Z', seq: 5, phase: 'module.done', module: '01-fsd', attempt: 1, status: 'COMPLETED', findings: 3 },
+  ...extra,
+  { at: '2026-09-30T00:40:00.000Z', seq: 9, phase: 'dispatch.end', terminalOk: 1, terminalFailed: 0, attemptsTotal: 1, attemptsFailed: 0 },
+  { at: '2026-09-30T00:50:00.000Z', seq: 10, phase: 'run.end', verdict: 'WARN' },
+]
+
+test('--check는 note를 단 같은 시도의 module.done을 목록 밖 status의 정정으로 받는다', t => {
+  const dir = freshDir(t)
+  plant(dir, miscounted([
+    { at: '2026-09-30T00:30:00.000Z', seq: 6, phase: 'module.done', module: '01-fsd', attempt: 1, status: 'ok', findings: 3, note: 'status COMPLETED를 ok로 바로잡는다' },
+  ]))
+  const out = check(dir)
+  assert.equal(out.status, 0, out.stdout)
+  assert.doesNotMatch(out.stdout, /닫힌 목록 밖/)
+  assert.doesNotMatch(out.stdout, /두 번 끝났다/)
+  assert.doesNotMatch(out.stdout, /module\.start` 없이/)
+  assert.match(out.stdout, /정정/)
+})
+
+test('--check는 note 없이 다시 온 module.done을 정정으로 받지 않는다', t => {
+  const dir = freshDir(t)
+  plant(dir, miscounted([
+    { at: '2026-09-30T00:30:00.000Z', seq: 6, phase: 'module.done', module: '01-fsd', attempt: 1, status: 'ok', findings: 3 },
+  ]))
+  const out = check(dir)
+  assert.equal(out.status, 1)
+  assert.match(out.stdout, /두 번 끝났다/)
+})
+
+test('--check는 목록 안 status를 바꾼 줄은 note가 있어도 정정이 아니라 재시도로 본다', t => {
+  // failed → ok는 어휘를 바로잡은 것이 아니라 다른 사건이다. 재시도는 attempt를 올린다.
+  const dir = freshDir(t)
+  plant(dir, [
+    { at: '2026-09-08T00:00:00.000Z', seq: 1, phase: 'run.start', host: 'h', rules: 'r', version: '2.11.0', branch: 'b', changedFiles: 9 },
+    { at: '2026-09-08T00:01:00.000Z', seq: 2, phase: 'module.done', module: '01-fsd', attempt: 1, status: 'failed', failureClass: 'task-not-found' },
+    { at: '2026-09-08T00:02:00.000Z', seq: 3, phase: 'module.done', module: '01-fsd', attempt: 1, status: 'ok', failureClass: 'none', note: '늦게 돌아왔다' },
+    { at: '2026-09-08T00:03:00.000Z', seq: 4, phase: 'run.end', verdict: 'WARN' },
+  ])
+  const out = check(dir)
+  assert.equal(out.status, 1)
+  assert.match(out.stdout, /두 번 끝났다/)
+})
+
 // ── 교차검증 시작·끝의 짝과 순서 ──────────────────────────────────────────
 //
 // 같은 실행이 `crossverify.start` 하나에 `crossverify.end` 둘을 남겼고, 두 번째

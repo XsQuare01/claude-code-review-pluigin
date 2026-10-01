@@ -1135,6 +1135,8 @@ UTF-16 파일도 읽는다 — PowerShell 5.1의 `Set-Content -Encoding UTF8`은
 
 **교차검증은 시작과 끝이 짝을 이루고, 판정을 입력으로 쓰는 단계(`synthesis.start`·`render.start` 중 먼저 온 것)보다 앞에서 끝난다.** `--check`는 시작 없이 남은 끝, 끝나지 않은 시작, 그 단계 뒤의 교차검증 기록을 문제로 짚는다. 같은 날 다른 실행은 `synthesis.start` 뒤에 판정 하나를 다시 받아 유지를 반박으로 바꿨다. 2026-09-30 실행이 시작 하나에 끝 둘을 남겼고, 두 번째 끝은 리포트를 조립하다 판정 하나를 다시 받아 집계를 바꾼 것이었다. 잘못 센 끝을 바로잡는 줄은 예외다 — 앞 끝 바로 뒤에 `note`를 달아 다시 쓴다(append 전용 기록의 정정).
 
+**`module.done`의 목록 밖 status도 같은 방식으로 바로잡는다.** 같은 모듈·같은 `attempt`의 `module.done`을 `ok`/`failed`와 사유를 적은 `note`로 한 줄 더 남기면, `--check`는 그것을 중복 끝이 아니라 정정으로 받는다. 상태는 정정 줄이 정본이고 구간의 시각은 앞 줄이 정본이다. 정정으로 받는 것은 앞 줄의 status가 목록 밖일 때뿐이다 — `failed`를 `ok`로 바꾸는 것은 어휘 정정이 아니라 재시도이고, `attempt`를 올려 남긴다.
+
 **full 워크플로우의 `module.done`은 결과 파일 뒤에 온다.** producer 결과는 C-6A validation을 통과하면 곧바로 `<리포트 basename>.<module>.json`에 그대로 쓰이고, `prepare-verification.mjs --collect`가 그 파일에서 검증 입력을 모은다. 결과 파일 없이 `status: ok`를 남기면 스크립트가 경고한다 — 결과를 대화에만 들고 있던 2026-09-30 실행은 context 압축으로 그것을 잃었다.
 
 **`module`에는 번호가 아니라 모듈 파일 이름을 적는다** — `review-rules/03-react-rules.md`면
