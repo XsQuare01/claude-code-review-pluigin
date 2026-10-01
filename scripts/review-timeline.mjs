@@ -178,6 +178,24 @@ const undeclaredKeys = (phase, data) => {
  * 이름이 틀렸다고 줄을 거부하지는 않는다 — 실패를 기록하려는 줄을 실패 이름 때문에
  * 버리는 것은 앞뒤가 맞지 않는다. append에서는 경고하고 `--check`가 짚는다.
  */
+/**
+ * 값이 닫힌 목록인 필드.
+ *
+ * `module.done`의 `status`는 `ok`/`failed` 둘뿐이다. 2026-09-30 실행이 22줄 전부에
+ * `COMPLETED`를 적었다 — SKILL이 모듈 상태를 부르는 이름(`PENDING → DISPATCHED →
+ * COMPLETED`)이 이 기록에 새어 들어온 것이다. append는 받았고, `--check`는 그 값을
+ * `ok`가 아닌 것으로 세어 "전부 실패"라는 수치를 냈다. 원인은 수가 아니라 어휘였다.
+ *
+ * `failureClass`와 같은 이유로 줄은 거부하지 않는다. 경고하고 `--check`가 짚는다.
+ */
+const CLOSED_VALUES = new Map([
+  ['module.done', { status: ['ok', 'failed'] }],
+])
+
+const outsideClosedValues = (phase, data) => Object.entries(CLOSED_VALUES.get(phase) ?? {})
+  .filter(([key, allowed]) => data[key] !== undefined && !allowed.includes(data[key]))
+  .map(([key, allowed]) => ({ key, value: data[key], allowed }))
+
 const FAILURE_CLASSES = new Set([
   'none', 'malformed-corrected',
   'no-start', 'task-not-found', 'inactivity-timeout', 'queue-expiry', 'empty-result',
@@ -351,6 +369,23 @@ if (has('check')) {
     problems.push(`표에 없는 failureClass: ${badClasses.join(', ')}. 쓸 수 있는 값은 C-9의 표에 있다`)
   }
 
+  // 닫힌 목록 밖 값은 **어휘 문제로** 짚는다. 이 값으로 아래 `dispatch.end`를 다시
+  // 세면 `COMPLETED`가 `ok`가 아니라서 전부 실패로 세어지고, 기록은 멀쩡한 수치를
+  // 틀렸다고 말하게 된다 — 진짜 원인(어휘)은 그 문장 어디에도 없다.
+  const offList = new Map()
+  for (const event of events) {
+    for (const { key, value, allowed } of outsideClosedValues(event.phase, event)) {
+      const label = `\`${event.phase}\`의 ${key}`
+      if (!offList.has(label)) offList.set(label, { values: new Set(), allowed, lines: 0 })
+      const entry = offList.get(label)
+      entry.values.add(String(value))
+      entry.lines += 1
+    }
+  }
+  for (const [label, entry] of offList) {
+    problems.push(`${label}가 닫힌 목록 밖이다: ${[...entry.values].join(', ')} (${entry.lines}줄). 쓸 수 있는 값: ${entry.allowed.join(', ')}`)
+  }
+
   // 같은 모듈·같은 시도가 두 번 끝났으면 재시도인지 중복 기록인지 알 수 없다.
   // 시도마다 한 쌍이라는 정규형이 지켜졌는지를 여기서 본다.
   const seenAttempts = new Set()
@@ -511,7 +546,11 @@ if (has('check')) {
       problems.push(`\`dispatch.end\`가 없다. 모듈을 ${terminal.size}개 끝내고 다음 단계로 갔는데 수집 결과가 기록되지 않았다 — 그 수치를 리포트에 적었다면 기록이 아니라 기억에서 온 것이다`)
     }
 
-    if (ended) {
+    // status가 닫힌 목록 밖이면 다시 셀 수 없다 — 그 값이 성공인지 실패인지는
+    // 기록이 말하지 않는다. 위에서 어휘 문제로 이미 짚었으므로 여기서 수치를
+    // 지어내지 않는다.
+    const countable = attempts.every(event => ['ok', 'failed'].includes(event.status))
+    if (ended && countable) {
       const expected = {
         terminalOk: [...terminal.values()].filter(status => status === 'ok').length,
         terminalFailed: [...terminal.values()].filter(status => status !== 'ok').length,
@@ -959,6 +998,9 @@ const data = (() => {
   const absent = spec.required.filter(key => data[key] === undefined)
   if (absent.length) {
     process.stderr.write(`경고: \`${phase}\`에 ${absent.join(', ')}가 없다 (C-9 표가 요구한다)\n`)
+  }
+  for (const { key, value, allowed } of outsideClosedValues(phase, data)) {
+    process.stderr.write(`경고: \`${phase}\`의 ${key} ${JSON.stringify(value)}는 C-9의 닫힌 목록에 없다. 쓸 수 있는 값: ${allowed.join(', ')}\n`)
   }
   // 실패를 기록하려는 줄을 실패 이름 때문에 버리지는 않는다. 이름만 짚는다.
   if (data.failureClass !== undefined && !FAILURE_CLASSES.has(data.failureClass)) {

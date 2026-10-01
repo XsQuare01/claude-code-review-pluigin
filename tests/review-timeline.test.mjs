@@ -1656,3 +1656,37 @@ test('--summary는 표의 출처와 이벤트 수를 함께 낸다', t => {
   assert.match(out.stdout, /> 출처: `.*code-review-full-feat-x-2026-09-01\.jsonl` · 이벤트 2개 · 마지막 `run\.end`/)
   assert.match(out.stdout, /손으로 고치면 대조가 깨진다/)
 })
+
+// ── module.done의 status 어휘 ─────────────────────────────────────────────
+//
+// 2026-09-30 실행(2.14.0)이 `module.done` 22줄 전부에 `status: "COMPLETED"`를 적었다.
+// SKILL의 모듈 상태 이름(`PENDING → DISPATCHED → COMPLETED`)이고, 이 기록의 값은
+// `ok`/`failed`다. append는 아무 말 없이 받았고, `--check`는 그것을 "terminalOk 22 →
+// 기록으로 세면 0 / terminalFailed 0 → 19"로 보고했다 — 전부 성공한 실행을 전부
+// 실패한 것처럼 읽는 수치다. 원인은 수가 아니라 어휘였는데 기록은 그 말을 하지 않았다.
+
+test('module.done의 status가 ok/failed가 아니면 줄은 남기되 경고한다', t => {
+  const dir = freshDir(t)
+  const out = log(dir, 'module.done', { module: '01-fsd', attempt: 1, status: 'COMPLETED' })
+  assert.equal(out.status, 0, out.stderr)
+  assert.match(out.stderr, /status "COMPLETED"/)
+  assert.match(out.stderr, /ok, failed/)
+  assert.equal(linesOf(dir)[0].status, 'COMPLETED')
+})
+
+test('--check는 닫힌 목록 밖 status를 어휘 문제로 짚고 수치 불일치로 둔갑시키지 않는다', t => {
+  const dir = freshDir(t)
+  plant(dir, [
+    { at: '2026-09-30T00:00:00.000Z', seq: 1, phase: 'run.start', host: 'opencode', rules: 'r', version: '2.14.0', branch: 'b', changedFiles: 52, candidates: 20 },
+    { at: '2026-09-30T00:00:10.000Z', seq: 2, phase: 'modules.planned', candidates: 20, applied: 1 },
+    { at: '2026-09-30T00:00:20.000Z', seq: 3, phase: 'dispatch.start', modules: 1, inflight: 4 },
+    { at: '2026-09-30T00:00:21.000Z', seq: 4, phase: 'module.start', module: '01-fsd', attempt: 1 },
+    { at: '2026-09-30T00:05:00.000Z', seq: 5, phase: 'module.done', module: '01-fsd', attempt: 1, status: 'COMPLETED', findings: 3 },
+    { at: '2026-09-30T00:05:01.000Z', seq: 6, phase: 'dispatch.end', terminalOk: 1, terminalFailed: 0, attemptsTotal: 1, attemptsFailed: 0 },
+    { at: '2026-09-30T00:10:00.000Z', seq: 7, phase: 'run.end', verdict: 'WARN' },
+  ])
+  const out = check(dir)
+  assert.equal(out.status, 1)
+  assert.match(out.stdout, /`module\.done`의 status가 닫힌 목록 밖이다: COMPLETED/)
+  assert.doesNotMatch(out.stdout, /기록으로 세면/)
+})
