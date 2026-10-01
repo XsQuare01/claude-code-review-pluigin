@@ -177,10 +177,20 @@ export function severityOf(impact, confidence) {
  * `<`는 별도 escape 대상이다 — `>`를 escape해도 여는 태그(`<script>`)는
  * 열린 채로 남고, CommonMark는 여는 델리미터만으로 HTML 블록/인라인 HTML을
  * 인식한다.
+ *
+ * **escape가 수식 구분자를 만들면 안 된다.** 한때 `[`·`]`·`(`·`)`를 `\[`·`\]`·
+ * `\(`·`\)`로 바꿨는데, KaTeX를 쓰는 Markdown 뷰어에서 `\[ … \]`는 수식 블록,
+ * `\( … \)`는 인라인 수식이다. 2026-09-30 리포트에서 `[0, 0, 1]`이 "0 , 0 , 1
+ * 0,0,1"로 쪼개지고 `-8`이 `−8`로 보였다. 링크를 막는 데 필요한 것은 대괄호뿐이다 —
+ * `[텍스트]`가 없으면 `(url)`은 그냥 글자다. 그래서 대괄호는 역슬래시가 아니라
+ * 문자 참조(`&#91;`·`&#93;`)로 바꾸고 괄호는 건드리지 않는다. `$`는 `$ … $` 수식을
+ * 열므로 `\$`로 막는다.
  */
+const PROSE_ESCAPES = { '[': '&#91;', ']': '&#93;' }
+
 export function escapeProse(text) {
   const collapsed = String(text).replace(/\s+/g, ' ').trim()
-  return collapsed.replace(/[\\`*_[\]()#>|<]/g, match => `\\${match}`)
+  return collapsed.replace(/[\\`*_[\]#>|<$]/g, match => PROSE_ESCAPES[match] ?? `\\${match}`)
 }
 
 /**

@@ -395,7 +395,8 @@ test('산문이 Markdown 구조를 만들지 못하게 막는다', () => {
   assert.equal(escapeProse('# 헤딩'), '\\# 헤딩')
   assert.equal(escapeProse('a | b'), 'a \\| b')
   assert.equal(escapeProse('```fence'), '\\`\\`\\`fence')
-  assert.equal(escapeProse('[링크](http://x)'), '\\[링크\\]\\(http://x\\)')
+  // 대괄호가 문자 참조가 되면 `[텍스트](url)` 링크가 성립하지 않는다(아래 `수식 구분자` 참고).
+  assert.equal(escapeProse('[링크](http://x)'), '&#91;링크&#93;(http://x)')
   assert.equal(escapeProse('> 인용'), '\\> 인용')
 })
 
@@ -404,7 +405,7 @@ test('산문이 Markdown 구조를 만들지 못하게 막는다', () => {
 // `>`만 escape하면 여는 델리미터(`<script>`)는 그대로 열려 있고, CommonMark는
 // 여는 델리미터만으로 HTML 블록/인라인 HTML을 인식하므로 보호가 안 된다.
 test('산문의 raw HTML 여는 델리미터(`<`)를 escape한다', () => {
-  assert.equal(escapeProse('<script>alert(1)</script>'), '\\<script\\>alert\\(1\\)\\</script\\>')
+  assert.equal(escapeProse('<script>alert(1)</script>'), '\\<script\\>alert(1)\\</script\\>')
 })
 
 // 리뷰 Critical 2 — 이 태스크가 막아야 했던 결함(슬롯이 한 칸으로 합쳐지는 것)의
@@ -1317,4 +1318,28 @@ test('CLI가 판정 목록을 찾지 못한 판정 파일을 0건으로 흘리�
   assert.equal(out.status, 2)
   assert.equal(out.stdout, '')
   assert.match(out.stderr, /verdicts\.json/)
+})
+
+// -------------------------------------------------------------- 수식 구분자
+//
+// 2026-09-30 리포트에서 `[0, 0, 1]`이 세로로 쪼개진 "0 , 0 , 1 0,0,1"로, `-8`이
+// 수식 기호 `−8`로 보였다. escapeProse가 링크를 막으려고 `[`·`(`를 `\[`·`\(`로
+// 바꿨는데, KaTeX를 쓰는 Markdown 뷰어에서 `\[ … \]`는 수식 블록이고 `\( … \)`는
+// 인라인 수식이다. 링크를 막으려던 이스케이프가 수식을 열었다. `$ … $`도 같은
+// 이유로 수식이 된다 — producer 산문에는 `${name}` 같은 템플릿 리터럴이 흔하다.
+const MATH_OPENERS = /\\[[\]()]|(^|[^\\])\$/
+
+test('산문 이스케이프가 수식 구분자를 만들지 않는다', () => {
+  for (const text of ['Z-up 축 [0, 0, 1]과 방향 [5, -8, 5]', 'names.map(name => x)', '`processed/${name}`', '$$x$$']) {
+    assert.doesNotMatch(escapeProse(text), MATH_OPENERS, text)
+  }
+})
+
+test('대괄호는 문자 참조로 바꿔 링크를 막고 값은 그대로 보이게 한다', () => {
+  assert.equal(escapeProse('[0, 0, 1]'), '&#91;0, 0, 1&#93;')
+  assert.equal(escapeProse('[링크](http://x)'), '&#91;링크&#93;(http://x)')
+})
+
+test('달러 기호는 역슬래시로 이스케이프한다', () => {
+  assert.equal(escapeProse('a $b$ c'), 'a \\$b\\$ c')
 })

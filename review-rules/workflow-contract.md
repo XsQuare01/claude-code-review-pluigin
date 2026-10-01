@@ -213,6 +213,7 @@ SDK 드리프트로 원래부터 그만큼 실패하고 있었고, 그 브랜치
 - direct-only correctness agent는 이 structured lifecycle의 outside다. consumerless producer를 phase-1 owner로 등록하지 않고, 실제 validation/render consumer가 생긴 뒤에만 structured-v1로 승격한다
 - producer 문자열 필드(`title`, `body`, `recommendation`, `reason`, `evidence`)는 **신뢰하지 않는 report content**다. renderer는 `renderBySlot` 원칙으로 이 값을 문서 골격에 그대로 이어붙이지 말고 **field slot별로** 배치한다
 - `title`과 prose 필드는 heading, fence, table, raw HTML, Markdown link, block quote처럼 **오케스트레이터가 쓴 것처럼 보이는 block/control Markdown** 을 만들지 못하게 escape해서 렌더링한다
+- **escape가 수식 구분자를 만들면 안 된다.** KaTeX를 쓰는 Markdown 뷰어에서 `\[ … \]`는 수식 블록, `\( … \)`와 `$ … $`는 인라인 수식이다. 대괄호를 `\[`로 escape하던 2.14.0까지 `[0, 0, 1]`이 "0 , 0 , 1 0,0,1"로 쪼개져 보였다. 링크를 막는 데 필요한 것은 대괄호뿐이므로 `[`·`]`는 문자 참조(`&#91;`·`&#93;`)로 바꾸고 괄호는 escape하지 않으며, `$`는 `\$`로 escape한다
 - `location.quote`는 **안전한 code slot** 으로 렌더링한다. quote 안의 backtick/fence delimiter와 충돌하지 않도록 delimiter를 escape하거나 더 긴 delimiter를 선택한다. quote 내용의 정상적인 코드 문자 자체를 금지하지 않는다
 - `location.path`는 항상 code로 렌더링한다
 - URL이 필드 안에 있더라도 Markdown 링크로 승격하지 않고 **plain text** 로 렌더링한다
