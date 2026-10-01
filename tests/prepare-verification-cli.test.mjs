@@ -185,3 +185,57 @@ test('입력이 깨져 끝내지 못해도 시작한 사실은 남는다', t => 
   const phases = timelineOf(dir).map(event => event.phase)
   assert.deepEqual(phases, ['run.start', 'script.start'])
 })
+
+// ------------------------------------------------------------ 입력 모양
+//
+// 2026-09-30 실행(2.14.0)이 producer 결과를 `[{ sourcePass, attempt, result }, …]`로
+// 만들었다 — 루트가 배열이고 envelope 키 이름도 틀렸다. 이 스크립트는 루트 배열을
+// "이미 ID가 붙은 후보"로 받는 분기가 있어서 **그 모양을 거부하지 않았다.**
+// 오케스트레이터가 스크립트 소스를 직접 읽고서야 틀린 것을 알았다. 같은 실행의
+// `source`는 `01`이었다 — 계약은 규칙 문서 이름(`01-fsd`)을 쓰고, 그 값은 리포트의
+// `출처 패스:` 줄에 그대로 나간다.
+
+const FINDING = { ruleId: '01-1', title: '제목', body: '본문', impact: 'low', confidence: 'high',
+  location: { kind: 'verified', path: 'README.md', line: 1, quote: '# React Code Review Plugin' } }
+const RESULT = { schemaVersion: 1, findings: [FINDING], openQuestions: [] }
+
+const prepare = (t, payload) => {
+  const dir = started(t)
+  const input = join(dir, 'candidates.json')
+  writeFileSync(input, JSON.stringify(payload), 'utf8')
+  return spawnSync('node', [SCRIPT, '--merge-base', 'HEAD', '--dir', dir, '--run', RUN, '--input', input],
+    { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+}
+
+test('producer envelope를 루트 배열로 넘기면 후보로 받지 않고 results로 감싸라고 말한다', t => {
+  const out = prepare(t, [{ sourcePass: '01', attempt: 1, result: RESULT }])
+  assert.equal(out.status, 2)
+  assert.equal(out.stdout, '')
+  assert.match(out.stderr, /candidateId/)
+  assert.match(out.stderr, /"results"/)
+})
+
+test('알아보는 키가 하나도 없는 입력은 후보 0건으로 흘리지 않고 거부한다', t => {
+  const out = prepare(t, { findings: [FINDING] })
+  assert.equal(out.status, 2)
+  assert.match(out.stderr, /findings/)
+})
+
+test('envelope에 계약 밖 키가 있으면 거부한다', t => {
+  const out = prepare(t, { results: [{ source: '01-fsd', sourcePass: '01', result: RESULT }] })
+  assert.equal(out.status, 2)
+  assert.match(out.stderr, /sourcePass/)
+})
+
+test('envelope의 source가 규칙 문서 이름이 아니면 거부하고 쓸 수 있는 이름을 보인다', t => {
+  const out = prepare(t, { results: [{ source: '01', result: RESULT }] })
+  assert.equal(out.status, 2)
+  assert.match(out.stderr, /"01"/)
+  assert.match(out.stderr, /01-fsd/)
+})
+
+test('규칙 문서 이름을 source로 단 envelope는 그 출처를 후보에 싣는다', t => {
+  const out = prepare(t, { results: [{ source: '04-state', result: RESULT }, { source: 'exception', result: { ...RESULT, findings: [] } }] })
+  assert.equal(out.status, 0, out.stderr)
+  assert.equal(JSON.parse(out.stdout).candidates[0].source, '04-state')
+})

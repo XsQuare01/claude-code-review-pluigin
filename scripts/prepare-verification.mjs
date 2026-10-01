@@ -366,6 +366,79 @@ function gitReaders(mergeBase) {
   }
 }
 
+/**
+ * `source`로 쓸 수 있는 이름 — 규칙 문서 파일명에서 `.md`를 뗀 값.
+ *
+ * catalog가 그 목록의 유일한 선언처다. 여기에 손으로 옮겨 두면 모듈이 늘 때
+ * 이쪽만 낡는다.
+ */
+export function loadSourceNames(rulesDir) {
+  let catalog
+  try {
+    catalog = JSON.parse(readFileSync(join(rulesDir, 'catalog.json'), 'utf8'))
+  } catch (error) {
+    return { error: `catalog.json을 읽지 못했다: ${join(rulesDir, 'catalog.json')} — ${error.message}` }
+  }
+  const names = (catalog.modules ?? [])
+    .filter(module => module.role === 'module' || module.role === 'specialist')
+    .map(module => String(module.path ?? '').replace(/\.md$/, ''))
+    .filter(Boolean)
+  return { value: new Set(names) }
+}
+
+const ENVELOPE_KEYS = new Set(['source', 'result'])
+
+/**
+ * 입력의 모양을 받기 전에 본다. 문제가 없으면 빈 배열이다.
+ *
+ * 받는 모양은 넷이다: `{ results }`(producer 결과 또는 envelope), `{ candidates }`,
+ * `{ locations }`, 그리고 ID가 이미 붙은 후보의 루트 배열. 어느 것에도 맞지 않는
+ * 입력을 후보 0건으로 흘려보내면 검증 대상이 통째로 사라지는데, 출력은 정상
+ * 실행과 똑같이 생겼다.
+ *
+ * envelope는 `source`와 `result`만 갖는다. `source`는 오케스트레이터가 디스패치
+ * 기록에서 채우는 값이라, 계약 밖 이름(`sourcePass`)이나 규칙 문서에 없는 이름
+ * (`01`)은 그 기록과 이 후보를 이어 주지 못한다.
+ */
+export function payloadProblems(payload, sourceNames) {
+  const problems = []
+  if (Array.isArray(payload)) {
+    const missing = payload.filter(entry => typeof entry?.candidateId !== 'string').length
+    if (missing) {
+      problems.push(`루트 배열은 이미 ID가 붙은 후보만 받는다 — ${payload.length}개 중 ${missing}개에 candidateId가 없다. producer 결과는 {"results":[{"source":"<규칙 문서 이름>","result":{…}}]}로 감싼다`)
+    }
+    return problems
+  }
+  if (!payload || typeof payload !== 'object') return ['입력이 객체도 배열도 아니다']
+  const shapes = ['results', 'candidates', 'locations'].filter(key => key in payload)
+  if (!shapes.length) {
+    return [`알아보는 키가 없다: ${JSON.stringify(Object.keys(payload))}. results · candidates · locations 중 하나로 넘긴다`]
+  }
+  for (const key of shapes) {
+    if (!Array.isArray(payload[key])) problems.push(`${key}가 배열이 아니다`)
+  }
+  ;(Array.isArray(payload.results) ? payload.results : []).forEach((entry, at) => {
+    const where = `results[${at}]`
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      problems.push(`${where}가 객체가 아니다`)
+      return
+    }
+    if (!('result' in entry)) {
+      if (!Array.isArray(entry.findings)) problems.push(`${where}는 envelope({source,result})도 producer 결과(findings 배열)도 아니다`)
+      return
+    }
+    const extra = Object.keys(entry).filter(name => !ENVELOPE_KEYS.has(name))
+    if (extra.length) problems.push(`${where} envelope에 계약 밖 키가 있다: ${extra.join(', ')}. 쓸 수 있는 키: source, result`)
+    if (!sourceNames.has(entry.source)) {
+      problems.push(`${where}.source ${JSON.stringify(entry.source)}는 규칙 문서 이름이 아니다. 쓸 수 있는 이름: ${[...sourceNames].join(', ')}`)
+    }
+    if (!entry.result || typeof entry.result !== 'object' || !Array.isArray(entry.result.findings)) {
+      problems.push(`${where}.result에 findings 배열이 없다`)
+    }
+  })
+  return problems
+}
+
 async function main() {
   const argv = process.argv.slice(2)
   const mergeBaseIndex = argv.indexOf('--merge-base')
@@ -377,6 +450,10 @@ async function main() {
   const dir = dirIndex === -1 ? undefined : argv[dirIndex + 1]
   const run = runIndex === -1 ? undefined : argv[runIndex + 1]
   const inputPath = inputIndex === -1 ? undefined : argv[inputIndex + 1]
+  const rulesIndex = argv.indexOf('--rules')
+  const rulesDir = rulesIndex === -1
+    ? join(dirname(fileURLToPath(import.meta.url)), '..', 'review-rules')
+    : argv[rulesIndex + 1]
 
   // 인자를 먼저 본다. 입력을 다 읽고 나서 거부하면 실패 메시지가 파이프 오류에
   // 묻히고, 무엇을 고쳐야 하는지가 가려진다.
@@ -413,6 +490,19 @@ async function main() {
     process.stderr.write(`${source} is not valid JSON: ${error.message}\n`)
     process.exit(2)
   }
+  // 규칙 문서 목록은 이 스크립트와 같은 플러그인의 것을 기본으로 쓴다. 호출자가
+  // `--rules`를 주면 producer가 읽은 그 디렉터리를 쓴다.
+  const sourceNames = loadSourceNames(rulesDir)
+  if (sourceNames.error) {
+    process.stderr.write(`${sourceNames.error}\n`)
+    process.exit(2)
+  }
+  const problems = payloadProblems(payload, sourceNames.value)
+  if (problems.length) {
+    process.stderr.write(`${source}를 검증 준비 입력으로 받을 수 없다:\n  - ${problems.join('\n  - ')}\n`)
+    process.exit(2)
+  }
+
   // Producer results are what the orchestrator already holds, so that is the cheap shape.
   // The candidates shape stays accepted for callers that assign their own ids.
   const candidates = Array.isArray(payload)
