@@ -294,6 +294,38 @@ test('--collect는 최종 상태가 failed인 모듈의 파일을 쓰지 않고 
   assert.match(out.stderr, /02-type/)
 })
 
+test('--collect는 module.done의 status가 ok도 failed도 아니면 그 모듈을 모으지 않고 거부한다', t => {
+  // 2026-09-30 실행은 22줄 전부에 `COMPLETED`를 적었다. 기록 단계는 경고만 하고 줄을
+  // 남기므로, 여기서 성공으로 읽으면 타임라인이 경고한 값을 검증 준비가 성공으로 쓴다.
+  const dir = startedWith(t, [done('01-fsd', 'COMPLETED')])
+  resultFile(dir, '01-fsd', RESULT)
+  const out = collect(dir)
+  assert.equal(out.status, 2)
+  assert.match(out.stderr, /01-fsd/)
+  assert.match(out.stderr, /COMPLETED/)
+})
+
+test('--collect는 목록 밖 status를 note 단 줄로 바로잡은 모듈을 모은다', t => {
+  // 기록은 덧붙이기만 하므로 마지막 줄이 정본이다.
+  const dir = startedWith(t, [done('01-fsd', 'COMPLETED'), { ...done('01-fsd', 'ok'), note: 'status COMPLETED를 ok로 바로잡는다' }])
+  resultFile(dir, '01-fsd', RESULT)
+  const out = collect(dir)
+  assert.equal(out.status, 0, out.stderr)
+  assert.deepEqual(JSON.parse(out.stdout).collected.sources, ['01-fsd'])
+})
+
+test('--collect는 module.done 없이 결과 파일만 있는 모듈을 모으지 않고 거부한다', t => {
+  // 결과 파일은 module.done보다 먼저 쓴다(SKILL). 기록이 없으면 그 모듈이 이번 실행에서
+  // 끝났는지 알 수 없다 — 쓰다 만 파일이거나 앞 실행의 파일일 수 있다.
+  const dir = startedWith(t, [done('01-fsd', 'ok')])
+  resultFile(dir, '01-fsd', RESULT)
+  resultFile(dir, '04-state', { ...RESULT, findings: [] })
+  const out = collect(dir)
+  assert.equal(out.status, 2)
+  assert.match(out.stderr, /04-state/)
+  assert.match(out.stderr, /module\.done/)
+})
+
 test('--collect는 읽을 수 없는 결과 파일을 이름으로 짚는다', t => {
   const dir = startedWith(t, [done('01-fsd', 'ok')])
   resultFile(dir, '01-fsd', '{"findings": [')

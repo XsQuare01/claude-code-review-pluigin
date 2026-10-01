@@ -584,11 +584,21 @@ async function main() {
 /**
  * 모듈별 결과 파일(`<run>.<규칙 문서 이름>.json`)을 envelope 입력으로 모은다.
  *
- * 기준은 파일이 아니라 **기록**이다. 마지막 `module.done`이 `failed`가 아닌 모듈은
- * 결과 파일이 반드시 있어야 하고, 없으면 거부한다 — 모은 것만 보고 넘어가면 빠진
- * 모듈이 "지적 0건"과 구분되지 않는다. `failed`로 끝난 모듈의 파일은 쓰지 않는다
- * (C-6A: 실패한 패스를 부분 보정으로 통과시키지 않는다). 기록 없이 파일만 있으면
- * 쓰되 경고한다.
+ * 기준은 파일이 아니라 **기록**이고, 모으는 것은 마지막 `module.done`이 `ok`인 모듈뿐이다.
+ *
+ * - `ok`인데 결과 파일이 없으면 거부한다. 모은 것만 보고 넘어가면 빠진 모듈이 "지적
+ *   0건"과 구분되지 않는다
+ * - `failed`로 끝난 모듈의 파일은 쓰지 않는다(C-6A: 실패한 패스를 부분 보정으로
+ *   통과시키지 않는다)
+ * - `ok`도 `failed`도 아닌 상태는 거부한다. 기록 단계는 목록 밖 값도 줄은 남기고
+ *   경고만 하므로, 여기서 성공으로 읽으면 타임라인이 경고한 값을 검증 준비가 성공으로
+ *   쓴다. 2026-09-30 실행은 22줄 전부에 `COMPLETED`를 적었다
+ * - `module.done` 없이 파일만 있으면 거부한다. 결과 파일은 `module.done`보다 먼저
+ *   쓰므로(SKILL), 기록이 없는 파일은 쓰다 만 것이거나 앞 실행의 것일 수 있다
+ *
+ * append 전용 기록이므로 상태를 바로잡는 방법은 같은 시도의 `module.done`을 `note`와
+ * 함께 한 줄 더 남기는 것이다 — 마지막 줄이 정본이고, `review-timeline.mjs --check`는
+ * 그 줄을 중복이 아니라 정정으로 받는다.
  */
 export function collectResultFiles({ events, sourceNames, pathOf, read }) {
   const finalStatus = new Map()
@@ -598,7 +608,7 @@ export function collectResultFiles({ events, sourceNames, pathOf, read }) {
   const results = []
   const problems = []
   const warnings = []
-  const collected = { sources: [], excludedFailed: [], withoutModuleDone: [] }
+  const collected = { sources: [], excludedFailed: [] }
   for (const name of sourceNames) {
     const path = pathOf(name)
     const raw = read(path)
@@ -610,8 +620,18 @@ export function collectResultFiles({ events, sourceNames, pathOf, read }) {
       }
       continue
     }
+    if (status === undefined) {
+      if (raw !== undefined) {
+        problems.push(`${name}는 module.done 없이 결과 파일만 있다: ${path} — 이번 실행에서 끝난 모듈이면 module.done(status ok)을 남기고 다시 돌린다. 아니면 그 파일은 이번 실행의 결과가 아니다`)
+      }
+      continue
+    }
+    if (status !== 'ok') {
+      problems.push(`${name}의 마지막 module.done status ${JSON.stringify(status)}는 ok도 failed도 아니다 — 성공인지 알 수 없어 모으지 않는다. 같은 모듈·같은 attempt의 module.done을 ok 또는 failed와 사유를 적은 note로 한 줄 더 남기고 다시 돌린다`)
+      continue
+    }
     if (raw === undefined) {
-      if (status !== undefined) problems.push(`${name}는 module.done이 있는데 결과 파일이 없다: ${path}`)
+      problems.push(`${name}는 module.done이 ok인데 결과 파일이 없다: ${path}`)
       continue
     }
     let parsed
@@ -620,10 +640,6 @@ export function collectResultFiles({ events, sourceNames, pathOf, read }) {
     } catch (error) {
       problems.push(`${path}를 JSON으로 읽지 못했다: ${error.message}`)
       continue
-    }
-    if (status === undefined) {
-      collected.withoutModuleDone.push(name)
-      warnings.push(`${name}는 module.done 없이 결과 파일만 있다 — 쓰지만 기록에 그 모듈이 끝난 흔적이 없다: ${path}`)
     }
     results.push({ source: name, result: parsed })
     collected.sources.push(name)
