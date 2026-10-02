@@ -267,6 +267,14 @@ isolated 11)을 동시에 background dispatch한 결과, 1건만 2분 25초에 �
   하나는 그 candidate에 대해 판정을 얻지 못했다는 뜻이다. 실패 클래스별 건수를
   남기지 않으면 다음 실행에서 상한을 조정할 근거가 사라진다
 
+**남은 작업은 기억이 아니라 `--validate`로 본다.** 오케스트레이터가 깨어날 때마다 — 작업 완료 알림, 사용자 메시지, context 압축 뒤, 같은 실행에서 스킬을 다시 불렀을 때 — 먼저 `tally-verdicts.mjs --validate --targets <routed>`를 돌린다. 그리고 출력의 `pending`(판정 파일이 없는 작업)·`promotionsDue`(띄워야 할 승격)·`malformed[].retryPrompt`(교정)만 상한 안에서 띄운다. `ready: true`(exit 0)가 되면 아래 `검증 결과 집계`로 넘어간다. 2026-09-30 `fix/anchor-vector-direction` 실행은 검증자 17건에 37시간이 걸렸다. 검증자 하나가 context 압축 직전에 떠서 끝나지 않았고, 그 뒤 웨이브마다 멈춰 사용자가 네 번 재촉하고 스킬을 다시 불러서야 끝났다. 무엇이 남았는지는 압축 요약에만 있었다.
+
+- **같은 실행을 이어 갈 때는 preflight와 `prepare-verification.mjs`를 다시 돌리지 않는다.** 시작된 타임라인은 preflight가 거부한다. `prepare-verification.mjs`는 이미 받은 판정 파일이 있으면 프롬프트 디렉터리를 지우지 않고 거부한다(`--discard-verdicts`는 검증을 처음부터 다시 할 때만 준다). routed 출력과 판정 파일이 디스크에 있으므로 `--validate`부터 시작한다
+- **완료 알림이 "전부 끝남"에서만 오케스트레이터를 깨우는 런타임에서는 검증자를 foreground 병렬 호출로 띄운다(한 번에 최대 4개).** oh-my-openagent가 그렇다. 작업 하나가 끝날 때의 알림에는 "You WILL be notified when ALL complete. Do NOT poll"이라는 문장과 응답하지 않는다는 표지가 붙고, 오케스트레이터는 띄운 작업이 모두 끝났다는 알림에만 깨어난다
+  - 그 런타임에서는 background로 띄워도 웨이브 단위로만 다음 작업을 넣을 수 있어서 얻는 것이 없다. 반대로 작업 하나가 끝나지 않으면 "전부 끝남"이 영영 오지 않아 검증 전체가 멈춘다(위 37시간)
+  - foreground로 함께 부르면 웨이브 모양은 같고, 기다림이 오케스트레이터의 턴 안에 있으므로 깨워 줄 알림에 기대지 않는다
+  - 위의 sliding window는 개별 완료에 깨어나는 런타임에만 해당한다
+
 ### `--verify` 모드
 
 | 모드 | 동작 |
