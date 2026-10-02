@@ -738,6 +738,26 @@ test('--check는 applied와 module.done 수가 어긋나면 경고로만 짚는�
   assert.match(out.stdout, /module\.done`이 남은 모듈은 1개/)
 })
 
+test('--check는 applied를 번호 모듈의 module.done과만 맞춘다', t => {
+  // applied는 번호 모듈만 센다. 특수 패스까지 세면 정상 실행마다 "18인데 21개"가
+  // 나온다 — 2026-09-30의 `fix/anchor-vector-direction` 실행이 그랬고, 리포트는 그
+  // 문장을 미해결 항목으로 옮겨 적었다.
+  const dir = freshDir(t)
+  plant(dir, [
+    { at: '2026-09-30T00:00:00.000Z', seq: 1, phase: 'run.start', host: 'opencode', rules: 'r', version: '2.15.1', branch: 'b', changedFiles: 9 },
+    { at: '2026-09-30T00:01:00.000Z', seq: 2, phase: 'modules.planned', candidates: 20, applied: 1 },
+    { at: '2026-09-30T00:01:30.000Z', seq: 3, phase: 'module.start', module: '01-fsd', attempt: 1 },
+    { at: '2026-09-30T00:02:00.000Z', seq: 4, phase: 'module.done', module: '01-fsd', attempt: 1, status: 'ok', failureClass: 'none' },
+    { at: '2026-09-30T00:02:10.000Z', seq: 5, phase: 'dispatch.end', terminalOk: 1, terminalFailed: 0, attemptsTotal: 1, attemptsFailed: 0 },
+    { at: '2026-09-30T00:02:20.000Z', seq: 6, phase: 'module.start', module: 'props', attempt: 1 },
+    { at: '2026-09-30T00:03:00.000Z', seq: 7, phase: 'module.done', module: 'props', attempt: 1, status: 'ok', failureClass: 'none' },
+    { at: '2026-09-30T00:10:00.000Z', seq: 8, phase: 'run.end', verdict: 'WARN' },
+  ])
+  const out = check(dir)
+  assert.equal(out.status, 0, out.stdout)
+  assert.doesNotMatch(out.stdout, /modules\.planned\.applied/)
+})
+
 test('--check는 사이드카가 없으면 실패하고 어디를 봐야 하는지 말한다', t => {
   const dir = freshDir(t)
   const out = check(dir)

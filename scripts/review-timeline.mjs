@@ -505,8 +505,12 @@ if (has('check')) {
   // fan-out 증거는 자동으로 남길 수 없다 — 이 플러그인은 task launcher를 갖고
   // 있지 않다. 그래서 강제하지 못하고 **사후에 짚는** 것까지가 여기서 할 수 있는
   // 전부다. 경고로 두는 이유는 이것만으로 실행을 실패로 부를 수 없기 때문이다.
+  // `applied`는 번호 모듈만 센다(C-3). 특수 패스까지 세면 정상 실행마다 "18인데 21개"가
+  // 나온다 — 2026-09-30 실행의 리포트가 그 문장을 미해결 항목으로 옮겨 적었다.
   const applied = events.find(event => event.phase === 'modules.planned')?.applied
-  const finished = new Set(events.filter(event => event.phase === 'module.done').map(event => String(event.module)))
+  const finished = new Set(events
+    .filter(event => event.phase === 'module.done' && /^\d\d-/.test(String(event.module ?? '')))
+    .map(event => String(event.module)))
   if (Number.isInteger(applied) && finished.size !== applied) {
     notes.push(`\`modules.planned.applied\`는 ${applied}인데 \`module.done\`이 남은 모듈은 ${finished.size}개다`)
   }
