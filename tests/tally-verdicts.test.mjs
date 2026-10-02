@@ -399,7 +399,49 @@ test('--validate는 판정이 모두 계약에 맞으면 0으로 끝나고 교�
   answer('isolated-A-8-1', verdict('A-8#1', 'rejected'))
   const out = validateRun(dir, routedPath)
   assert.equal(out.status, 0, out.stdout)
-  assert.deepEqual(JSON.parse(out.stdout).malformed, [])
+  const report = JSON.parse(out.stdout)
+  assert.deepEqual(report.malformed, [])
+  assert.equal(report.ready, true)
+})
+
+// ── 남은 검증 작업 (--validate) ─────────────────────────────────────────────
+//
+// `fix/anchor-vector-direction` 실행(2026-09-30)은 검증자 17건에 37시간이 걸렸다.
+// 검증이 느렸던 것이 아니다 — 한 검증자가 context 압축 직전에 떠서 끝나지 않았고,
+// 호스트는 띄운 작업이 **전부** 끝나야 오케스트레이터를 깨웠다. 그 뒤로 웨이브마다
+// 멈췄고, 사용자가 네 번 재촉하고 스킬을 다시 불러서야 끝났다. 무엇이 남았는지는
+// 오케스트레이터의 기억에만 있었다. 판정 파일 자리는 이미 정해져 있으므로, 남은 일은
+// 파일에서 셀 수 있다.
+
+test('--validate는 판정 파일이 없는 작업과 띄워야 할 승격 작업을 알려 준다', t => {
+  const dir = started(t)
+  const { routedPath, answer, routed } = withPrompts(dir)
+  answer('bundle-1', verdict('04-3#1', 'needs-context'))
+  const out = validateRun(dir, routedPath)
+  assert.equal(out.status, 1)
+  const report = JSON.parse(out.stdout)
+  assert.equal(report.ready, false)
+  assert.deepEqual(report.malformed, [])
+  assert.deepEqual(report.pending, [{
+    taskId: 'isolated-A-8-1', route: 'isolated', prompt: routed.verifierTasks[1].prompt, verdict: routed.verifierTasks[1].verdict,
+  }])
+  assert.deepEqual(report.promotionsDue, [{
+    candidateId: '04-3#1', taskId: 'isolated-04-3-1', prompt: routed.promotions['04-3#1'].prompt, verdict: routed.promotions['04-3#1'].verdict,
+  }])
+})
+
+test('--validate는 승격 판정까지 받았으면 남은 작업이 없다고 말한다', t => {
+  const dir = started(t)
+  const { routedPath, answer } = withPrompts(dir)
+  answer('bundle-1', verdict('04-3#1', 'needs-context'))
+  answer('isolated-A-8-1', verdict('A-8#1', 'upheld'))
+  answer('isolated-04-3-1', verdict('04-3#1', 'upheld'))
+  const out = validateRun(dir, routedPath)
+  assert.equal(out.status, 0, out.stdout)
+  const report = JSON.parse(out.stdout)
+  assert.equal(report.ready, true)
+  assert.deepEqual(report.pending, [])
+  assert.deepEqual(report.promotionsDue, [])
 })
 
 test('--collect는 교정 뒤에도 계약을 어긴 판정을 세지 않고, 교정한 작업 수를 스스로 센다', t => {
@@ -417,4 +459,75 @@ test('--collect는 교정 뒤에도 계약을 어긴 판정을 세지 않고, �
   assert.equal(counts.noVerdict, 1)
   assert.match(out.stderr, /isolated-A-8-1/)
   assert.equal(timelineOf(dir).at(-1).malformedTasksCorrected, 2)
+})
+
+test('--validate는 한 작업이 같은 candidateId를 두 번 판정하면 형식 위반으로 본다', t => {
+  // 집합으로만 맞춰 보면 [A 유지, A 반박]도 요청 [A]와 같아 보이고, 집계에서는
+  // 나중 판정이 조용히 이긴다. 검증자 하나가 한 후보에 두 결론을 낸 것은 판정이 아니다.
+  const dir = started(t)
+  const { routedPath, answer } = withPrompts(dir)
+  answer('bundle-1', verdict('04-3#1', 'upheld'), verdict('04-3#1', 'rejected'))
+  answer('isolated-A-8-1', verdict('A-8#1', 'upheld'))
+  const out = validateRun(dir, routedPath)
+  assert.equal(out.status, 1)
+  const [entry] = JSON.parse(out.stdout).malformed
+  assert.equal(entry.taskId, 'bundle-1')
+  assert.match(entry.problems.join('\n'), /04-3#1/)
+  assert.match(entry.problems.join('\n'), /두 번 이상/)
+})
+
+// ── 승격은 bundle의 needs-context에만 따른다 ────────────────────────────────
+//
+// bundle이 `needs-context`로 돌린 후보는 isolated로 다시 판정받아야 한다(SKILL).
+// 승격 판정이 없을 때 bundle의 `needs-context`를 최종 판정으로 세면, 계약이 isolated에서도
+// 닫히지 않은 후보에만 주는 `미해결 / 후속 확인`으로 그려지고 판정 없음은 0으로 보인다 —
+// 해야 할 검증을 건너뛴 사실이 어디에도 남지 않는다. 반대로 bundle이 이미 닫은 후보의
+// 승격 판정을 세면, 그것은 계약에 없는 재검증으로 판정을 뒤집는 경로가 된다.
+
+test('--collect는 bundle의 needs-context에 승격 판정이 없으면 판정 없음으로 세고 그 후보를 알린다', t => {
+  const dir = started(t)
+  const { routedPath, answer } = verifyTasks(dir)
+  answer('bundle-1', verdict('04-3#1', 'needs-context'))
+  answer('isolated-A-8-1', verdict('A-8#1', 'upheld'))
+  const out = collectTally(dir, ['--targets', routedPath])
+  assert.equal(out.status, 0, out.stderr)
+  const counts = JSON.parse(out.stdout)
+  assert.equal(counts.needsContext, 0)
+  assert.equal(counts.upheld, 1)
+  assert.equal(counts.noVerdict, 1)
+  assert.match(out.stderr, /승격/)
+  assert.match(out.stderr, /04-3#1/)
+  // 렌더러가 읽을 파일에도 bundle의 needs-context가 남지 않아야 둘이 같은 결론을 낸다.
+  const combined = JSON.parse(readFileSync(counts.verdictsFile, 'utf8'))
+  const ids = combined.tasks.flatMap(payload => payload.verdicts.map(entry => entry.candidateId))
+  assert.deepEqual(ids, ['A-8#1'])
+})
+
+test('--collect는 승격 판정이 계약을 어겼으면 bundle의 needs-context도 최종 판정으로 쓰지 않는다', t => {
+  const dir = started(t)
+  const { routedPath, answer } = verifyTasks(dir)
+  answer('bundle-1', verdict('04-3#1', 'needs-context'))
+  answer('isolated-A-8-1', verdict('A-8#1', 'upheld'))
+  answer('isolated-04-3-1', { ...verdict('04-3#1', 'upheld'), location: 'src/a.ts:1' })
+  const out = collectTally(dir, ['--targets', routedPath])
+  assert.equal(out.status, 0, out.stderr)
+  const counts = JSON.parse(out.stdout)
+  assert.equal(counts.needsContext, 0)
+  assert.equal(counts.noVerdict, 1)
+  assert.match(out.stderr, /isolated-04-3-1/)
+})
+
+test('--collect는 bundle이 이미 닫은 후보의 승격 판정을 세지 않고 그 사실을 알린다', t => {
+  const dir = started(t)
+  const { routedPath, answer } = verifyTasks(dir)
+  answer('bundle-1', verdict('04-3#1', 'upheld'))
+  answer('isolated-A-8-1', verdict('A-8#1', 'upheld'))
+  answer('isolated-04-3-1', verdict('04-3#1', 'rejected'))
+  const out = collectTally(dir, ['--targets', routedPath])
+  assert.equal(out.status, 0, out.stderr)
+  const counts = JSON.parse(out.stdout)
+  assert.equal(counts.upheld, 2)
+  assert.equal(counts.rejected, 0)
+  assert.equal(counts.reverdicted, 0)
+  assert.match(out.stderr, /isolated-04-3-1/)
 })

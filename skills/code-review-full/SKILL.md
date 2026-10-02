@@ -51,7 +51,7 @@ description: Use when the user invokes /code-review-full or asks for a full code
 node "$RULES_DIR/../scripts/review-preflight.mjs" --dir "$REPORT_DIR" --run "$REPORT_BASENAME" --rules "$RULES_DIR" --workflow full --base "$BASE" --host <harness 이름>
 ```
 
-**`$REPORT_DIR`와 `$REPORT_BASENAME`은 리포트를 실제로 저장할 곳과 그 파일 이름이다.** 여기서 정한 값이 사이드카의 자리를 결정하므로, 나중에 리포트를 다른 디렉터리나 다른 이름으로 쓰면 기록과 리포트가 서로를 못 찾는다. 실제로 한 실행이 리포트를 `Docs/`에 쓰고 사이드카는 워크트리에 남겨 **이름도 디렉터리도 달랐다.** `--check`가 `render.wrote`의 경로와 대조해 그 어긋남을 짚는다.
+**`$REPORT_DIR`와 `$REPORT_BASENAME`은 리포트를 실제로 저장할 곳과 그 파일 이름이다.** 여기서 정한 값이 사이드카의 자리를 결정하므로, 나중에 리포트를 다른 디렉터리나 다른 이름으로 쓰면 기록과 리포트가 서로를 못 찾는다. 실제로 한 실행이 리포트를 `Docs/`에 쓰고 사이드카는 워크트리에 남겨 **이름도 디렉터리도 달랐다.** `--check`가 `render.wrote`의 경로와 대조해 그 어긋남을 짚는다. **`$REPORT_BASENAME`에는 확장자를 붙이지 않는다** — `.md`로 끝나면 preflight와 기록 스크립트가 거부한다. 2026-09-30의 한 실행은 리포트 파일 이름을 그대로 넘겨 기록이 전부 `….md.jsonl`로 남았다.
 
 C-9의 `run.start`를 이 스크립트가 쓴다. 동시에 `리뷰 기준`과 `실행 계획`에 적을 값을 낸다 — 플러그인 버전, 해석된 규칙 경로, 브랜치, merge-base, 변경 파일 수, **후보 모듈 수와 목록**. 그 값을 손으로 세지 않는다. 후보에서 빠진 `00-rule.md`와 synthesis 전용 모듈도 이유와 함께 출력되므로, 아래 (2)와 (4)는 이 목록에서 출발한다.
 
@@ -234,12 +234,15 @@ node "$RULES_DIR/../scripts/prepare-verification.mjs" --merge-base "$MERGE_BASE"
 
 이 스크립트는 결과를 **stdout에만** 낸다. 리다이렉트를 빠뜨리면 이 출력을 담을 파일이 저장소 어디에도 없는데, 뒤의 `render-findings.mjs`는 `--input <경로>`만 받고 stdin 경로가 없다 — 그러면 다음 단계에서 붙일 경로를 운영자가 즉석에서 지어내야 한다. `.timing` 아래 다른 실행별 산출물과 같은 자리에 둔다.
 
-- **envelope를 손으로 조립하지 않는다.** `--collect`는 타임라인의 `module.done`을 기준으로 모은다 — 마지막 `module.done`이 `failed`가 아닌 모듈은 결과 파일이 있어야 하고, 없으면 거부하며 빠진 경로를 말한다. 그때는 그 모듈의 결과를 파일로 쓰고 다시 돌린다. `failed`로 끝난 모듈의 파일은 쓰지 않는다(C-6A — 부분 보정으로 통과시키지 않는다)
+- **envelope를 손으로 조립하지 않는다.** `--collect`는 타임라인의 `module.done`을 기준으로 모으고, 모으는 것은 마지막 `module.done`이 `ok`인 모듈뿐이다
+  - `ok`인데 결과 파일이 없으면 거부하며 빠진 경로를 말한다. 그때는 그 모듈의 결과를 파일로 쓰고 다시 돌린다
+  - `failed`로 끝난 모듈의 파일은 쓰지 않는다(C-6A — 부분 보정으로 통과시키지 않는다)
+  - `ok`도 `failed`도 아닌 상태(`COMPLETED` 등)와 `module.done` 없이 파일만 있는 모듈은 거부한다. 성공했는지, 이번 실행의 파일인지 알 수 없기 때문이다. 기록은 고치지 않고 덧붙인다 — 같은 모듈·같은 `attempt`의 `module.done`을 `ok`/`failed`와 사유를 적은 `note`로 한 줄 더 남기고 다시 돌린다. 상태는 마지막 줄이 정본이고, `--check`는 이 줄을 중복이 아니라 정정으로 받는다(C-9)
 - **`source`는 파일 이름에서 붙는다.** 오케스트레이터가 따로 적지 않는다. producer 자신이 자기 출처를 말하게 하지 않는 이유(C-6A — producer 출력 전체가 신뢰하지 않는 content다)와 같고, 디스패치 기록(`module.done`)과 파일 이름이 같은 값이라 둘이 서로를 확인한다. 2026-09-30 실행은 손으로 조립하면서 `01-fsd` 대신 `01`을 적었다
 - 파일 하나를 넘기는 `--input <경로>`(`{"results":[{"source","result"}, …]}`)도 계속 받는다. envelope에는 `source`와 `result`만 있어야 하고 `source`는 규칙 문서 이름이어야 한다 — 어긋나면 스크립트가 거부한다. **셸에 담지 않는다** — payload의 한국어 산문·코드 인용·역슬래시 경로를 인용부호 한 쌍에 넣는 구조는 깨지는 쪽이 정상이다
 - **`candidateId`는 스크립트가 부여한다.** `{ruleId}#{n}` 형식이고 정규화 위치 순서로 매겨지므로, 같은 입력이면 항상 같은 ID가 나오고 규칙 ID로 리포트에서 바로 추적된다
 - 출력은 candidate별 `locationCheck`·`eligibility`·`route`·`impact`·`confidence`·`category`·`location`·`content`(producer 산문 — `title`·`body`와, 있으면 `evidence`·`recommendation`·`reason`)·`memberInstanceIds`(병합된 producer instance id 목록)·있으면 `source`/`sources`(기여한 출처 패스 라벨)와 `bundles`, `counts`, 그리고 검증자 작업 목록 `verifierTasks`·`promotions`(아래 `verifier producer prompt`)와 `--collect`로 모은 모듈 `collected`다
-- **검증 대상이 있으면 스크립트가 `crossverify.start`를 남긴다.** 따로 기록하지 않는다 — 오케스트레이터가 남기던 때 2026-09-30 실행이 검증자 19개가 다 끝난 뒤에야 찍었고, 80분 검증이 "무엇이 돌았는지 기록에 없는 5173초"로 보였다. 검증을 끄는 실행은 `--verify off`를 준다
+- **검증 대상이 있으면 스크립트가 `crossverify.start`를 남긴다.** 따로 기록하지 않는다 — 오케스트레이터가 남기던 때 2026-09-30 실행이 검증자 19개가 다 끝난 뒤에야 찍었고, 80분 검증이 "무엇이 돌았는지 기록에 없는 5173초"로 보였다. 검증을 끄는 실행은 `--verify off`를, 모든 후보를 검증하는 실행은 `--verify exhaustive`를 준다(아래 `--verify` 모드)
 - **coverage 숫자는 이 `counts`를 그대로 옮긴다.** 직접 세지 않는다 — 손으로 센 수치는 `verify + skipVerify = total`을 깨뜨린다
 - **coverage 숫자의 출처를 함께 적는다.** 스크립트를 돌렸으면 `도구 실행 결과`에도 실행을 남기고, 돌리지 않았으면 미실행이라고 적는다. 숫자가 맞더라도 **결정적으로 판정했다고 서술하지 않는다**
 - 플러그인으로 설치된 경우 스크립트는 `RULES_DIR`의 상위에 있다. 경로를 찾지 못하면 그 사실을 `실행 계획`에 적는다
@@ -264,12 +267,20 @@ isolated 11)을 동시에 background dispatch한 결과, 1건만 2분 25초에 �
   하나는 그 candidate에 대해 판정을 얻지 못했다는 뜻이다. 실패 클래스별 건수를
   남기지 않으면 다음 실행에서 상한을 조정할 근거가 사라진다
 
+**남은 작업은 기억이 아니라 `--validate`로 본다.** 오케스트레이터가 깨어날 때마다 — 작업 완료 알림, 사용자 메시지, context 압축 뒤, 같은 실행에서 스킬을 다시 불렀을 때 — 먼저 `tally-verdicts.mjs --validate --targets <routed>`를 돌린다. 그리고 출력의 `pending`(판정 파일이 없는 작업)·`promotionsDue`(띄워야 할 승격)·`malformed[].retryPrompt`(교정)만 상한 안에서 띄운다. `ready: true`(exit 0)가 되면 아래 `검증 결과 집계`로 넘어간다. 2026-09-30 `fix/anchor-vector-direction` 실행은 검증자 17건에 37시간이 걸렸다. 검증자 하나가 context 압축 직전에 떠서 끝나지 않았고, 그 뒤 웨이브마다 멈춰 사용자가 네 번 재촉하고 스킬을 다시 불러서야 끝났다. 무엇이 남았는지는 압축 요약에만 있었다.
+
+- **같은 실행을 이어 갈 때는 preflight와 `prepare-verification.mjs`를 다시 돌리지 않는다.** 시작된 타임라인은 preflight가 거부한다. `prepare-verification.mjs`는 이미 받은 판정 파일이 있으면 프롬프트 디렉터리를 지우지 않고 거부한다(`--discard-verdicts`는 검증을 처음부터 다시 할 때만 준다). routed 출력과 판정 파일이 디스크에 있으므로 `--validate`부터 시작한다
+- **완료 알림이 "전부 끝남"에서만 오케스트레이터를 깨우는 런타임에서는 검증자를 foreground 병렬 호출로 띄운다(한 번에 최대 4개).** oh-my-openagent가 그렇다. 작업 하나가 끝날 때의 알림에는 "You WILL be notified when ALL complete. Do NOT poll"이라는 문장과 응답하지 않는다는 표지가 붙고, 오케스트레이터는 띄운 작업이 모두 끝났다는 알림에만 깨어난다
+  - 그 런타임에서는 background로 띄워도 웨이브 단위로만 다음 작업을 넣을 수 있어서 얻는 것이 없다. 반대로 작업 하나가 끝나지 않으면 "전부 끝남"이 영영 오지 않아 검증 전체가 멈춘다(위 37시간)
+  - foreground로 함께 부르면 웨이브 모양은 같고, 기다림이 오케스트레이터의 턴 안에 있으므로 깨워 줄 알림에 기대지 않는다
+  - 위의 sliding window는 개별 완료에 깨어나는 런타임에만 해당한다
+
 ### `--verify` 모드
 
 | 모드 | 동작 |
 |------|------|
 | `selective` (기본) | eligibility 판정을 적용해 대상만 검증 |
-| `exhaustive` | 모든 candidate를 검증 대상으로. audit sidecar를 **기본 저장**한다 |
+| `exhaustive` | 모든 candidate를 검증 대상으로(`prepare-verification.mjs --verify exhaustive`). audit sidecar를 **기본 저장**한다 |
 | `off` | 위치 대조까지만 수행하고 verifier를 띄우지 않는다 |
 
 `off`를 두는 이유는 위치 대조가 추가 sub-agent 호출 없이 값이 크기 때문이다. 검증을 전부 꺼도 위치 대조는 남긴다.
@@ -315,7 +326,7 @@ isolated 11)을 동시에 background dispatch한 결과, 1건만 2분 25초에 �
 - **검증 에이전트 실패는 `FAILED orchestration`이 아니다.** 해당 candidate에 `verification-unavailable`을 부여하고 coverage에 건수를 남긴다. 보조 단계의 실패가 전체 리뷰를 실패로 만들면, 새로 붙인 단계가 리뷰 전체의 신뢰성을 떨어뜨린다
 - retry 1회 / in-flight 상한 공유 / 실패 클래스별 건수 기록 — 일반 모듈 정책을 그대로 재사용한다
 - verdict `malformed-output` → C-6A와 동일 (교정 재시도 1회, 두 번째 실패 시 확정). 반환된 `candidateId` 집합이 요청과 다르면 그것도 `malformed-output`이다
-- **형식 검사와 교정 프롬프트는 스크립트가 만든다.** 판정 파일을 다 받으면 `tally-verdicts.mjs --validate --targets <routed>`를 돌린다(기록에는 아무것도 남기지 않는다). 계약을 어긴 작업마다 `<taskId>.retry.md`가 생기고 — 원래 지시에 오류 목록과 직전 응답 원문을 붙인 것이다 — 그 **파일 내용을 그대로** 새 `rule-module-reviewer`에게 넘긴다. 돌아온 JSON으로 같은 판정 파일을 덮어쓴다. 교정 프롬프트를 직접 쓰지 않고, 판정 근거를 요약해 불러 주지 않는다 — 2026-09-30 실행은 세션 재개가 `task-not-found`로 막히자 새 작업에 "이 근거를 보존하라"며 근거를 불러 줬고, 그 판정은 검증자가 아니라 오케스트레이터가 쓴 것이 됐다
+- **형식 검사와 교정 프롬프트, 남은 작업 목록은 스크립트가 만든다.** 검증자가 돌아올 때마다 `tally-verdicts.mjs --validate --targets <routed>`를 돌린다(기록에는 아무것도 남기지 않는다). 판정 파일이 없는 작업(`pending`)과 띄워야 할 승격(`promotionsDue`)도 이 출력에 있다(위 `디스패치`). 계약을 어긴 작업마다 `<taskId>.retry.md`가 생기고 — 원래 지시에 오류 목록과 직전 응답 원문을 붙인 것이다 — 그 **파일 내용을 그대로** 새 `rule-module-reviewer`에게 넘긴다. 돌아온 JSON으로 같은 판정 파일을 덮어쓴다. 교정 프롬프트를 직접 쓰지 않고, 판정 근거를 요약해 불러 주지 않는다 — 2026-09-30 실행은 세션 재개가 `task-not-found`로 막히자 새 작업에 "이 근거를 보존하라"며 근거를 불러 줬고, 그 판정은 검증자가 아니라 오케스트레이터가 쓴 것이 됐다
 - `exhaustive` release-gate 실행에서 **차단 후보(`impact = high`)의 검증이 실패하면 최종 판정은 `INCONCLUSIVE`** 다. 개별 finding의 차단 여부와 gate 전체의 완결성 판정은 다른 값이다
 
 ### 검증 결과 집계
@@ -330,6 +341,7 @@ node "$RULES_DIR/../scripts/tally-verdicts.mjs" --dir "$REPORT_DIR" --run "$REPO
 - **판정 파일을 손으로 합치지 않는다.** `--collect`는 bundle 작업 → isolated 작업 → 승격 작업 순서로 읽는다. 후보별로 마지막 판정만 세므로, bundle이 `needs-context`로 돌리고 isolated가 다시 판정한 후보가 두 번 세어지지 않는다. 2026-09-30 실행은 서브에이전트가 세션 기록에서 판정을 긁어 파일 두 개를 만들었고(17분), 그 파일을 렌더러가 읽지 못해 모양을 다시 바꿨다(5분)
 - 모은 판정은 `$REPORT_BASENAME.verdicts.json` 한 파일로 남는다(stdout의 `verdictsFile`). 렌더러의 `--verdicts`에는 이 파일을 준다
 - 판정 파일이 없는 작업은 검증자가 결과를 내지 못한 것이다. 스크립트는 멈추지 않고 그 작업 이름을 알리며, 그 후보는 `noVerdict`로 센다(C-6B `verification-unavailable`)
+- **승격 판정은 bundle이 `needs-context`로 돌린 후보에만 쓰인다.** 그 후보의 승격 판정이 없거나 교정 뒤에도 계약을 어겼으면, 스크립트는 bundle의 `needs-context`도 최종 판정으로 쓰지 않고 `noVerdict`로 센다 — `미해결 / 후속 확인`은 isolated에서도 닫히지 않은 후보의 자리다. bundle이 이미 닫은 후보의 승격 판정은 세지 않고 알린다(계약에 없는 재검증)
 - **`--targets`를 빠뜨리지 않는다.** 판정을 받지 못한 후보를 개수가 아니라 ID로 센다. 개수만 맞추면 대상 밖 후보의 판정이 빠진 대상을 가리는데, 한 실행에서 verifier 타임아웃으로 판정을 못 받은 3건이 기록에서 통째로 사라진 적이 있다
 - 판정 파일을 직접 넘기는 `--input <파일>`(여러 번, 준 순서가 정본 순서)도 계속 받는다. 받는 모양은 payload 하나, 그 배열, `{"tasks":[…]}`이고 렌더러도 같은 규칙으로 읽는다
 - coverage 숫자는 이 출력을 그대로 옮긴다. 한 실행이 손으로 세어 `upheld 13 / rejected 3`으로 적고 44초 뒤 `upheld 12 / rejected 4`로 정정했다 — 후보 수는 스크립트가 세면서 검증 결과만 눈으로 세고 있었다

@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { dirname, isAbsolute, join, resolve, sep } from 'node:path'
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
 import { markedBlock } from './lib/contract-blocks.mjs'
@@ -129,9 +129,16 @@ function eligibilityReasons({ candidate, locationCheck, ownerCollision }) {
   return reasons
 }
 
-/** Decide whether a candidate gets verified at all. Five schema fields plus the two derived signals — no model involved. */
-export function decideEligibility(input) {
+/**
+ * Decide whether a candidate gets verified at all. Five schema fields plus the two derived signals — no model involved.
+ *
+ * `exhaustive` (`--verify exhaustive`) verifies every candidate. A candidate that had a
+ * reason keeps it; one that had none is marked `exhaustive`, so the routed output still
+ * says why each candidate was sent rather than leaving an empty reason list next to VERIFY.
+ */
+export function decideEligibility(input, options = {}) {
   const reasons = eligibilityReasons(input)
+  if (options.exhaustive && reasons.length === 0) reasons.push('exhaustive')
   return { eligibility: reasons.length > 0 ? 'VERIFY' : 'SKIP-VERIFY', reasons }
 }
 
@@ -142,9 +149,9 @@ export function decideEligibility(input) {
  * approximation is deliberately conservative: over-isolating costs tokens,
  * while under-isolating can produce a wrong rejection that no later step undoes.
  */
-export function routeCandidate(input) {
+export function routeCandidate(input, options = {}) {
   const { candidate, locationCheck, ownerCollision } = input
-  const { eligibility, reasons } = decideEligibility(input)
+  const { eligibility, reasons } = decideEligibility(input, options)
   if (eligibility === 'SKIP-VERIFY') return { route: 'none', reasons }
 
   const isolationReasons = []
@@ -217,8 +224,8 @@ export function prepareVerification(candidates, blobs, options = {}) {
   const decided = list.map(candidate => {
     const check = checkLocation(candidate.location, blobs)
     const input = { candidate, locationCheck: check.status, ownerCollision: collisions.has(candidate.candidateId) }
-    const { eligibility, reasons } = decideEligibility(input)
-    const { route } = routeCandidate(input)
+    const { eligibility, reasons } = decideEligibility(input, options)
+    const { route } = routeCandidate(input, options)
     return {
       candidateId: candidate.candidateId,
       ruleId: candidate.ruleId,
@@ -277,6 +284,12 @@ export function prepareVerification(candidates, blobs, options = {}) {
 // --rules <dir>  : the RULES_DIR the producers read (catalog, module docs, verifier
 //                  template, verdict manifest). Defaults to this plugin's review-rules.
 // --verify off   : no verifier prompt files and no `crossverify.start`. Default selective.
+// --verify exhaustive : every candidate is a verification target (reason `exhaustive` when
+//                  it had none); bundle/isolated routing is unchanged. The audit sidecar
+//                  stays the orchestrator's job (contract C-6B).
+// --discard-verdicts : the prompt directory already holds `*.verdict.json` from this run;
+//                  without this flag the script refuses rather than wipe them. Resuming a
+//                  run uses `tally-verdicts.mjs --validate` instead of preparing again.
 //
 // Unless --locations-only or --verify off, one prompt file per verifier task is written to
 // `<d>/.timing/<r>.verify/` and listed as `verifierTasks` / `promotions`, each with the
@@ -482,8 +495,8 @@ async function main() {
   }
   const verifyIndex = argv.indexOf('--verify')
   const verifyMode = verifyIndex === -1 ? 'selective' : argv[verifyIndex + 1]
-  if (!['selective', 'off'].includes(verifyMode)) {
-    process.stderr.write(`--verify는 selective 또는 off다 (받은 값: ${JSON.stringify(verifyMode)}). exhaustive 라우팅은 이 스크립트가 아직 하지 않는다\n`)
+  if (!['selective', 'exhaustive', 'off'].includes(verifyMode)) {
+    process.stderr.write(`--verify는 selective, exhaustive, off 중 하나다 (받은 값: ${JSON.stringify(verifyMode)})\n`)
     process.exit(2)
   }
 
@@ -559,7 +572,7 @@ async function main() {
       : payload.results
         ? candidatesFromResults(payload.results)
         : (payload.candidates ?? [])
-  const result = prepareVerification(candidates, collectBlobs(candidates, gitReaders(mergeBase)), { locationsOnly })
+  const result = prepareVerification(candidates, collectBlobs(candidates, gitReaders(mergeBase)), { locationsOnly, exhaustive: verifyMode === 'exhaustive' })
   if (collected) result.collected = collected
 
   // 검증자 프롬프트는 여기서 파일로 만든다. 오케스트레이터는 그 내용을 넘기기만
@@ -567,7 +580,9 @@ async function main() {
   let written = { tasks: [], promotions: {} }
   if (!locationsOnly) {
     if (verifyMode !== 'off') {
-      written = writeVerifierTasks({ result, rulesDir, mergeBase, outDir: resolve(dir, '.timing', `${run}.verify`), fail })
+      const outDir = verifyDirOf(dir, run)
+      if (outDir.error) fail(outDir.error)
+      written = writeVerifierTasks({ result, rulesDir, mergeBase, outDir: outDir.path, discardVerdicts: argv.includes('--discard-verdicts'), fail })
     }
     result.verifierTasks = written.tasks
     result.promotions = written.promotions
@@ -584,11 +599,21 @@ async function main() {
 /**
  * 모듈별 결과 파일(`<run>.<규칙 문서 이름>.json`)을 envelope 입력으로 모은다.
  *
- * 기준은 파일이 아니라 **기록**이다. 마지막 `module.done`이 `failed`가 아닌 모듈은
- * 결과 파일이 반드시 있어야 하고, 없으면 거부한다 — 모은 것만 보고 넘어가면 빠진
- * 모듈이 "지적 0건"과 구분되지 않는다. `failed`로 끝난 모듈의 파일은 쓰지 않는다
- * (C-6A: 실패한 패스를 부분 보정으로 통과시키지 않는다). 기록 없이 파일만 있으면
- * 쓰되 경고한다.
+ * 기준은 파일이 아니라 **기록**이고, 모으는 것은 마지막 `module.done`이 `ok`인 모듈뿐이다.
+ *
+ * - `ok`인데 결과 파일이 없으면 거부한다. 모은 것만 보고 넘어가면 빠진 모듈이 "지적
+ *   0건"과 구분되지 않는다
+ * - `failed`로 끝난 모듈의 파일은 쓰지 않는다(C-6A: 실패한 패스를 부분 보정으로
+ *   통과시키지 않는다)
+ * - `ok`도 `failed`도 아닌 상태는 거부한다. 기록 단계는 목록 밖 값도 줄은 남기고
+ *   경고만 하므로, 여기서 성공으로 읽으면 타임라인이 경고한 값을 검증 준비가 성공으로
+ *   쓴다. 2026-09-30 실행은 22줄 전부에 `COMPLETED`를 적었다
+ * - `module.done` 없이 파일만 있으면 거부한다. 결과 파일은 `module.done`보다 먼저
+ *   쓰므로(SKILL), 기록이 없는 파일은 쓰다 만 것이거나 앞 실행의 것일 수 있다
+ *
+ * append 전용 기록이므로 상태를 바로잡는 방법은 같은 시도의 `module.done`을 `note`와
+ * 함께 한 줄 더 남기는 것이다 — 마지막 줄이 정본이고, `review-timeline.mjs --check`는
+ * 그 줄을 중복이 아니라 정정으로 받는다.
  */
 export function collectResultFiles({ events, sourceNames, pathOf, read }) {
   const finalStatus = new Map()
@@ -598,7 +623,7 @@ export function collectResultFiles({ events, sourceNames, pathOf, read }) {
   const results = []
   const problems = []
   const warnings = []
-  const collected = { sources: [], excludedFailed: [], withoutModuleDone: [] }
+  const collected = { sources: [], excludedFailed: [] }
   for (const name of sourceNames) {
     const path = pathOf(name)
     const raw = read(path)
@@ -610,8 +635,18 @@ export function collectResultFiles({ events, sourceNames, pathOf, read }) {
       }
       continue
     }
+    if (status === undefined) {
+      if (raw !== undefined) {
+        problems.push(`${name}는 module.done 없이 결과 파일만 있다: ${path} — 이번 실행에서 끝난 모듈이면 module.done(status ok)을 남기고 다시 돌린다. 아니면 그 파일은 이번 실행의 결과가 아니다`)
+      }
+      continue
+    }
+    if (status !== 'ok') {
+      problems.push(`${name}의 마지막 module.done status ${JSON.stringify(status)}는 ok도 failed도 아니다 — 성공인지 알 수 없어 모으지 않는다. 같은 모듈·같은 attempt의 module.done을 ok 또는 failed와 사유를 적은 note로 한 줄 더 남기고 다시 돌린다`)
+      continue
+    }
     if (raw === undefined) {
-      if (status !== undefined) problems.push(`${name}는 module.done이 있는데 결과 파일이 없다: ${path}`)
+      problems.push(`${name}는 module.done이 ok인데 결과 파일이 없다: ${path}`)
       continue
     }
     let parsed
@@ -621,14 +656,27 @@ export function collectResultFiles({ events, sourceNames, pathOf, read }) {
       problems.push(`${path}를 JSON으로 읽지 못했다: ${error.message}`)
       continue
     }
-    if (status === undefined) {
-      collected.withoutModuleDone.push(name)
-      warnings.push(`${name}는 module.done 없이 결과 파일만 있다 — 쓰지만 기록에 그 모듈이 끝난 흔적이 없다: ${path}`)
-    }
     results.push({ source: name, result: parsed })
     collected.sources.push(name)
   }
   return { payload: { results }, problems, warnings, collected }
+}
+
+/**
+ * 검증자 프롬프트 디렉터리(`<dir>/.timing/<run>.verify`)를 정한다.
+ *
+ * 이 디렉터리는 실행마다 **재귀로 지우고** 다시 만든다. 그래서 지우기 전에 경로가
+ * `.timing` 안인지 본다. `--run`의 구분자 검사만으로는 부족하다 — Windows에서
+ * `D:evil`은 구분자가 없는데도 다른 드라이브로 풀린다.
+ */
+export function verifyDirOf(dir, run) {
+  const timing = resolve(dir, '.timing')
+  const path = resolve(timing, `${run}.verify`)
+  const rel = relative(timing, path)
+  if (!rel || rel.startsWith('..') || isAbsolute(rel)) {
+    return { error: `검증자 프롬프트 디렉터리가 ${timing} 밖으로 풀린다: ${path} — --run은 경로가 아니라 리포트 basename이어야 한다` }
+  }
+  return { path }
 }
 
 /**
@@ -638,7 +686,7 @@ export function collectResultFiles({ events, sourceNames, pathOf, read }) {
  * 검증자가 받는 규칙이 같아야 한다. 디렉터리는 실행마다 새로 만든다. 앞 실행의
  * 파일이 남으면 이번 목록에 없는 작업이 디렉터리에는 있게 된다.
  */
-function writeVerifierTasks({ result, rulesDir, mergeBase, outDir, fail }) {
+function writeVerifierTasks({ result, rulesDir, mergeBase, outDir, discardVerdicts, fail }) {
   const planned = planVerifierTasks(result)
   if (!planned.tasks.length) return { tasks: [], promotions: {} }
 
@@ -666,6 +714,13 @@ function writeVerifierTasks({ result, rulesDir, mergeBase, outDir, fail }) {
     clauses.set(candidate.ruleId, docPath ? extractClause(docs.get(docPath), candidate.ruleId) : null)
   }
 
+  // 받은 판정이 있는 디렉터리는 지우지 않는다. 같은 실행을 이어 가다 이 스크립트를 다시
+  // 돌리면 검증자가 이미 낸 판정까지 지워진다 — 2026-09-30의 한 실행은 검증 도중 스킬을
+  // 다시 불렀다. 남은 작업은 판정 파일에서 셀 수 있으므로 다시 준비할 이유가 없다.
+  const received = existsSync(outDir) ? readdirSync(outDir).filter(name => name.endsWith('.verdict.json')) : []
+  if (received.length && !discardVerdicts) {
+    fail(`${outDir}에 이미 받은 판정 파일이 ${received.length}개 있다 — 같은 실행을 이어 가는 중이면 이 스크립트를 다시 돌리지 않고 tally-verdicts.mjs --validate --targets <routed>로 남은 작업을 본다. 받은 판정을 버리고 검증을 처음부터 다시 하려면 --discard-verdicts를 준다`)
+  }
   rmSync(outDir, { recursive: true, force: true })
   mkdirSync(outDir, { recursive: true })
   const candidatesById = new Map(result.candidates.map(candidate => [candidate.candidateId, candidate]))

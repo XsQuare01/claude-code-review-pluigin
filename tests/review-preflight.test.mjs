@@ -104,6 +104,20 @@ test('--dry-run은 계산만 하고 쓰지 않는다', t => {
   assert.equal(existsSync(join(dir, '.timing', `${RUN}.jsonl`)), false)
 })
 
+test('--run이 .md로 끝나면 시작하지 않고 basename을 알려 준다', t => {
+  // 2026-09-30의 한 실행은 리포트 파일 이름을 그대로 넘겨 기록이 전부 `….md.jsonl`로
+  // 남았다. 끝에 가서 `--check`가 이름이 다르다고 짚었지만, 그때는 바꿀 수 없다.
+  const dir = freshDir(t)
+  const repo = scratchRepo()
+  const out = spawnSync(process.execPath, [
+    SCRIPT, '--dir', dir, '--run', `${RUN}.md`, '--rules', RULES, '--workflow', 'full',
+    '--repo', repo.dir, '--base', repo.base, '--host', 'test',
+  ], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+  assert.equal(out.status, 2)
+  assert.ok(out.stderr.includes(`"${RUN}"`), out.stderr)
+  assert.equal(existsSync(join(dir, '.timing')), false)
+})
+
 test('이미 시작된 타임라인에 두 번째 시작을 얹지 않는다', t => {
   // 한 파일에 두 실행이 섞이면 어느 줄이 어느 실행인지 가릴 수 없다.
   const dir = freshDir(t)

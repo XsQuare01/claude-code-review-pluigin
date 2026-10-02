@@ -28,6 +28,8 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs'
 import { basename, dirname, extname, join, resolve } from 'node:path'
 
+import { runNameProblem } from './lib/run-name.mjs'
+
 const die = message => {
   process.stderr.write(`${message}\n`)
   process.exit(2)
@@ -76,8 +78,12 @@ const BOOL_FLAGS = new Set(['summary', 'check'])
 const dir = flag('dir', 'review-reports')
 const run = flag('run')
 if (!run) die('usage: review-timeline.mjs --dir <reports-dir> --run <basename> --phase <name> [--data <json>]')
-// 경로 구분자가 들어오면 파일이 엉뚱한 데 생긴다. 리포트 basename만 받는다.
-if (/[\\/]/.test(run)) die(`--run must be a bare basename, got ${JSON.stringify(run)}`)
+// 경로 구분자가 들어오면 파일이 엉뚱한 데 생긴다. 리포트 basename만 받는다. 읽기만 하는
+// `--check`·`--summary`는 이미 `.md`가 붙은 채 남은 기록도 읽어야 하므로 그 검사를 빼고 본다.
+{
+  const runProblem = runNameProblem(run, { writing: !has('check') && !has('summary') })
+  if (runProblem) die(runProblem)
+}
 
 const timingDir = join(dir, '.timing')
 const path = join(timingDir, `${run}.jsonl`)
@@ -196,6 +202,38 @@ const outsideClosedValues = (phase, data) => Object.entries(CLOSED_VALUES.get(ph
   .filter(([key, allowed]) => data[key] !== undefined && !allowed.includes(data[key]))
   .map(([key, allowed]) => ({ key, value: data[key], allowed }))
 
+/**
+ * `module.done`의 정정 줄을 가려낸다.
+ *
+ * append 전용 기록에서 목록 밖 status를 적은 줄은 고치지 않고, 같은 모듈·시도의
+ * `module.done`을 `note`와 함께 한 줄 더 남겨 바로잡는다 — `crossverify.end`의 정정
+ * 줄과 같은 규칙이다. `prepare-verification.mjs --collect`가 목록 밖 status를 거부하므로,
+ * 바로잡은 기록을 여기서 받지 않으면 바로잡을 길이 없다.
+ *
+ * 정정으로 받는 것은 **앞 줄의 status가 목록 밖일 때뿐이다.** `failed`를 `ok`로 바꾼
+ * 줄은 어휘를 바로잡은 것이 아니라 다른 사건이고, 그것은 `attempt`를 올린 재시도로
+ * 남긴다. 상태는 정정 줄이 정본이고 시각은 앞 줄이 정본이다 — 정정은 모듈이 끝난
+ * 때가 아니라 바로잡은 때에 쓰이므로, 그 시각으로 구간을 닫으면 모듈이 쓴 시간이 부푼다.
+ */
+const doneKey = event => `${event.module}#${event.attempt ?? '?'}`
+const moduleDoneCorrections = events => {
+  const allowed = CLOSED_VALUES.get('module.done').status
+  const latest = new Map()
+  const corrections = new Set()
+  const superseded = new Set()
+  for (const event of events) {
+    if (event?.phase !== 'module.done') continue
+    const key = doneKey(event)
+    const previous = latest.get(key)
+    if (previous && event.note !== undefined && !allowed.includes(previous.status)) {
+      corrections.add(event)
+      superseded.add(previous)
+    }
+    latest.set(key, event)
+  }
+  return { corrections, superseded }
+}
+
 const FAILURE_CLASSES = new Set([
   'none', 'malformed-corrected',
   'no-start', 'task-not-found', 'inactivity-timeout', 'queue-expiry', 'empty-result',
@@ -212,7 +250,8 @@ const FAILURE_CLASSES = new Set([
  * 그 시도가 성공인지 실패인지 기록이 말하지 않으므로 세지 않는다(`countable: false`).
  */
 const dispatchCounts = events => {
-  const attempts = events.filter(event => event.phase === 'module.done' && /^\d\d-/.test(String(event.module ?? '')))
+  const { superseded } = moduleDoneCorrections(events)
+  const attempts = events.filter(event => event.phase === 'module.done' && /^\d\d-/.test(String(event.module ?? '')) && !superseded.has(event))
   const terminal = new Map()
   for (const event of attempts) terminal.set(String(event.module), event.status)
   return {
@@ -247,11 +286,12 @@ const attemptSpans = events => {
   const opened = new Map()
   const spans = []
   const unstarted = []
+  const { corrections } = moduleDoneCorrections(events)
   for (const event of events) {
     const at = new Date(event.at).getTime()
     const key = `${event.module}#${event.attempt ?? '?'}`
     if (event.phase === 'module.start') opened.set(key, { from: at, module: String(event.module) })
-    if (event.phase !== 'module.done') continue
+    if (event.phase !== 'module.done' || corrections.has(event)) continue
     if (opened.has(key)) {
       const start = opened.get(key)
       spans.push({ from: start.from, to: at, module: start.module, open: false })
@@ -398,8 +438,15 @@ if (has('check')) {
   // 닫힌 목록 밖 값은 **어휘 문제로** 짚는다. 이 값으로 아래 `dispatch.end`를 다시
   // 세면 `COMPLETED`가 `ok`가 아니라서 전부 실패로 세어지고, 기록은 멀쩡한 수치를
   // 틀렸다고 말하게 된다 — 진짜 원인(어휘)은 그 문장 어디에도 없다.
+  // `note`를 단 다음 줄이 바로잡은 줄은 문제가 아니라 기록된 사실이다(moduleDoneCorrections).
+  const { corrections, superseded } = moduleDoneCorrections(events)
+  if (superseded.size) {
+    const was = [...new Set([...superseded].map(event => String(event.status)))].join(', ')
+    notes.push(`정정된 \`module.done\` ${superseded.size}줄: 목록 밖 status(${was})를 note를 단 다음 줄이 바로잡았다`)
+  }
   const offList = new Map()
   for (const event of events) {
+    if (superseded.has(event)) continue
     for (const { key, value, allowed } of outsideClosedValues(event.phase, event)) {
       const label = `\`${event.phase}\`의 ${key}`
       if (!offList.has(label)) offList.set(label, { values: new Set(), allowed, lines: 0 })
@@ -417,7 +464,7 @@ if (has('check')) {
   const seenAttempts = new Set()
   const doubled = new Set()
   for (const event of events) {
-    if (event.phase !== 'module.done') continue
+    if (event.phase !== 'module.done' || corrections.has(event)) continue
     const key = `${event.module}#${event.attempt ?? '?'}`
     if (seenAttempts.has(key)) doubled.add(key)
     seenAttempts.add(key)
@@ -458,8 +505,12 @@ if (has('check')) {
   // fan-out 증거는 자동으로 남길 수 없다 — 이 플러그인은 task launcher를 갖고
   // 있지 않다. 그래서 강제하지 못하고 **사후에 짚는** 것까지가 여기서 할 수 있는
   // 전부다. 경고로 두는 이유는 이것만으로 실행을 실패로 부를 수 없기 때문이다.
+  // `applied`는 번호 모듈만 센다(C-3). 특수 패스까지 세면 정상 실행마다 "18인데 21개"가
+  // 나온다 — 2026-09-30 실행의 리포트가 그 문장을 미해결 항목으로 옮겨 적었다.
   const applied = events.find(event => event.phase === 'modules.planned')?.applied
-  const finished = new Set(events.filter(event => event.phase === 'module.done').map(event => String(event.module)))
+  const finished = new Set(events
+    .filter(event => event.phase === 'module.done' && /^\d\d-/.test(String(event.module ?? '')))
+    .map(event => String(event.module)))
   if (Number.isInteger(applied) && finished.size !== applied) {
     notes.push(`\`modules.planned.applied\`는 ${applied}인데 \`module.done\`이 남은 모듈은 ${finished.size}개다`)
   }

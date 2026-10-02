@@ -170,30 +170,54 @@ const retryPathOf = task => task.prompt.replace(/\.md$/, '.retry.md')
  * 오류 목록과 직전 응답 원문을 붙인 것이다. 오케스트레이터는 그 파일 내용을 그대로
  * 새 검증자에게 넘기고, 돌아온 JSON으로 같은 판정 파일을 덮어쓴다. 기록에는 아무것도
  * 남기지 않는다 — 검사일 뿐이고, 교차검증의 끝은 `--collect`가 남긴다.
+ *
+ * **남은 일도 함께 낸다.** 판정 파일이 없는 작업(`pending`)과, bundle이 `needs-context`로
+ * 돌렸는데 승격 판정이 아직 없는 후보(`promotionsDue`)다. `fix/anchor-vector-direction`
+ * 실행(2026-09-30)은 검증자 하나가 context 압축 직전에 떠서 끝나지 않았고, 호스트는 띄운
+ * 작업이 전부 끝나야 오케스트레이터를 깨웠다 — 웨이브마다 멈춰 17건에 37시간이 걸렸고,
+ * 무엇이 남았는지는 오케스트레이터의 기억에만 있었다. 판정 파일 자리는 이미 정해져
+ * 있으므로 남은 일은 파일에서 센다. `ready`는 셋이 모두 비었을 때만 참이고, 그때만 0으로 끝난다.
  */
 const validateTasks = plan => {
   const validate = manifests()
   const malformed = []
+  const pending = []
+  const awaiting = []
   let checked = 0
   for (const task of tasksOf(plan)) {
-    if (!existsSync(task.verdict)) continue
+    if (!existsSync(task.verdict)) {
+      if (!task.promotion) pending.push({ taskId: task.taskId, route: task.route, prompt: task.prompt, verdict: task.verdict })
+      continue
+    }
     checked += 1
     const raw = readFileSync(task.verdict, 'utf8')
     const ids = task.candidateIds
-    const { problems } = checkTaskVerdict(raw, ids, validate)
-    if (!problems) continue
+    const { payload, problems } = checkTaskVerdict(raw, ids, validate)
+    if (!problems) {
+      if (!task.promotion && task.route === 'bundle') {
+        for (const verdict of payload.verdicts) {
+          if (verdict.disposition === 'needs-context') awaiting.push(verdict.candidateId)
+        }
+      }
+      continue
+    }
     const original = existsSync(task.prompt) ? readFileSync(task.prompt, 'utf8') : ''
     const retryPrompt = retryPathOf(task)
     writeFileSync(retryPrompt, buildRetryPrompt(original, problems, raw), 'utf8')
     malformed.push({ taskId: task.taskId, problems, retryPrompt })
   }
-  return { checked, malformed }
+  const promotionsDue = awaiting
+    .map(candidateId => ({ candidateId, task: plan?.promotions?.[candidateId] }))
+    .filter(({ task }) => task !== undefined && !existsSync(task.verdict))
+    .map(({ candidateId, task }) => ({ candidateId, taskId: task.taskId, prompt: task.prompt, verdict: task.verdict }))
+  const ready = !malformed.length && !pending.length && !promotionsDue.length
+  return { checked, malformed, pending, promotionsDue, ready }
 }
 
 if (validateMode) {
   const report = validateTasks(routed)
   process.stdout.write(`${JSON.stringify(report, null, 2)}\n`)
-  process.exit(report.malformed.length ? 1 : 0)
+  process.exit(report.ready ? 0 : 1)
 }
 
 /**
@@ -202,41 +226,85 @@ if (validateMode) {
  * 순서가 곧 정본 순서다 — bundle 작업, isolated 작업, 그다음 승격 작업. 승격은
  * bundle이 `needs-context`로 돌린 후보를 다시 판정한 것이므로 반드시 bundle 뒤에
  * 와야 한다. 판정 파일이 없는 작업은 검증자가 결과를 내지 못한 것이다 — 실패로
- * 멈추지 않고(C-6B: verification-unavailable) 어느 작업인지 알린다. 승격 작업은
- * 필요할 때만 띄우므로 파일이 없는 것이 정상이다.
+ * 멈추지 않고(C-6B: verification-unavailable) 어느 작업인지 알린다.
+ *
+ * 승격 작업을 읽을지는 **bundle 판정이 정한다.** bundle이 `needs-context`로 돌린 후보만
+ * 승격 판정을 받아야 한다(SKILL). 그 판정이 없거나 교정 뒤에도 계약을 어겼으면 bundle의
+ * `needs-context`도 최종 판정으로 쓰지 않는다 — 그대로 세면 계약이 isolated에서도 닫히지
+ * 않은 후보에만 주는 `미해결 / 후속 확인`으로 그려지고, 해야 할 검증을 건너뛴 사실은
+ * 판정 없음 0건에 묻힌다. bundle이 이미 닫은 후보의 승격 판정은 세지 않는다 — 계약에
+ * 없는 재검증으로 판정을 뒤집는 경로이기 때문이다.
  */
 const collectFromTasks = plan => {
   const validate = manifests()
+  const tasks = tasksOf(plan)
   const found = []
   const missing = []
   const malformed = []
-  let corrected = 0
-  for (const task of tasksOf(plan)) {
-    if (existsSync(retryPathOf(task))) corrected += 1
-    if (!existsSync(task.verdict)) {
-      if (!task.promotion) missing.push(task.taskId)
-      continue
-    }
-    const ids = task.candidateIds
-    const { payload, problems } = checkTaskVerdict(readFileSync(task.verdict, 'utf8'), ids, validate)
+  const unpromoted = []
+  const unrequested = []
+  const corrected = tasks.filter(task => existsSync(retryPathOf(task))).length
+
+  const read = task => {
+    if (!existsSync(task.verdict)) return { absent: true }
+    const { payload, problems } = checkTaskVerdict(readFileSync(task.verdict, 'utf8'), task.candidateIds, validate)
     // 교정 뒤에도 계약을 어긴 판정은 세지 않는다(C-6A: 두 번째 malformed-output은
     // 확정 실패다). 그 후보는 판정 없음으로 남고, 차단은 C-6B대로 fail-open이다.
-    if (problems) malformed.push(task.taskId)
-    else found.push(payload)
+    if (problems) {
+      malformed.push(task.taskId)
+      return {}
+    }
+    return { payload }
   }
-  return { found, missing, malformed, corrected }
+
+  const awaiting = []
+  for (const task of tasks.filter(entry => !entry.promotion)) {
+    const { payload, absent } = read(task)
+    if (absent) missing.push(task.taskId)
+    if (!payload) continue
+    found.push(payload)
+    if (task.route !== 'bundle') continue
+    for (const verdict of payload.verdicts) {
+      if (verdict.disposition === 'needs-context') awaiting.push(verdict.candidateId)
+    }
+  }
+
+  const promotionOf = new Map(tasks.filter(entry => entry.promotion).map(task => [task.candidateIds[0], task]))
+  for (const id of awaiting) {
+    const task = promotionOf.get(id)
+    const payload = task === undefined ? undefined : read(task).payload
+    if (payload) found.push(payload)
+    else unpromoted.push(id)
+  }
+  for (const [id, task] of promotionOf) {
+    if (!awaiting.includes(id) && existsSync(task.verdict)) unrequested.push(task.taskId)
+  }
+
+  // 승격 판정을 받지 못한 후보는 bundle 판정에서도 지운다. 렌더러가 읽을 파일에 남기면
+  // 여기서는 판정 없음으로 세고 렌더러는 `needs-context`로 그려, 둘이 다른 결론을 낸다.
+  const unresolved = new Set(unpromoted)
+  const payloads = unresolved.size
+    ? found.map(payload => ({ ...payload, verdicts: payload.verdicts.filter(verdict => !unresolved.has(verdict.candidateId)) }))
+    : found
+  return { found: payloads, missing, malformed, unpromoted, unrequested, corrected }
 }
 
 let payloads
 let verdictsFile
 let correctedByFiles
 if (collectMode) {
-  const { found, missing, malformed, corrected } = collectFromTasks(routed)
+  const { found, missing, malformed, unpromoted, unrequested, corrected } = collectFromTasks(routed)
   if (missing.length) {
     process.stderr.write(`경고: 판정 파일이 없는 검증 작업 ${missing.length}개: ${missing.join(', ')} — 그 후보는 판정 없음(noVerdict)으로 센다\n`)
   }
   if (malformed.length) {
     process.stderr.write(`경고: 계약을 어긴 판정 파일 ${malformed.length}개를 세지 않았다: ${malformed.join(', ')} — --validate로 교정 프롬프트를 만들 수 있다. 교정 뒤에도 어겼다면 그 후보는 판정 없음(noVerdict)이다\n`)
+  }
+  if (unpromoted.length) {
+    process.stderr.write(`경고: bundle이 needs-context로 돌린 후보 ${unpromoted.length}개의 승격 판정이 없다: ${unpromoted.join(', ')} — bundle 판정을 최종 판정으로 쓰지 않고 판정 없음(noVerdict)으로 센다. promotions[<candidateId>].prompt로 isolated 검증자를 띄워 그 verdict 자리에 쓴다\n`)
+  }
+  if (unrequested.length) {
+    process.stderr.write(`경고: bundle이 이미 닫은 후보의 승격 판정 ${unrequested.length}개를 세지 않았다: ${unrequested.join(', ')} — 승격은 bundle이 needs-context로 돌린 후보에만 한다\n`)
   }
   correctedByFiles = corrected
   payloads = found
