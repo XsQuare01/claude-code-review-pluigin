@@ -107,6 +107,15 @@ test('--run에 역슬래시 경로 구분자가 와도 거부한다', t => {
   assert.match(out.stderr, /bare basename/)
 })
 
+test('--run이 .md로 끝나면 리포트 파일 이름을 준 것으로 보고 거부한다', t => {
+  const dir = started(t)
+  const out = spawnSync('node', [SCRIPT, '--merge-base', 'HEAD', '--dir', dir, '--run', `${RUN}.md`], {
+    input: JSON.stringify({ candidates: [] }), encoding: 'utf8',
+  })
+  assert.equal(out.status, 2)
+  assert.ok(out.stderr.includes(`"${RUN}"`), out.stderr)
+})
+
 test('준비 수치를 script.done으로 남기고 counts는 객체로 남는다', t => {
   // `--set`으로 넘기면 `total=5,verify=2,…`가 문자열 하나로 남아 다시 꺼낼 수
   // 없다. 실제로 그렇게 기록된 실행이 있어서, 이 스크립트가 직접 남긴다.

@@ -572,6 +572,18 @@ test('run에 경로 구분자가 들어오면 거부한다', t => {
   assert.ok(!existsSync(join(dir, '.timing')))
 })
 
+test('run이 .md로 끝나면 리포트 파일 이름을 준 것으로 보고 거부한다', t => {
+  // 2026-09-30의 한 실행은 `--run`에 리포트 파일 이름을 줘서, 기록이 전부
+  // `….md.jsonl`·`….md.routed.json`으로 남았다. 리포트만 가진 사람은 그 기록을 찾지 못한다.
+  const dir = freshDir(t)
+  const out = spawnSync(process.execPath, [SCRIPT, '--dir', dir, '--run', `${RUN}.md`, '--phase', 'run.start'],
+    { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+  assert.equal(out.status, 2)
+  assert.match(out.stderr, /\.md/)
+  assert.ok(out.stderr.includes(`"${RUN}"`), out.stderr)
+  assert.ok(!existsSync(join(dir, '.timing')))
+})
+
 test('data가 JSON이 아니거나 객체가 아니면 거부한다', t => {
   const dir = freshDir(t)
   const bad = spawnSync(process.execPath, [SCRIPT, '--dir', dir, '--run', RUN, '--phase', 'synthesis.start', '--data', 'findings=3'],

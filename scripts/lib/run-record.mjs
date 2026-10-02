@@ -3,6 +3,8 @@ import { existsSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+import { runNameProblem } from './run-name.mjs'
+
 // 실행 기록(C-9)에 줄을 남기는 두 가지 일 — 관문 확인과 append.
 //
 // 두 스크립트가 같은 일을 한다. `prepare-verification.mjs`는 렌더 전 필수 관문이고
@@ -26,9 +28,10 @@ export function requireStartedTimeline(dir, run) {
     process.stderr.write(`--dir와 --run이 필요하다. 실행 타임라인(C-9) 없이 진행하지 않는다.\n먼저: ${HOW}\n`)
     process.exit(2)
   }
-  // 역슬래시도 막는다 — Windows에서는 경로 구분자다. preflight·review-timeline과 같은 검사다.
-  if (/[\\/]/.test(run)) {
-    process.stderr.write(`--run must be a bare basename, got ${JSON.stringify(run)}\n`)
+  // preflight·review-timeline과 같은 검사다(`run-name.mjs`). 두 스크립트 모두 기록을 남긴다.
+  const runProblem = runNameProblem(run)
+  if (runProblem) {
+    process.stderr.write(`${runProblem}\n`)
     process.exit(2)
   }
   const sidecar = join(dir, '.timing', `${run}.jsonl`)

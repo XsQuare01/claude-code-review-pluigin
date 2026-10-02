@@ -28,6 +28,8 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs'
 import { basename, dirname, extname, join, resolve } from 'node:path'
 
+import { runNameProblem } from './lib/run-name.mjs'
+
 const die = message => {
   process.stderr.write(`${message}\n`)
   process.exit(2)
@@ -76,8 +78,12 @@ const BOOL_FLAGS = new Set(['summary', 'check'])
 const dir = flag('dir', 'review-reports')
 const run = flag('run')
 if (!run) die('usage: review-timeline.mjs --dir <reports-dir> --run <basename> --phase <name> [--data <json>]')
-// 경로 구분자가 들어오면 파일이 엉뚱한 데 생긴다. 리포트 basename만 받는다.
-if (/[\\/]/.test(run)) die(`--run must be a bare basename, got ${JSON.stringify(run)}`)
+// 경로 구분자가 들어오면 파일이 엉뚱한 데 생긴다. 리포트 basename만 받는다. 읽기만 하는
+// `--check`·`--summary`는 이미 `.md`가 붙은 채 남은 기록도 읽어야 하므로 그 검사를 빼고 본다.
+{
+  const runProblem = runNameProblem(run, { writing: !has('check') && !has('summary') })
+  if (runProblem) die(runProblem)
+}
 
 const timingDir = join(dir, '.timing')
 const path = join(timingDir, `${run}.jsonl`)

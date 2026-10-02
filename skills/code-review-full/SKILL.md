@@ -51,7 +51,7 @@ description: Use when the user invokes /code-review-full or asks for a full code
 node "$RULES_DIR/../scripts/review-preflight.mjs" --dir "$REPORT_DIR" --run "$REPORT_BASENAME" --rules "$RULES_DIR" --workflow full --base "$BASE" --host <harness 이름>
 ```
 
-**`$REPORT_DIR`와 `$REPORT_BASENAME`은 리포트를 실제로 저장할 곳과 그 파일 이름이다.** 여기서 정한 값이 사이드카의 자리를 결정하므로, 나중에 리포트를 다른 디렉터리나 다른 이름으로 쓰면 기록과 리포트가 서로를 못 찾는다. 실제로 한 실행이 리포트를 `Docs/`에 쓰고 사이드카는 워크트리에 남겨 **이름도 디렉터리도 달랐다.** `--check`가 `render.wrote`의 경로와 대조해 그 어긋남을 짚는다.
+**`$REPORT_DIR`와 `$REPORT_BASENAME`은 리포트를 실제로 저장할 곳과 그 파일 이름이다.** 여기서 정한 값이 사이드카의 자리를 결정하므로, 나중에 리포트를 다른 디렉터리나 다른 이름으로 쓰면 기록과 리포트가 서로를 못 찾는다. 실제로 한 실행이 리포트를 `Docs/`에 쓰고 사이드카는 워크트리에 남겨 **이름도 디렉터리도 달랐다.** `--check`가 `render.wrote`의 경로와 대조해 그 어긋남을 짚는다. **`$REPORT_BASENAME`에는 확장자를 붙이지 않는다** — `.md`로 끝나면 preflight와 기록 스크립트가 거부한다. 2026-09-30의 한 실행은 리포트 파일 이름을 그대로 넘겨 기록이 전부 `….md.jsonl`로 남았다.
 
 C-9의 `run.start`를 이 스크립트가 쓴다. 동시에 `리뷰 기준`과 `실행 계획`에 적을 값을 낸다 — 플러그인 버전, 해석된 규칙 경로, 브랜치, merge-base, 변경 파일 수, **후보 모듈 수와 목록**. 그 값을 손으로 세지 않는다. 후보에서 빠진 `00-rule.md`와 synthesis 전용 모듈도 이유와 함께 출력되므로, 아래 (2)와 (4)는 이 목록에서 출발한다.
 
