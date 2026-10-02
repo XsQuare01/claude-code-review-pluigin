@@ -318,7 +318,7 @@ isolated 11)을 동시에 background dispatch한 결과, 1건만 2분 25초에 �
 - **검증 에이전트 실패는 `FAILED orchestration`이 아니다.** 해당 candidate에 `verification-unavailable`을 부여하고 coverage에 건수를 남긴다. 보조 단계의 실패가 전체 리뷰를 실패로 만들면, 새로 붙인 단계가 리뷰 전체의 신뢰성을 떨어뜨린다
 - retry 1회 / in-flight 상한 공유 / 실패 클래스별 건수 기록 — 일반 모듈 정책을 그대로 재사용한다
 - verdict `malformed-output` → C-6A와 동일 (교정 재시도 1회, 두 번째 실패 시 확정). 반환된 `candidateId` 집합이 요청과 다르면 그것도 `malformed-output`이다
-- **형식 검사와 교정 프롬프트는 스크립트가 만든다.** 판정 파일을 다 받으면 `tally-verdicts.mjs --validate --targets <routed>`를 돌린다(기록에는 아무것도 남기지 않는다). 계약을 어긴 작업마다 `<taskId>.retry.md`가 생기고 — 원래 지시에 오류 목록과 직전 응답 원문을 붙인 것이다 — 그 **파일 내용을 그대로** 새 `rule-module-reviewer`에게 넘긴다. 돌아온 JSON으로 같은 판정 파일을 덮어쓴다. 교정 프롬프트를 직접 쓰지 않고, 판정 근거를 요약해 불러 주지 않는다 — 2026-09-30 실행은 세션 재개가 `task-not-found`로 막히자 새 작업에 "이 근거를 보존하라"며 근거를 불러 줬고, 그 판정은 검증자가 아니라 오케스트레이터가 쓴 것이 됐다
+- **형식 검사와 교정 프롬프트, 남은 작업 목록은 스크립트가 만든다.** 검증자가 돌아올 때마다 `tally-verdicts.mjs --validate --targets <routed>`를 돌린다(기록에는 아무것도 남기지 않는다). 판정 파일이 없는 작업(`pending`)과 띄워야 할 승격(`promotionsDue`)도 이 출력에 있다(위 `디스패치`). 계약을 어긴 작업마다 `<taskId>.retry.md`가 생기고 — 원래 지시에 오류 목록과 직전 응답 원문을 붙인 것이다 — 그 **파일 내용을 그대로** 새 `rule-module-reviewer`에게 넘긴다. 돌아온 JSON으로 같은 판정 파일을 덮어쓴다. 교정 프롬프트를 직접 쓰지 않고, 판정 근거를 요약해 불러 주지 않는다 — 2026-09-30 실행은 세션 재개가 `task-not-found`로 막히자 새 작업에 "이 근거를 보존하라"며 근거를 불러 줬고, 그 판정은 검증자가 아니라 오케스트레이터가 쓴 것이 됐다
 - `exhaustive` release-gate 실행에서 **차단 후보(`impact = high`)의 검증이 실패하면 최종 판정은 `INCONCLUSIVE`** 다. 개별 finding의 차단 여부와 gate 전체의 완결성 판정은 다른 값이다
 
 ### 검증 결과 집계

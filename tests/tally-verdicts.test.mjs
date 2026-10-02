@@ -399,7 +399,49 @@ test('--validate는 판정이 모두 계약에 맞으면 0으로 끝나고 교�
   answer('isolated-A-8-1', verdict('A-8#1', 'rejected'))
   const out = validateRun(dir, routedPath)
   assert.equal(out.status, 0, out.stdout)
-  assert.deepEqual(JSON.parse(out.stdout).malformed, [])
+  const report = JSON.parse(out.stdout)
+  assert.deepEqual(report.malformed, [])
+  assert.equal(report.ready, true)
+})
+
+// ── 남은 검증 작업 (--validate) ─────────────────────────────────────────────
+//
+// `fix/anchor-vector-direction` 실행(2026-09-30)은 검증자 17건에 37시간이 걸렸다.
+// 검증이 느렸던 것이 아니다 — 한 검증자가 context 압축 직전에 떠서 끝나지 않았고,
+// 호스트는 띄운 작업이 **전부** 끝나야 오케스트레이터를 깨웠다. 그 뒤로 웨이브마다
+// 멈췄고, 사용자가 네 번 재촉하고 스킬을 다시 불러서야 끝났다. 무엇이 남았는지는
+// 오케스트레이터의 기억에만 있었다. 판정 파일 자리는 이미 정해져 있으므로, 남은 일은
+// 파일에서 셀 수 있다.
+
+test('--validate는 판정 파일이 없는 작업과 띄워야 할 승격 작업을 알려 준다', t => {
+  const dir = started(t)
+  const { routedPath, answer, routed } = withPrompts(dir)
+  answer('bundle-1', verdict('04-3#1', 'needs-context'))
+  const out = validateRun(dir, routedPath)
+  assert.equal(out.status, 1)
+  const report = JSON.parse(out.stdout)
+  assert.equal(report.ready, false)
+  assert.deepEqual(report.malformed, [])
+  assert.deepEqual(report.pending, [{
+    taskId: 'isolated-A-8-1', route: 'isolated', prompt: routed.verifierTasks[1].prompt, verdict: routed.verifierTasks[1].verdict,
+  }])
+  assert.deepEqual(report.promotionsDue, [{
+    candidateId: '04-3#1', taskId: 'isolated-04-3-1', prompt: routed.promotions['04-3#1'].prompt, verdict: routed.promotions['04-3#1'].verdict,
+  }])
+})
+
+test('--validate는 승격 판정까지 받았으면 남은 작업이 없다고 말한다', t => {
+  const dir = started(t)
+  const { routedPath, answer } = withPrompts(dir)
+  answer('bundle-1', verdict('04-3#1', 'needs-context'))
+  answer('isolated-A-8-1', verdict('A-8#1', 'upheld'))
+  answer('isolated-04-3-1', verdict('04-3#1', 'upheld'))
+  const out = validateRun(dir, routedPath)
+  assert.equal(out.status, 0, out.stdout)
+  const report = JSON.parse(out.stdout)
+  assert.equal(report.ready, true)
+  assert.deepEqual(report.pending, [])
+  assert.deepEqual(report.promotionsDue, [])
 })
 
 test('--collect는 교정 뒤에도 계약을 어긴 판정을 세지 않고, 교정한 작업 수를 스스로 센다', t => {

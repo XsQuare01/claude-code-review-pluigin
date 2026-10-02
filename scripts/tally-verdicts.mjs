@@ -170,30 +170,54 @@ const retryPathOf = task => task.prompt.replace(/\.md$/, '.retry.md')
  * 오류 목록과 직전 응답 원문을 붙인 것이다. 오케스트레이터는 그 파일 내용을 그대로
  * 새 검증자에게 넘기고, 돌아온 JSON으로 같은 판정 파일을 덮어쓴다. 기록에는 아무것도
  * 남기지 않는다 — 검사일 뿐이고, 교차검증의 끝은 `--collect`가 남긴다.
+ *
+ * **남은 일도 함께 낸다.** 판정 파일이 없는 작업(`pending`)과, bundle이 `needs-context`로
+ * 돌렸는데 승격 판정이 아직 없는 후보(`promotionsDue`)다. `fix/anchor-vector-direction`
+ * 실행(2026-09-30)은 검증자 하나가 context 압축 직전에 떠서 끝나지 않았고, 호스트는 띄운
+ * 작업이 전부 끝나야 오케스트레이터를 깨웠다 — 웨이브마다 멈춰 17건에 37시간이 걸렸고,
+ * 무엇이 남았는지는 오케스트레이터의 기억에만 있었다. 판정 파일 자리는 이미 정해져
+ * 있으므로 남은 일은 파일에서 센다. `ready`는 셋이 모두 비었을 때만 참이고, 그때만 0으로 끝난다.
  */
 const validateTasks = plan => {
   const validate = manifests()
   const malformed = []
+  const pending = []
+  const awaiting = []
   let checked = 0
   for (const task of tasksOf(plan)) {
-    if (!existsSync(task.verdict)) continue
+    if (!existsSync(task.verdict)) {
+      if (!task.promotion) pending.push({ taskId: task.taskId, route: task.route, prompt: task.prompt, verdict: task.verdict })
+      continue
+    }
     checked += 1
     const raw = readFileSync(task.verdict, 'utf8')
     const ids = task.candidateIds
-    const { problems } = checkTaskVerdict(raw, ids, validate)
-    if (!problems) continue
+    const { payload, problems } = checkTaskVerdict(raw, ids, validate)
+    if (!problems) {
+      if (!task.promotion && task.route === 'bundle') {
+        for (const verdict of payload.verdicts) {
+          if (verdict.disposition === 'needs-context') awaiting.push(verdict.candidateId)
+        }
+      }
+      continue
+    }
     const original = existsSync(task.prompt) ? readFileSync(task.prompt, 'utf8') : ''
     const retryPrompt = retryPathOf(task)
     writeFileSync(retryPrompt, buildRetryPrompt(original, problems, raw), 'utf8')
     malformed.push({ taskId: task.taskId, problems, retryPrompt })
   }
-  return { checked, malformed }
+  const promotionsDue = awaiting
+    .map(candidateId => ({ candidateId, task: plan?.promotions?.[candidateId] }))
+    .filter(({ task }) => task !== undefined && !existsSync(task.verdict))
+    .map(({ candidateId, task }) => ({ candidateId, taskId: task.taskId, prompt: task.prompt, verdict: task.verdict }))
+  const ready = !malformed.length && !pending.length && !promotionsDue.length
+  return { checked, malformed, pending, promotionsDue, ready }
 }
 
 if (validateMode) {
   const report = validateTasks(routed)
   process.stdout.write(`${JSON.stringify(report, null, 2)}\n`)
-  process.exit(report.malformed.length ? 1 : 0)
+  process.exit(report.ready ? 0 : 1)
 }
 
 /**
