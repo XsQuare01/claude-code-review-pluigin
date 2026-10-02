@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
@@ -287,6 +287,9 @@ export function prepareVerification(candidates, blobs, options = {}) {
 // --verify exhaustive : every candidate is a verification target (reason `exhaustive` when
 //                  it had none); bundle/isolated routing is unchanged. The audit sidecar
 //                  stays the orchestrator's job (contract C-6B).
+// --discard-verdicts : the prompt directory already holds `*.verdict.json` from this run;
+//                  without this flag the script refuses rather than wipe them. Resuming a
+//                  run uses `tally-verdicts.mjs --validate` instead of preparing again.
 //
 // Unless --locations-only or --verify off, one prompt file per verifier task is written to
 // `<d>/.timing/<r>.verify/` and listed as `verifierTasks` / `promotions`, each with the
@@ -579,7 +582,7 @@ async function main() {
     if (verifyMode !== 'off') {
       const outDir = verifyDirOf(dir, run)
       if (outDir.error) fail(outDir.error)
-      written = writeVerifierTasks({ result, rulesDir, mergeBase, outDir: outDir.path, fail })
+      written = writeVerifierTasks({ result, rulesDir, mergeBase, outDir: outDir.path, discardVerdicts: argv.includes('--discard-verdicts'), fail })
     }
     result.verifierTasks = written.tasks
     result.promotions = written.promotions
@@ -683,7 +686,7 @@ export function verifyDirOf(dir, run) {
  * 검증자가 받는 규칙이 같아야 한다. 디렉터리는 실행마다 새로 만든다. 앞 실행의
  * 파일이 남으면 이번 목록에 없는 작업이 디렉터리에는 있게 된다.
  */
-function writeVerifierTasks({ result, rulesDir, mergeBase, outDir, fail }) {
+function writeVerifierTasks({ result, rulesDir, mergeBase, outDir, discardVerdicts, fail }) {
   const planned = planVerifierTasks(result)
   if (!planned.tasks.length) return { tasks: [], promotions: {} }
 
@@ -711,6 +714,13 @@ function writeVerifierTasks({ result, rulesDir, mergeBase, outDir, fail }) {
     clauses.set(candidate.ruleId, docPath ? extractClause(docs.get(docPath), candidate.ruleId) : null)
   }
 
+  // 받은 판정이 있는 디렉터리는 지우지 않는다. 같은 실행을 이어 가다 이 스크립트를 다시
+  // 돌리면 검증자가 이미 낸 판정까지 지워진다 — 2026-09-30의 한 실행은 검증 도중 스킬을
+  // 다시 불렀다. 남은 작업은 판정 파일에서 셀 수 있으므로 다시 준비할 이유가 없다.
+  const received = existsSync(outDir) ? readdirSync(outDir).filter(name => name.endsWith('.verdict.json')) : []
+  if (received.length && !discardVerdicts) {
+    fail(`${outDir}에 이미 받은 판정 파일이 ${received.length}개 있다 — 같은 실행을 이어 가는 중이면 이 스크립트를 다시 돌리지 않고 tally-verdicts.mjs --validate --targets <routed>로 남은 작업을 본다. 받은 판정을 버리고 검증을 처음부터 다시 하려면 --discard-verdicts를 준다`)
+  }
   rmSync(outDir, { recursive: true, force: true })
   mkdirSync(outDir, { recursive: true })
   const candidatesById = new Map(result.candidates.map(candidate => [candidate.candidateId, candidate]))

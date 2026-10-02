@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { execFileSync, spawnSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
@@ -456,6 +456,36 @@ test('--verify off면 프롬프트도 crossverify.start도 만들지 않는다',
   assert.equal(out.status, 0, out.stderr)
   assert.deepEqual(JSON.parse(out.stdout).verifierTasks, [])
   assert.deepEqual(timelineOf(dir).map(event => event.phase), ['run.start', 'script.start', 'script.done'])
+})
+
+// 같은 실행을 이어 가다 이 스크립트를 다시 돌리면, 검증자 프롬프트 디렉터리를 지우고
+// 다시 만들면서 그 안의 판정 파일까지 지운다. 2026-09-30의 한 실행은 검증 도중 스킬을
+// 다시 불렀다 — 남은 작업은 `tally-verdicts.mjs --validate`가 판정 파일에서 센다.
+const prepareTwice = (t, extra = []) => {
+  const dir = started(t)
+  const input = join(dir, 'candidates.json')
+  writeFileSync(input, JSON.stringify(withHigh([HIGH])), 'utf8')
+  const prepareOnce = more => spawnSync('node', [SCRIPT, '--merge-base', 'HEAD', '--dir', dir, '--run', RUN, '--input', input, ...more],
+    { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+  const first = prepareOnce([])
+  assert.equal(first.status, 0, first.stderr)
+  const { verdict } = JSON.parse(first.stdout).verifierTasks[0]
+  writeFileSync(verdict, JSON.stringify({ schemaVersion: 1, verdicts: [] }), 'utf8')
+  return { verdict, second: prepareOnce(extra) }
+}
+
+test('받은 판정 파일이 있으면 검증자 프롬프트 디렉터리를 지우지 않고 거부한다', t => {
+  const { verdict, second } = prepareTwice(t)
+  assert.equal(second.status, 2)
+  assert.match(second.stderr, /--validate/)
+  assert.match(second.stderr, /--discard-verdicts/)
+  assert.equal(existsSync(verdict), true)
+})
+
+test('--discard-verdicts를 주면 받은 판정을 버리고 디렉터리를 다시 만든다', t => {
+  const { verdict, second } = prepareTwice(t, ['--discard-verdicts'])
+  assert.equal(second.status, 0, second.stderr)
+  assert.equal(existsSync(verdict), false)
 })
 
 test('--verify exhaustive는 검증 대상이 아니던 후보도 검증 작업으로 만든다', t => {
