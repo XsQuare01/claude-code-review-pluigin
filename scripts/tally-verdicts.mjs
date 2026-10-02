@@ -23,9 +23,15 @@
 // 파일로 받는 이유는 `prepare-verification.mjs --input`과 같다 — 산문과 코드 인용이
 // 든 payload를 셸 인용부호 하나에 넣는 구조는 깨지는 쪽이 정상이다.
 
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
+import { markedJson } from './lib/contract-blocks.mjs'
+import { validateVerdictPayload } from './lib/contract-validate.mjs'
 import { lastPhase, logPhase, requireStartedTimeline } from './lib/run-record.mjs'
+import { checkTaskVerdict, collectVerdicts } from './lib/verdicts.mjs'
+import { buildRetryPrompt } from './lib/verifier-tasks.mjs'
 
 // C-6B의 닫힌 목록이다. 목록 밖 값을 만나면 세지 않고 멈춘다 — 모르는 값을 0으로
 // 흘려보내면 합계는 그럴듯하고 판정만 틀린다.
@@ -45,28 +51,14 @@ const flag = (name, fallback) => {
   return at === -1 ? fallback : process.argv[at + 1]
 }
 
+const noteText = parts => {
+  const present = parts.filter(part => typeof part === 'string' && part.trim())
+  return present.length ? present.join(' · ') : undefined
+}
+
 const flagAll = name => process.argv
   .map((arg, at) => (arg === `--${name}` ? process.argv[at + 1] : null))
   .filter(value => value !== null && value !== undefined)
-
-/**
- * payload가 어떤 모양으로 오든 verdict 목록 하나로 편다.
- *
- * 검증 패스는 작업을 여러 개 띄우고 각자 payload를 낸다. 그 여러 벌을 합치는
- * 일이 곧 모델이 하던 일이고, 틀렸던 자리다.
- */
-export function collectVerdicts(payloads) {
-  const verdicts = []
-  const walk = value => {
-    if (Array.isArray(value)) { value.forEach(walk); return }
-    if (!value || typeof value !== 'object') return
-    if (Array.isArray(value.verdicts)) { verdicts.push(...value.verdicts); return }
-    if (Array.isArray(value.tasks)) { value.tasks.forEach(walk); return }
-    die(`verdicts도 tasks도 없는 payload다: ${JSON.stringify(Object.keys(value))}`)
-  }
-  walk(payloads)
-  return verdicts
-}
 
 /**
  * 검증 대상 후보 ID를 `prepare-verification.mjs` 출력에서 읽는다.
@@ -120,27 +112,157 @@ const run = flag('run')
 const sidecar = requireStartedTimeline(dir, run)
 
 const inputs = flagAll('input')
-if (!inputs.length) die('--input <경로>가 필요하다. 검증 작업이 낸 verdict payload를 파일로 넘긴다')
+const collectMode = process.argv.includes('--collect')
+const validateMode = process.argv.includes('--validate')
+const targetsPath = flag('targets')
+if ((collectMode || validateMode) && inputs.length) die('--collect·--validate와 --input을 함께 줄 수 없다. 작업별 판정 파일을 모으거나 판정 파일을 직접 넘긴다')
+if (collectMode && validateMode) die('--collect와 --validate는 따로 돌린다. --validate로 형식을 고친 뒤 --collect로 센다')
+if ((collectMode || validateMode) && targetsPath === undefined) {
+  die(`${collectMode ? '--collect' : '--validate'}에는 --targets <prepare-verification 출력>이 필요하다 — 어느 작업의 판정 파일을 어떤 순서로 읽을지가 거기 있다`)
+}
+if (!collectMode && !validateMode && !inputs.length) die('--input <경로>가 필요하다. 검증 작업이 낸 verdict payload를 파일로 넘긴다')
 
-const payloads = inputs.map(path => {
+const readJson = (path, what) => {
   let raw
   try {
     raw = readFileSync(path, 'utf8')
   } catch (error) {
-    die(`--input을 읽지 못했다: ${path} — ${error.message}`)
+    die(`${what}을 읽지 못했다: ${path} — ${error.message}`)
   }
   try {
     return JSON.parse(raw)
   } catch (error) {
     die(`${path} is not valid JSON: ${error.message}`)
   }
-})
+}
 
-const counts = tally(collectVerdicts(payloads))
+const routed = targetsPath === undefined ? undefined : readJson(targetsPath, '--targets')
+
+// 계약 검사에 쓰는 manifest는 규칙 문서에서 읽는다. 기본은 이 스크립트와 같은
+// 플러그인의 것이고, `--rules`를 주면 검증자가 받은 그 디렉터리를 쓴다.
+const manifests = () => {
+  const rulesDir = flag('rules') ?? join(dirname(fileURLToPath(import.meta.url)), '..', 'review-rules')
+  let contract
+  try {
+    contract = readFileSync(join(rulesDir, 'workflow-contract.md'), 'utf8')
+  } catch (error) {
+    die(`workflow-contract.md를 읽지 못했다: ${rulesDir} — ${error.message}`)
+  }
+  const verdict = markedJson(contract, 'REVIEW_VERDICT_CONTRACT_V1')
+  const result = markedJson(contract, 'REVIEW_RESULT_CONTRACT_V1')
+  if (verdict.error) die(`workflow-contract.md: ${verdict.error}`)
+  if (result.error) die(`workflow-contract.md: ${result.error}`)
+  return payload => validateVerdictPayload(payload, verdict.value, result.value)
+}
+
+// 작업 목록 — bundle, isolated, 그다음 승격 순서가 정본 순서다.
+// 승격 작업은 `promotions[<candidateId>]`로 오므로 맡긴 후보는 그 키 하나다.
+const tasksOf = plan => [
+  ...(plan?.verifierTasks ?? []).map(task => ({ ...task, promotion: false })),
+  ...Object.entries(plan?.promotions ?? {}).map(([candidateId, task]) => ({ ...task, candidateIds: [candidateId], promotion: true })),
+]
+const retryPathOf = task => task.prompt.replace(/\.md$/, '.retry.md')
+
+/**
+ * 작업별 판정 파일을 계약과 요청에 맞춰 본다.
+ *
+ * 형식을 어긴 작업마다 교정 프롬프트(`<taskId>.retry.md`)를 만든다 — 원래 지시에
+ * 오류 목록과 직전 응답 원문을 붙인 것이다. 오케스트레이터는 그 파일 내용을 그대로
+ * 새 검증자에게 넘기고, 돌아온 JSON으로 같은 판정 파일을 덮어쓴다. 기록에는 아무것도
+ * 남기지 않는다 — 검사일 뿐이고, 교차검증의 끝은 `--collect`가 남긴다.
+ */
+const validateTasks = plan => {
+  const validate = manifests()
+  const malformed = []
+  let checked = 0
+  for (const task of tasksOf(plan)) {
+    if (!existsSync(task.verdict)) continue
+    checked += 1
+    const raw = readFileSync(task.verdict, 'utf8')
+    const ids = task.candidateIds
+    const { problems } = checkTaskVerdict(raw, ids, validate)
+    if (!problems) continue
+    const original = existsSync(task.prompt) ? readFileSync(task.prompt, 'utf8') : ''
+    const retryPrompt = retryPathOf(task)
+    writeFileSync(retryPrompt, buildRetryPrompt(original, problems, raw), 'utf8')
+    malformed.push({ taskId: task.taskId, problems, retryPrompt })
+  }
+  return { checked, malformed }
+}
+
+if (validateMode) {
+  const report = validateTasks(routed)
+  process.stdout.write(`${JSON.stringify(report, null, 2)}\n`)
+  process.exit(report.malformed.length ? 1 : 0)
+}
+
+/**
+ * `prepare-verification.mjs`가 정한 자리에서 판정 파일을 모은다.
+ *
+ * 순서가 곧 정본 순서다 — bundle 작업, isolated 작업, 그다음 승격 작업. 승격은
+ * bundle이 `needs-context`로 돌린 후보를 다시 판정한 것이므로 반드시 bundle 뒤에
+ * 와야 한다. 판정 파일이 없는 작업은 검증자가 결과를 내지 못한 것이다 — 실패로
+ * 멈추지 않고(C-6B: verification-unavailable) 어느 작업인지 알린다. 승격 작업은
+ * 필요할 때만 띄우므로 파일이 없는 것이 정상이다.
+ */
+const collectFromTasks = plan => {
+  const validate = manifests()
+  const found = []
+  const missing = []
+  const malformed = []
+  let corrected = 0
+  for (const task of tasksOf(plan)) {
+    if (existsSync(retryPathOf(task))) corrected += 1
+    if (!existsSync(task.verdict)) {
+      if (!task.promotion) missing.push(task.taskId)
+      continue
+    }
+    const ids = task.candidateIds
+    const { payload, problems } = checkTaskVerdict(readFileSync(task.verdict, 'utf8'), ids, validate)
+    // 교정 뒤에도 계약을 어긴 판정은 세지 않는다(C-6A: 두 번째 malformed-output은
+    // 확정 실패다). 그 후보는 판정 없음으로 남고, 차단은 C-6B대로 fail-open이다.
+    if (problems) malformed.push(task.taskId)
+    else found.push(payload)
+  }
+  return { found, missing, malformed, corrected }
+}
+
+let payloads
+let verdictsFile
+let correctedByFiles
+if (collectMode) {
+  const { found, missing, malformed, corrected } = collectFromTasks(routed)
+  if (missing.length) {
+    process.stderr.write(`경고: 판정 파일이 없는 검증 작업 ${missing.length}개: ${missing.join(', ')} — 그 후보는 판정 없음(noVerdict)으로 센다\n`)
+  }
+  if (malformed.length) {
+    process.stderr.write(`경고: 계약을 어긴 판정 파일 ${malformed.length}개를 세지 않았다: ${malformed.join(', ')} — --validate로 교정 프롬프트를 만들 수 있다. 교정 뒤에도 어겼다면 그 후보는 판정 없음(noVerdict)이다\n`)
+  }
+  correctedByFiles = corrected
+  payloads = found
+  // 렌더러는 판정 파일을 `--verdicts`로 받는다. 여러 파일을 순서대로 넘기게 하면
+  // 순서를 다시 사람이 정하게 되므로, 모은 순서 그대로 한 파일에 남긴다.
+  verdictsFile = join(dir, '.timing', `${run}.verdicts.json`)
+  writeFileSync(verdictsFile, `${JSON.stringify({ tasks: payloads }, null, 2)}\n`, 'utf8')
+} else {
+  payloads = inputs.map(path => readJson(path, '--input'))
+}
+
+// 판정 파일을 읽는 규칙은 렌더러와 같은 함수 하나다(`lib/verdicts.mjs`). 여기서만
+// 받아 주는 모양이 생기면, 여기서 센 판정을 렌더러가 못 읽는 일이 다시 생긴다.
+let verdicts
+try {
+  verdicts = collectVerdicts(payloads)
+} catch (error) {
+  die(`${collectMode ? '작업별 판정 파일' : inputs.join(', ')}: ${error.message}`)
+}
+const counts = tally(verdicts)
 
 // 교정 횟수는 verdict payload가 모르는 값이다 — 그것은 dispatch 쪽 사실이라
 // 호출자가 넘긴다. 이름에 **세는 단위**를 담는다: verdict가 아니라 task 수다.
-const corrected = flag('malformed-tasks-corrected')
+// `--collect`는 교정 프롬프트 파일(`<taskId>.retry.md`)이 있는 작업을 교정한 작업으로
+// 센다. 손으로 넘긴 값이 있으면 그것을 쓴다.
+const corrected = flag('malformed-tasks-corrected') ?? (correctedByFiles === undefined ? undefined : String(correctedByFiles))
 const malformedTasksCorrected = corrected === undefined ? undefined : Number(corrected)
 if (corrected !== undefined && !Number.isInteger(malformedTasksCorrected)) {
   die(`--malformed-tasks-corrected는 정수여야 한다: ${JSON.stringify(corrected)}`)
@@ -157,18 +279,11 @@ if (corrected !== undefined && !Number.isInteger(malformedTasksCorrected)) {
  * 들어 있으므로, 여기서 뺄셈만 하면 된다 — 모델에게 다시 세게 하지 않는다.
  * 대상 수를 못 읽으면 필드를 만들지 않는다. **0과 미측정은 다르다.**
  */
-const targetsPath = flag('targets')
 let noVerdict
 let weakNote
 
-if (targetsPath !== undefined) {
+if (routed !== undefined) {
   // ID로 본다. 빠진 것과 대상 밖의 것이 함께 드러난다.
-  let routed
-  try {
-    routed = JSON.parse(readFileSync(targetsPath, 'utf8'))
-  } catch (error) {
-    die(`--targets를 읽지 못했다: ${targetsPath} — ${error.message}`)
-  }
   const targets = targetIds(routed)
   if (!targets.size) die(`--targets에 검증 대상이 없다: ${targetsPath} — prepare-verification.mjs의 출력을 넘긴다`)
 
@@ -187,6 +302,10 @@ if (targetsPath !== undefined) {
   }
 }
 
+// `--note`는 다시 센 이유다. 교차검증의 끝이 두 번 남으면 `--check`는 `note`가
+// 있는 두 번째 끝만 정정으로 받는다 — 없으면 판정을 다시 받은 것으로 읽는다.
+const note = noteText([flag('note'), weakNote])
+
 logPhase(dir, run, 'crossverify.end', {
   upheld: counts.upheld,
   rejected: counts.rejected,
@@ -194,10 +313,14 @@ logPhase(dir, run, 'crossverify.end', {
   ...(noVerdict === undefined ? {} : { noVerdict }),
   ...(malformedTasksCorrected === undefined ? {} : { malformedTasksCorrected }),
   countsFrom: 'tally-verdicts.mjs',
-  ...(weakNote === undefined ? {} : { note: weakNote }),
+  ...(note === undefined ? {} : { note }),
 })
 
 // `judged`는 집합 차이를 내려고 들고 다닌 것이라 stdout에는 싣지 않는다.
 // `JSON.stringify`가 Set을 `{}`로 내보내 호출자에게 빈 값처럼 보이기 때문이다.
 const { judged: _judged, ...reported } = counts
-process.stdout.write(`${JSON.stringify({ ...reported, ...(noVerdict === undefined ? {} : { noVerdict }) }, null, 2)}\n`)
+process.stdout.write(`${JSON.stringify({
+  ...reported,
+  ...(noVerdict === undefined ? {} : { noVerdict }),
+  ...(verdictsFile === undefined ? {} : { verdictsFile }),
+}, null, 2)}\n`)

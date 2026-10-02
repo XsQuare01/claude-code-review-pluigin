@@ -178,12 +178,56 @@ const undeclaredKeys = (phase, data) => {
  * 이름이 틀렸다고 줄을 거부하지는 않는다 — 실패를 기록하려는 줄을 실패 이름 때문에
  * 버리는 것은 앞뒤가 맞지 않는다. append에서는 경고하고 `--check`가 짚는다.
  */
+/**
+ * 값이 닫힌 목록인 필드.
+ *
+ * `module.done`의 `status`는 `ok`/`failed` 둘뿐이다. 2026-09-30 실행이 22줄 전부에
+ * `COMPLETED`를 적었다 — SKILL이 모듈 상태를 부르는 이름(`PENDING → DISPATCHED →
+ * COMPLETED`)이 이 기록에 새어 들어온 것이다. append는 받았고, `--check`는 그 값을
+ * `ok`가 아닌 것으로 세어 "전부 실패"라는 수치를 냈다. 원인은 수가 아니라 어휘였다.
+ *
+ * `failureClass`와 같은 이유로 줄은 거부하지 않는다. 경고하고 `--check`가 짚는다.
+ */
+const CLOSED_VALUES = new Map([
+  ['module.done', { status: ['ok', 'failed'] }],
+])
+
+const outsideClosedValues = (phase, data) => Object.entries(CLOSED_VALUES.get(phase) ?? {})
+  .filter(([key, allowed]) => data[key] !== undefined && !allowed.includes(data[key]))
+  .map(([key, allowed]) => ({ key, value: data[key], allowed }))
+
 const FAILURE_CLASSES = new Set([
   'none', 'malformed-corrected',
   'no-start', 'task-not-found', 'inactivity-timeout', 'queue-expiry', 'empty-result',
   'skill-injection-invalid', 'malformed-output', 'provider-model-not-found', 'poll-timeout',
   'unknown',
 ])
+
+/**
+ * `dispatch.end`의 네 수치를 `module.done`에서 센다.
+ *
+ * 세는 단위는 **numbered 모듈**이다(C-9). 2026-09-30의 두 실행이 모두 특수 패스까지
+ * 넣어 셌다 — 규칙이 직관과 반대인데 세는 일을 모델에게 맡겼기 때문이다. 재료는
+ * 기록에 다 있으므로 `seq`·`at`처럼 이 스크립트가 센다. status가 닫힌 목록 밖이면
+ * 그 시도가 성공인지 실패인지 기록이 말하지 않으므로 세지 않는다(`countable: false`).
+ */
+const dispatchCounts = events => {
+  const attempts = events.filter(event => event.phase === 'module.done' && /^\d\d-/.test(String(event.module ?? '')))
+  const terminal = new Map()
+  for (const event of attempts) terminal.set(String(event.module), event.status)
+  return {
+    countable: attempts.every(event => ['ok', 'failed'].includes(event.status)),
+    modules: terminal.size,
+    counts: {
+      terminalOk: [...terminal.values()].filter(status => status === 'ok').length,
+      terminalFailed: [...terminal.values()].filter(status => status !== 'ok').length,
+      attemptsTotal: attempts.length,
+      attemptsFailed: attempts.filter(event => event.status !== 'ok').length,
+    },
+  }
+}
+
+const DISPATCH_COUNT_KEYS = ['terminalOk', 'terminalFailed', 'attemptsTotal', 'attemptsFailed']
 
 /**
  * 모듈 시도를 구간으로 접는다. **끝나지 않은 시도도 구간으로 낸다.**
@@ -351,6 +395,23 @@ if (has('check')) {
     problems.push(`표에 없는 failureClass: ${badClasses.join(', ')}. 쓸 수 있는 값은 C-9의 표에 있다`)
   }
 
+  // 닫힌 목록 밖 값은 **어휘 문제로** 짚는다. 이 값으로 아래 `dispatch.end`를 다시
+  // 세면 `COMPLETED`가 `ok`가 아니라서 전부 실패로 세어지고, 기록은 멀쩡한 수치를
+  // 틀렸다고 말하게 된다 — 진짜 원인(어휘)은 그 문장 어디에도 없다.
+  const offList = new Map()
+  for (const event of events) {
+    for (const { key, value, allowed } of outsideClosedValues(event.phase, event)) {
+      const label = `\`${event.phase}\`의 ${key}`
+      if (!offList.has(label)) offList.set(label, { values: new Set(), allowed, lines: 0 })
+      const entry = offList.get(label)
+      entry.values.add(String(value))
+      entry.lines += 1
+    }
+  }
+  for (const [label, entry] of offList) {
+    problems.push(`${label}가 닫힌 목록 밖이다: ${[...entry.values].join(', ')} (${entry.lines}줄). 쓸 수 있는 값: ${entry.allowed.join(', ')}`)
+  }
+
   // 같은 모듈·같은 시도가 두 번 끝났으면 재시도인지 중복 기록인지 알 수 없다.
   // 시도마다 한 쌍이라는 정규형이 지켜졌는지를 여기서 본다.
   const seenAttempts = new Set()
@@ -499,25 +560,19 @@ if (has('check')) {
   // 줄곧 그렇게 세어 왔고, 두 단위가 한 필드에서 섞이면 `ok:18`과 `module.done`
   // 20건이 어긋나던 그 문제로 돌아간다.
   {
-    const numbered = event => /^\d\d-/.test(String(event.module ?? ''))
-    const attempts = events.filter(event => event.phase === 'module.done' && numbered(event))
-    const terminal = new Map()
-    for (const event of attempts) terminal.set(String(event.module), event.status)
+    const { countable, modules, counts: expected } = dispatchCounts(events)
     const dispatched = events.some(event => ['dispatch.start', 'module.start', 'module.done'].includes(event.phase))
     const ended = events.find(event => event.phase === 'dispatch.end')
     const reachedAfterDispatch = events.some(event => ['script.start', 'script.done', 'crossverify.start', 'crossverify.end', 'render.start', 'render.wrote', 'run.end'].includes(event.phase))
 
     if (dispatched && reachedAfterDispatch && !ended) {
-      problems.push(`\`dispatch.end\`가 없다. 모듈을 ${terminal.size}개 끝내고 다음 단계로 갔는데 수집 결과가 기록되지 않았다 — 그 수치를 리포트에 적었다면 기록이 아니라 기억에서 온 것이다`)
+      problems.push(`\`dispatch.end\`가 없다. 모듈을 ${modules}개 끝내고 다음 단계로 갔는데 수집 결과가 기록되지 않았다 — 그 수치를 리포트에 적었다면 기록이 아니라 기억에서 온 것이다`)
     }
 
-    if (ended) {
-      const expected = {
-        terminalOk: [...terminal.values()].filter(status => status === 'ok').length,
-        terminalFailed: [...terminal.values()].filter(status => status !== 'ok').length,
-        attemptsTotal: attempts.length,
-        attemptsFailed: attempts.filter(event => event.status !== 'ok').length,
-      }
+    // status가 닫힌 목록 밖이면 다시 셀 수 없다 — 그 값이 성공인지 실패인지는
+    // 기록이 말하지 않는다. 위에서 어휘 문제로 이미 짚었으므로 여기서 수치를
+    // 지어내지 않는다.
+    if (ended && countable) {
       const off = Object.entries(expected)
         .filter(([key, value]) => Number.isInteger(ended[key]) && ended[key] !== value)
         .map(([key, value]) => `${key} ${ended[key]} → 기록으로 세면 ${value}`)
@@ -576,6 +631,53 @@ if (has('check')) {
       if (judged !== targeted) {
         problems.push(`검증 대상과 판정 수가 맞지 않는다: \`script.done\`은 ${targeted}건을 대상으로 적었는데 \`crossverify.end\`의 합은 ${judged}건이다. 판정을 받지 못한 건수는 \`noVerdict\`로 적는다 — 기록에 없으면 검증하고 통과한 것인지 검증하지 못한 것인지 갈리지 않는다`)
       }
+    }
+  }
+
+  // 교차검증도 시작과 끝이 짝을 이루고, 렌더보다 앞에서 끝난다.
+  //
+  // 2026-09-30 실행이 `crossverify.start` 하나에 `crossverify.end` 둘을 남겼고, 두
+  // 번째 끝은 `render.start` 뒤에 있었다 — 리포트를 조립하다가 판정 하나를 다시
+  // 받아 집계를 바꾼 것이다. 그 재판정에는 시작 기록이 없어 언제 돌았는지도 없었다.
+  //
+  // **정정 줄은 짝의 예외다.** append 전용 기록에서 잘못 센 끝은 고치는 대신 바로
+  // 다음 줄에 `note`를 달아 다시 쓴다(위 ALWAYS_ALLOWED). 앞 끝 바로 뒤에 `note`와
+  // 함께 온 끝은 새 교차검증이 아니라 그 정정이다.
+  {
+    let open = null
+    let previous = null
+    const unclosed = []
+    const unmatched = []
+    for (const event of events) {
+      if (event.phase === 'crossverify.start') {
+        if (open) unclosed.push(open.seq)
+        open = event
+      } else if (event.phase === 'crossverify.end') {
+        if (open) open = null
+        else if (!(previous?.phase === 'crossverify.end' && event.note !== undefined)) unmatched.push(event.seq)
+      } else {
+        continue
+      }
+      previous = event
+    }
+    if (open) unclosed.push(open.seq)
+    if (unmatched.length) {
+      problems.push(`\`crossverify.start\` 없이 끝난 교차검증: seq ${unmatched.join(', ')}. 정정이면 앞 끝 바로 뒤에 \`note\`를 달아 남기고, 판정을 다시 받았다면 그 교차검증도 시작부터 남긴다`)
+    }
+    if (unclosed.length) {
+      problems.push(`끝을 남기지 않은 교차검증: seq ${unclosed.join(', ')}. 판정을 세지 않았으면 리포트의 교차검증 수치는 기록에서 온 것이 아니다`)
+    }
+
+    // 판정을 입력으로 쓰는 단계는 synthesis와 렌더다. 둘 중 먼저 시작한 쪽 뒤에
+    // 교차검증 기록이 있으면, 그 단계는 바뀌기 전의 판정으로 돈 것이다 —
+    // synthesis는 반박된 지적을 입력에서 빼고(C-6B), 렌더는 판정을 축 줄에 찍는다.
+    const consumerAt = events.findIndex(event => event.phase === 'synthesis.start' || event.phase === 'render.start')
+    const late = consumerAt === -1
+      ? []
+      : events.slice(consumerAt + 1).filter(event => event.phase === 'crossverify.start' || event.phase === 'crossverify.end')
+    if (late.length) {
+      const consumer = events[consumerAt]
+      problems.push(`\`${consumer.phase}\`(seq ${consumer.seq}) 뒤에 교차검증 기록이 있다: seq ${late.map(event => event.seq).join(', ')}. 판정을 입력으로 쓰는 단계를 시작한 뒤 판정이 바뀌면 그 단계의 결과와 최종 판정이 어긋난다 — 교차검증을 끝낸 뒤 synthesis와 렌더를 시작한다`)
     }
   }
 
@@ -956,9 +1058,15 @@ const data = (() => {
   }
   // 빠진 필수 필드는 경고만 한다. 줄을 거부하면 그 단계가 통째로 사라지는데,
   // 필드 하나 빠진 기록이 없는 기록보다 낫다. `--check`가 종료 전에 다시 짚는다.
-  const absent = spec.required.filter(key => data[key] === undefined)
+  // `dispatch.end`의 수치는 아래에서 이 스크립트가 센다 — 빠졌다고 경고하지 않는다.
+  const absent = spec.required
+    .filter(key => !(phase === 'dispatch.end' && DISPATCH_COUNT_KEYS.includes(key)))
+    .filter(key => data[key] === undefined)
   if (absent.length) {
     process.stderr.write(`경고: \`${phase}\`에 ${absent.join(', ')}가 없다 (C-9 표가 요구한다)\n`)
+  }
+  for (const { key, value, allowed } of outsideClosedValues(phase, data)) {
+    process.stderr.write(`경고: \`${phase}\`의 ${key} ${JSON.stringify(value)}는 C-9의 닫힌 목록에 없다. 쓸 수 있는 값: ${allowed.join(', ')}\n`)
   }
   // 실패를 기록하려는 줄을 실패 이름 때문에 버리지는 않는다. 이름만 짚는다.
   if (data.failureClass !== undefined && !FAILURE_CLASSES.has(data.failureClass)) {
@@ -972,6 +1080,37 @@ const data = (() => {
 }
 
 const { events } = readLines()
+
+// full 워크플로우의 producer 결과는 받는 즉시 `<run>.<모듈>.json`으로 남는다 —
+// `prepare-verification.mjs --collect`가 그 파일에서 입력을 모은다. 2026-09-30 실행은
+// 결과를 대화에만 들고 있다가 context 압축으로 잃었고, 세션 기록을 긁어 다시
+// 조립하다 인용 하나를 망가뜨렸다. `module.done`은 모델이 반드시 남기는 줄이므로
+// 파일이 없다는 사실을 여기서 알린다. 줄은 그대로 남긴다 — 경고일 뿐이다.
+if (phase === 'module.done' && data.status === 'ok' && typeof data.module === 'string') {
+  const workflow = events.find(event => event.phase === 'run.start')?.workflow
+  const resultPath = join(timingDir, `${run}.${data.module}.json`)
+  if (workflow === 'full' && !existsSync(resultPath)) {
+    process.stderr.write(`경고: ${data.module}의 결과 파일이 없다: ${resultPath} — producer가 돌려준 JSON을 module.done보다 먼저 그대로 저장한다. prepare-verification.mjs --collect가 그 파일을 읽는다\n`)
+  }
+}
+
+// numbered `module.done`이 한 줄도 없으면 셀 재료가 없다. 0으로 덮지 않고 넘긴
+// 값을 둔다 — 디스패치 기록이 없다는 사실은 `--check`가 따로 짚는다.
+const dispatchRecord = phase === 'dispatch.end' ? dispatchCounts(events) : null
+if (dispatchRecord && dispatchRecord.counts.attemptsTotal > 0) {
+  const { countable, counts } = dispatchRecord
+  if (countable) {
+    const off = DISPATCH_COUNT_KEYS
+      .filter(key => data[key] !== undefined && data[key] !== counts[key])
+      .map(key => `${key} ${data[key]} → 기록으로 세면 ${counts[key]}`)
+    if (off.length) {
+      process.stderr.write(`경고: \`dispatch.end\`에 넘긴 수치가 기록과 다르다: ${off.join(' / ')}. numbered 모듈만 센 기록의 값을 남긴다\n`)
+    }
+    Object.assign(data, counts)
+  } else {
+    process.stderr.write('경고: `module.done`의 status가 닫힌 목록 밖이라 `dispatch.end`를 기록으로 셀 수 없다. 넘긴 수치를 그대로 남긴다\n')
+  }
+}
 
 // 끝난 타임라인에 새 실행을 이어붙이지 않는다.
 //

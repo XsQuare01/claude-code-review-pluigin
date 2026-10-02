@@ -18,6 +18,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 import { markedJson, CROSS_VERIFICATION_TOKEN_KEYS } from './lib/contract-blocks.mjs'
+import { collectVerdicts } from './lib/verdicts.mjs'
 
 const IMPACTS = new Set(['high', 'low'])
 const CONFIDENCES = new Set(['high', 'low'])
@@ -154,6 +155,8 @@ const flagAll = name => process.argv
 
 const IMPACT_WORD = { high: '높음', low: '낮음' }
 
+const NOT_COLLECTED = '결과 없음 — 수집된 결과 파일이 없다. 실행이 실패했거나 결과가 빠졌다는 뜻이고, 지적 0건과 다르다.'
+
 /** 등급은 규칙이 아니라 지적이 갖는다 — `00-rule.md`의 파생표 그대로다. */
 export function severityOf(impact, confidence) {
   if (impact === 'high') return confidence === 'high' ? '🔴' : '🟡'
@@ -176,10 +179,20 @@ export function severityOf(impact, confidence) {
  * `<`는 별도 escape 대상이다 — `>`를 escape해도 여는 태그(`<script>`)는
  * 열린 채로 남고, CommonMark는 여는 델리미터만으로 HTML 블록/인라인 HTML을
  * 인식한다.
+ *
+ * **escape가 수식 구분자를 만들면 안 된다.** 한때 `[`·`]`·`(`·`)`를 `\[`·`\]`·
+ * `\(`·`\)`로 바꿨는데, KaTeX를 쓰는 Markdown 뷰어에서 `\[ … \]`는 수식 블록,
+ * `\( … \)`는 인라인 수식이다. 2026-09-30 리포트에서 `[0, 0, 1]`이 "0 , 0 , 1
+ * 0,0,1"로 쪼개지고 `-8`이 `−8`로 보였다. 링크를 막는 데 필요한 것은 대괄호뿐이다 —
+ * `[텍스트]`가 없으면 `(url)`은 그냥 글자다. 그래서 대괄호는 역슬래시가 아니라
+ * 문자 참조(`&#91;`·`&#93;`)로 바꾸고 괄호는 건드리지 않는다. `$`는 `$ … $` 수식을
+ * 열므로 `\$`로 막는다.
  */
+const PROSE_ESCAPES = { '[': '&#91;', ']': '&#93;' }
+
 export function escapeProse(text) {
   const collapsed = String(text).replace(/\s+/g, ' ').trim()
-  return collapsed.replace(/[\\`*_[\]()#>|<]/g, match => `\\${match}`)
+  return collapsed.replace(/[\\`*_[\]#>|<$]/g, match => PROSE_ESCAPES[match] ?? `\\${match}`)
 }
 
 /**
@@ -462,7 +475,9 @@ export function loadModuleSections(rulesDir, workflow, plannedPath) {
     // 뒤에도 둘을 구분할 수 있게 하는 판별자다(리뷰 판정 Ruling 2 후속,
     // Important 5) — id 모양으로 추측하면(두 자리 숫자인지 등) 그 추측과
     // 어긋나는 항목이 양쪽 분기 모두에서 조용히 빠질 수 있다.
-    .map(module => ({ kind: 'module', id: module.id, title: module.title }))
+    // `source`는 결과 파일과 `collected.sources`가 쓰는 이름(규칙 문서 파일명에서
+    // `.md`를 뗀 값)이다. 수집 기록과 대조할 때 쓴다.
+    .map(module => ({ kind: 'module', id: module.id, title: module.title, source: String(module.path ?? '').replace(/\.md$/, '') }))
     .sort((left, right) => (left.id < right.id ? -1 : 1))
   return { value: sections }
 }
@@ -490,12 +505,28 @@ export function loadModuleSections(rulesDir, workflow, plannedPath) {
  * 방식(`{value}`/`{error}`)을 쓴다 — catalog를 그 사실의 단일 소스로 만든
  * 것(Ruling 1)은, 그 소스가 조용히 사라질 수 있으면 단일 소스가 아니다.
  */
-export function loadSpecialistPasses(rulesDir) {
+export function loadSpecialistPasses(rulesDir, plannedPath) {
   let catalog
   try {
     catalog = JSON.parse(readFileSync(join(rulesDir, 'catalog.json'), 'utf8'))
   } catch (error) {
     return { error: `catalog.json을 읽지 못했다: ${error.message}` }
+  }
+  // 적용 범위가 없어 띄우지 않은 특수 패스는 실행 계획(`--planned`)의 `skipped`에
+  // 그 패스 이름(`props`·`math`·`exception`)으로 적힌다. 렌더러는 그 사유를
+  // 그 패스 자리에 옮긴다 — 번호 모듈의 SKIPPED가 `실행 계획`에 적히는 것과 달리,
+  // 특수 패스는 `특수 패스` 절이 제 상태를 말하는 유일한 자리다.
+  const skipped = new Map()
+  if (plannedPath) {
+    let planned
+    try {
+      planned = JSON.parse(readFileSync(plannedPath, 'utf8'))
+    } catch (error) {
+      return { error: `--planned를 읽지 못했다: ${plannedPath} — ${error.message}` }
+    }
+    for (const entry of planned.skipped ?? []) {
+      if (entry && typeof entry === 'object') skipped.set(String(entry.module), { reason: entry.reason ?? entry.evidence ?? entry.reasonCode })
+    }
   }
   const byId = new Map((catalog.modules ?? []).map(module => [module.id, module]))
   const passes = []
@@ -504,7 +535,7 @@ export function loadSpecialistPasses(rulesDir) {
     if (!Array.isArray(prefixes) || prefixes.length === 0) {
       return { error: `catalog.json의 "${id}" specialist 항목에 rulePrefixes가 없다 — 특수 패스 접두를 알 수 없다` }
     }
-    passes.push({ kind: 'pass', id, title, prefixes })
+    passes.push({ kind: 'pass', id, title, prefixes, source: id, ...(skipped.has(id) ? { skipped: skipped.get(id) } : {}) })
   }
   return { value: passes }
 }
@@ -559,7 +590,7 @@ export function loadSpecialistPasses(rulesDir) {
  *     안이다), 함수 자체는 다른 워크플로우가 이 값으로 부를 수 있게 열어
  *     둔다.
  */
-export function render(candidates, verdictByCandidateId, phaseByImpact, vocabulary, sections, verificationState) {
+export function render(candidates, verdictByCandidateId, phaseByImpact, vocabulary, sections, verificationState, options = {}) {
   const labelled = []
   const movedToOpenQuestions = []
   // C-6B "오판 가시성" — active-deletion이 지운 rejected finding의 흔적을
@@ -655,8 +686,20 @@ export function render(candidates, verdictByCandidateId, phaseByImpact, vocabula
     throw new Error(`render: sections[].kind는 'module' 또는 'pass'여야 한다 — 받은 값: ${JSON.stringify(section)}`)
   }
 
+  // 결과를 수집한 모듈 이름(`prepare-verification.mjs --collect`의 `collected.sources`).
+  // 이 목록이 있으면, 지적이 없는 섹션이 "0건"인지 "결과가 없다"인지 가를 수 있다 —
+  // 실행이 실패한 모듈을 "지적 없음."으로 찍으면 0건과 구분되지 않는다. 목록이 없는
+  // 입력(`--input`으로 모은 예전 경로)에서는 가를 근거가 없으므로 예전처럼 적는다.
+  const collected = options.collected
+  // 특수 패스는 id가 곧 결과 파일 이름이다(`props`·`math`·`exception`).
+  const sourceOf = section => section?.source ?? (section?.kind === 'pass' ? section.id : undefined)
+  const emptyText = section => (collected && sourceOf(section) && !collected.has(sourceOf(section))
+    ? NOT_COLLECTED
+    : '지적 없음.')
+
   const lines = ['## 상세 지적', '']
   const titleById = new Map(moduleSections.map(section => [section.id, section.title]))
+  const sectionById = new Map(moduleSections.map(section => [section.id, section]))
   // 섹션에 없는 모듈에서 지적이 오면 그 모듈도 낸다. 조용히 버리면 지적이
   // 사라지는데, 섹션 목록이 틀린 것보다 지적이 없어지는 쪽이 나쁘다.
   const moduleKeys = [...new Set([
@@ -668,7 +711,7 @@ export function render(candidates, verdictByCandidateId, phaseByImpact, vocabula
     lines.push(`### ${key} ${titleById.get(key) ?? ''}`.trimEnd(), '')
     const inModule = numberedModules.filter(candidate => candidate.ruleId.startsWith(`${key}-`))
     if (!inModule.length) {
-      lines.push('지적 없음.', '')
+      lines.push(emptyText(sectionById.get(key)), '')
       continue
     }
     for (const candidate of inModule) {
@@ -676,7 +719,11 @@ export function render(candidates, verdictByCandidateId, phaseByImpact, vocabula
     }
   }
 
-  if (specials.length) {
+  // 특수 패스 섹션이 넘어왔으면 절을 **항상** 낸다. 지적이 없는 패스를 헤딩째
+  // 빼던 때에는 2026-09-30 리포트에서 Props(실행·0건)와 수학(SKIPPED)이 흔적도
+  // 없이 사라졌다 — 번호 모듈은 0건이어도 "지적 없음."을 찍으므로, 읽는 쪽은 빠진
+  // 패스를 "안 돌았다"로도 "0건이다"로도 읽을 수 없었다.
+  if (specials.length || specialistSections.length) {
     lines.push('## 특수 패스', '')
     // 규칙 ID 접두(`EX`, `P`, `A`, `C`, …)로 특수 패스 표시명을 찾는다. 못
     // 찾으면(카탈로그와 CLI 배선이 어긋난 경우) 접두 자체를 헤딩으로 써서
@@ -694,9 +741,20 @@ export function render(candidates, verdictByCandidateId, phaseByImpact, vocabula
       const title = titleFor(candidate)
       grouped.set(title, [...(grouped.get(title) ?? []), candidate])
     }
+    const passByTitle = new Map(specialistSections.map(pass => [pass.title, pass]))
     for (const [title, inPass] of grouped) {
-      if (!inPass.length) continue
+      const pass = passByTitle.get(title)
+      // 카탈로그에 없는 접두로 모인 묶음은 지적이 있을 때만 생긴다 — 빈 것을 낼 이유가 없다.
+      if (!pass && !inPass.length) continue
       lines.push(`### ${title}`, '')
+      if (!inPass.length) {
+        // SKIPPED는 실행 계획(`--planned`)이 준 사유를 그대로 옮긴다. 사유가 없으면
+        // 지어내지 않고 없다고 적는다.
+        lines.push(pass.skipped
+          ? `\`SKIPPED\` — ${pass.skipped.reason ? escapeProse(pass.skipped.reason) : '사유가 기록되지 않았다'} · 비차단`
+          : emptyText(pass), '')
+        continue
+      }
       for (const candidate of inPass) {
         lines.push(renderFinding(candidate, { label: labelById.get(candidate.candidateId), vocabulary }), '')
       }
@@ -771,7 +829,7 @@ if (process.argv[1] && process.argv[1].endsWith('render-findings.mjs')) {
   // 아직 남아 있는 별도 정리 항목이다. 여기서 두 loader의 결과를 합쳐
   // 하나의 `sections`로 넘기는 것은 그 중복을 막기 위해서가 아니라, render
   // 자체를 두 loader의 파일 I/O에서 떼어 놓기 위해서다.)
-  const specialistPasses = loadSpecialistPasses(rulesDir)
+  const specialistPasses = loadSpecialistPasses(rulesDir, flag('planned'))
   if (specialistPasses.error) die(specialistPasses.error)
 
   const byCandidateId = new Map()
@@ -794,7 +852,18 @@ if (process.argv[1] && process.argv[1].endsWith('render-findings.mjs')) {
     // 그 finding이 `미해결 / 후속 확인`으로 옮겨질 때 "무엇을 더 봐야
     // 하는가"를 말하는 유일한 값이다. 여기서 버리면 뒤에서 되찾을 방법이
     // 없다 — 이 loader가 판정 파일을 읽는 유일한 자리다.
-    for (const verdict of parsed.verdicts ?? []) {
+    //
+    // 파일의 모양은 `tally-verdicts.mjs`와 같은 함수로 푼다. 한때 여기서
+    // `parsed.verdicts`만 봤는데, tally가 받는 `{ tasks: [...] }` 파일을
+    // 넘기면 판정이 0건이 되어 검증 대상 전부가 `검증 실패`로 찍혔다 —
+    // 두 스크립트가 같은 파일을 서로 다르게 읽었고, 오류는 나지 않았다.
+    let verdicts
+    try {
+      verdicts = collectVerdicts(parsed)
+    } catch (error) {
+      die(`--verdicts에서 판정 목록을 찾지 못했다: ${path} — ${error.message}`)
+    }
+    for (const verdict of verdicts) {
       byCandidateId.set(verdict.candidateId, {
         disposition: verdict.disposition,
         rebuttalKind: verdict.rebuttal?.kind,
@@ -810,7 +879,8 @@ if (process.argv[1] && process.argv[1].endsWith('render-findings.mjs')) {
   try {
     output = render(
       payload.candidates, byCandidateId, phaseByImpact, vocabulary.value,
-      [...sections.value, ...specialistPasses.value], verificationState)
+      [...sections.value, ...specialistPasses.value], verificationState,
+      { collected: Array.isArray(payload.collected?.sources) ? new Set(payload.collected.sources) : undefined })
   } catch (error) {
     die(error.message)
   }

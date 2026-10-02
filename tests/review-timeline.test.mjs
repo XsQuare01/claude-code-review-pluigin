@@ -1334,8 +1334,10 @@ test('--summary는 최장 구간이 끝 표시에 붙으면 그 문장을 붙이
 const withVerify = (verify, verdicts) => ([
   { at: '2026-09-18T00:00:00.000Z', seq: 1, phase: 'run.start', host: 'opencode', rules: 'r', version: '2.13.3', branch: 'b', changedFiles: 22 },
   { at: '2026-09-18T00:01:00.000Z', seq: 2, phase: 'script.done', ran: true, counts: { total: 35, verify } },
-  { at: '2026-09-18T01:00:00.000Z', seq: 3, phase: 'crossverify.end', ...verdicts },
-  { at: '2026-09-18T01:01:00.000Z', seq: 4, phase: 'run.end', verdict: 'MERGE_BLOCKED' },
+  // 교차검증은 시작과 끝이 짝이다(아래 `crossverify.start` 없이 끝난 교차검증 참고).
+  { at: '2026-09-18T00:02:00.000Z', seq: 3, phase: 'crossverify.start', targets: verify },
+  { at: '2026-09-18T01:00:00.000Z', seq: 4, phase: 'crossverify.end', ...verdicts },
+  { at: '2026-09-18T01:01:00.000Z', seq: 5, phase: 'run.end', verdict: 'MERGE_BLOCKED' },
 ])
 
 test('noVerdict는 닫힌 목록에 있다', t => {
@@ -1375,8 +1377,9 @@ test('--check는 대상 수가 없으면 대조하지 않는다', t => {
   const dir = freshDir(t)
   plant(dir, [
     { at: '2026-09-18T00:00:00.000Z', seq: 1, phase: 'run.start', host: 'opencode', rules: 'r', version: '2.13.3', branch: 'b', changedFiles: 22 },
-    { at: '2026-09-18T01:00:00.000Z', seq: 2, phase: 'crossverify.end', upheld: 13, rejected: 0 },
-    { at: '2026-09-18T01:01:00.000Z', seq: 3, phase: 'run.end', verdict: 'WARN' },
+    { at: '2026-09-18T00:02:00.000Z', seq: 2, phase: 'crossverify.start', targets: 13 },
+    { at: '2026-09-18T01:00:00.000Z', seq: 3, phase: 'crossverify.end', upheld: 13, rejected: 0 },
+    { at: '2026-09-18T01:01:00.000Z', seq: 4, phase: 'run.end', verdict: 'WARN' },
   ])
   const out = check(dir)
   assert.equal(out.status, 0, out.stdout)
@@ -1399,9 +1402,10 @@ test('--check는 나중에 적힌 crossverify.end를 정본으로 쓴다', t => 
   plant(dir, [
     { at: '2026-09-18T00:00:00.000Z', seq: 1, phase: 'run.start', host: 'opencode', rules: 'r', version: '2.13.3', branch: 'b', changedFiles: 22 },
     { at: '2026-09-18T00:01:00.000Z', seq: 2, phase: 'script.done', ran: true, counts: { total: 35, verify: 16 } },
-    { at: '2026-09-18T01:00:00.000Z', seq: 3, phase: 'crossverify.end', upheld: 13, rejected: 0, needsContext: 0 },
-    { at: '2026-09-18T01:00:44.000Z', seq: 4, phase: 'crossverify.end', upheld: 13, rejected: 0, needsContext: 0, noVerdict: 3, note: '다시 셌다' },
-    { at: '2026-09-18T01:01:00.000Z', seq: 5, phase: 'run.end', verdict: 'WARN' },
+    { at: '2026-09-18T00:02:00.000Z', seq: 3, phase: 'crossverify.start', targets: 16 },
+    { at: '2026-09-18T01:00:00.000Z', seq: 4, phase: 'crossverify.end', upheld: 13, rejected: 0, needsContext: 0 },
+    { at: '2026-09-18T01:00:44.000Z', seq: 5, phase: 'crossverify.end', upheld: 13, rejected: 0, needsContext: 0, noVerdict: 3, note: '다시 셌다' },
+    { at: '2026-09-18T01:01:00.000Z', seq: 6, phase: 'run.end', verdict: 'WARN' },
   ])
   const out = check(dir)
   assert.equal(out.status, 0, out.stdout)
@@ -1655,4 +1659,177 @@ test('--summary는 표의 출처와 이벤트 수를 함께 낸다', t => {
   assert.equal(out.status, 0)
   assert.match(out.stdout, /> 출처: `.*code-review-full-feat-x-2026-09-01\.jsonl` · 이벤트 2개 · 마지막 `run\.end`/)
   assert.match(out.stdout, /손으로 고치면 대조가 깨진다/)
+})
+
+// ── module.done의 status 어휘 ─────────────────────────────────────────────
+//
+// 2026-09-30 실행(2.14.0)이 `module.done` 22줄 전부에 `status: "COMPLETED"`를 적었다.
+// SKILL의 모듈 상태 이름(`PENDING → DISPATCHED → COMPLETED`)이고, 이 기록의 값은
+// `ok`/`failed`다. append는 아무 말 없이 받았고, `--check`는 그것을 "terminalOk 22 →
+// 기록으로 세면 0 / terminalFailed 0 → 19"로 보고했다 — 전부 성공한 실행을 전부
+// 실패한 것처럼 읽는 수치다. 원인은 수가 아니라 어휘였는데 기록은 그 말을 하지 않았다.
+
+test('module.done의 status가 ok/failed가 아니면 줄은 남기되 경고한다', t => {
+  const dir = freshDir(t)
+  const out = log(dir, 'module.done', { module: '01-fsd', attempt: 1, status: 'COMPLETED' })
+  assert.equal(out.status, 0, out.stderr)
+  assert.match(out.stderr, /status "COMPLETED"/)
+  assert.match(out.stderr, /ok, failed/)
+  assert.equal(linesOf(dir)[0].status, 'COMPLETED')
+})
+
+test('--check는 닫힌 목록 밖 status를 어휘 문제로 짚고 수치 불일치로 둔갑시키지 않는다', t => {
+  const dir = freshDir(t)
+  plant(dir, [
+    { at: '2026-09-30T00:00:00.000Z', seq: 1, phase: 'run.start', host: 'opencode', rules: 'r', version: '2.14.0', branch: 'b', changedFiles: 52, candidates: 20 },
+    { at: '2026-09-30T00:00:10.000Z', seq: 2, phase: 'modules.planned', candidates: 20, applied: 1 },
+    { at: '2026-09-30T00:00:20.000Z', seq: 3, phase: 'dispatch.start', modules: 1, inflight: 4 },
+    { at: '2026-09-30T00:00:21.000Z', seq: 4, phase: 'module.start', module: '01-fsd', attempt: 1 },
+    { at: '2026-09-30T00:05:00.000Z', seq: 5, phase: 'module.done', module: '01-fsd', attempt: 1, status: 'COMPLETED', findings: 3 },
+    { at: '2026-09-30T00:05:01.000Z', seq: 6, phase: 'dispatch.end', terminalOk: 1, terminalFailed: 0, attemptsTotal: 1, attemptsFailed: 0 },
+    { at: '2026-09-30T00:10:00.000Z', seq: 7, phase: 'run.end', verdict: 'WARN' },
+  ])
+  const out = check(dir)
+  assert.equal(out.status, 1)
+  assert.match(out.stdout, /`module\.done`의 status가 닫힌 목록 밖이다: COMPLETED/)
+  assert.doesNotMatch(out.stdout, /기록으로 세면/)
+})
+
+// ── 교차검증 시작·끝의 짝과 순서 ──────────────────────────────────────────
+//
+// 같은 실행이 `crossverify.start` 하나에 `crossverify.end` 둘을 남겼고, 두 번째
+// 끝은 `render.start` 뒤에 있었다 — 리포트를 조립하다가 판정 하나를 다시 받아
+// 집계를 바꾼 것이다. `--check`는 둘 다 짚지 않았다.
+
+const verified = middle => ([
+  { at: '2026-09-30T00:00:00.000Z', seq: 1, phase: 'run.start', host: 'opencode', rules: 'r', version: '2.14.0', branch: 'b', changedFiles: 52 },
+  { at: '2026-09-30T00:01:00.000Z', seq: 2, phase: 'script.done', ran: true, counts: { total: 3, verify: 2 } },
+  ...middle,
+  { at: '2026-09-30T02:00:00.000Z', seq: 90, phase: 'run.end', verdict: 'MERGE_BLOCKED' },
+])
+const cvStart = (seq, minute) => ({ at: `2026-09-30T00:${String(minute).padStart(2, '0')}:00.000Z`, seq, phase: 'crossverify.start', targets: 2 })
+const cvEnd = (seq, minute) => ({ at: `2026-09-30T00:${String(minute).padStart(2, '0')}:00.000Z`, seq, phase: 'crossverify.end', upheld: 2, rejected: 0, needsContext: 0, noVerdict: 0 })
+const renderStart = (seq, minute) => ({ at: `2026-09-30T00:${String(minute).padStart(2, '0')}:00.000Z`, seq, phase: 'render.start', findings: 3 })
+
+test('--check는 시작 없이 남은 crossverify.end를 짚는다', t => {
+  const dir = freshDir(t)
+  plant(dir, verified([cvStart(3, 2), cvEnd(4, 20), cvEnd(5, 40)]))
+  const out = check(dir)
+  assert.equal(out.status, 1)
+  assert.match(out.stdout, /`crossverify\.start` 없이 끝난 교차검증: seq 5/)
+})
+
+test('--check는 끝을 남기지 않은 crossverify.start를 짚는다', t => {
+  const dir = freshDir(t)
+  plant(dir, verified([cvStart(3, 2)]))
+  const out = check(dir)
+  assert.equal(out.status, 1)
+  assert.match(out.stdout, /끝을 남기지 않은 교차검증: seq 3/)
+})
+
+test('--check는 render.start 뒤에 온 교차검증 기록을 짚는다', t => {
+  const dir = freshDir(t)
+  plant(dir, verified([cvStart(3, 2), cvEnd(4, 20), renderStart(5, 30), cvStart(6, 40), cvEnd(7, 50)]))
+  const out = check(dir)
+  assert.equal(out.status, 1)
+  assert.match(out.stdout, /`render\.start`\(seq 5\) 뒤에 교차검증 기록이 있다: seq 6, 7/)
+})
+
+test('--check는 짝이 맞고 렌더 앞에서 끝난 교차검증은 짚지 않는다', t => {
+  const dir = freshDir(t)
+  plant(dir, verified([cvStart(3, 2), cvEnd(4, 20), renderStart(5, 30)]))
+  const out = check(dir)
+  assert.equal(out.status, 0, out.stdout)
+})
+
+// ── 모듈 결과 파일 ────────────────────────────────────────────────────────
+//
+// 2026-09-30 실행은 producer 결과를 대화에만 들고 있다가 context 압축으로 잃었고,
+// 서브에이전트가 세션 기록을 긁어 다시 조립하다 인용 하나를 망가뜨렸다. full
+// 워크플로우는 결과를 받는 즉시 `<run>.<모듈>.json`으로 남기고, 그 파일에서
+// `prepare-verification.mjs --collect`가 입력을 모은다. `module.done`은 모델이
+// 반드시 남기는 줄이므로, 파일이 없다는 사실을 **그 자리에서** 알린다 — 압축 뒤에
+// 알게 되면 되찾을 방법이 없다.
+
+const startFull = (dir, workflow = 'full') => log(dir, 'run.start', { host: 'h', rules: 'r', version: 'v', branch: 'b', changedFiles: 1, workflow })
+
+test('full 실행에서 결과 파일 없이 module.done ok를 남기면 경고한다', t => {
+  const dir = freshDir(t)
+  startFull(dir)
+  const out = log(dir, 'module.done', { module: '01-fsd', attempt: 1, status: 'ok' })
+  assert.equal(out.status, 0, out.stderr)
+  assert.match(out.stderr, new RegExp(`${RUN}\\.01-fsd\\.json`))
+  assert.equal(linesOf(dir).at(-1).phase, 'module.done')
+})
+
+test('결과 파일이 먼저 있으면 module.done에 경고하지 않는다', t => {
+  const dir = freshDir(t)
+  startFull(dir)
+  writeFileSync(join(dir, '.timing', `${RUN}.01-fsd.json`), '{"schemaVersion":1,"findings":[],"openQuestions":[]}', 'utf8')
+  const out = log(dir, 'module.done', { module: '01-fsd', attempt: 1, status: 'ok' })
+  assert.equal(out.status, 0, out.stderr)
+  assert.equal(out.stderr, '')
+})
+
+test('실패로 끝난 모듈에는 결과 파일을 요구하지 않는다', t => {
+  const dir = freshDir(t)
+  startFull(dir)
+  const out = log(dir, 'module.done', { module: '01-fsd', attempt: 1, status: 'failed', failureClass: 'malformed-output' })
+  assert.equal(out.stderr, '')
+})
+
+test('full이 아닌 워크플로우에는 결과 파일을 요구하지 않는다', t => {
+  const dir = freshDir(t)
+  startFull(dir, 'default')
+  const out = log(dir, 'module.done', { module: '01-fsd', attempt: 1, status: 'ok' })
+  assert.equal(out.stderr, '')
+})
+
+// `feat/scene-graph-undo-redo` 실행(2026-09-30)은 synthesis를 시작한 뒤 판정 하나를
+// 다시 받아 유지를 반박으로 바꿨다. synthesis는 반박된 지적을 입력에서 빼므로(C-6B),
+// 시작한 뒤에 판정이 바뀌면 synthesis의 입력과 최종 판정이 어긋난다.
+test('--check는 synthesis.start 뒤에 온 교차검증 기록을 짚는다', t => {
+  const dir = freshDir(t)
+  const synthesisStart = { at: '2026-09-30T00:30:00.000Z', seq: 5, phase: 'synthesis.start', findings: 3 }
+  plant(dir, verified([cvStart(3, 2), cvEnd(4, 20), synthesisStart, cvStart(6, 40), cvEnd(7, 50)]))
+  const out = check(dir)
+  assert.equal(out.status, 1)
+  assert.match(out.stdout, /`synthesis\.start`\(seq 5\) 뒤에 교차검증 기록이 있다: seq 6, 7/)
+})
+
+// ── dispatch.end 수치는 스크립트가 센다 ────────────────────────────────────
+//
+// 2026-09-30의 두 실행이 모두 `dispatch.end`에 특수 패스까지 넣어 셌다(22, 21 —
+// 계약은 numbered 모듈만 센다). 규칙을 두 번 어긴 것은 규칙이 직관과 반대이기
+// 때문이고, 세는 재료(`module.done`)는 이미 기록에 다 있다. `seq`·`at`처럼 이
+// 스크립트가 센다.
+
+const doneLine = (seq, module, attempt, status) => ({ at: `2026-09-30T00:0${seq}:00.000Z`, seq, phase: 'module.done', module, attempt, status })
+const dispatchedRecord = () => [
+  { at: '2026-09-30T00:00:00.000Z', seq: 1, phase: 'run.start', host: 'h', rules: 'r', version: 'v', branch: 'b', changedFiles: 1 },
+  doneLine(2, '01-fsd', 1, 'failed'),
+  doneLine(3, '01-fsd', 2, 'ok'),
+  doneLine(4, '02-type', 1, 'ok'),
+  doneLine(5, 'props', 1, 'ok'),
+]
+
+test('dispatch.end를 수치 없이 남기면 module.done에서 numbered 모듈만 센다', t => {
+  const dir = freshDir(t)
+  plant(dir, dispatchedRecord())
+  const out = log(dir, 'dispatch.end', {})
+  assert.equal(out.status, 0, out.stderr)
+  const ended = linesOf(dir).at(-1)
+  assert.deepEqual(
+    [ended.terminalOk, ended.terminalFailed, ended.attemptsTotal, ended.attemptsFailed],
+    [2, 0, 3, 1],
+  )
+})
+
+test('dispatch.end에 넘긴 수치가 기록과 다르면 경고하고 기록으로 센 값을 남긴다', t => {
+  const dir = freshDir(t)
+  plant(dir, dispatchedRecord())
+  const out = log(dir, 'dispatch.end', { terminalOk: 3, terminalFailed: 0, attemptsTotal: 4, attemptsFailed: 1 })
+  assert.equal(out.status, 0, out.stderr)
+  assert.match(out.stderr, /terminalOk 3 → 기록으로 세면 2/)
+  assert.equal(linesOf(dir).at(-1).terminalOk, 2)
 })

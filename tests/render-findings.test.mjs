@@ -395,7 +395,8 @@ test('산문이 Markdown 구조를 만들지 못하게 막는다', () => {
   assert.equal(escapeProse('# 헤딩'), '\\# 헤딩')
   assert.equal(escapeProse('a | b'), 'a \\| b')
   assert.equal(escapeProse('```fence'), '\\`\\`\\`fence')
-  assert.equal(escapeProse('[링크](http://x)'), '\\[링크\\]\\(http://x\\)')
+  // 대괄호가 문자 참조가 되면 `[텍스트](url)` 링크가 성립하지 않는다(아래 `수식 구분자` 참고).
+  assert.equal(escapeProse('[링크](http://x)'), '&#91;링크&#93;(http://x)')
   assert.equal(escapeProse('> 인용'), '\\> 인용')
 })
 
@@ -404,7 +405,7 @@ test('산문이 Markdown 구조를 만들지 못하게 막는다', () => {
 // `>`만 escape하면 여는 델리미터(`<script>`)는 그대로 열려 있고, CommonMark는
 // 여는 델리미터만으로 HTML 블록/인라인 HTML을 인식하므로 보호가 안 된다.
 test('산문의 raw HTML 여는 델리미터(`<`)를 escape한다', () => {
-  assert.equal(escapeProse('<script>alert(1)</script>'), '\\<script\\>alert\\(1\\)\\</script\\>')
+  assert.equal(escapeProse('<script>alert(1)</script>'), '\\<script\\>alert(1)\\</script\\>')
 })
 
 // 리뷰 Critical 2 — 이 태스크가 막아야 했던 결함(슬롯이 한 칸으로 합쳐지는 것)의
@@ -603,8 +604,8 @@ test('멀쩡한 후보는 exit 0이고 실제 모듈 리포트를 낸다', () =>
   assert.match(out.stdout, /^## 상세 지적\n/)
   assert.match(out.stdout, /### 04 상태 관리 & 사이드이펙트\n/)
   assert.match(out.stdout, /#### 🔴 `04-3` 제목/)
-  // 특수 패스 후보가 없으므로 그 섹션 자체가 나오지 않는다.
-  assert.doesNotMatch(out.stdout, /## 특수 패스/)
+  // 특수 패스 후보가 없어도 그 절은 나오고, 세 패스가 각자 "지적 없음."을 말한다.
+  assert.match(out.stdout, /## 특수 패스\n\n### Props\n\n지적 없음\.\n\n### 수학\n\n지적 없음\.\n\n### 예외\n\n지적 없음\./)
 })
 
 test('CLI가 특수 패스 규칙 ID 접두를 실제로 예외 섹션으로 묶는다', () => {
@@ -617,7 +618,8 @@ test('CLI가 특수 패스 규칙 ID 접두를 실제로 예외 섹션으로 묶
   })])
   assert.equal(out.status, 0)
   assert.equal(out.stderr, '')
-  assert.match(out.stdout, /## 특수 패스\n\n### 예외\n/)
+  // 예외 절 바로 아래에 그 지적이 온다 — 앞의 Props·수학은 지적 없음으로 남는다.
+  assert.match(out.stdout, /## 특수 패스\n\n### Props\n\n지적 없음\.\n\n### 수학\n\n지적 없음\.\n\n### 예외\n\n#### /)
   assert.match(out.stdout, /`EX-1` 예외 통합 테스트/)
 })
 
@@ -994,7 +996,8 @@ test('rebuttal.kind가 other가 아니면 active-deletion에서 그대로 사라
 test('catalog에서 워크플로우의 모듈 섹션을 만든다', () => {
   const { value } = loadModuleSections(RULES, 'full')
   assert.ok(value.length >= 19)
-  assert.deepEqual(value[0], { kind: 'module', id: '01', title: 'FSD 아키텍처' })
+  // `source`는 결과 파일·`collected.sources`가 쓰는 규칙 문서 이름이다.
+  assert.deepEqual(value[0], { kind: 'module', id: '01', title: 'FSD 아키텍처', source: '01-fsd' })
   assert.equal(value.some(section => section.id === '00'), false, '공통 규칙은 섹션이 아니다')
   assert.equal(value.some(section => section.id === '10'), false, 'synthesis 전용 모듈은 섹션이 아니다')
 })
@@ -1025,9 +1028,9 @@ test('catalog을 읽지 못하면 사유를 낸다 — loadModuleSections', () =
 test('catalog에서 특수 패스 접두를 얻는다', () => {
   const { value } = loadSpecialistPasses(RULES)
   assert.deepEqual(value, [
-    { kind: 'pass', id: 'props', title: 'Props', prefixes: ['P'] },
-    { kind: 'pass', id: 'math', title: '수학', prefixes: ['A', 'C'] },
-    { kind: 'pass', id: 'exception', title: '예외', prefixes: ['EX'] },
+    { kind: 'pass', id: 'props', title: 'Props', prefixes: ['P'], source: 'props' },
+    { kind: 'pass', id: 'math', title: '수학', prefixes: ['A', 'C'], source: 'math' },
+    { kind: 'pass', id: 'exception', title: '예외', prefixes: ['EX'], source: 'exception' },
   ])
 })
 
@@ -1129,6 +1132,15 @@ test('두 섹션 전문을 낸다 — golden', () => {
     '본문: B2',
     '',
     '## 특수 패스',
+    '',
+    // 지적이 없는 특수 패스도 제 자리에 남는다(아래 `빈 특수 패스` 참고).
+    '### Props',
+    '',
+    '지적 없음.',
+    '',
+    '### 수학',
+    '',
+    '지적 없음.',
     '',
     '### 예외',
     '',
@@ -1271,4 +1283,137 @@ test('sections 항목의 kind가 module·pass가 아니면 조용히 사라지�
     () => render([], new Map(), { high: 'active-deletion', low: 'active-deletion' }, VOCAB, [{ kind: 'mystery', id: 'zz', title: '?' }], false),
     /kind/,
   )
+})
+
+// -------------------------------------------------------------- 판정 파일 모양
+
+// 2026-09-30 실행(2.14.0) — 오케스트레이터가 판정 파일을 `{ tasks: [ …payload… ] }`로
+// 만들었다. `tally-verdicts.mjs`는 그 모양을 받아 유지 19건으로 셌는데, 렌더러는
+// 최상위 `verdicts`만 봐서 **같은 파일을 판정 0건으로 읽었다.** 그대로 그렸으면
+// 검증 대상 23건이 전부 `검증 실패`로 찍혔고, 집계와 리포트가 말없이 어긋났다.
+// 오케스트레이터가 렌더러 소스를 읽고 파일 모양을 바꿔서 겨우 피했다.
+const runWithVerdicts = verdictsPayload => {
+  const dir = mkdtempSync(join(tmpdir(), 'render-'))
+  const input = join(dir, 'targets.json')
+  const verdictsPath = join(dir, 'verdicts.json')
+  writeFileSync(input, JSON.stringify({
+    candidates: [ok({ candidateId: '04-3#1', ruleId: '04-3', eligibility: 'VERIFY', route: 'bundle' })],
+  }), 'utf8')
+  writeFileSync(verdictsPath, JSON.stringify(verdictsPayload), 'utf8')
+  const out = spawnSync(process.execPath, [
+    SCRIPT, '--input', input, '--rules', RULES, '--phase-high', 'rollout-shadow', '--phase-low', 'rollout-shadow',
+    '--workflow', 'full', '--verdicts', verdictsPath, '--verification-state', 'ran',
+  ], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+  rmSync(dir, { recursive: true, force: true })
+  return out
+}
+
+const UPHELD = { candidateId: '04-3#1', disposition: 'upheld', evidence: 'e',
+  location: { kind: 'verified', path: 'src/a.ts', line: 1, quote: 'const a = 1' } }
+
+test('CLI가 tally-verdicts가 받는 { tasks: [...] } 판정 파일을 같은 판정으로 읽는다', () => {
+  const out = runWithVerdicts({ tasks: [{ schemaVersion: 1, verdicts: [UPHELD] }] })
+  assert.equal(out.status, 0, out.stderr)
+  assert.match(out.stdout, /교차검증: `유지`/)
+  assert.doesNotMatch(out.stdout, /검증 실패/)
+})
+
+test('CLI가 payload 배열로 된 판정 파일도 같은 판정으로 읽는다', () => {
+  const out = runWithVerdicts([{ schemaVersion: 1, verdicts: [UPHELD] }])
+  assert.equal(out.status, 0, out.stderr)
+  assert.match(out.stdout, /교차검증: `유지`/)
+})
+
+test('CLI가 판정 목록을 찾지 못한 판정 파일을 0건으로 흘리지 않고 거부한다', () => {
+  const out = runWithVerdicts({ results: [UPHELD] })
+  assert.equal(out.status, 2)
+  assert.equal(out.stdout, '')
+  assert.match(out.stderr, /verdicts\.json/)
+})
+
+// -------------------------------------------------------------- 수식 구분자
+//
+// 2026-09-30 리포트에서 `[0, 0, 1]`이 세로로 쪼개진 "0 , 0 , 1 0,0,1"로, `-8`이
+// 수식 기호 `−8`로 보였다. escapeProse가 링크를 막으려고 `[`·`(`를 `\[`·`\(`로
+// 바꿨는데, KaTeX를 쓰는 Markdown 뷰어에서 `\[ … \]`는 수식 블록이고 `\( … \)`는
+// 인라인 수식이다. 링크를 막으려던 이스케이프가 수식을 열었다. `$ … $`도 같은
+// 이유로 수식이 된다 — producer 산문에는 `${name}` 같은 템플릿 리터럴이 흔하다.
+const MATH_OPENERS = /\\[[\]()]|(^|[^\\])\$/
+
+test('산문 이스케이프가 수식 구분자를 만들지 않는다', () => {
+  for (const text of ['Z-up 축 [0, 0, 1]과 방향 [5, -8, 5]', 'names.map(name => x)', '`processed/${name}`', '$$x$$']) {
+    assert.doesNotMatch(escapeProse(text), MATH_OPENERS, text)
+  }
+})
+
+test('대괄호는 문자 참조로 바꿔 링크를 막고 값은 그대로 보이게 한다', () => {
+  assert.equal(escapeProse('[0, 0, 1]'), '&#91;0, 0, 1&#93;')
+  assert.equal(escapeProse('[링크](http://x)'), '&#91;링크&#93;(http://x)')
+})
+
+test('달러 기호는 역슬래시로 이스케이프한다', () => {
+  assert.equal(escapeProse('a $b$ c'), 'a \\$b\\$ c')
+})
+
+// -------------------------------------------------------------- 빈 특수 패스
+//
+// 2026-09-30 `feat/scene-graph-undo-redo` 리포트의 `특수 패스`에는 `예외`만 있었다.
+// Props는 돌아서 지적이 0건이었고, 수학은 적용 범위가 없어 SKIPPED였다 — 둘 다
+// 리포트 어디에도 없었다. 번호 모듈은 0건이어도 "지적 없음."이 찍히는데 특수 패스는
+// 지적이 없으면 헤딩째 빠졌고, 계약(C-7)이 이 절을 "렌더러 출력 그대로"로 정해 두어
+// 오케스트레이터가 채울 수도 없었다. 읽는 쪽은 "돌았는데 0건"과 "안 돌았다"를 가를
+// 수 없다. 리포트를 감사한 에이전트 넷도 이것을 못 잡았다.
+
+const PHASES_BOTH = { high: 'active-deletion', low: 'active-deletion' }
+
+test('특수 패스는 지적이 없어도 이름과 "지적 없음."을 낸다', () => {
+  const { markdown } = render([], new Map(), PHASES_BOTH, VOCAB, SECTIONS, false)
+  assert.match(markdown, /## 특수 패스\n\n### Props\n\n지적 없음\.\n\n### 수학\n\n지적 없음\.\n\n### 예외\n\n지적 없음\./)
+})
+
+test('SKIPPED 특수 패스는 사유와 비차단을 낸다', () => {
+  const sections = SECTIONS.map(section => (section.id === 'math' ? { ...section, skipped: { reason: '행렬 연산 없음' } } : section))
+  const { markdown } = render([], new Map(), PHASES_BOTH, VOCAB, sections, false)
+  assert.match(markdown, /### 수학\n\n`SKIPPED` — 행렬 연산 없음 · 비차단\n/)
+})
+
+test('CLI가 --planned의 SKIPPED 특수 패스를 그 패스 자리에 표시한다', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'render-'))
+  const planned = join(dir, 'planned.json')
+  writeFileSync(planned, JSON.stringify({ skipped: [{ module: 'math', reasonCode: 'no-matrix-ops', reason: '행렬 연산 없음' }], unknown: [] }), 'utf8')
+  const out = runWith([ok()], ['--planned', planned])
+  rmSync(dir, { recursive: true, force: true })
+  assert.equal(out.status, 0, out.stderr)
+  assert.match(out.stdout, /### Props\n\n지적 없음\./)
+  assert.match(out.stdout, /### 수학\n\n`SKIPPED` — 행렬 연산 없음 · 비차단/)
+})
+
+// 수집 기록과 대조한다. `prepare-verification.mjs --collect`는 결과 파일을 모은 모듈을
+// `collected.sources`로 남긴다. 그 목록이 있는데 거기 없는 모듈·패스를 "지적 없음."으로
+// 찍으면, 실행이 실패했거나 결과가 빠진 모듈이 0건인 것처럼 보인다.
+test('수집 목록이 있으면 결과가 수집되지 않은 모듈과 패스를 지적 없음과 구분한다', () => {
+  const sections = [
+    { kind: 'module', id: '04', title: '상태와 Effect', source: '04-state' },
+    { kind: 'module', id: '11', title: '스타일링', source: '11-styling' },
+    ...SECTIONS.filter(section => section.kind === 'pass'),
+  ]
+  const { markdown } = render([], new Map(), PHASES_BOTH, VOCAB, sections, false, { collected: new Set(['04-state', 'exception']) })
+  assert.match(markdown, /### 04 상태와 Effect\n\n지적 없음\.\n/)
+  assert.match(markdown, /### 11 스타일링\n\n결과 없음 — /)
+  assert.match(markdown, /### Props\n\n결과 없음 — /)
+  assert.match(markdown, /### 예외\n\n지적 없음\.\n/)
+})
+
+test('CLI가 routed의 collected로 수집되지 않은 모듈을 표시한다', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'render-'))
+  const input = join(dir, 'targets.json')
+  writeFileSync(input, JSON.stringify({ candidates: [ok()], collected: { sources: ['04-state'] } }), 'utf8')
+  const out = spawnSync(process.execPath, [
+    SCRIPT, '--input', input, '--rules', RULES, '--phase-high', 'active-deletion', '--phase-low', 'active-deletion',
+    '--workflow', 'full', '--verification-state', 'disabled',
+  ], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+  rmSync(dir, { recursive: true, force: true })
+  assert.equal(out.status, 0, out.stderr)
+  assert.match(out.stdout, /### 01 FSD 아키텍처\n\n결과 없음 — /)
+  assert.match(out.stdout, /#### 🔴 `04-3` 제목/)
 })

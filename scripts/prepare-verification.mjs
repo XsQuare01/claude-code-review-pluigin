@@ -1,9 +1,13 @@
 import { execFileSync } from 'node:child_process'
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, isAbsolute, join, resolve, sep } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
-import { logPhase, requireStartedTimeline } from './lib/run-record.mjs'
+import { markedBlock } from './lib/contract-blocks.mjs'
+import { logPhase, readEvents, requireStartedTimeline } from './lib/run-record.mjs'
+import {
+  buildTaskPrompt, docPathForRule, extractClause, instructionsWithManifest, planVerifierTasks,
+} from './lib/verifier-tasks.mjs'
 
 // Deterministic preparation for the cross-verification pass.
 //
@@ -262,8 +266,22 @@ export function prepareVerification(candidates, blobs, options = {}) {
 
 // ---------------------------------------------------------------------- CLI
 //
-//   node scripts/prepare-verification.mjs --merge-base <sha> --input candidates.json
-//   node scripts/prepare-verification.mjs --merge-base <sha> < candidates.json
+//   node scripts/prepare-verification.mjs --merge-base <sha> --dir <d> --run <r> --collect
+//   node scripts/prepare-verification.mjs --merge-base <sha> --dir <d> --run <r> --input candidates.json
+//   node scripts/prepare-verification.mjs --merge-base <sha> --dir <d> --run <r> < candidates.json
+//
+// --collect      : gather `<d>/.timing/<r>.<module>.json` — each producer result written
+//                  verbatim as it arrived — against the timeline's `module.done` records.
+//                  `/code-review-full` uses this; the orchestrator never assembles an
+//                  envelope by hand. Cannot be combined with --input.
+// --rules <dir>  : the RULES_DIR the producers read (catalog, module docs, verifier
+//                  template, verdict manifest). Defaults to this plugin's review-rules.
+// --verify off   : no verifier prompt files and no `crossverify.start`. Default selective.
+//
+// Unless --locations-only or --verify off, one prompt file per verifier task is written to
+// `<d>/.timing/<r>.verify/` and listed as `verifierTasks` / `promotions`, each with the
+// `verdict` path the orchestrator writes the verifier's JSON to. `crossverify.start` is
+// logged here when there is at least one task.
 //
 // --input <path> : read the payload from a file. **Prefer this.** The payload carries
 //                  prose, code quotes and Windows paths, and a shell that has to hold
@@ -275,7 +293,8 @@ export function prepareVerification(candidates, blobs, options = {}) {
 //          { "locations": [ {ruleId, path, line, quote}, … ] }  light form for a
 //                                                              consolidated pass
 //          { "candidates": [ … ] }                            when the caller owns the ids
-// stdout : { "candidates": [ … ], "bundles": [ … ], "counts": { … } }
+// stdout : { "candidates": [ … ], "bundles": [ … ], "counts": { … },
+//            "verifierTasks": [ … ], "promotions": { … }, "collected": { … } (--collect) }
 //
 // --locations-only : location checks and their counts, with no eligibility, route or
 //                    bundle. For workflows that have no rebuttal pass.
@@ -366,6 +385,79 @@ function gitReaders(mergeBase) {
   }
 }
 
+/**
+ * `source`로 쓸 수 있는 이름 — 규칙 문서 파일명에서 `.md`를 뗀 값.
+ *
+ * catalog가 그 목록의 유일한 선언처다. 여기에 손으로 옮겨 두면 모듈이 늘 때
+ * 이쪽만 낡는다.
+ */
+export function loadSourceNames(rulesDir) {
+  let catalog
+  try {
+    catalog = JSON.parse(readFileSync(join(rulesDir, 'catalog.json'), 'utf8'))
+  } catch (error) {
+    return { error: `catalog.json을 읽지 못했다: ${join(rulesDir, 'catalog.json')} — ${error.message}` }
+  }
+  const names = (catalog.modules ?? [])
+    .filter(module => module.role === 'module' || module.role === 'specialist')
+    .map(module => String(module.path ?? '').replace(/\.md$/, ''))
+    .filter(Boolean)
+  return { value: new Set(names) }
+}
+
+const ENVELOPE_KEYS = new Set(['source', 'result'])
+
+/**
+ * 입력의 모양을 받기 전에 본다. 문제가 없으면 빈 배열이다.
+ *
+ * 받는 모양은 넷이다: `{ results }`(producer 결과 또는 envelope), `{ candidates }`,
+ * `{ locations }`, 그리고 ID가 이미 붙은 후보의 루트 배열. 어느 것에도 맞지 않는
+ * 입력을 후보 0건으로 흘려보내면 검증 대상이 통째로 사라지는데, 출력은 정상
+ * 실행과 똑같이 생겼다.
+ *
+ * envelope는 `source`와 `result`만 갖는다. `source`는 오케스트레이터가 디스패치
+ * 기록에서 채우는 값이라, 계약 밖 이름(`sourcePass`)이나 규칙 문서에 없는 이름
+ * (`01`)은 그 기록과 이 후보를 이어 주지 못한다.
+ */
+export function payloadProblems(payload, sourceNames) {
+  const problems = []
+  if (Array.isArray(payload)) {
+    const missing = payload.filter(entry => typeof entry?.candidateId !== 'string').length
+    if (missing) {
+      problems.push(`루트 배열은 이미 ID가 붙은 후보만 받는다 — ${payload.length}개 중 ${missing}개에 candidateId가 없다. producer 결과는 {"results":[{"source":"<규칙 문서 이름>","result":{…}}]}로 감싼다`)
+    }
+    return problems
+  }
+  if (!payload || typeof payload !== 'object') return ['입력이 객체도 배열도 아니다']
+  const shapes = ['results', 'candidates', 'locations'].filter(key => key in payload)
+  if (!shapes.length) {
+    return [`알아보는 키가 없다: ${JSON.stringify(Object.keys(payload))}. results · candidates · locations 중 하나로 넘긴다`]
+  }
+  for (const key of shapes) {
+    if (!Array.isArray(payload[key])) problems.push(`${key}가 배열이 아니다`)
+  }
+  ;(Array.isArray(payload.results) ? payload.results : []).forEach((entry, at) => {
+    const where = `results[${at}]`
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      problems.push(`${where}가 객체가 아니다`)
+      return
+    }
+    if (!('result' in entry)) {
+      if (!Array.isArray(entry.findings)) problems.push(`${where}는 envelope({source,result})도 producer 결과(findings 배열)도 아니다`)
+      return
+    }
+    const extra = Object.keys(entry).filter(name => !ENVELOPE_KEYS.has(name))
+    if (extra.length) problems.push(`${where} envelope에 계약 밖 키가 있다: ${extra.join(', ')}. 쓸 수 있는 키: source, result`)
+    if (!sourceNames.has(entry.source)) {
+      problems.push(`${where}.source ${JSON.stringify(entry.source)}는 규칙 문서 이름이 아니다. 쓸 수 있는 이름: ${[...sourceNames].join(', ')}`)
+    }
+    if (!entry.result || typeof entry.result !== 'object' || !Array.isArray(entry.result.findings)) {
+      problems.push(`${where}.result에 findings 배열이 없다`)
+    }
+  })
+  return problems
+}
+
 async function main() {
   const argv = process.argv.slice(2)
   const mergeBaseIndex = argv.indexOf('--merge-base')
@@ -377,6 +469,23 @@ async function main() {
   const dir = dirIndex === -1 ? undefined : argv[dirIndex + 1]
   const run = runIndex === -1 ? undefined : argv[runIndex + 1]
   const inputPath = inputIndex === -1 ? undefined : argv[inputIndex + 1]
+  const rulesIndex = argv.indexOf('--rules')
+  const rulesDir = rulesIndex === -1
+    ? join(dirname(fileURLToPath(import.meta.url)), '..', 'review-rules')
+    : argv[rulesIndex + 1]
+  // 모듈별 결과 파일에서 입력을 모은다. `--input`과 함께 주면 어느 쪽이 입력인지
+  // 호출자만 알고 스크립트는 모른다 — 고르지 않고 거부한다.
+  const collect = argv.includes('--collect')
+  if (collect && inputPath !== undefined) {
+    process.stderr.write('--collect와 --input을 함께 줄 수 없다. 모듈별 결과 파일을 모으거나 입력 파일 하나를 넘긴다\n')
+    process.exit(2)
+  }
+  const verifyIndex = argv.indexOf('--verify')
+  const verifyMode = verifyIndex === -1 ? 'selective' : argv[verifyIndex + 1]
+  if (!['selective', 'off'].includes(verifyMode)) {
+    process.stderr.write(`--verify는 selective 또는 off다 (받은 값: ${JSON.stringify(verifyMode)}). exhaustive 라우팅은 이 스크립트가 아직 하지 않는다\n`)
+    process.exit(2)
+  }
 
   // 인자를 먼저 본다. 입력을 다 읽고 나서 거부하면 실패 메시지가 파이프 오류에
   // 묻히고, 무엇을 고쳐야 하는지가 가려진다.
@@ -386,7 +495,7 @@ async function main() {
   // 지시였고, 2026-09-08의 한 실행은 계약을 읽고도 타임라인을 한 줄도 남기지
   // 않았다. 디스패치 이후라 부팅을 강제할 수는 없지만, 타임라인 없이 검증까지
   // 가는 경로는 여기서 닫힌다. 시작 자체를 강제하는 것은 `review-preflight.mjs`의 몫이다.
-  requireStartedTimeline(dir, run)
+  const sidecar = requireStartedTimeline(dir, run)
 
   // 부른 사실을 먼저 남긴다. `script.start`만 있고 `script.done`이 없는 기록은
   // "불렀고 끝내지 못했다"는 뜻이고, 아무 줄도 없는 것은 "부르지 않았다"는 뜻이다.
@@ -394,25 +503,53 @@ async function main() {
   // 한 실행에서 그 구간이 1086초로 전체 최장이었는데 무엇이 오래 걸렸는지 알 수 없었다.
   logPhase(dir, run, 'script.start', { script: 'prepare-verification' })
 
-  const source = inputPath === undefined ? 'stdin' : inputPath
-  let raw = ''
-  if (inputPath === undefined) {
-    for await (const chunk of process.stdin) raw += chunk
-  } else {
-    try {
-      raw = readFileSync(inputPath, 'utf8')
-    } catch (error) {
-      process.stderr.write(`--input을 읽지 못했다: ${inputPath} — ${error.message}\n`)
-      process.exit(2)
-    }
-  }
-  let payload
-  try {
-    payload = JSON.parse(raw)
-  } catch (error) {
-    process.stderr.write(`${source} is not valid JSON: ${error.message}\n`)
+  const fail = message => {
+    process.stderr.write(`${message}\n`)
     process.exit(2)
   }
+
+  // 규칙 문서 목록은 이 스크립트와 같은 플러그인의 것을 기본으로 쓴다. 호출자가
+  // `--rules`를 주면 producer가 읽은 그 디렉터리를 쓴다.
+  const sourceNames = loadSourceNames(rulesDir)
+  if (sourceNames.error) fail(sourceNames.error)
+
+  let source
+  let payload
+  let collected
+  if (collect) {
+    source = '--collect'
+    const gathered = collectResultFiles({
+      events: readEvents(sidecar),
+      sourceNames: sourceNames.value,
+      pathOf: name => join(dir, '.timing', `${run}.${name}.json`),
+      read: path => (existsSync(path) ? readFileSync(path, 'utf8') : undefined),
+    })
+    if (gathered.problems.length) fail(`모듈별 결과를 모으지 못했다:\n  - ${gathered.problems.join('\n  - ')}`)
+    for (const warning of gathered.warnings) process.stderr.write(`경고: ${warning}\n`)
+    payload = gathered.payload
+    collected = gathered.collected
+  } else {
+    source = inputPath === undefined ? 'stdin' : inputPath
+    let raw = ''
+    if (inputPath === undefined) {
+      for await (const chunk of process.stdin) raw += chunk
+    } else {
+      try {
+        raw = readFileSync(inputPath, 'utf8')
+      } catch (error) {
+        fail(`--input을 읽지 못했다: ${inputPath} — ${error.message}`)
+      }
+    }
+    try {
+      payload = JSON.parse(raw)
+    } catch (error) {
+      fail(`${source} is not valid JSON: ${error.message}`)
+    }
+  }
+
+  const problems = payloadProblems(payload, sourceNames.value)
+  if (problems.length) fail(`${source}를 검증 준비 입력으로 받을 수 없다:\n  - ${problems.join('\n  - ')}`)
+
   // Producer results are what the orchestrator already holds, so that is the cheap shape.
   // The candidates shape stays accepted for callers that assign their own ids.
   const candidates = Array.isArray(payload)
@@ -423,8 +560,139 @@ async function main() {
         ? candidatesFromResults(payload.results)
         : (payload.candidates ?? [])
   const result = prepareVerification(candidates, collectBlobs(candidates, gitReaders(mergeBase)), { locationsOnly })
+  if (collected) result.collected = collected
+
+  // 검증자 프롬프트는 여기서 파일로 만든다. 오케스트레이터는 그 내용을 넘기기만
+  // 한다 — 다시 쓰지 않는다(`lib/verifier-tasks.mjs` 머리말).
+  let written = { tasks: [], promotions: {} }
+  if (!locationsOnly) {
+    if (verifyMode !== 'off') {
+      written = writeVerifierTasks({ result, rulesDir, mergeBase, outDir: resolve(dir, '.timing', `${run}.verify`), fail })
+    }
+    result.verifierTasks = written.tasks
+    result.promotions = written.promotions
+  }
+
   logPhase(dir, run, 'script.done', { ran: true, counts: result.counts })
+  // 교차검증의 시작은 **검증자를 띄울 준비가 끝난 이 자리**에서 남긴다. 오케스트레이터가
+  // 남기게 두었더니 2026-09-30 실행이 검증자 19개가 다 끝난 뒤에야 찍었고, 80분
+  // 검증이 "무엇이 돌았는지 기록에 없는 5173초"로 보였다.
+  if (written.tasks.length) logPhase(dir, run, 'crossverify.start', { targets: result.counts.verify })
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`)
+}
+
+/**
+ * 모듈별 결과 파일(`<run>.<규칙 문서 이름>.json`)을 envelope 입력으로 모은다.
+ *
+ * 기준은 파일이 아니라 **기록**이다. 마지막 `module.done`이 `failed`가 아닌 모듈은
+ * 결과 파일이 반드시 있어야 하고, 없으면 거부한다 — 모은 것만 보고 넘어가면 빠진
+ * 모듈이 "지적 0건"과 구분되지 않는다. `failed`로 끝난 모듈의 파일은 쓰지 않는다
+ * (C-6A: 실패한 패스를 부분 보정으로 통과시키지 않는다). 기록 없이 파일만 있으면
+ * 쓰되 경고한다.
+ */
+export function collectResultFiles({ events, sourceNames, pathOf, read }) {
+  const finalStatus = new Map()
+  for (const event of events) {
+    if (event?.phase === 'module.done') finalStatus.set(String(event.module), event.status)
+  }
+  const results = []
+  const problems = []
+  const warnings = []
+  const collected = { sources: [], excludedFailed: [], withoutModuleDone: [] }
+  for (const name of sourceNames) {
+    const path = pathOf(name)
+    const raw = read(path)
+    const status = finalStatus.get(name)
+    if (status === 'failed') {
+      if (raw !== undefined) {
+        collected.excludedFailed.push(name)
+        warnings.push(`${name}는 마지막 module.done이 failed라 결과 파일을 쓰지 않는다: ${path}`)
+      }
+      continue
+    }
+    if (raw === undefined) {
+      if (status !== undefined) problems.push(`${name}는 module.done이 있는데 결과 파일이 없다: ${path}`)
+      continue
+    }
+    let parsed
+    try {
+      parsed = JSON.parse(raw)
+    } catch (error) {
+      problems.push(`${path}를 JSON으로 읽지 못했다: ${error.message}`)
+      continue
+    }
+    if (status === undefined) {
+      collected.withoutModuleDone.push(name)
+      warnings.push(`${name}는 module.done 없이 결과 파일만 있다 — 쓰지만 기록에 그 모듈이 끝난 흔적이 없다: ${path}`)
+    }
+    results.push({ source: name, result: parsed })
+    collected.sources.push(name)
+  }
+  return { payload: { results }, problems, warnings, collected }
+}
+
+/**
+ * verifier 작업마다 프롬프트 파일을 쓰고, 그 목록을 돌려준다.
+ *
+ * 지시문·manifest·규칙 문서는 모두 `rulesDir`에서 읽는다 — producer가 읽은 규칙과
+ * 검증자가 받는 규칙이 같아야 한다. 디렉터리는 실행마다 새로 만든다. 앞 실행의
+ * 파일이 남으면 이번 목록에 없는 작업이 디렉터리에는 있게 된다.
+ */
+function writeVerifierTasks({ result, rulesDir, mergeBase, outDir, fail }) {
+  const planned = planVerifierTasks(result)
+  if (!planned.tasks.length) return { tasks: [], promotions: {} }
+
+  const readRule = name => {
+    try {
+      return readFileSync(join(rulesDir, name), 'utf8')
+    } catch (error) {
+      fail(`${join(rulesDir, name)}를 읽지 못했다: ${error.message}`)
+    }
+  }
+  const template = markedBlock(readRule('verifier-prompt.md'), 'VERIFIER_PROMPT')
+  if (template.error) fail(`verifier-prompt.md: ${template.error}`)
+  const manifest = markedBlock(readRule('workflow-contract.md'), 'REVIEW_VERDICT_CONTRACT_V1')
+  if (manifest.error) fail(`workflow-contract.md: ${manifest.error}`)
+  const instructions = instructionsWithManifest(template.value, manifest.value)
+  if (instructions.error) fail(instructions.error)
+
+  const catalog = JSON.parse(readRule('catalog.json'))
+  const docs = new Map()
+  const clauses = new Map()
+  for (const candidate of result.candidates) {
+    if (clauses.has(candidate.ruleId)) continue
+    const docPath = docPathForRule(candidate.ruleId, catalog)
+    if (docPath && !docs.has(docPath)) docs.set(docPath, readRule(docPath))
+    clauses.set(candidate.ruleId, docPath ? extractClause(docs.get(docPath), candidate.ruleId) : null)
+  }
+
+  rmSync(outDir, { recursive: true, force: true })
+  mkdirSync(outDir, { recursive: true })
+  const candidatesById = new Map(result.candidates.map(candidate => [candidate.candidateId, candidate]))
+  // 검증자가 돌려준 JSON을 남길 자리(`verdict`)도 여기서 정한다. 오케스트레이터가
+  // 이름을 지으면 실행마다 달라지고, `tally-verdicts.mjs --collect`가 찾지 못한다.
+  const write = task => {
+    const { prompt, missingClauses } = buildTaskPrompt({ instructions: instructions.value, task, candidatesById, clauses, mergeBase })
+    const path = join(outDir, `${task.taskId}.md`)
+    writeFileSync(path, prompt, 'utf8')
+    return { prompt: path, verdict: join(outDir, `${task.taskId}.verdict.json`), missingClauses }
+  }
+  const tasks = planned.tasks.map(task => {
+    const { prompt, verdict, missingClauses } = write(task)
+    return {
+      taskId: task.taskId,
+      route: task.kind,
+      candidateIds: task.candidateIds,
+      prompt,
+      verdict,
+      ...(missingClauses.length ? { missingClauses } : {}),
+    }
+  })
+  const promotions = Object.fromEntries(planned.promotions.map(task => {
+    const { prompt, verdict } = write(task)
+    return [task.candidateIds[0], { taskId: task.taskId, prompt, verdict }]
+  }))
+  return { tasks, promotions }
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
