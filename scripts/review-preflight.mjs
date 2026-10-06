@@ -30,6 +30,8 @@ import { existsSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+import { runNameProblem } from './lib/run-name.mjs'
+
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)))
 const TIMELINE = join(ROOT, 'scripts', 'review-timeline.mjs')
 
@@ -81,7 +83,8 @@ const repo = flag('repo', process.cwd())
 if (!dir || !run || !rules || !workflow) {
   die('usage: review-preflight.mjs --dir <리포트 디렉터리> --run <리포트 basename> --rules <RULES_DIR> --workflow <이름> [--base main] [--host 이름]')
 }
-if (/[\\/]/.test(run)) die(`--run must be a bare basename, got ${JSON.stringify(run)}`)
+const runProblem = runNameProblem(run)
+if (runProblem) die(runProblem)
 if (!existsSync(rules)) die(`--rules not found: ${rules}`)
 
 // 이미 시작된 실행에 두 번째 시작을 얹지 않는다. 그러면 한 파일에 두 실행이

@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { execFileSync, spawnSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
@@ -94,6 +94,26 @@ test('--run에 경로 구분자가 오면 거부한다', t => {
   })
   assert.equal(out.status, 2)
   assert.match(out.stderr, /bare basename/)
+})
+
+test('--run에 역슬래시 경로 구분자가 와도 거부한다', t => {
+  // Windows에서는 역슬래시도 경로 구분자다. 그대로 받으면 `.timing` 밖의 사이드카를 읽고,
+  // 검증자 프롬프트 디렉터리를 `.timing` 밖에서 지우고 다시 만든다.
+  const dir = started(t)
+  const out = spawnSync('node', [SCRIPT, '--merge-base', 'HEAD', '--dir', dir, '--run', '..\\escape'], {
+    input: JSON.stringify({ candidates: [] }), encoding: 'utf8',
+  })
+  assert.equal(out.status, 2)
+  assert.match(out.stderr, /bare basename/)
+})
+
+test('--run이 .md로 끝나면 리포트 파일 이름을 준 것으로 보고 거부한다', t => {
+  const dir = started(t)
+  const out = spawnSync('node', [SCRIPT, '--merge-base', 'HEAD', '--dir', dir, '--run', `${RUN}.md`], {
+    input: JSON.stringify({ candidates: [] }), encoding: 'utf8',
+  })
+  assert.equal(out.status, 2)
+  assert.ok(out.stderr.includes(`"${RUN}"`), out.stderr)
 })
 
 test('준비 수치를 script.done으로 남기고 counts는 객체로 남는다', t => {
@@ -294,6 +314,38 @@ test('--collect는 최종 상태가 failed인 모듈의 파일을 쓰지 않고 
   assert.match(out.stderr, /02-type/)
 })
 
+test('--collect는 module.done의 status가 ok도 failed도 아니면 그 모듈을 모으지 않고 거부한다', t => {
+  // 2026-09-30 실행은 22줄 전부에 `COMPLETED`를 적었다. 기록 단계는 경고만 하고 줄을
+  // 남기므로, 여기서 성공으로 읽으면 타임라인이 경고한 값을 검증 준비가 성공으로 쓴다.
+  const dir = startedWith(t, [done('01-fsd', 'COMPLETED')])
+  resultFile(dir, '01-fsd', RESULT)
+  const out = collect(dir)
+  assert.equal(out.status, 2)
+  assert.match(out.stderr, /01-fsd/)
+  assert.match(out.stderr, /COMPLETED/)
+})
+
+test('--collect는 목록 밖 status를 note 단 줄로 바로잡은 모듈을 모은다', t => {
+  // 기록은 덧붙이기만 하므로 마지막 줄이 정본이다.
+  const dir = startedWith(t, [done('01-fsd', 'COMPLETED'), { ...done('01-fsd', 'ok'), note: 'status COMPLETED를 ok로 바로잡는다' }])
+  resultFile(dir, '01-fsd', RESULT)
+  const out = collect(dir)
+  assert.equal(out.status, 0, out.stderr)
+  assert.deepEqual(JSON.parse(out.stdout).collected.sources, ['01-fsd'])
+})
+
+test('--collect는 module.done 없이 결과 파일만 있는 모듈을 모으지 않고 거부한다', t => {
+  // 결과 파일은 module.done보다 먼저 쓴다(SKILL). 기록이 없으면 그 모듈이 이번 실행에서
+  // 끝났는지 알 수 없다 — 쓰다 만 파일이거나 앞 실행의 파일일 수 있다.
+  const dir = startedWith(t, [done('01-fsd', 'ok')])
+  resultFile(dir, '01-fsd', RESULT)
+  resultFile(dir, '04-state', { ...RESULT, findings: [] })
+  const out = collect(dir)
+  assert.equal(out.status, 2)
+  assert.match(out.stderr, /04-state/)
+  assert.match(out.stderr, /module\.done/)
+})
+
 test('--collect는 읽을 수 없는 결과 파일을 이름으로 짚는다', t => {
   const dir = startedWith(t, [done('01-fsd', 'ok')])
   resultFile(dir, '01-fsd', '{"findings": [')
@@ -404,4 +456,58 @@ test('--verify off면 프롬프트도 crossverify.start도 만들지 않는다',
   assert.equal(out.status, 0, out.stderr)
   assert.deepEqual(JSON.parse(out.stdout).verifierTasks, [])
   assert.deepEqual(timelineOf(dir).map(event => event.phase), ['run.start', 'script.start', 'script.done'])
+})
+
+// 같은 실행을 이어 가다 이 스크립트를 다시 돌리면, 검증자 프롬프트 디렉터리를 지우고
+// 다시 만들면서 그 안의 판정 파일까지 지운다. 2026-09-30의 한 실행은 검증 도중 스킬을
+// 다시 불렀다 — 남은 작업은 `tally-verdicts.mjs --validate`가 판정 파일에서 센다.
+const prepareTwice = (t, extra = []) => {
+  const dir = started(t)
+  const input = join(dir, 'candidates.json')
+  writeFileSync(input, JSON.stringify(withHigh([HIGH])), 'utf8')
+  const prepareOnce = more => spawnSync('node', [SCRIPT, '--merge-base', 'HEAD', '--dir', dir, '--run', RUN, '--input', input, ...more],
+    { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+  const first = prepareOnce([])
+  assert.equal(first.status, 0, first.stderr)
+  const { verdict } = JSON.parse(first.stdout).verifierTasks[0]
+  writeFileSync(verdict, JSON.stringify({ schemaVersion: 1, verdicts: [] }), 'utf8')
+  return { verdict, second: prepareOnce(extra) }
+}
+
+test('받은 판정 파일이 있으면 검증자 프롬프트 디렉터리를 지우지 않고 거부한다', t => {
+  const { verdict, second } = prepareTwice(t)
+  assert.equal(second.status, 2)
+  assert.match(second.stderr, /--validate/)
+  assert.match(second.stderr, /--discard-verdicts/)
+  assert.equal(existsSync(verdict), true)
+})
+
+test('--discard-verdicts를 주면 받은 판정을 버리고 디렉터리를 다시 만든다', t => {
+  const { verdict, second } = prepareTwice(t, ['--discard-verdicts'])
+  assert.equal(second.status, 0, second.stderr)
+  assert.equal(existsSync(verdict), false)
+})
+
+test('--verify exhaustive는 검증 대상이 아니던 후보도 검증 작업으로 만든다', t => {
+  const dir = started(t)
+  const input = join(dir, 'candidates.json')
+  writeFileSync(input, JSON.stringify(withHigh([LOW_ELSEWHERE])), 'utf8')
+  const out = spawnSync('node', [SCRIPT, '--merge-base', 'HEAD', '--dir', dir, '--run', RUN, '--input', input, '--verify', 'exhaustive'],
+    { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+  assert.equal(out.status, 0, out.stderr)
+  const result = JSON.parse(out.stdout)
+  assert.equal(result.counts.verify, 1)
+  assert.equal(result.counts.skipVerify, 0)
+  assert.deepEqual(result.candidates[0].reasons, ['exhaustive'])
+  assert.equal(result.verifierTasks.length, 1)
+  assert.equal(timelineOf(dir).at(-1).phase, 'crossverify.start')
+})
+
+test('--verify에 모르는 모드를 주면 쓸 수 있는 값을 보이고 거부한다', t => {
+  const dir = started(t)
+  const out = spawnSync('node', [SCRIPT, '--merge-base', 'HEAD', '--dir', dir, '--run', RUN, '--verify', 'all'],
+    { input: JSON.stringify({ candidates: [] }), encoding: 'utf8' })
+  assert.equal(out.status, 2)
+  assert.match(out.stderr, /selective/)
+  assert.match(out.stderr, /exhaustive/)
 })

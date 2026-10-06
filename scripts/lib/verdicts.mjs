@@ -40,7 +40,9 @@ export function collectVerdicts(payloads) {
  * `lib/contract-validate.mjs`의 `validateVerdictPayload`에 manifest를 묶어 넘긴다.
  * 여기서 더 보는 것은 **요청과의 대응**이다: 판정한 candidateId 집합이 그 작업에
  * 맡긴 집합과 다르면 C-6B는 그것도 malformed-output으로 친다. 이름표가 어긋난
- * 판정은 형식이 맞아도 다른 지적의 판정이 될 수 있기 때문이다.
+ * 판정은 형식이 맞아도 다른 지적의 판정이 될 수 있기 때문이다. 같은 후보를 두 번
+ * 판정한 것도 위반이다 — 집합만 보면 `[A 유지, A 반박]`이 요청 `[A]`와 같아 보이고,
+ * 집계에서는 나중 판정이 조용히 이긴다.
  *
  * 문제가 없으면 `payload`를, 있으면 `problems`(사람이 읽을 문장 목록)를 돌려준다.
  */
@@ -56,8 +58,10 @@ export function checkTaskVerdict(raw, candidateIds, validateVerdict) {
     const returned = payload.verdicts.map(verdict => verdict?.candidateId)
     const missing = candidateIds.filter(id => !returned.includes(id))
     const extra = returned.filter(id => typeof id === 'string' && !candidateIds.includes(id))
+    const repeated = [...new Set(returned.filter((id, at) => typeof id === 'string' && returned.indexOf(id) !== at))]
     if (missing.length) problems.push(`요청한 candidateId의 판정이 없다: ${missing.join(', ')}`)
     if (extra.length) problems.push(`요청하지 않은 candidateId를 판정했다: ${extra.join(', ')}`)
+    if (repeated.length) problems.push(`같은 candidateId를 두 번 이상 판정했다: ${repeated.join(', ')} — 후보마다 판정은 하나다`)
   }
   return problems.length ? { problems } : { payload }
 }

@@ -346,8 +346,8 @@ node <RULES_DIR>/../scripts/tally-verdicts.mjs --dir <리포트 디렉터리> --
      --collect --targets <prepare-verification 출력> [--malformed-tasks-corrected N]
 ```
 
-- **`--collect`는 작업별 판정 파일을 모은다.** `prepare-verification.mjs`가 작업마다 판정 파일 자리(`verifierTasks[].verdict`, `promotions[].verdict`)를 정하고, 오케스트레이터는 검증자가 돌려준 JSON을 받는 즉시 그 자리에 그대로 쓴다. 읽는 순서는 bundle 작업 → isolated 작업 → 승격 작업이다. 모은 판정은 `<리포트 basename>.verdicts.json` 한 파일로 남고 렌더러가 그 파일을 읽는다. 판정 파일이 없는 작업은 `noVerdict`로 세고 작업 이름을 알린다
-- **`--validate`는 작업별 판정 파일을 계약과 요청한 candidateId 집합에 맞춰 보고, 어긴 작업마다 교정 프롬프트(`<taskId>.retry.md`: 원래 지시 + 오류 목록 + 직전 응답 원문)를 만든다.** 기록은 남기지 않는다. 계약 검사는 `validate-rules.mjs`와 같은 함수(`scripts/lib/contract-validate.mjs`)다. `--collect`도 같은 검사를 하고, 교정 뒤에도 어긴 판정은 세지 않으며, 교정한 작업 수는 retry 파일로 센다
+- **`--collect`는 작업별 판정 파일을 모은다.** `prepare-verification.mjs`가 작업마다 판정 파일 자리(`verifierTasks[].verdict`, `promotions[].verdict`)를 정하고, 오케스트레이터는 검증자가 돌려준 JSON을 받는 즉시 그 자리에 그대로 쓴다. 읽는 순서는 bundle 작업 → isolated 작업 → 승격 작업이다. 모은 판정은 `<리포트 basename>.verdicts.json` 한 파일로 남고 렌더러가 그 파일을 읽는다. 판정 파일이 없는 작업은 `noVerdict`로 세고 작업 이름을 알린다. 승격 작업은 bundle이 `needs-context`로 돌린 후보에만 읽는다 — 그 후보의 승격 판정이 없거나 계약을 어겼으면 bundle 판정도 쓰지 않아(`verdicts.json`에서도 빠진다) `noVerdict`가 되고, bundle이 이미 닫은 후보의 승격 판정은 세지 않는다. 한 작업이 같은 candidateId를 두 번 판정하면 형식 위반이다
+- **`--validate`는 작업별 판정 파일을 계약과 요청한 candidateId 집합에 맞춰 보고, 어긴 작업마다 교정 프롬프트(`<taskId>.retry.md`: 원래 지시 + 오류 목록 + 직전 응답 원문)를 만든다.** 기록은 남기지 않는다. 계약 검사는 `validate-rules.mjs`와 같은 함수(`scripts/lib/contract-validate.mjs`)다. `--collect`도 같은 검사를 하고, 교정 뒤에도 어긴 판정은 세지 않으며, 교정한 작업 수는 retry 파일로 센다. **남은 일도 낸다** — 판정 파일이 없는 작업(`pending`)과, bundle이 `needs-context`로 돌렸는데 승격 판정이 아직 없는 후보(`promotionsDue`)다. 교정할 작업까지 셋이 모두 비면 `ready: true`이고 그때만 0으로 끝난다. 오케스트레이터는 깨어날 때마다(압축 뒤·스킬을 다시 불렀을 때 포함) 기억이 아니라 이 출력으로 다음 작업을 정한다
 - 판정 파일을 직접 넘기는 `--input`도 받는다. 받는 모양은 `REVIEW_VERDICT_CONTRACT_V1` payload 하나, 그 배열, 또는 `{ "tasks": [ … ] }`다 — **`render-findings.mjs`도 같은 로더(`scripts/lib/verdicts.mjs`)로 읽는다.** 2.14.0까지 렌더러는 최상위 `verdicts`만 봐서, tally가 센 `{ "tasks": [ … ] }` 파일을 판정 0건으로 읽었다
 - **`--targets`에 `prepare-verification.mjs`의 출력을 넘긴다.** 판정을 받지 못한 후보를 개수가 아니라 ID로 가려내므로, 대상 밖 후보의 판정이 빠진 대상을 가리지 못한다. 넘기지 않으면 뺄셈으로만 세고 그 한계가 `note`로 기록에 남는다
 - **`--input`을 준 순서가 정본 순서다.** 후보별로 마지막 판정만 세고, 뒤집힌 건수는 `reverdicted`로 따로 낸다
@@ -1134,6 +1134,8 @@ UTF-16 파일도 읽는다 — PowerShell 5.1의 `Set-Content -Encoding UTF8`은
 | `run.end` | 마지막 | `verdict`, `usageSource`, (있으면) `tokensIn`·`tokensOut`·`tokensCacheRead`·`costUsd` |
 
 **교차검증은 시작과 끝이 짝을 이루고, 판정을 입력으로 쓰는 단계(`synthesis.start`·`render.start` 중 먼저 온 것)보다 앞에서 끝난다.** `--check`는 시작 없이 남은 끝, 끝나지 않은 시작, 그 단계 뒤의 교차검증 기록을 문제로 짚는다. 같은 날 다른 실행은 `synthesis.start` 뒤에 판정 하나를 다시 받아 유지를 반박으로 바꿨다. 2026-09-30 실행이 시작 하나에 끝 둘을 남겼고, 두 번째 끝은 리포트를 조립하다 판정 하나를 다시 받아 집계를 바꾼 것이었다. 잘못 센 끝을 바로잡는 줄은 예외다 — 앞 끝 바로 뒤에 `note`를 달아 다시 쓴다(append 전용 기록의 정정).
+
+**`module.done`의 목록 밖 status도 같은 방식으로 바로잡는다.** 같은 모듈·같은 `attempt`의 `module.done`을 `ok`/`failed`와 사유를 적은 `note`로 한 줄 더 남기면, `--check`는 그것을 중복 끝이 아니라 정정으로 받는다. 상태는 정정 줄이 정본이고 구간의 시각은 앞 줄이 정본이다. 정정으로 받는 것은 앞 줄의 status가 목록 밖일 때뿐이다 — `failed`를 `ok`로 바꾸는 것은 어휘 정정이 아니라 재시도이고, `attempt`를 올려 남긴다. `prepare-verification.mjs --collect`는 마지막 `module.done`이 `ok`인 모듈만 모으고, 목록 밖 status와 `module.done` 없는 결과 파일은 거부한다.
 
 **full 워크플로우의 `module.done`은 결과 파일 뒤에 온다.** producer 결과는 C-6A validation을 통과하면 곧바로 `<리포트 basename>.<module>.json`에 그대로 쓰이고, `prepare-verification.mjs --collect`가 그 파일에서 검증 입력을 모은다. 결과 파일 없이 `status: ok`를 남기면 스크립트가 경고한다 — 결과를 대화에만 들고 있던 2026-09-30 실행은 context 압축으로 그것을 잃었다.
 
