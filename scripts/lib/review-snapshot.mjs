@@ -1,5 +1,6 @@
 import * as nodeFs from 'node:fs'
-import { randomBytes } from 'node:crypto'
+
+import { writeTextAtomic } from './atomic-write.mjs'
 
 import { codeSpan, dispositionOf, escapeProse } from '../render-findings.mjs'
 import { moduleOutcomes } from './run-record.mjs'
@@ -396,23 +397,7 @@ export function writeSnapshotAtomic(path, snapshot, fs = nodeFs) {
       throw new Error(`${path}는 다른 실행(${existing.value.run.runId})의 스냅숏이다 — 덮지 않는다`)
     }
   }
-  const text = `${JSON.stringify(snapshot, null, 2)}\n`
-  const temporary = `${path}.${process.pid}.${randomBytes(4).toString('hex')}.tmp`
-  try {
-    fs.writeFileSync(temporary, text, { encoding: 'utf8', flag: 'wx' })
-    const written = fs.readFileSync(temporary, 'utf8')
-    if (written !== text || parseSnapshot(written).error) {
-      throw new Error(`임시 파일을 다시 읽었더니 쓴 내용과 다르다(${written.length}/${text.length}자) — 교체하지 않는다`)
-    }
-    fs.renameSync(temporary, path)
-  } catch (error) {
-    try {
-      if (fs.existsSync(temporary)) fs.unlinkSync(temporary)
-    } catch {
-      // 임시 파일을 못 지운 것은 원래 실패를 가리지 않는다
-    }
-    throw error
-  }
+  writeTextAtomic(path, `${JSON.stringify(snapshot, null, 2)}\n`, { fs, verify: written => parseSnapshot(written).error })
 }
 
 const STATUS_TEXT = {
