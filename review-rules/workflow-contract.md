@@ -896,6 +896,8 @@ finding 헤딩 **바로 다음 줄**에 영향도와 확신도를 적는다. `00
 
 **같은 자리에 다른 namespace의 지적이 있으면 `관련 지적:` 줄을 `출처 패스:` 줄 다음에 둔다.** 정확성 패스의 `CR-*`와 규칙 모듈의 지적이 같은 정규화 위치를 가리킬 때다. 이 리포트에 그려진 지적은 순번까지 붙은 규칙 ID로, 그려지지 않은 지적은 candidate ID와 `(상세 지적에 없음)`으로 적는다. 두 지적을 합치지 않는다(C-6B `조항이 없는 지적`).
 
+**재현 근거가 있으면 근거 줄을 슬롯 뒤에 둔다(C-11).** `재현 근거:`로 시작하는 줄에 확인 방법과 결과를, 다음 줄에 조건·절차·기대·관찰을, 실행했으면 그다음 줄에 로그 경로를 적는다. 렌더러가 그린다 — 직접 쓰지 않는다. 근거는 등급·두 축·교차검증 표기를 바꾸지 않는다.
+
 **두 축 줄은 헤딩 바로 다음 줄이다 — 사이에 빈 줄을 두지 않는다.** 위 예시가 그 모양이지만, 예시로만 두었더니 한 실행이 48개 지적 전부에 빈 줄을 넣어 렌더한 뒤 **리포트 전체를 다시 썼다.** 보여주는 것과 말하는 것은 다른 일이고, 산문이 빠뜨리면 산문이 이긴다.
 
 ### 교차검증 표기
@@ -1140,8 +1142,8 @@ UTF-16 파일도 읽는다 — PowerShell 5.1의 `Set-Content -Encoding UTF8`은
 | `dispatch.end` | 전부 수집 후 | `terminalOk`, `terminalFailed`(최종 모듈 단위) · `attemptsTotal`, `attemptsFailed`(시도 단위) — **이 넷은 스크립트가 `module.done`에서 센다.** 넘기지 않아도 되고, 넘긴 값이 기록과 다르면 경고하고 센 값을 남긴다 · `attemptFailureClasses`(중첩, `--data-file`), (있으면) `tokensIn`·`tokensOut` |
 | `script.start` | `prepare-verification.mjs` 진입 직후 (스크립트가 직접 남긴다) | `script` |
 | `script.done` | `prepare-verification.mjs` 실행 후 | `ran`, `counts`(중첩, 스크립트가 직접 남긴다) |
-| `tool.start` | **도구 하나를 돌리기 직전** | `name`, (재시도면) `attempt` |
-| `tool.done` | lint/typecheck/test를 돌린 직후 | `name`, `exit`, `treeSha` · `failedNow`, `failedBaseline`(재지 못했으면 `null`) · `failing`(중첩, `--data-file`) · (재시도면) `attempt` |
+| `tool.start` | **도구 하나를 돌리기 직전** | `name`, (재시도면) `attempt` · 재현 명령이면 `candidateId`·`evidenceId`(C-11, `review-evidence.mjs`가 쓴다) |
+| `tool.done` | lint/typecheck/test를 돌린 직후 | `name`, `exit`, `treeSha` · `failedNow`, `failedBaseline`(재지 못했으면 `null`) · `failing`(중첩, `--data-file`) · (재시도면) `attempt` · 재현 명령이면 `candidateId`·`evidenceId` |
 | `crossverify.start` / `.end` | 교차검증 패스 — 시작은 `prepare-verification.mjs`가 검증 작업을 만든 직후, 끝은 `tally-verdicts.mjs`가 **직접 남긴다** | `targets` / `upheld`, `rejected`, `needsContext`, `noVerdict`, `countsFrom`, (있으면) `malformedTasksCorrected`·`tokensIn`·`tokensOut` |
 | `synthesis.start` / `.end` | synthesis 패스 | `findings` / `clusters`, (있으면) `tokensIn`·`tokensOut` |
 | `render.start` | **문서를 쓰기 직전** | `findings`(중복 제거 후) |
@@ -1549,9 +1551,9 @@ node <RULES_DIR>/../scripts/review-snapshot.mjs --dir <리포트 디렉터리> -
 | `status` | `complete` · `partial` · `failed` |
 | `scope` | 모듈마다 `ok` · `failed` · `missing` · `skipped` · `unknown`과 사유, 그리고 그 수 |
 | `verification` | `state`(`ran` · `disabled`) |
-| `findings` | 후보마다 `ref`, `candidateId`, 규칙 ID, `impact`·`confidence`, 출처, 위치, 위치 대조 결과, eligibility, route, disposition(C-6B) |
+| `findings` | 후보마다 `ref`, `candidateId`, 규칙 ID, `impact`·`confidence`, 출처, 위치, 위치 대조 결과, eligibility, route, disposition(C-6B), 근거가 있으면 근거 요약(C-11) |
 | `openQuestions` | 수집한 producer 결과의 openQuestion과 그 출처 |
-| `inputs` | 읽은 파일의 역할·경로·sha256 |
+| `inputs` | 읽은 파일의 역할·경로·sha256. 재현 근거가 있으면 근거 파일(`evidence`)과 실행 기록(`execution`)도 |
 | `notes` | 스크립트가 짚은 기록의 빈 곳 |
 
 **모듈 상태와 실행 상태.**
@@ -1596,6 +1598,104 @@ sha256으로 가리킨다. 지적의 본문·근거 서술은 싣지 않는다 �
   판정을 내지 못했으면 `--no-verdicts`), 검증을 끈 실행에 판정 파일을 줬다
 - 파일 생성을 원하지 않는 요청(C-6)에서는 돌리지 않는다
 
+## C-11. 지적별 재현 근거
+
+지적은 "왜 그런가"를 본문으로 말하지만 **어떻게 확인했는가**는 말하지 않았다. 코드를 읽고
+경로를 따라간 것인지, 실제로 돌려 본 것인지, 확인하지 못한 것인지가 같은 모양의 산문으로
+섞여, 읽는 사람이 그 지적을 다시 확인할 길이 없었다. 모델은 돌려 보지 않은 것을 "실행해서
+확인했다"고 쓸 수 있었다.
+
+그래서 확인 기록을 지적 옆의 별도 파일(sidecar)로 남긴다. producer 출력
+(`REVIEW_RESULT_CONTRACT_V1`)에는 필드를 더하지 않는다. 오늘 이 파일을 쓰는 워크플로우는
+`full` 하나다.
+
+### 확인 방법은 셋이다
+
+| `method` | 뜻 | 반드시 적는 것 |
+|----------|-----|----------------|
+| `static-trace` | 코드 경로를 따라가 확인했다. 실행하지 않았다 | 조건 · 절차 · 기대 · 관찰 |
+| `executed` | 재현 명령을 실제로 돌렸다 | 조건 · 기대 · 그 실행의 기록 ID |
+| `not-run` | 확인하지 않았다 | 사유 |
+
+**`executed`는 스크립트가 남긴 실행 기록이 있어야만 붙는다.** 실행 기록은
+`review-evidence.mjs exec`만 쓴다. 그 스크립트가 명령을 실제로 돌리고, 출력을 로그 파일로,
+결과를 실행 기록으로 남기고, 타임라인에 `tool.start`/`tool.done` 한 쌍(`name: repro`,
+`evidenceId`)을 쓴다. 근거 항목은 `review-evidence.mjs note`가 받는데, `executed` 항목에 **이
+지적의, 근거로 쓸 수 있는 HEAD 쪽 실행 기록**이 없으면 거부한다. 산문으로 "돌려 봤다"고 적는
+길로는 이 값을 만들 수 없다.
+
+이 장치는 착오를 막는다. 기록 파일·로그·타임라인을 일부러 맞춰 위조하는 것까지 막지는 못한다.
+
+### 실행 기록을 근거로 쓸 수 있는 조건
+
+실행 기록은 어느 대상에서 돌았는지(HEAD·작업 트리 fingerprint, C-10)와 로그의 sha256을
+갖는다. 아래를 모두 만족해야 근거로 쓴다.
+
+- **이 실행의 기록이다** — `runId`가 같다
+- **이 실행의 대상에서 돌았다** — HEAD 쪽은 `run.start`의 HEAD·작업 트리와 같아야 한다. 같은
+  HEAD라도 작업 트리가 다르면 다른 코드를 돌린 것이다. 그래서 preflight 뒤에 대상이 바뀌었으면
+  스크립트는 아예 돌리지 않는다
+- **작업 트리를 바꾸지 않았다** — 돌리기 전후의 fingerprint가 같다. 바꿨으면 read-only 계약
+  (C-6) 밖의 실행이고, 바뀐 뒤의 트리가 리뷰 대상과 같다고 말할 수 없다. 기록은 남기되 근거로
+  쓰지 않는다
+- **로그가 그대로다** — 로그 파일이 있고 해시가 기록과 같다
+
+### 재현 결과는 넷이고, 어느 것도 반증이 아니다
+
+무엇이 "재현"인지는 **돌리기 전에** 정한다(`--expect-exit`, 필요하면 `--expect-output`). 돌린
+뒤에 결과를 보고 정하면 무엇이든 재현이 된다. 분류는 스크립트가 한다.
+
+| 결과 | 뜻 |
+|------|-----|
+| `reproduced` | 지정한 종료 코드(와 지정한 출력)로 끝났다 |
+| `not-reproduced` | 0으로 끝났다. **반증이 아니다** — 재현 절차가 결함을 건드리지 못했을 수 있다 |
+| `inconclusive` | 예상하지 않은 종료 코드이거나, 지정한 코드지만 지정한 출력이 없다. 다른 이유로 실패했을 수 있다 |
+| `env-failure` | 시작하지 못했거나, 시간 제한을 넘겼거나, 신호로 죽었다. 결함 여부와 무관하다 |
+
+결함의 반증은 교차검증의 `rejected`다(C-6B). **이 파일은 지적의 존부·등급·판정을 바꾸지
+않는다.** 재현하지 못했다는 이유만으로, 위치를 확인하지 못했다는 이유만으로 이미 성립한 결함을
+지우지 않는다 — 검증 방법과 주장의 확신도는 다른 축이다.
+
+### 기존 결함과 신규 회귀
+
+같은 재현을 merge-base에서도 돌렸으면(`--side base`) 양쪽 결과로 가른다.
+
+- HEAD 재현됨 · base 재현됨 → 기존 결함(`pre-existing`)
+- HEAD 재현됨 · base 재현 안 됨 → 신규 회귀(`new-regression`)
+- base를 재지 않았거나, 환경 실패·판단 불가·쓸 수 없는 기록이면 → `base-unmeasured`
+
+**base 미측정을 "base에서는 정상"으로 읽지 않는다** — 그러면 기존 결함이 이 변경의 회귀로
+둔갑한다(C-6 `게이트 수치는 baseline 대비로 적는다`). base 쪽 재현은 merge-base를 꺼낸 깨끗한
+트리에서만 돈다. 스크립트는 그 트리를 만들지 않는다 — 대상 저장소에 쓰지 않는다.
+
+### 파일
+
+```
+<리포트 디렉터리>/.timing/<리포트 basename>.evidence.json        근거 항목 (note가 쓴다)
+<리포트 디렉터리>/.timing/<리포트 basename>.evidence/<id>.json   실행 기록 (exec가 쓴다, 실행마다 하나)
+<리포트 디렉터리>/.timing/<리포트 basename>.evidence/<id>.log    실행 로그
+```
+
+- 근거 파일은 `schemaVersion`과 실행 식별(`run.start`의 `runId`·HEAD·작업 트리·merge-base)을
+  갖는다. 임시 파일에 쓰고 다시 읽어 확인한 뒤 교체한다(C-10과 같은 쓰기)
+- 실행 기록은 실행마다 새 파일이다. 공용 파일을 고쳐 쓰지 않으므로 여러 재현을 함께 돌려도
+  서로의 기록을 덮을 자리가 없다
+- 근거 항목은 이 실행의 후보(`routed` 출력의 `candidateId`)에만 붙는다. 같은 지적을 다시 적으면
+  바꾼다
+- 잘렸거나 버전이 다른 근거 파일을 "근거 없음"으로 읽지 않는다. 렌더러와 스냅숏은 읽을 수 없는
+  근거 파일을 받으면 멈춘다
+
+### 리포트와 스냅숏
+
+- 렌더러는 `--evidence <근거 파일>`을 받으면 지적마다 근거 줄을 슬롯 뒤에 낸다(C-7). 근거 파일이
+  routed 출력과 같은 실행의 것인지 `collected.runId`로 대조하고, 다르거나 대조할 수 없으면
+  거부한다. 근거가 없는 지적은 예전과 똑같이 그린다
+- 계약에 맞지 않는 항목(손으로 고친 파일 등)은 근거로 그리지 않고 그 사실을 적는다
+- 스냅숏(C-10)은 지적마다 근거 요약(`method`·`valid`·`headOutcome`·`headUsable`·`comparison`)을
+  싣고, 근거 파일과 실행 기록을 `inputs`의 해시(`evidence`·`execution`)로 가리킨다. 본문은
+  싣지 않는다
+- 파일 생성을 원하지 않는 요청(C-6)에서는 남기지 않는다
+
 ## 워크플로우별 차이 선언
 
 각 SKILL 문서는 이 계약을 참조한 뒤 아래 항목 중 자기 모드에서 달라지는 것만 적는다.
@@ -1608,3 +1708,4 @@ sha256으로 가리킨다. 지적의 본문·근거 서술은 싣지 않는다 �
 | 출력 밀도 | 위반 전부 | `fast` — 파일당 최대 1개 |
 | 모듈 필터 | 없음 | `default` — `--module` |
 | 결과 스냅숏 | 없음 | `full` — `review-snapshot.mjs` (C-10) |
+| 재현 근거 | 없음 | `full` — `review-evidence.mjs` (C-11) |
