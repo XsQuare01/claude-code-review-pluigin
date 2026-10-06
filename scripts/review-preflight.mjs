@@ -19,7 +19,8 @@
 // Usage:
 //
 //   review-preflight.mjs --dir <리포트 디렉터리> --run <리포트 basename> \
-//     --rules <RULES_DIR> --workflow full [--base main] [--host claude-code] [--repo .]
+//     --rules <RULES_DIR> --workflow full [--base main] [--host claude-code] [--repo .] \
+//     [--correctness on|off]
 //
 //   --dry-run  계산만 하고 타임라인에 쓰지 않는다
 //
@@ -41,7 +42,7 @@ const die = message => {
   process.exit(2)
 }
 
-const VALUE_FLAGS = new Set(['dir', 'run', 'rules', 'workflow', 'base', 'host', 'repo'])
+const VALUE_FLAGS = new Set(['dir', 'run', 'rules', 'workflow', 'base', 'host', 'repo', 'correctness'])
 const BOOL_FLAGS = new Set(['dry-run'])
 {
   const argv = process.argv.slice(2)
@@ -80,6 +81,11 @@ const base = flag('base', 'main')
 // `--set os=win32`로 따로 싣는다.
 const host = flag('host', 'unknown')
 const repo = flag('repo', process.cwd())
+// 선택 패스(catalog의 `optIn`)를 켰는지. 기본은 꺼짐이다 — correctness 패스는 검출 효과와
+// 추가 비용을 확인하기 전까지 명시적으로 켜서 쓴다(#88). 켰는지를 여기서 기록해야, 결과가
+// 없는 것이 "켜지 않았다"인지 "켰는데 실패했다"인지 뒤의 스크립트가 가를 수 있다.
+const correctness = flag('correctness', 'off')
+if (!['on', 'off'].includes(correctness)) die(`--correctness는 on 또는 off다 (받은 값: ${JSON.stringify(correctness)})`)
 
 if (!dir || !run || !rules || !workflow) {
   die('usage: review-preflight.mjs --dir <리포트 디렉터리> --run <리포트 basename> --rules <RULES_DIR> --workflow <이름> [--base main] [--host 이름]')
@@ -130,7 +136,12 @@ const deferred = forWorkflow.filter(module =>
   module.role === 'module' && module.phaseByWorkflow?.[workflow] === 'post-verification-synthesis')
 const candidates = forWorkflow.filter(module =>
   module.role === 'module' && module.phaseByWorkflow?.[workflow] !== 'post-verification-synthesis')
-const specialists = forWorkflow.filter(module => module.role === 'specialist')
+const optedIn = module => (module.optIn ?? []).includes(workflow)
+const specialists = forWorkflow.filter(module => module.role === 'specialist' && !optedIn(module))
+const optional = forWorkflow.filter(module => module.role === 'specialist' && optedIn(module))
+if (correctness === 'on' && !optional.some(module => module.id === 'correctness')) {
+  die(`--correctness on은 correctness 선택 패스가 있는 워크플로우에서만 쓴다 — ${JSON.stringify(workflow)}에는 없다`)
+}
 
 const git = args => {
   try {
@@ -196,6 +207,9 @@ const logged = (() => {
     ...(identity.remote ? { repo: identity.remote } : {}),
     repoRoot: identity.root,
     rulesDigest: identity.rulesDigest,
+    // 선택 패스가 있는 워크플로우만 남긴다. 없는 워크플로우에 `off`를 적으면 "끌 수 있었는데
+    // 껐다"로 읽힌다.
+    ...(optional.some(module => module.id === 'correctness') ? { correctness } : {}),
   }
   const args = [TIMELINE, '--dir', dir, '--run', run, '--phase', 'run.start', '--data', JSON.stringify(data)]
   try {
@@ -228,6 +242,10 @@ if (deferred.length) {
 }
 if (specialists.length) {
   out.push(`특수 패스     ${specialists.map(module => module.id).join(' ')} — 후보 수에 넣지 않는다`)
+}
+for (const module of optional) {
+  const state = module.id === 'correctness' ? correctness : 'off'
+  out.push(`선택 패스     ${module.id} ${state === 'on' ? '켜짐' : `꺼짐 — --${module.id} on일 때만 돈다`}`)
 }
 if (identity.worktree !== 'clean') {
   out.push('')

@@ -130,7 +130,7 @@ const PHASES = new Map([
   ['run.start', {
     required: ['host', 'rules', 'version', 'branch', 'changedFiles'],
     structured: [],
-    allowed: ['candidates', 'workflow', 'mergeBase', 'os', 'runId', 'base', 'head', 'worktree', 'dirtyFiles', 'repo', 'repoRoot', 'rulesDigest'],
+    allowed: ['candidates', 'workflow', 'mergeBase', 'os', 'runId', 'base', 'head', 'worktree', 'dirtyFiles', 'repo', 'repoRoot', 'rulesDigest', 'correctness'],
   }],
   ['scope.done', { required: ['files', 'excluded'], structured: [], allowed: [] }],
   ['modules.planned', { required: ['candidates', 'applied'], structured: ['skipped', 'unknown'], allowed: [] }],
