@@ -961,7 +961,7 @@ for (const [owner, contextPaths] of Object.entries(STRUCTURED_OWNER_POLICY_BEARI
           }
         }
       }
-      for (const specialistPrompt of ['Props & Arguments Code Review', 'Math Code Review (linear algebra)', 'Exception Handling Code Review']) {
+      for (const specialistPrompt of ['Props & Arguments Code Review', 'Math Code Review (linear algebra)', 'Exception Handling Code Review', 'Correctness Code Review']) {
         if (!text.includes(specialistPrompt)) {
           failCode('structured-producer', 'E_FULL_SPECIALIST_PROMPT_MISSING', `${relativePath} must define the full-review specialist prompt for ${specialistPrompt}`)
         }

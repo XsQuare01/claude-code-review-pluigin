@@ -166,8 +166,8 @@ These scenarios pin the behaviour that `review-rules/workflow-contract.md` promi
         "C-6A",
         "C-7"
       ],
-      "scenario": "correctness remains a direct-only evidence-first agent with CR namespace and shared location discipline",
-      "expected": "It is not V1 until an orchestrator consumer exists; static validation fails if correctness declares structured-v1 ownership before a validation/render consumer is registered"
+      "scenario": "The correctness agent invoked directly remains a direct-only evidence-first agent with CR namespace and shared location discipline; /code-review-full --correctness on runs the same criteria from correctness.md through rule-module-reviewer instead",
+      "expected": "The direct agent is not V1 until an orchestrator consumer exists for its own prose output; static validation fails if the agent declares structured-v1 ownership before a validation/render consumer is registered, and the full pass never dispatches the agent itself"
     },
     {
       "id": 55,
@@ -719,6 +719,42 @@ These scenarios pin the behaviour that `review-rules/workflow-contract.md` promi
       ],
       "scenario": "One applicable module timed out twice and another finished ok but was never collected",
       "expected": "The snapshot status is partial with the first module FAILED and the second 결과 없음, and the 실행 계획 block pasted into the report is printed from that saved snapshot, so the report and the JSON state the same status and scope"
+    },
+    {
+      "id": 93,
+      "clauses": [
+        "C-6A",
+        "C-8",
+        "C-10"
+      ],
+      "scenario": "/code-review-full runs without --correctness on",
+      "expected": "Preflight records correctness off; the correctness pass is not dispatched, and the report and snapshot show it as SKIPPED (not requested) rather than as zero findings or as a missing result. Results produced anyway are not collected, and the report says they existed"
+    },
+    {
+      "id": 94,
+      "clauses": [
+        "C-6B"
+      ],
+      "scenario": "A CR-3 finding is selected for verification",
+      "expected": "The verifier prompt carries correctness.md's VERIFICATION_BASIS block in place of a rule clause and tells the verifier not to look for or invent a clause; it is not counted as a missing clause, and rebuttals use the same closed kinds"
+    },
+    {
+      "id": 95,
+      "clauses": [
+        "C-6B",
+        "C-7"
+      ],
+      "scenario": "The correctness pass and 04-state both flag the same line",
+      "expected": "Both findings stay with their own source, rule ID and verdict; they are not merged, and each carries a 관련 지적 line naming the other"
+    },
+    {
+      "id": 96,
+      "clauses": [
+        "C-6A",
+        "C-8"
+      ],
+      "scenario": "With --correctness on, the correctness producer times out twice, or returns malformed output twice",
+      "expected": "module.done records the pass as failed with its failureClass, the run is a partial review (FAILED orchestration), and the report shows 결과 없음 for 정확성 — never zero findings or a pass"
     }
   ],
   "defaultWorkflowOnlyCases": [
