@@ -129,7 +129,11 @@ const KIND_TEXT = {
  * 작업 하나의 프롬프트 전문과, 조항을 찾지 못한 규칙 ID 목록.
  *
  * `instructions`는 manifest가 이미 들어간 지시문이다. `clauses`는 규칙 ID → 조항
- * 본문(없으면 `null`)이다.
+ * 본문(없으면 `null`)이다. 조항이 **원래 없는** 지적(correctness 패스의 `CR-{n}` — 번호가
+ * 지적의 순번이다)은 `{ basis }`로 오고, 조항 대신 그 패스 문서의 판정 기준이 붙는다.
+ * 이것은 빠진 조항이 아니므로 `missingClauses`에 넣지 않는다. 조항을 지어 넣지도 않는다 —
+ * 검증자가 없는 조항을 찾거나 상상하면, 의도와 경로로 판정해야 할 주장을 규칙 문장으로
+ * 판정한다.
  */
 export function buildTaskPrompt({ instructions, task, candidatesById, clauses, mergeBase }) {
   const members = task.candidateIds.map(id => candidatesById.get(id)).filter(Boolean)
@@ -170,7 +174,14 @@ export function buildTaskPrompt({ instructions, task, candidatesById, clauses, m
   for (const ruleId of [...new Set(members.map(candidate => candidate.ruleId))]) {
     const clause = clauses.get(ruleId)
     lines.push(`#### \`${ruleId}\``, '')
-    if (clause) {
+    if (clause && typeof clause === 'object' && typeof clause.basis === 'string') {
+      lines.push(
+        '이 지적에는 규칙 조항이 없다. 이 ID의 번호는 지적의 순번이고, 근거는 규칙 문장이 아니라 변경의 의도와 코드 경로다. 조항을 찾거나 지어내지 말고, 아래 판정 기준과 코드로 판정한다.',
+        '',
+        fenced('markdown', clause.basis),
+        '',
+      )
+    } else if (typeof clause === 'string' && clause) {
       lines.push(fenced('markdown', clause), '')
     } else {
       missing.push(ruleId)

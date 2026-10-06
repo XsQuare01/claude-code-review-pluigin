@@ -153,7 +153,7 @@ SDK 드리프트로 원래부터 그만큼 실패하고 있었고, 그 브랜치
 
 | owner | mode | contract ownership |
 |------|------|--------------------|
-| `skills/code-review-full/SKILL.md` | `full` 일반 numbered + full specialist dispatch | structured-v1 producer 지시 보유 |
+| `skills/code-review-full/SKILL.md` | `full` 일반 numbered + full specialist dispatch (정확성 선택 패스 포함) | structured-v1 producer 지시 보유 |
 | `skills/code-review-props/SKILL.md` | `props` standalone specialist | structured-v1 producer 지시 보유 |
 | `skills/code-review-math/SKILL.md` | `math` standalone specialist | structured-v1 producer 지시 보유 |
 | `skills/code-review-exception/SKILL.md` | `exception` standalone specialist | structured-v1 producer 지시 보유 |
@@ -162,8 +162,9 @@ SDK 드리프트로 원래부터 그만큼 실패하고 있었고, 그 브랜치
 | `skills/code-review-commit/SKILL.md` | `commit` | legacy producer 유지 |
 | `skills/code-review-fast/SKILL.md` | `fast` | legacy producer 유지 |
 
-- numbered rule modules `01`~`21`과 specialist rule docs `props.md` / `math.md` / `exception.md`는 **workflow-neutral domain judgment docs**다. producer schema, raw JSON, malformed-output, renderer, legacy/structured ownership을 직접 소유하지 않는다.
-- correctness agent는 `CR-{n}` namespace와 `00-9`/`00-10`/`00-11` evidence discipline을 그대로 따르지만, **phase-1 structured-v1 owner는 아니다.** 지금은 built-in validation/render consumer가 없으므로 direct-agent evidence-first 결과만 낸다.
+- numbered rule modules `01`~`21`과 specialist rule docs `props.md` / `math.md` / `exception.md` / `correctness.md`는 **workflow-neutral domain judgment docs**다. producer schema, raw JSON, malformed-output, renderer, legacy/structured ownership을 직접 소유하지 않는다.
+- 직접 호출하는 correctness agent는 `CR-{n}` namespace와 `00-9`/`00-10`/`00-11` evidence discipline을 그대로 따르지만, **phase-1 structured-v1 owner는 아니다.** 그 에이전트의 산문 결과를 받는 validation/render consumer가 없으므로 direct-agent evidence-first 결과만 낸다.
+- **`full`의 정확성 패스는 그 에이전트를 쓰지 않는다(2.17.0).** `--correctness on`일 때 full SKILL이 structured-v1 producer 지시를 보유하고, 판정 문서 `correctness.md`를 쓰기 도구 없는 `rule-module-reviewer`에게 넘긴다. 결과는 다른 특수 패스와 같은 validation → aggregation → verification → rendering을 지난다. 판정 기준은 에이전트 문서와 `correctness.md`가 같고, `validate-rules.mjs`가 두 문서를 대조한다.
 - 아래 lifecycle은 **structured-v1 owner에만 적용**한다. legacy owner(`default`, `commit`, `fast`)는 기존 producer 계약을 유지한다.
 
 `REVIEW_RESULT_CONTRACT_V1`을 쓰는 owner에서는 결과가 **producer → validation → aggregation → Markdown rendering** 순서로 흐른다. 공통 원칙은 다음과 같다.
@@ -210,7 +211,7 @@ SDK 드리프트로 원래부터 그만큼 실패하고 있었고, 그 브랜치
 - 기존 리포트 의미는 유지한다. 즉, 판정/상세 지적/요약/도구 실행 결과/미해결·후속 확인의 역할은 그대로 두고, structured result는 그 입력 형식만 바꾼다
 - `openQuestions`는 `미해결 / 후속 확인` 섹션에 렌더링한다
 - 아직 structured result를 쓰지 않는 워크플로우(`default`, `commit`, `fast`)는 기존 producer 계약을 유지한다. 이 문단은 structured owner에만 적용한다
-- direct-only correctness agent는 이 structured lifecycle의 outside다. consumerless producer를 phase-1 owner로 등록하지 않고, 실제 validation/render consumer가 생긴 뒤에만 structured-v1로 승격한다
+- direct-only correctness agent의 직접 호출 결과는 이 structured lifecycle의 outside다. consumerless producer를 phase-1 owner로 등록하지 않고, 실제 validation/render consumer가 생긴 뒤에만 structured-v1로 승격한다. `full`의 정확성 패스는 이 lifecycle 안이다(위 ownership)
 - producer 문자열 필드(`title`, `body`, `recommendation`, `reason`, `evidence`)는 **신뢰하지 않는 report content**다. renderer는 `renderBySlot` 원칙으로 이 값을 문서 골격에 그대로 이어붙이지 말고 **field slot별로** 배치한다
 - `title`과 prose 필드는 heading, fence, table, raw HTML, Markdown link, block quote처럼 **오케스트레이터가 쓴 것처럼 보이는 block/control Markdown** 을 만들지 못하게 escape해서 렌더링한다
 - **escape가 수식 구분자를 만들면 안 된다.** KaTeX를 쓰는 Markdown 뷰어에서 `\[ … \]`는 수식 블록, `\( … \)`와 `$ … $`는 인라인 수식이다. 대괄호를 `\[`로 escape하던 2.14.0까지 `[0, 0, 1]`이 "0 , 0 , 1 0,0,1"로 쪼개져 보였다. 링크를 막는 데 필요한 것은 대괄호뿐이므로 `[`·`]`는 문자 참조(`&#91;`·`&#93;`)로 바꾸고 괄호는 escape하지 않으며, `$`는 `\$`로 escape한다
@@ -281,6 +282,15 @@ verifier가 반환하는 값과 오케스트레이터가 부여하는 값을 구
 - **`verification-unavailable`을 synthesis에 넣는 이유** — 빼면 selective 모드에서 입력이 줄어 `10-principles.md`의 대조 조건이 다시 무너진다. 넣되 표시한다
 
 개별 finding의 차단 여부는 이 표가 정한다. **gate 전체의 완결성 판정(`INCONCLUSIVE`)은 다른 값**이며 모드별 정책을 따른다. 둘을 섞으면 "차단 후보가 있는데 판정은 통과"가 나온다.
+
+### 조항이 없는 지적 (`CR-*`)
+
+정확성 패스의 지적 ID `CR-{n}`은 그 패스가 낸 지적의 **순번**이고, `correctness.md`에는 대응하는 조항이 없다. catalog가 이것을 `ruleClauses: false`로 선언한다.
+
+- **검증자에게 조항 대신 판정 기준을 준다.** `prepare-verification.mjs`가 그 문서의 `VERIFICATION_BASIS` 블록을 조항 자리에 붙이고, 조항을 찾거나 지어내지 말고 의도와 코드 경로로 판정하라고 적는다. 이것은 빠진 조항이 아니므로 `missingClauses`로 세지 않는다. 블록이 없으면 스크립트가 멈춘다 — 조항도 기준도 없는 프롬프트는 검증자에게 무엇으로 판정할지 말하지 않는다
+- **반박의 종류는 같은 닫힌 목록이다.** 막는 장치(`guard-exists`), 도달하지 않는 경로(`unreachable`), 전제한 의도와 다른 실제 계약(`contract-differs`)이 그대로 쓰인다. disposition·상태표·삭제 rollout도 다른 후보와 같다 — 별도 파이프라인이 없다
+- **출처와 ID는 서로 맞아야 한다.** 정확성 패스가 규칙 ID를 쓰거나, 다른 모듈이 `CR-*`를 쓰면 `prepare-verification.mjs`가 거부한다. 근거가 다른 지적이 다른 근거로 검증되기 때문이다
+- **같은 자리의 규칙 지적과 합치지 않는다.** exact dedup은 규칙 ID가 같아야 병합하고, 교차 namespace 병합은 입증된 동일성 규칙이 생길 때까지 하지 않는다. 대신 같은 정규화 위치의 다른 namespace 지적을 `relatedCandidateIds`로 잇고, 렌더러가 `관련 지적:` 줄로 그린다(C-7)
 
 ### `rebuttal.kind = other`
 
@@ -858,7 +868,7 @@ H1은 **`# {대상} {워크플로우 이름} 리포트`** 형식이며, 대상�
 | `##` | 상세 지적 | 아래 모듈 섹션을 담는다. `full`은 `render-findings.mjs` 출력을 그대로 붙인다 — 표기를 직접 만들지 않는다. 다른 워크플로우는 각자의 기존 producer 계약과 표 형식을 그대로 유지한다 | 전체 (`render-findings.mjs` 호출은 `full`만) |
 | `###` | `{NN} {모듈 제목}` | 모듈 하나당 하나 | 모듈을 쓰는 워크플로우 |
 | `####` | `{severity} {규칙 ID} {제목}` | finding 하나당 하나 | 전체 |
-| `##` | 특수 패스 | Props·수학·예외를 `###`로 **셋 다** 낸다 — 지적이 없으면 "지적 없음.", 실행 계획에서 건너뛴 패스는 `SKIPPED`와 사유, 결과 파일이 수집되지 않은 모듈·패스는 "결과 없음"(`collected.sources` 대조 — 0건과 다르다). `render-findings.mjs` 출력을 그대로 붙인다. 표기를 직접 만들지 않는다 | `full` |
+| `##` | 특수 패스 | Props·수학·예외를 `###`로 **셋 다** 낸다 — 지적이 없으면 "지적 없음.", 실행 계획에서 건너뛴 패스는 `SKIPPED`와 사유, 결과 파일이 수집되지 않은 모듈·패스는 "결과 없음"(`collected.sources` 대조 — 0건과 다르다). 그 뒤에 선택 패스 `정확성`이 온다 — 켰으면 같은 규칙으로, 켜지 않았으면 `SKIPPED`(선택 패스, 켜지 않았다)로 낸다. `render-findings.mjs` 출력을 그대로 붙인다. 표기를 직접 만들지 않는다 | `full` |
 | `##` | 요약 | 중복 제거된 지적을 severity 순으로 | `full`, `default` |
 | `##` | 도구 실행 결과 | C-6 / `00-rule.md` 00-9 | 전체 |
 | `##` | 실행 타임라인 | C-9 `--summary` 출력 표를 그대로. 표를 직접 만들지 않는다 | 전체 |
@@ -883,6 +893,8 @@ finding 헤딩 **바로 다음 줄**에 영향도와 확신도를 적는다. `00
 근거: diff 안에서 동일 입력에 대해 참조를 고정하는 경로가 없습니다.
 개선 제안: 계산을 상위에서 memoize하거나 필요 시 데이터 shape를 안정화하세요.
 ```
+
+**같은 자리에 다른 namespace의 지적이 있으면 `관련 지적:` 줄을 `출처 패스:` 줄 다음에 둔다.** 정확성 패스의 `CR-*`와 규칙 모듈의 지적이 같은 정규화 위치를 가리킬 때다. 이 리포트에 그려진 지적은 순번까지 붙은 규칙 ID로, 그려지지 않은 지적은 candidate ID와 `(상세 지적에 없음)`으로 적는다. 두 지적을 합치지 않는다(C-6B `조항이 없는 지적`).
 
 **두 축 줄은 헤딩 바로 다음 줄이다 — 사이에 빈 줄을 두지 않는다.** 위 예시가 그 모양이지만, 예시로만 두었더니 한 실행이 48개 지적 전부에 빈 줄을 넣어 렌더한 뒤 **리포트 전체를 다시 썼다.** 보여주는 것과 말하는 것은 다른 일이고, 산문이 빠뜨리면 산문이 이긴다.
 
@@ -1119,7 +1131,7 @@ UTF-16 파일도 읽는다 — PowerShell 5.1의 `Set-Content -Encoding UTF8`은
 
 | `--phase` | 시점 | `--set`/`--data`에 담는 것 |
 |---|---|---|
-| `run.start` | 가장 먼저 | `host`, `rules`(해석된 RULES_DIR), `version`, `branch`, `changedFiles` · 무엇을 리뷰하는지(C-10): `runId`, `base`, `head`, `worktree`, `dirtyFiles`, `repo`, `repoRoot`, `rulesDigest` — preflight가 쓴다 |
+| `run.start` | 가장 먼저 | `host`, `rules`(해석된 RULES_DIR), `version`, `branch`, `changedFiles` · 무엇을 리뷰하는지(C-10): `runId`, `base`, `head`, `worktree`, `dirtyFiles`, `repo`, `repoRoot`, `rulesDigest` · 선택 패스를 켰는지: `correctness`(`on`/`off`, 선택 패스가 있는 워크플로우만) — preflight가 쓴다 |
 | `scope.done` | 범위 확정(C-4) | `files`, `excluded` |
 | `modules.planned` | 적용 모듈 확정(C-3) | `candidates`, `applied` · `skipped`, `unknown`(중첩, `--data-file`) |
 | `dispatch.start` | **첫 sub-agent를 실제로 띄운 직후** | `modules`, `inflight` |
@@ -1552,6 +1564,8 @@ node <RULES_DIR>/../scripts/review-snapshot.mjs --dir <리포트 디렉터리> -
   않았다(`not-collected`)
 - `skipped`·`unknown`은 마지막 `modules.planned`를 따른다. 그 줄이 없으면 후보 전부를
   적용 대상으로 본다 — 건너뛴 사실을 지어내지 않는다
+- 선택 패스(catalog의 `optIn`)는 `run.start`가 켰다고 말할 때만 적용 대상이다. 켜지
+  않았으면 `skipped`(`not-requested`)이고, 그런데도 기록이나 결과가 있으면 `notes`에 남긴다
 - 적용 대상을 전부 모았으면 `complete`, 하나도 못 모았으면 `failed`, 그 사이는
   `partial`이다. `SKIPPED`·`UNKNOWN`은 상태를 낮추지 않지만 범위에는 남는다.
   `partial`과 `failed`는 `FAILED orchestration`이다(C-8)

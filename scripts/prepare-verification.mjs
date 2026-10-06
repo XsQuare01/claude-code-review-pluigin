@@ -118,6 +118,46 @@ export function computeOwnerCollisions(candidates) {
   return collided
 }
 
+/**
+ * 같은 정규화 위치에 걸린 지적 중 **namespace가 다른 것**을 서로 잇는다.
+ *
+ * correctness 패스(`CR-*`)와 규칙 모듈이 같은 자리를 지적하면, 둘은 근거가 다르다 —
+ * 하나는 의도와 경로, 하나는 규칙 문장이다. exact dedup은 규칙 ID가 같아야 병합하므로
+ * 둘은 합쳐지지 않고, 합쳐서도 안 된다: 같은 결함인지 입증할 규칙이 아직 없다(#88).
+ * 그렇다고 따로 두기만 하면 읽는 사람이 같은 자리의 두 지적을 서로 모른 채 읽는다.
+ * 그래서 합치지 않고 잇기만 한다. 각자의 출처와 판정은 그대로다.
+ *
+ * `prefixes`는 이을 namespace다(조항이 없는 패스의 접두, catalog의 `ruleClauses: false`).
+ * 규칙 모듈끼리의 같은 자리는 `ownerCollision`이 이미 다루므로 여기서 잇지 않는다.
+ */
+export function relatedAcrossNamespaces(candidates, prefixes) {
+  const linked = new Map()
+  if (!prefixes.length) return linked
+  const namespaceOf = candidate => {
+    const prefix = String(candidate.ruleId ?? '').split('-')[0]
+    return prefixes.includes(prefix) ? prefix : null
+  }
+  const byLocation = new Map()
+  for (const candidate of candidates ?? []) {
+    const key = collisionKey(candidate.location)
+    if (!key) continue
+    if (!byLocation.has(key)) byLocation.set(key, [])
+    byLocation.get(key).push(candidate)
+  }
+  for (const group of byLocation.values()) {
+    for (const candidate of group) {
+      const own = namespaceOf(candidate)
+      // 적어도 한쪽이 이을 namespace여야 하고, 둘의 namespace가 달라야 한다.
+      const others = group
+        .filter(other => other !== candidate && namespaceOf(other) !== own && (own !== null || namespaceOf(other) !== null))
+        .map(other => other.candidateId)
+        .sort()
+      if (others.length) linked.set(candidate.candidateId, others)
+    }
+  }
+  return linked
+}
+
 function eligibilityReasons({ candidate, locationCheck, ownerCollision }) {
   const reasons = []
   if (candidate?.impact === 'high') reasons.push('impact-high')
@@ -221,6 +261,7 @@ export function prepareVerification(candidates, blobs, options = {}) {
   const list = candidates ?? []
   if (options.locationsOnly) return locationsOnly(list, blobs)
   const collisions = computeOwnerCollisions(list)
+  const related = relatedAcrossNamespaces(list, options.linkPrefixes ?? [])
   const decided = list.map(candidate => {
     const check = checkLocation(candidate.location, blobs)
     const input = { candidate, locationCheck: check.status, ownerCollision: collisions.has(candidate.candidateId) }
@@ -251,6 +292,7 @@ export function prepareVerification(candidates, blobs, options = {}) {
       memberInstanceIds: candidate.memberInstanceIds ?? [],
       ...(candidate.source !== undefined ? { source: candidate.source } : {}),
       ...(candidate.sources !== undefined ? { sources: candidate.sources } : {}),
+      ...(related.has(candidate.candidateId) ? { relatedCandidateIds: related.get(candidate.candidateId) } : {}),
     }
   })
 
@@ -471,6 +513,55 @@ export function payloadProblems(payload, sourceNames) {
   return problems
 }
 
+/**
+ * 조항이 없는 패스(catalog의 `ruleClauses: false`)의 출처 → 접두.
+ *
+ * 그 패스의 ID(`CR-{n}`)는 지적의 순번이지 규칙 조항이 아니다. 출처와 ID가 서로 맞아야
+ * 그 사실을 뒤의 단계(검증자 프롬프트·렌더)가 믿고 쓸 수 있다.
+ */
+export function clauselessNamespaces(catalog) {
+  return new Map((catalog?.modules ?? [])
+    .filter(module => module.ruleClauses === false && Array.isArray(module.rulePrefixes) && module.rulePrefixes.length)
+    .map(module => [String(module.path ?? '').replace(/\.md$/, ''), module.rulePrefixes]))
+}
+
+/**
+ * 출처와 지적 ID의 namespace가 어긋난 producer 결과. 문제가 없으면 빈 배열이다.
+ *
+ * - 조항 없는 패스(correctness)가 규칙 ID를 쓰면 거부한다. 리포트를 읽는 사람이 그 규칙
+ *   문서에서 근거를 찾다 실패하고, 검증자는 그 조항으로 반증한다 — 근거가 다른 지적이다
+ * - 다른 모듈이 그 패스의 ID(`CR-*`)를 쓰면 거부한다. 규칙 문서를 근거로 한 지적이 조항
+ *   없는 지적으로 검증된다
+ *
+ * 규칙 모듈끼리의 ID(04 모듈이 `17-3`을 내는 것 등)는 여기서 보지 않는다 — 이번 변경의
+ * 범위는 조항 없는 namespace다.
+ */
+export function namespaceProblems(results, namespaces) {
+  const problems = []
+  const foreign = [...namespaces.values()].flat()
+  ;(Array.isArray(results) ? results : []).forEach((entry, at) => {
+    if (!entry || typeof entry !== 'object' || !('result' in entry) || !Array.isArray(entry.result?.findings)) return
+    const own = namespaces.get(entry.source)
+    for (const finding of entry.result.findings) {
+      const prefix = String(finding?.ruleId ?? '').split('-')[0]
+      if (own && !own.includes(prefix)) {
+        problems.push(`results[${at}] ${entry.source}의 지적 ${JSON.stringify(finding?.ruleId)}는 ${own.map(item => `${item}-{번호}`).join('/')}가 아니다 — 이 패스는 규칙 ID를 빌려 쓰지 않는다. 결과를 C-6A 교정 재시도로 다시 받는다`)
+      } else if (!own && foreign.includes(prefix)) {
+        problems.push(`results[${at}] ${entry.source}의 지적 ${JSON.stringify(finding?.ruleId)}는 다른 패스의 namespace다 — 규칙 문서의 ID를 쓴다. 결과를 C-6A 교정 재시도로 다시 받는다`)
+      }
+    }
+  })
+  return problems
+}
+
+/** 이 워크플로우에서 켰을 때만 도는 패스(catalog의 `optIn`). */
+export function optInPasses(catalog, workflow) {
+  if (!workflow) return []
+  return (catalog?.modules ?? [])
+    .filter(module => (module.optIn ?? []).includes(workflow))
+    .map(module => ({ id: module.id, name: String(module.path ?? '').replace(/\.md$/, '') }))
+}
+
 async function main() {
   const argv = process.argv.slice(2)
   const mergeBaseIndex = argv.indexOf('--merge-base')
@@ -525,6 +616,17 @@ async function main() {
   // `--rules`를 주면 producer가 읽은 그 디렉터리를 쓴다.
   const sourceNames = loadSourceNames(rulesDir)
   if (sourceNames.error) fail(sourceNames.error)
+  // loadSourceNames가 이미 같은 파일을 읽어 검사했다.
+  const catalog = JSON.parse(readFileSync(join(rulesDir, 'catalog.json'), 'utf8'))
+  const namespaces = clauselessNamespaces(catalog)
+
+  // 선택 패스를 켰는지는 preflight가 run.start에 남긴다. 켜지 않은 패스의 결과는 이 실행의
+  // 결과가 아니다 — 모으지 않되, 있었다는 사실은 출력과 경고에 남긴다.
+  const events = readEvents(sidecar)
+  const start = events.find(event => event?.phase === 'run.start') ?? {}
+  const passes = optInPasses(catalog, start.workflow)
+  const optIn = Object.fromEntries(passes.map(pass => [pass.id, start[pass.id] === 'on' ? 'on' : 'off']))
+  const notRequested = new Set(passes.filter(pass => optIn[pass.id] !== 'on').map(pass => pass.name))
 
   let source
   let payload
@@ -532,15 +634,16 @@ async function main() {
   if (collect) {
     source = '--collect'
     const gathered = collectResultFiles({
-      events: readEvents(sidecar),
+      events,
       sourceNames: sourceNames.value,
+      notRequested,
       pathOf: name => join(dir, '.timing', `${run}.${name}.json`),
       read: path => (existsSync(path) ? readFileSync(path, 'utf8') : undefined),
     })
     if (gathered.problems.length) fail(`모듈별 결과를 모으지 못했다:\n  - ${gathered.problems.join('\n  - ')}`)
     for (const warning of gathered.warnings) process.stderr.write(`경고: ${warning}\n`)
     payload = gathered.payload
-    collected = gathered.collected
+    collected = { ...gathered.collected, ...(passes.length ? { optIn } : {}) }
   } else {
     source = inputPath === undefined ? 'stdin' : inputPath
     let raw = ''
@@ -560,7 +663,7 @@ async function main() {
     }
   }
 
-  const problems = payloadProblems(payload, sourceNames.value)
+  const problems = [...payloadProblems(payload, sourceNames.value), ...namespaceProblems(payload?.results, namespaces)]
   if (problems.length) fail(`${source}를 검증 준비 입력으로 받을 수 없다:\n  - ${problems.join('\n  - ')}`)
 
   // Producer results are what the orchestrator already holds, so that is the cheap shape.
@@ -572,7 +675,9 @@ async function main() {
       : payload.results
         ? candidatesFromResults(payload.results)
         : (payload.candidates ?? [])
-  const result = prepareVerification(candidates, collectBlobs(candidates, gitReaders(mergeBase)), { locationsOnly, exhaustive: verifyMode === 'exhaustive' })
+  const result = prepareVerification(candidates, collectBlobs(candidates, gitReaders(mergeBase)), {
+    locationsOnly, exhaustive: verifyMode === 'exhaustive', linkPrefixes: [...namespaces.values()].flat(),
+  })
   if (collected) result.collected = collected
 
   // 검증자 프롬프트는 여기서 파일로 만든다. 오케스트레이터는 그 내용을 넘기기만
@@ -615,7 +720,7 @@ async function main() {
  * 함께 한 줄 더 남기는 것이다 — 마지막 줄이 정본이고, `review-timeline.mjs --check`는
  * 그 줄을 중복이 아니라 정정으로 받는다.
  */
-export function collectResultFiles({ events, sourceNames, pathOf, read }) {
+export function collectResultFiles({ events, sourceNames, pathOf, read, notRequested = new Set() }) {
   const finalStatus = new Map()
   for (const event of events) {
     if (event?.phase === 'module.done') finalStatus.set(String(event.module), event.status)
@@ -628,6 +733,15 @@ export function collectResultFiles({ events, sourceNames, pathOf, read }) {
     const path = pathOf(name)
     const raw = read(path)
     const status = finalStatus.get(name)
+    // 켜지 않은 선택 패스. 기록이나 파일이 있어도 이 실행의 결과로 모으지 않는다 — 실행
+    // 기록(run.start)이 그 패스를 켜지 않았다고 말한다. 조용히 버리지 않고 알린다.
+    if (notRequested.has(name)) {
+      if (raw !== undefined || status !== undefined) {
+        collected.excludedNotRequested = [...(collected.excludedNotRequested ?? []), name]
+        warnings.push(`${name}는 이 실행에서 켜지 않은 선택 패스인데 기록이나 결과 파일이 있다 — 모으지 않는다. 그 패스를 쓰려면 preflight에 --${name} on을 주고 새 실행으로 시작한다`)
+      }
+      continue
+    }
     if (status === 'failed') {
       if (raw !== undefined) {
         collected.excludedFailed.push(name)
@@ -711,6 +825,14 @@ function writeVerifierTasks({ result, rulesDir, mergeBase, outDir, discardVerdic
     if (clauses.has(candidate.ruleId)) continue
     const docPath = docPathForRule(candidate.ruleId, catalog)
     if (docPath && !docs.has(docPath)) docs.set(docPath, readRule(docPath))
+    // 조항이 원래 없는 패스(`ruleClauses: false`)는 문서의 판정 기준 블록을 준다. 그 블록이
+    // 없으면 멈춘다 — 조항도 기준도 없는 프롬프트는 검증자에게 무엇으로 판정할지 말하지 않는다.
+    if (docPath && catalog.modules?.find(module => module.path === docPath)?.ruleClauses === false) {
+      const basis = markedBlock(docs.get(docPath), 'VERIFICATION_BASIS')
+      if (basis.error) fail(`${docPath}: ${basis.error}`)
+      clauses.set(candidate.ruleId, { basis: basis.value })
+      continue
+    }
     clauses.set(candidate.ruleId, docPath ? extractClause(docs.get(docPath), candidate.ruleId) : null)
   }
 

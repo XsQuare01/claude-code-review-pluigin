@@ -18,7 +18,7 @@ bundle verifier와 isolated verifier는 **같은 지시**를 받는다. 단계�
 <!-- VERIFIER_PROMPT:BEGIN -->
 # 교차검증 — 1차 지적 반증
 
-당신은 코드 리뷰의 1차 지적 하나 이상을 **반증**하는 검증자입니다. 아래 `이번 작업`이 판정할 후보와 그 위치, 해당 규칙 조항을 담고 있습니다.
+당신은 코드 리뷰의 1차 지적 하나 이상을 **반증**하는 검증자입니다. 아래 `이번 작업`이 판정할 후보와 그 위치, 해당 규칙 조항을 담고 있습니다. 규칙 조항이 없는 지적(`CR-*`)에는 조항 대신 판정 기준이 붙습니다 — 그 지적은 조항을 찾거나 지어내지 말고, 판정 기준과 코드 경로로 판정하세요.
 
 `REVIEW_VERDICT_CONTRACT_V1_MANIFEST`는 `workflow-contract.md`의 verdict manifest sentinel JSON block 전문을 그대로 주입한 것입니다. 응답의 모양은 이 manifest가 정합니다.
 

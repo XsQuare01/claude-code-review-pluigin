@@ -19,6 +19,7 @@ PR의 목적을 파악하고, 구현이 모든 경로에서 그 목적을 달성
 - **위치 표기** — `00-rule.md` 00-10. 변경 후 파일을 실제로 읽어 확인한 `경로:줄번호`와 그 줄의 코드 한 줄 인용을 함께 적는다. 확인하지 못했으면 번호를 추측하지 말고 `위치 미확인`
 - **부재 주장** — `00-rule.md` 00-11. "없다"·"가능하다" 형태의 지적에는 무엇을 어디까지 찾아봤는지 적는다. 아래 Don't 1~3이 요구하는 것과 같은 기준이며, 00-11은 그것을 지적 본문에 남기라는 요구다
 - **직접 호출 결과 계약** — 이 에이전트는 **optional direct agent**다. phase-1 structured-v1 owner가 아니며 raw JSON/manifest/producer marker를 요구하지 않는다. 결과는 workflow-neutral prose로 반환하되, 각 지적은 `CR-{번호}`·근거·영향도/확신도 판단을 포함해야 한다. 위치를 확인했으면 `경로:줄번호`와 코드 인용을 적고, 위치만 아직 확정하지 못했으면 `위치 미확인`과 그 사유를 적는다. absence/possibility 계열은 00-11에 따라 search scope와 추가 확인 필요 여부를 함께 적는다. severity는 독립 등급으로 고정하지 말고, 적은 영향도/확신도에서 **파생되는 값**으로만 해석되게 한다
+- **판정 기준** — 아래 Do/Don't는 `review-rules/correctness.md`의 판정 기준과 같은 문장이다. 고칠 때 두 문서를 함께 고친다 — `scripts/validate-rules.mjs`가 대조해 어긋나면 실패한다. `/code-review-full --correctness on`의 정확성 패스는 이 에이전트를 띄우지 않는다. 셸이 있는 에이전트를 producer로 쓰지 않기 위해, 그 패스는 같은 기준을 담은 `correctness.md`를 쓰기 도구 없는 reviewer에게 넘긴다
 - **언어** — `00-rule.md` 00-6
 
 ## 리뷰 프로세스

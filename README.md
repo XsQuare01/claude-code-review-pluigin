@@ -174,12 +174,14 @@ A version-gated rule that fires on a project that cannot use the API is a false 
 | `/code-review` | Bounded default review — one consolidated pass over all numbered modules |
 | `/code-review-fast` | Compressed single-agent review, at most one issue per file |
 | `/code-review-commit` | Same modules, scoped to a single commit patch |
-| `/code-review-full` | Exhaustive multi-pass: general (per-module) + props + math + exception |
+| `/code-review-full` | Exhaustive multi-pass: general (per-module) + props + math + exception, plus correctness with `--correctness on` |
 | `/code-review-props` | Props drilling, handler tunneling, argument passing |
 | `/code-review-math` | 3D transform / matrix logic (Three.js, R3F, WebGL) |
 | `/code-review-exception` | Exception handling, propagation, fallback, recovery |
 
 `/code-review-full` accepts `--verify` to control its cross-verification pass — `selective` (default), `exhaustive`, or `off`. See [Cross-verification](#cross-verification-25) below.
+
+`/code-review-full` also accepts `--correctness on|off` (default `off`) to add a correctness pass. See [Correctness pass](#correctness-pass-in-code-review-full-2170) below.
 
 `/code-review` accepts `--module` to restrict the pass to specific rule modules. Tokens resolve against the module filenames at runtime — by number (`--module 01,02`), by slug (`--module fsd,type`), or by unambiguous slug prefix. An unknown or ambiguous token stops the review and lists the available modules rather than silently falling back to a full pass; modules that were filtered out are never reported as passing.
 
@@ -263,7 +265,7 @@ and the legacy producers were `/code-review`, `/code-review-commit` and `/code-r
 
 Numbered rule modules and specialist rule docs are **workflow-neutral domain judgment docs**. They explain what facts a useful finding should cover, but they do not own schema fields, retry policy, renderer behavior, or raw-output instructions.
 
-For structured owners, producers return one raw JSON object with `findings` and `openQuestions`; they do not return Markdown or `severity`. A finding records `impact`, `confidence`, and a `verified`, `deleted`, or `unverified` location. An `unverified` location carries a reason instead of a made-up path or line, and it remains a finding when the defect is established but the exact anchor cannot yet be verified. `openQuestions` is for unresolved claim truth or search scope instead — especially incomplete absence/possibility claims under `00-11`, or explicit follow-up investigation. High-impact findings must name one of five closed categories: user malfunction, data loss, security exposure, verification failure, or external breakage. Low-impact findings may carry `evidence`, but do not require it. Correctness keeps the same `CR-{n}` namespace and location semantics, but because no built-in workflow currently validates/renders its output, it remains direct-only rather than pretending to be a consumer-backed V1 producer.
+For structured owners, producers return one raw JSON object with `findings` and `openQuestions`; they do not return Markdown or `severity`. A finding records `impact`, `confidence`, and a `verified`, `deleted`, or `unverified` location. An `unverified` location carries a reason instead of a made-up path or line, and it remains a finding when the defect is established but the exact anchor cannot yet be verified. `openQuestions` is for unresolved claim truth or search scope instead — especially incomplete absence/possibility claims under `00-11`, or explicit follow-up investigation. High-impact findings must name one of five closed categories: user malfunction, data loss, security exposure, verification failure, or external breakage. Low-impact findings may carry `evidence`, but do not require it. Correctness keeps the same `CR-{n}` namespace and location semantics. The direct agent's own prose output still has no validation/render consumer, so the agent remains direct-only rather than pretending to be a consumer-backed V1 producer; the structured correctness pass inside `/code-review-full` is described below.
 
 The orchestrator validates those results, aggregates only valid JSON, derives severity from `impact × confidence`, and renders the final Markdown report. Deduplication is owned by the shared workflow contract: only findings with the same rule ID, the same verified/deleted normalized location, the same core claim / root cause / breaking condition, the same impact/category, and the same confidence may merge. `unverified` findings and `openQuestions` never auto-merge; source labels are preserved when valid merges do happen. JSON conformance is prompt-only, not a native model-output schema. Malformed structured output **or legacy/prose output from a structured owner** gets one corrective retry; a second malformed response ends that pass as `FAILED malformed-output` rather than being partially parsed or repaired. There is **no compatibility parser** for legacy/prose output in structured-v1 owners.
 
@@ -297,6 +299,19 @@ Every workflow's preflight now records **what** a run reviewed in its `run.start
 
 The snapshot is written to a temporary file, read back and validated, then renamed into place, so a failed write leaves the previous snapshot intact. Reading is strict: an empty, truncated, unknown-version or internally inconsistent snapshot is reported as unreadable rather than treated as a review with no findings. The `ref` is not a cross-run identity — matching findings between runs is not part of this release. The contract is `workflow-contract.md` C-10.
 
+## Correctness pass in `/code-review-full` (2.17.0)
+
+The rule modules ask whether the code breaks a rule. The correctness pass asks whether the change does what it set out to do, on every path — normal, failure, cancellation, retry, and out-of-order responses — including callers outside the diff that still depend on behaviour the change removed. `/code-review-full --correctness on` runs it as one more specialist pass; it is off by default until its detection value and extra cost have been measured.
+
+- **The same pipeline, not a second one.** The pass uses the judgement document `review-rules/correctness.md`, runs as the write-less `rule-module-reviewer` (the direct `correctness-reviewer` agent has a shell and is not used here), returns the same structured result, and goes through the same collection, verification, rendering and snapshot as the other passes. Its findings appear under `특수 패스` → `정확성` with their source, impact and confidence intact.
+- **Intent is collected once and labelled.** The orchestrator passes the PR title and body when there is a PR, the user's request otherwise, and commit messages only as an inferred intent. When nothing states the intent, the pass is told so rather than given an invented one.
+- **`CR-{n}` is not a clause.** The number counts findings within the pass, and `catalog.json` marks the document `ruleClauses: false`. Verifiers receive the document's `VERIFICATION_BASIS` block in place of a clause and are told not to look for or invent one. A correctness result that borrows a rule ID, or a module that emits `CR-*`, is rejected before verification.
+- **Same location, different rule: linked, not merged.** When a `CR-*` finding and a rule finding point at the same normalized location, both stay, each with its own source and verdict, and the report adds a `관련 지적:` line to each.
+- **Whether it ran is recorded, not inferred.** Preflight records `correctness: on|off` in `run.start`. When off, the report and the snapshot show the pass as `SKIPPED` (not requested) rather than as zero findings; results produced anyway are not collected, and the report says they existed. When on, a timeout or a second malformed output ends the pass as `FAILED` with its failure class, the run is a partial review, and the report shows `결과 없음` for that pass.
+- **Tests do not measure detection.** The pipeline tests feed fixed producer and verifier responses for three scenarios — a deleted guard, an unchanged caller, and a claim that an existing guard refutes. They prove the wiring, not that a model finds these defects; that needs a real run, which is the user's call (see `evals/README.md`).
+
+The direct agent stays available. Its Do/Don't criteria are a copy of the ones in `correctness.md`, and `validate-rules.mjs` fails the build when the two drift.
+
 ## Applicability metadata
 
 `review-rules/catalog.json` records **when** a module applies — required profile (FSD, Tailwind, RSC, Electron, TanStack Query, server code, contract provider), minimum React version, which workflows load it, and which individual rules carry a narrower gate than their module. The Markdown modules stay canonical for **what** a rule says; the catalog never generates documentation and never restates rule text.
@@ -323,7 +338,7 @@ Every finding carries an ID that matches its source file, so a report can always
 | Exception | `EX-{n}` | `EX-3` |
 | Props | `P-{n}` | `P-5` |
 | Math | `A-{n}` / `C-{n}` | `A-2`, `C-5` |
-| Correctness agent | `CR-{n}` | `CR-2` |
+| Correctness pass (`correctness.md`) and agent | `CR-{n}` — numbers findings, names no clause | `CR-2` |
 
 `CR-` is a separate namespace on purpose. The correctness pass argues from the PR's stated intent rather than from a rule document, so borrowing a module's ID would send the reader to rule text that says nothing about the finding.
 
@@ -351,7 +366,7 @@ The third entry is a fallback for older setups, and it is the one that bites: if
 
 ## Included agent
 
-`agents/correctness-reviewer.md` is an optional evidence-first correctness reviewer (does the implementation match the PR's stated intent across all branches?). It is not part of the default workflows and not part of phase-1 structured-v1 ownership — invoke it explicitly when you want a correctness pass alongside the rule-based review.
+`agents/correctness-reviewer.md` is an optional evidence-first correctness reviewer (does the implementation match the PR's stated intent across all branches?). It is not part of the default workflows and not part of phase-1 structured-v1 ownership — invoke it explicitly when you want a correctness pass alongside the rule-based review. Inside `/code-review-full`, use `--correctness on` instead: the same criteria run as a structured pass without a shell (see above).
 
 It answers a question the rule modules do not: a module asks whether the code breaks a rule, this pass asks whether the code does what the PR says it does. Because its findings land in the same report, it is bound by the same contract — read-only execution (`00-9`), verified line numbers with a quoted line (`00-10`), and stated search scope behind any absence claim (`00-11`) — and its findings carry `CR-{n}` IDs. The `agent` check in `scripts/validate-rules.mjs` enforces that: an agent document that cites no contract clause, or uses an ID prefix registered nowhere, fails the build. Being outside the workflows is a scoping decision; being outside the contract was an oversight.
 
@@ -383,7 +398,8 @@ claude-code-review-plugin/
 │   ├── fast.md
 │   ├── props.md
 │   ├── math.md
-│   └── exception.md
+│   ├── exception.md
+│   └── correctness.md
 └── README.md
 ```
 

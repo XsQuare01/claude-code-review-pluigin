@@ -308,7 +308,7 @@ const SLOTS = [
  * 이어붙이는 방식이면 다음 사람이 실수로 다시 합칠 수 있지만, 배열 + `\n`
  * join은 슬롯을 합칠 방법 자체가 없다.
  */
-export function renderFinding(candidate, { label, vocabulary }) {
+export function renderFinding(candidate, { label, vocabulary, related = [] }) {
   const severity = severityOf(candidate.impact, candidate.confidence)
   // category는 계약상 impact가 high일 때만 존재한다(low는 category 자체를
   // 금지한다) — 그래도 candidate.category를 한 번 더 확인해 방어적으로 둔다.
@@ -333,6 +333,9 @@ export function renderFinding(candidate, { label, vocabulary }) {
     `#### ${severity} \`${candidate.renderedRuleId ?? candidate.ruleId}\` ${escapeProse(candidate.content.title)}`,
     axes.join(' · '),
     ...(source ? [source] : []),
+    // 같은 자리에 걸린 다른 namespace의 지적. 합치지 않고 잇기만 한다 — 근거가 다른 두
+    // 지적이 같은 결함인지는 이 렌더러가 정하지 않는다. 값은 호출자가 이미 code span으로 만든다.
+    ...(related.length ? [`관련 지적: ${related.join(', ')}`] : []),
     locationLine(candidate),
     ...slots,
   ].join('\n')
@@ -558,6 +561,20 @@ export function loadSpecialistPasses(rulesDir, plannedPath) {
     }
     passes.push({ kind: 'pass', id, title, prefixes, source: id, ...(skipped.has(id) ? { skipped: skipped.get(id) } : {}) })
   }
+  // 선택 패스(#88 PR 1). 켰을 때만 도는 패스라 catalog에 없어도 거부하지 않는다 — 이 패스가
+  // 생기기 전의 규칙 디렉터리(C-1의 홈 사본 등)를 읽는 실행이 있다. 있는데 접두가 없으면
+  // 위 셋과 같은 이유로 거부한다.
+  const correctness = byId.get('correctness')
+  if (correctness) {
+    if (!Array.isArray(correctness.rulePrefixes) || correctness.rulePrefixes.length === 0) {
+      return { error: 'catalog.json의 "correctness" specialist 항목에 rulePrefixes가 없다 — 특수 패스 접두를 알 수 없다' }
+    }
+    passes.push({
+      kind: 'pass', id: 'correctness', title: '정확성', prefixes: correctness.rulePrefixes, source: 'correctness',
+      ...((correctness.optIn ?? []).length ? { optIn: true } : {}),
+      ...(skipped.has('correctness') ? { skipped: skipped.get('correctness') } : {}),
+    })
+  }
   return { value: passes }
 }
 
@@ -716,6 +733,18 @@ export function render(candidates, verdictByCandidateId, phaseByImpact, vocabula
     ? NOT_COLLECTED
     : '지적 없음.')
 
+  // 같은 자리에 걸린 다른 namespace의 지적(`relatedCandidateIds`, prepare-verification이
+  // 붙인다)을 리포트에서 부르는 이름. 이 리포트에 그려진 지적은 순번까지 붙은 이름으로,
+  // 그려지지 않은 지적(범위 미확정으로 옮겨졌거나 삭제된 것)은 candidate ID와 그 사실로
+  // 적는다 — 이름만 적으면 독자가 상세 지적에서 찾다 실패한다.
+  const renderedName = new Map(numbered.map(candidate => [candidate.candidateId, candidate.renderedRuleId ?? candidate.ruleId]))
+  const relatedOf = candidate => (candidate.relatedCandidateIds ?? []).map(id => (renderedName.has(id)
+    ? codeSpan(renderedName.get(id))
+    : `${codeSpan(id)} (상세 지적에 없음)`))
+  const findingLines = candidate => renderFinding(candidate, {
+    label: labelById.get(candidate.candidateId), vocabulary, related: relatedOf(candidate),
+  })
+
   const lines = ['## 상세 지적', '']
   const titleById = new Map(moduleSections.map(section => [section.id, section.title]))
   const sectionById = new Map(moduleSections.map(section => [section.id, section]))
@@ -734,7 +763,7 @@ export function render(candidates, verdictByCandidateId, phaseByImpact, vocabula
       continue
     }
     for (const candidate of inModule) {
-      lines.push(renderFinding(candidate, { label: labelById.get(candidate.candidateId), vocabulary }), '')
+      lines.push(findingLines(candidate), '')
     }
   }
 
@@ -765,7 +794,21 @@ export function render(candidates, verdictByCandidateId, phaseByImpact, vocabula
       const pass = passByTitle.get(title)
       // 카탈로그에 없는 접두로 모인 묶음은 지적이 있을 때만 생긴다 — 빈 것을 낼 이유가 없다.
       if (!pass && !inPass.length) continue
+      // 선택 패스(`optIn`)는 켰는지에 따라 다르다. 켰는지는 prepare-verification이 run.start에서
+      // 읽어 `collected.optIn`으로 넘긴다.
+      // - 켜지 않았으면 `SKIPPED`와 그 이유. "지적 없음."은 돌았는데 0건이라는 뜻이라 틀리고,
+      //   섹션을 빼면 그런 패스가 있다는 사실이 리포트에서 사라진다
+      // - 켰는지 모르는 입력(`--input` 경로)이면 지적이 있을 때만 낸다
+      const state = pass?.optIn ? options.optIn?.[pass.id] : undefined
+      if (pass?.optIn && state === undefined && !inPass.length) continue
       lines.push(`### ${title}`, '')
+      if (pass?.optIn && state === 'off') {
+        const leftover = options.excludedNotRequested?.has(pass.source)
+          ? ' 기록이나 결과 파일이 있었지만 이 실행의 결과로 모으지 않았다.'
+          : ''
+        lines.push(`\`SKIPPED\` — 선택 패스, 이 실행에서 켜지 않았다(\`--${pass.id} on\` 없음) · 비차단${leftover}`, '')
+        continue
+      }
       if (!inPass.length) {
         // SKIPPED는 실행 계획(`--planned`)이 준 사유를 그대로 옮긴다. 사유가 없으면
         // 지어내지 않고 없다고 적는다.
@@ -775,7 +818,7 @@ export function render(candidates, verdictByCandidateId, phaseByImpact, vocabula
         continue
       }
       for (const candidate of inPass) {
-        lines.push(renderFinding(candidate, { label: labelById.get(candidate.candidateId), vocabulary }), '')
+        lines.push(findingLines(candidate), '')
       }
     }
   }
@@ -899,7 +942,13 @@ if (process.argv[1] && process.argv[1].endsWith('render-findings.mjs')) {
     output = render(
       payload.candidates, byCandidateId, phaseByImpact, vocabulary.value,
       [...sections.value, ...specialistPasses.value], verificationState,
-      { collected: Array.isArray(payload.collected?.sources) ? new Set(payload.collected.sources) : undefined })
+      {
+        collected: Array.isArray(payload.collected?.sources) ? new Set(payload.collected.sources) : undefined,
+        // 선택 패스를 켰는지(`prepare-verification.mjs --collect`가 run.start에서 읽는다)와,
+        // 켜지 않았는데 결과가 있어 모으지 않은 패스.
+        optIn: payload.collected?.optIn,
+        excludedNotRequested: new Set(payload.collected?.excludedNotRequested ?? []),
+      })
   } catch (error) {
     die(error.message)
   }

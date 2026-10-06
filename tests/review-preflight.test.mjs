@@ -149,6 +149,35 @@ test('리포트 디렉터리가 저장소 안이어도 작업 트리를 바꾼 �
   assert.match(dirty.stdout, /커밋하지 않은 변경 1개/)
 })
 
+test('선택 패스는 켰는지를 run.start에 남긴다 — 기본은 꺼짐이다', t => {
+  // correctness 패스는 full에서 켰을 때만 돈다(#88 PR 1). 켰는지를 기록이 말하지 않으면,
+  // 결과가 없는 것이 "안 켰다"인지 "켰는데 실패했다"인지 가를 수 없다.
+  const off = freshDir(t)
+  const outOff = preflight(off)
+  assert.equal(outOff.status, 0, outOff.stderr)
+  assert.equal(linesOf(off)[0].correctness, 'off')
+  assert.match(outOff.stdout, /특수 패스 +props math exception —/)
+  assert.match(outOff.stdout, /선택 패스 +correctness 꺼짐/)
+
+  const on = freshDir(t)
+  const outOn = preflight(on, ['--correctness', 'on'])
+  assert.equal(outOn.status, 0, outOn.stderr)
+  assert.equal(linesOf(on)[0].correctness, 'on')
+  assert.match(outOn.stdout, /선택 패스 +correctness 켜짐/)
+})
+
+test('선택 패스가 없는 워크플로우에서 켜면 거부한다', t => {
+  const dir = freshDir(t)
+  const repo = scratchRepo()
+  const out = spawnSync(process.execPath, [
+    SCRIPT, '--dir', dir, '--run', RUN, '--rules', RULES, '--workflow', 'props',
+    '--repo', repo.dir, '--base', repo.base, '--host', 'test', '--correctness', 'on',
+  ], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+  assert.equal(out.status, 2)
+  assert.match(out.stderr, /correctness/)
+  assert.equal(preflight(freshDir(t), ['--correctness', 'maybe']).status, 2)
+})
+
 test('--dry-run은 계산만 하고 쓰지 않는다', t => {
   const dir = freshDir(t)
   const out = preflight(dir, ['--dry-run'])

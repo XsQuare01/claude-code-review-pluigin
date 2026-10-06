@@ -511,3 +511,101 @@ test('--verify에 모르는 모드를 주면 쓸 수 있는 값을 보이고 거
   assert.match(out.stderr, /selective/)
   assert.match(out.stderr, /exhaustive/)
 })
+
+// ------------------------------------------------------- correctness 패스 (#88 PR 1)
+//
+// correctness 패스의 지적은 `CR-{n}`이고, 그 번호는 규칙 조항이 아니라 지적의 순번이다.
+// 그래서 세 자리가 이 사실을 따로 다뤄야 한다 — 출처와 ID가 맞는지(규칙 ID를 빌려 쓰거나
+// 남의 namespace를 쓰지 않는지), 검증자가 조항 대신 무엇을 받는지, 같은 자리의 규칙 지적과
+// 어떻게 이어지는지. 이 테스트들은 배선만 본다. 모델이 무엇을 찾는지는 증명하지 않는다.
+
+const CR = { ...FINDING, ruleId: 'CR-1', impact: 'high', category: 'user-malfunction', evidence: '취소 뒤 늦게 온 응답이 상태를 덮는다' }
+
+test('correctness 결과가 규칙 ID를 쓰거나, 다른 모듈이 CR ID를 쓰면 거부한다', t => {
+  const borrowed = prepare(t, { results: [{ source: 'correctness', result: { ...RESULT, findings: [{ ...CR, ruleId: '04-3' }] } }] })
+  assert.equal(borrowed.status, 2)
+  assert.match(borrowed.stderr, /correctness/)
+  assert.match(borrowed.stderr, /CR-/)
+  const foreign = prepare(t, { results: [{ source: '04-state', result: { ...RESULT, findings: [{ ...FINDING, ruleId: 'CR-1' }] } }] })
+  assert.equal(foreign.status, 2)
+  assert.match(foreign.stderr, /04-state/)
+})
+
+test('CR 후보의 검증자 프롬프트에는 조항 대신 판정 기준이 붙고, 조항을 못 찾았다고 하지 않는다', t => {
+  const out = prepare(t, { results: [{ source: 'correctness', result: { ...RESULT, findings: [CR] } }] })
+  assert.equal(out.status, 0, out.stderr)
+  const result = JSON.parse(out.stdout)
+  assert.equal(result.candidates[0].source, 'correctness')
+  const [task] = result.verifierTasks
+  assert.equal(task.missingClauses, undefined, 'CR에는 조항이 없는 것이 정상이다 — 빠진 조항으로 세지 않는다')
+  const prompt = readFileSync(task.prompt, 'utf8')
+  assert.match(prompt, /#### `CR-1`/)
+  assert.match(prompt, /규칙 조항이 없다/)
+  assert.match(prompt, /막는 장치가 있다/)
+  assert.doesNotMatch(prompt, /규칙 문서에서 이 조항을 찾지 못했다/)
+  assert.doesNotMatch(prompt, /## CR-1\./, '없는 조항을 지어 넣지 않는다')
+})
+
+test('같은 자리의 CR 지적과 규칙 지적은 합치지 않고 서로 관련 지적으로 잇는다', t => {
+  const out = prepare(t, { results: [
+    { source: '04-state', result: { ...RESULT, findings: [HIGH] } },
+    { source: '01-fsd', result: { ...RESULT, findings: [FINDING] } },
+    { source: 'correctness', result: { ...RESULT, findings: [CR] } },
+  ] })
+  assert.equal(out.status, 0, out.stderr)
+  const byId = new Map(JSON.parse(out.stdout).candidates.map(candidate => [candidate.candidateId, candidate]))
+  assert.equal(byId.size, 3, '출처마다 남는다')
+  assert.deepEqual(byId.get('CR-1#1').relatedCandidateIds, ['01-1#1', '04-3#1'])
+  assert.deepEqual(byId.get('04-3#1').relatedCandidateIds, ['CR-1#1'])
+  assert.deepEqual(byId.get('01-1#1').relatedCandidateIds, ['CR-1#1'])
+})
+
+test('규칙 지적끼리는 같은 자리여도 관련 지적으로 잇지 않는다 — 이번 범위는 namespace를 넘는 것뿐이다', t => {
+  const out = prepare(t, { results: [
+    { source: '04-state', result: { ...RESULT, findings: [HIGH] } },
+    { source: '01-fsd', result: { ...RESULT, findings: [FINDING] } },
+  ] })
+  assert.equal(out.status, 0, out.stderr)
+  for (const candidate of JSON.parse(out.stdout).candidates) assert.equal(candidate.relatedCandidateIds, undefined)
+})
+
+// full 실행의 run.start — 선택 패스를 켰는지가 여기 있다.
+const startedFull = (t, correctness, events) => {
+  const dir = mkdtempSync(join(tmpdir(), 'prep-full-'))
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  mkdirSync(join(dir, '.timing'), { recursive: true })
+  const lines = [
+    { at: '2026-10-06T00:00:00.000Z', seq: 1, phase: 'run.start', host: 'test', rules: 'review-rules', version: '2.17.0', branch: 'b', changedFiles: 1, candidates: 20, workflow: 'full', correctness },
+    ...events.map((event, at) => ({ at: '2026-10-06T00:01:00.000Z', seq: at + 2, ...event })),
+  ]
+  writeFileSync(join(dir, '.timing', `${RUN}.jsonl`), `${lines.map(line => JSON.stringify(line)).join('\n')}\n`, 'utf8')
+  return dir
+}
+
+test('--collect는 켠 선택 패스의 결과를 모으고, 켰는지를 출력에 싣는다', t => {
+  const dir = startedFull(t, 'on', [done('01-fsd', 'ok'), done('correctness', 'ok')])
+  resultFile(dir, '01-fsd', RESULT)
+  resultFile(dir, 'correctness', { ...RESULT, findings: [CR] })
+  const out = collect(dir)
+  assert.equal(out.status, 0, out.stderr)
+  const result = JSON.parse(out.stdout)
+  assert.deepEqual(result.collected.sources, ['01-fsd', 'correctness'])
+  assert.deepEqual(result.collected.optIn, { correctness: 'on' })
+  assert.ok(result.candidates.some(candidate => candidate.ruleId === 'CR-1'))
+})
+
+test('--collect는 켜지 않은 선택 패스의 결과를 모으지 않고, 있었다는 사실을 남긴다', t => {
+  // preflight에 --correctness on을 주지 않고 패스를 돌린 경우다. 기록상 켜지 않은 실행이므로
+  // 그 결과를 이 실행의 결과로 세지 않는다. 대신 조용히 버리지 않고 출력과 경고에 남긴다.
+  const dir = startedFull(t, 'off', [done('01-fsd', 'ok'), done('correctness', 'ok')])
+  resultFile(dir, '01-fsd', RESULT)
+  resultFile(dir, 'correctness', { ...RESULT, findings: [CR] })
+  const out = collect(dir)
+  assert.equal(out.status, 0, out.stderr)
+  const result = JSON.parse(out.stdout)
+  assert.deepEqual(result.collected.sources, ['01-fsd'])
+  assert.deepEqual(result.collected.optIn, { correctness: 'off' })
+  assert.deepEqual(result.collected.excludedNotRequested, ['correctness'])
+  assert.ok(!result.candidates.some(candidate => candidate.ruleId === 'CR-1'))
+  assert.match(out.stderr, /correctness/)
+})

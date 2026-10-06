@@ -55,9 +55,11 @@ export function plannedModules(catalog, workflow) {
     .filter(module => module.phaseByWorkflow?.[workflow] !== 'post-verification-synthesis')
     .map(module => ({ name: String(module.path ?? '').replace(/\.md$/, ''), kind: 'module', id: module.id }))
     .sort((left, right) => (left.name < right.name ? -1 : 1))
+  // `optIn`은 이 워크플로우에서 켰을 때만 도는 패스다(`--correctness on`). 켰는지는
+  // preflight가 `run.start`에 남긴다.
   const passes = modules
     .filter(module => module.role === 'specialist' && (module.workflows ?? []).includes(workflow))
-    .map(module => ({ name: module.id, kind: 'pass', id: module.id }))
+    .map(module => ({ name: module.id, kind: 'pass', id: module.id, optIn: (module.optIn ?? []).includes(workflow) }))
   return [...numbered, ...passes]
 }
 
@@ -75,7 +77,7 @@ const matchPlanned = (entry, modules) => {
  * 기록만 보면, 성공으로 끝났는데 검증 준비가 모으지 않은 모듈이 "검토됨"으로 남는다 —
  * 그 모듈의 지적은 리포트에 없는데도. 그래서 그 경우는 `missing`(`not-collected`)이다.
  */
-function moduleStates({ modules, events, collected, notes }) {
+function moduleStates({ modules, events, collected, notes, start }) {
   const lastPlanned = events.filter(event => event?.phase === 'modules.planned').at(-1)
   if (!lastPlanned) {
     notes.push('modules.planned가 없어 후보 전부를 적용 대상으로 봤다 — 건너뛴 모듈이 있었다면 기록되지 않았다')
@@ -96,6 +98,14 @@ function moduleStates({ modules, events, collected, notes }) {
   const outcomes = moduleOutcomes(events)
   const states = modules.map(module => {
     const base = { name: module.name, kind: module.kind }
+    // 켜지 않은 선택 패스는 적용 대상이 아니다. "결과 없음"으로 세면 기본 설정으로 돈
+    // 실행이 전부 부분 완료가 된다. 그래도 범위에서 빼지 않고 이유를 단 SKIPPED로 남긴다.
+    if (module.optIn && start?.[module.id] !== 'on') {
+      if (outcomes.has(module.name) || collected.has(module.name)) {
+        notes.push(`켜지 않은 선택 패스 ${module.name}의 기록이나 결과가 있다 — 이 실행은 --${module.id} on 없이 시작했으므로 모은 것으로 세지 않는다`)
+      }
+      return { ...base, state: 'skipped', reasonCode: 'not-requested', reason: `선택 패스 — 이 실행은 --${module.id} on 없이 시작했다` }
+    }
     if (skipped.has(module.name)) {
       const entry = skipped.get(module.name)
       return {
@@ -121,6 +131,7 @@ function moduleStates({ modules, events, collected, notes }) {
 
   for (const source of collected) {
     if (!modules.some(module => module.name === source)) notes.push(`수집된 ${JSON.stringify(source)}는 이 워크플로우의 모듈이 아니다`)
+    else if (states.find(state => state.name === source)?.reasonCode === 'not-requested') continue
     else if (states.find(state => state.name === source)?.state !== 'ok') {
       notes.push(`${source}는 수집됐지만 기록의 최종 상태가 성공이 아니다 — 기록을 정본으로 둔다`)
     }
@@ -167,7 +178,7 @@ export function buildSnapshot({ name, events, catalog, routed, verdicts, verific
   const modules = plannedModules(catalog, start.workflow)
   if (!modules.length) throw new Error(`catalog에 워크플로우 ${JSON.stringify(start.workflow)}의 모듈이 없다`)
   const collected = new Set(routed.collected.sources.map(String))
-  const states = moduleStates({ modules, events, collected, notes })
+  const states = moduleStates({ modules, events, collected, notes, start })
   const counts = countsOf(states)
 
   const findings = routed.candidates.map(candidate => {
