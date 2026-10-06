@@ -354,3 +354,28 @@ test('완료와 실패도 같은 자리에 같은 말로 쓴다', () => {
   const failed = buildSnapshot(fixture({ events, routed: { candidates: [], collected: { sources: [], excludedFailed: [] } }, verdicts: new Map() }))
   assert.match(renderSnapshotMarkdown(failed), /검토 상태: 실패/)
 })
+
+// --- 재현 근거 요약 (#88 PR 2) ---
+
+test('지적마다 재현 근거의 방법·결과·base 비교를 요약해 싣는다 — 근거가 없으면 싣지 않는다', () => {
+  const evidence = new Map([['04-3#1', {
+    candidateId: '04-3#1', method: 'executed', condition: 'c', expected: 'e',
+    head: { id: 'exec-1', side: 'head', outcome: 'reproduced', usable: true }, base: null, comparison: 'base-unmeasured',
+  }]])
+  const snapshot = buildSnapshot(fixture({ routed: { candidates: [candidate()], collected: { sources: ALL.filter(name => name !== 'math'), excludedFailed: [] } }, evidence }))
+  assert.deepEqual(snapshotProblems(snapshot), [])
+  assert.deepEqual(snapshot.findings[0].evidence, { method: 'executed', valid: true, headOutcome: 'reproduced', headUsable: true, comparison: 'base-unmeasured' })
+  assert.equal(buildSnapshot(fixture()).findings[0].evidence, undefined)
+})
+
+test('계약에 맞지 않는 근거 항목은 결과 없이 valid false로 싣는다 — 실행 근거로 세지 않는다', () => {
+  const evidence = new Map([['04-3#1', { candidateId: '04-3#1', method: 'executed', problems: ['executions가 없다'] }]])
+  const snapshot = buildSnapshot(fixture({ evidence }))
+  assert.deepEqual(snapshot.findings[0].evidence, { method: 'executed', valid: false, headOutcome: null, headUsable: null, comparison: null })
+})
+
+test('근거 요약의 값이 닫힌 목록 밖이면 스냅숏을 거부한다', () => {
+  const good = buildSnapshot(fixture({ evidence: new Map([['04-3#1', { candidateId: '04-3#1', method: 'static-trace' }]]) }))
+  const bad = { ...good, findings: [{ ...good.findings[0], evidence: { ...good.findings[0].evidence, method: 'guessed' } }] }
+  assert.ok(snapshotProblems(bad).some(problem => /evidence/.test(problem)))
+})

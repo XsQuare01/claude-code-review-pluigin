@@ -28,6 +28,7 @@ import { join, relative } from 'node:path'
 import { requireStartedTimeline, readEvents } from './lib/run-record.mjs'
 import { currentTarget, rulesDigest } from './lib/run-identity.mjs'
 import { buildSnapshot, parseSnapshot, renderSnapshotMarkdown, writeSnapshotAtomic } from './lib/review-snapshot.mjs'
+import { assessEvidence, executionsDirOf, loadEvidence } from './lib/evidence.mjs'
 import { collectVerdicts } from './lib/verdicts.mjs'
 
 const die = message => {
@@ -152,6 +153,24 @@ for (const source of Array.isArray(routed.value.collected?.sources) ? routed.val
   inputs.push({ role: 'result', path: relativeToDir(path), sha256: digest(result.text) })
 }
 
+// 재현 근거(C-11). 파일이 있으면 읽는다 — 읽을 수 없으면 스냅숏을 쓰지 않는다. 깨진 근거 파일을
+// "근거 없음"으로 읽으면, 실행으로 확인한 지적이 확인 안 한 지적과 같아진다.
+let evidence = new Map()
+const evidencePath = join(timing, `${run}.evidence.json`)
+if (existsSync(evidencePath)) {
+  const loaded = loadEvidence(evidencePath)
+  if (loaded.error) die(`재현 근거 파일을 읽지 못했다 — ${loaded.error}`)
+  const start = events.find(event => event?.phase === 'run.start')
+  if (loaded.doc.run.runId !== start?.runId) die(`${evidencePath}는 다른 실행(${loaded.doc.run.runId})의 근거 파일이다`)
+  for (const problem of loaded.problems) process.stderr.write(`경고: 근거 실행 기록 ${problem}\n`)
+  evidence = assessEvidence(loaded.doc, loaded.executions, new Set((routed.value.candidates ?? []).map(candidate => candidate.candidateId)))
+  inputs.push({ role: 'evidence', path: relativeToDir(evidencePath), sha256: digest(readText(evidencePath, '근거 파일')) })
+  for (const { record } of loaded.executions.values()) {
+    const recordPath = join(executionsDirOf(evidencePath), `${record.id}.json`)
+    inputs.push({ role: 'execution', path: relativeToDir(recordPath), sha256: digest(readText(recordPath, '실행 기록')) })
+  }
+}
+
 // 지금의 대상. 시작할 때 기록한 값과 다르면 실행 도중 대상이 바뀐 것이다.
 let current
 try {
@@ -164,7 +183,7 @@ let snapshot
 try {
   snapshot = buildSnapshot({
     name: run, events, catalog, routed: routed.value, verdicts, verificationState,
-    openQuestionsBySource, inputs, current, now: new Date().toISOString(),
+    openQuestionsBySource, inputs, current, now: new Date().toISOString(), evidence,
   })
 } catch (error) {
   die(`스냅숏을 만들지 못했다: ${error.message}`)

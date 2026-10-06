@@ -3,6 +3,7 @@ import * as nodeFs from 'node:fs'
 import { writeTextAtomic } from './atomic-write.mjs'
 
 import { codeSpan, dispositionOf, escapeProse } from '../render-findings.mjs'
+import { COMPARISONS, METHODS, OUTCOMES } from './evidence.mjs'
 import { moduleOutcomes } from './run-record.mjs'
 
 // 한 실행의 결과 스냅숏 — 무엇을 리뷰했고, 어디까지 끝냈고, 무엇을 찾았는가(#88 PR 0).
@@ -32,7 +33,7 @@ const MODULE_STATES = ['ok', 'failed', 'missing', 'skipped', 'unknown']
 const MISSING_REASONS = ['no-record', 'status-outside-list', 'not-collected']
 const DISPOSITIONS = ['upheld', 'rejected', 'scope-open', 'not-eligible', 'verification-disabled', 'verification-unavailable']
 const DRIFT_FIELDS = ['head', 'worktree', 'rulesDigest']
-const INPUT_ROLES = ['timeline', 'routed', 'verdicts', 'result']
+const INPUT_ROLES = ['timeline', 'routed', 'verdicts', 'result', 'evidence', 'execution']
 const VERIFICATION_STATES = ['ran', 'disabled']
 
 const SHA256 = /^sha256:[0-9a-f]{64}$/
@@ -157,11 +158,30 @@ const countsOf = modules => {
 const statusOf = counts => (counts.ok === counts.applied ? 'complete' : counts.ok === 0 ? 'failed' : 'partial')
 
 /**
+ * 재현 근거(C-11)의 요약 — 어떻게 확인했고, 실행했으면 무엇이 나왔는가.
+ *
+ * 본문(조건·절차·기대·관찰)은 싣지 않는다. 근거 파일과 실행 기록이 원본이고, 스냅숏은 그
+ * 파일들을 `inputs`의 해시로 가리킨다. 계약에 맞지 않는 항목은 `valid: false`이고 결과를 싣지
+ * 않는다 — 실행 기록 없이 `executed`를 붙인 항목이 실행 근거로 남지 않게.
+ */
+function evidenceSummary(assessed) {
+  const valid = !assessed.problems?.length
+  const head = valid && assessed.method === 'executed' ? assessed.head : null
+  return {
+    method: assessed.method,
+    valid,
+    headOutcome: head?.outcome ?? null,
+    headUsable: head ? head.usable : null,
+    comparison: valid ? assessed.comparison ?? null : null,
+  }
+}
+
+/**
  * 스냅숏을 만든다. 순수 함수다 — 파일을 읽고 쓰는 일은 호출자(`review-snapshot.mjs`)가 한다.
  *
  * 그릴 재료가 모자라면 던진다. 모자란 채로 만든 스냅숏은 "지적 0건"이나 "완료"처럼 읽힌다.
  */
-export function buildSnapshot({ name, events, catalog, routed, verdicts, verificationState, openQuestionsBySource, inputs, current, now }) {
+export function buildSnapshot({ name, events, catalog, routed, verdicts, verificationState, openQuestionsBySource, inputs, current, now, evidence = new Map() }) {
   const start = events.find(event => event?.phase === 'run.start')
   if (!start) throw new Error('타임라인에 run.start가 없다 — 실행 식별 없이 스냅숏을 만들지 않는다')
   if (!nonEmpty(start.runId)) {
@@ -201,6 +221,7 @@ export function buildSnapshot({ name, events, catalog, routed, verdicts, verific
       route: candidate.route,
       disposition,
       ...(disposition === 'rejected' && verdict?.rebuttalKind !== undefined ? { rebuttalKind: verdict.rebuttalKind } : {}),
+      ...(evidence.has(candidate.candidateId) ? { evidence: evidenceSummary(evidence.get(candidate.candidateId)) } : {}),
     }
   })
 
@@ -339,6 +360,15 @@ export function snapshotProblems(snapshot) {
         problems.push(`${id}의 disposition verification-disabled는 검증을 돌린 실행에서 나올 수 없다`)
       }
       if (!Array.isArray(finding.sources)) problems.push(`${id}의 sources가 배열이 아니다`)
+      if (finding.evidence !== undefined) {
+        const ev = finding.evidence
+        if (!isObject(ev) || !METHODS.includes(ev.method) || typeof ev.valid !== 'boolean' ||
+          !(ev.headOutcome === null || OUTCOMES.includes(ev.headOutcome)) ||
+          !(ev.headUsable === null || typeof ev.headUsable === 'boolean') ||
+          !(ev.comparison === null || COMPARISONS.includes(ev.comparison))) {
+          problems.push(`${id}의 evidence 요약이 계약 밖이다`)
+        }
+      }
       if (!isObject(finding.location)) problems.push(`${id}에 location이 없다`)
     }
   }
