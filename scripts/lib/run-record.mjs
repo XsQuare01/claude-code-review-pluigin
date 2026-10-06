@@ -53,6 +53,29 @@ export function lastPhase(sidecar, phase) {
   return readEvents(sidecar).filter(event => event?.phase === phase).at(-1) ?? null
 }
 
+/**
+ * 모듈마다 최종 결과를 정한다 — **가장 큰 attempt**의 마지막 `module.done`이다.
+ *
+ * 파일의 마지막 줄이 아니다. append 전용 기록에서 정정은 같은 시도의 줄을 하나 더
+ * 남기는 것이라(C-9), 시도 1을 나중에 정정한 줄이 시도 2보다 뒤에 올 수 있다. 마지막
+ * 줄을 정본으로 읽으면 그 정정이 시도 2의 성공을 덮는다(PR #87 리뷰에서 재현).
+ * 같은 시도 안에서는 나중 줄이 정본이다. attempt가 없거나 숫자가 아니면 0으로 본다.
+ *
+ * 기록이 없는 모듈은 결과에 없다. 그것은 "실패"도 "0건"도 아니고 "모른다"이다.
+ */
+export function moduleOutcomes(events) {
+  const outcomes = new Map()
+  for (const event of events) {
+    if (event?.phase !== 'module.done' || event.module === undefined) continue
+    const attempt = Number.isFinite(Number(event.attempt)) && event.attempt !== null ? Number(event.attempt) : 0
+    const name = String(event.module)
+    const previous = outcomes.get(name)
+    if (previous && attempt < previous.attempt) continue
+    outcomes.set(name, { status: event.status, attempt, failureClass: event.failureClass })
+  }
+  return outcomes
+}
+
 /** 사이드카의 줄을 순서대로 읽는다. 깨진 줄은 건너뛴다. 파일이 없으면 빈 배열이다. */
 export function readEvents(sidecar) {
   if (!existsSync(sidecar)) return []

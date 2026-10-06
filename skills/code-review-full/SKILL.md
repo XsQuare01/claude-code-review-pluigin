@@ -55,6 +55,8 @@ node "$RULES_DIR/../scripts/review-preflight.mjs" --dir "$REPORT_DIR" --run "$RE
 
 C-9의 `run.start`를 이 스크립트가 쓴다. 동시에 `리뷰 기준`과 `실행 계획`에 적을 값을 낸다 — 플러그인 버전, 해석된 규칙 경로, 브랜치, merge-base, 변경 파일 수, **후보 모듈 수와 목록**. 그 값을 손으로 세지 않는다. 후보에서 빠진 `00-rule.md`와 synthesis 전용 모듈도 이유와 함께 출력되므로, 아래 (2)와 (4)는 이 목록에서 출발한다.
 
+**무엇을 리뷰하는지도 여기서 정해진다(C-10).** 출력의 `HEAD`·`작업 트리`·`실행 ID`를 `리뷰 기준`에 옮긴다. 작업 트리에 커밋하지 않은 변경이 있으면 스크립트가 그렇다고 말한다 — 그 변경은 diff(3a(3))에는 없지만 파일을 읽는 단계는 그 내용을 보므로, `리뷰 기준`에 그 사실을 적는다. 리뷰가 끝날 때 `review-snapshot.mjs`가 이 값을 다시 재서 실행 도중 대상이 바뀌었는지 본다(아래 `결과 스냅숏`).
+
 **(1) 프로파일 판정 — 1회**
 
 C-3에 따라 프로젝트 프로파일(FSD, Electron, Tailwind, RSC, SSR, Three.js, TanStack Query, server-code, contract-provider)과 React/TypeScript 버전을 **한 번만** 판정한다. 결과를 모든 sub-agent prompt에 함께 넘겨, 각 에이전트가 다시 조사하지 않게 한다.
@@ -403,6 +405,20 @@ node "$RULES_DIR/../scripts/render-findings.mjs" \
 **위치 확인에 실패한 finding의 위치 줄은 렌더러가 다르게 그린다.** `prepare-verification.mjs`가 후보마다 붙인 `locationCheck`를 렌더러가 읽어, 주장된 경로를 읽지 못했거나 인용이 실제 내용과 다르면 `위치 확인 실패: …` 줄을 낸다 (C-7 **확인에 실패한 위치**). **그 문장을 직접 쓰지 않는다** — 한 실행이 손으로 `위치 미확인 사유`를 적었고, 그것은 계약이 `location.kind = "unverified"`에만 주는 다른 줄이다. `locationCheck`가 없는 입력은 렌더러가 거부하므로, `--input`에는 항상 `prepare-verification.mjs`의 출력을 그대로 넘긴다.
 
 **`active-deletion` phase가 지운 `rejected` finding도 같은 방식으로 stderr에 나온다.** C-6B "오판 가시성"은 이 삭제의 흔적을 audit이 아니라 리포트 본문(`미해결 / 후속 확인`)에 남기라고 명시한다 — 검증자의 오판이 진짜 결함의 소멸이 될 수 있고, audit는 아무도 읽지 않기 때문이다. stderr 알림에는 `impact = high`였던 것은 건별로(규칙 ID·anchor path·`rebuttal.kind`), `impact = low`였던 것은 건수만 실린다 — 그 알림 내용을 그대로 `미해결 / 후속 확인`에 옮겨 적는다. 옮겨 적지 않으면 그 삭제는 리포트 어디에도 없는 채로 사라진다.
+
+### 결과 스냅숏
+
+**렌더 뒤, 리포트를 쓰기 전에 돌린다(C-10).** 이 실행이 무엇을 리뷰했고 어디까지 끝냈고 무엇을 찾았는지를 `$REPORT_DIR/.timing/$REPORT_BASENAME.snapshot.json`에 남기고, `실행 계획`에 붙일 블록을 낸다. preflight와 같은 디렉터리(리뷰 대상 저장소)에서 돌린다 — 다르면 `--repo`로 그 저장소를 준다.
+
+```bash
+node "$RULES_DIR/../scripts/review-snapshot.mjs" --dir "$REPORT_DIR" --run "$REPORT_BASENAME" --rules "$RULES_DIR" --verification-state <ran|disabled>
+```
+
+- **출력을 `실행 계획` 섹션 맨 앞에 그대로 붙인다.** 그 블록은 방금 저장한 스냅숏 파일을 다시 읽어 그린 것이다. 손으로 고치면 리포트와 JSON이 다른 것을 말한다. 리포트를 다시 쓸 때는 `--show <스냅숏 경로>`로 같은 블록을 다시 낸다
+- `--verification-state`는 렌더러에 준 값과 같다. routed 출력과 판정은 위 명령들이 남긴 자리(`$REPORT_BASENAME.routed.json`·`.verdicts.json`)에서 읽는다
+- **`검토 상태`가 `완료`가 아니면 `판정`을 통과로 쓰지 않는다.** `부분 완료`와 `실패`는 `FAILED orchestration`이다(C-8). 표에 나온 모듈(`FAILED`·결과 없음·`SKIPPED`·`UNKNOWN`)이 이 실행이 검토하지 않은 범위다
+- `검토 도중 대상이 바뀌었다`가 찍히면 `판정`에도 한 줄 적는다 — 그 실행의 결과는 한 시점의 코드에 대한 것이 아니다
+- 스크립트가 멈추면(종료 코드 2) 이유를 고치고 다시 돌린다. 검증 대상이 있는데 검증자가 하나도 판정을 내지 못했으면 `--no-verdicts`를 준다. 고칠 수 없으면 `실행 계획`에 스냅숏을 남기지 못했다고 적는다 — **블록을 손으로 만들지 않는다**
 
 ### 상세 지적 작성 규칙
 - 사용자가 다른 언어를 명시하지 않은 한 모든 패스의 상세 지적과 최종 저장 문서는 한국어로 작성한다.

@@ -30,6 +30,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+import { currentTarget, newRunId, repoIdentity, rulesDigest } from './lib/run-identity.mjs'
 import { runNameProblem } from './lib/run-name.mjs'
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)))
@@ -156,19 +157,47 @@ const changed = (() => {
   return out ? out.split('\n').filter(Boolean) : []
 })()
 
+// 무엇을 리뷰하는지를 값으로 남긴다(#88 PR 0). 브랜치와 merge-base만으로는 두 실행이
+// 같은 대상을 봤는지 말할 수 없다 — 같은 HEAD에서 작업 트리만 바뀐 두 실행이 기록상
+// 똑같았다. 그런데 producer와 위치 대조는 작업 트리의 파일을 읽는다. 계산하지 못하면
+// 시작하지 않는다 — 대상이 기록되지 않은 실행의 결과는 다른 실행과 이을 수 없다.
+const identity = (() => {
+  try {
+    // 리포트 디렉터리는 뺀다. 기본 저장 위치는 대상 저장소 안이고, 이 실행이 거기 쓰는
+    // 기록이 대상을 바꾼 것으로 보이면 안 된다.
+    const target = currentTarget(repo, { exclude: [dir] })
+    const { remote, root } = repoIdentity(repo)
+    return { runId: newRunId(), ...target, remote, root, rulesDigest: rulesDigest(rules) }
+  } catch (error) {
+    die(`리뷰 대상을 식별하지 못했다: ${String(error.stderr || error.message).trim()}`)
+  }
+})()
+
 const logged = (() => {
   if (has('dry-run')) return { ok: true, skipped: true }
-  const args = [
-    TIMELINE, '--dir', dir, '--run', run, '--phase', 'run.start',
-    '--set', `host=${host}`,
-    '--set', `rules=${rules}`,
-    '--set', `version=${version}`,
-    '--set', `branch=${branch}`,
-    '--set', `changedFiles=${changed.length}`,
-    '--set', `candidates=${candidates.length}`,
-    '--set', `workflow=${workflow}`,
-    '--set', `mergeBase=${mergeBase}`,
-  ]
+  // `--set`이 아니라 `--data`로 넘긴다. `--set`은 숫자로 되돌아오는 값을 숫자로 바꾸므로
+  // `--base 1234` 같은 값의 타입이 넘긴 것과 달라질 수 있다. 셸을 거치지 않는 인자 배열이라
+  // JSON이 깨질 자리는 없다.
+  const data = {
+    host,
+    rules,
+    version,
+    branch,
+    changedFiles: changed.length,
+    candidates: candidates.length,
+    workflow,
+    mergeBase,
+    runId: identity.runId,
+    base,
+    head: identity.head,
+    worktree: identity.worktree,
+    dirtyFiles: identity.dirtyFiles,
+    // 원격이 없으면 필드를 비워 둔다. 없는 값을 지어 넣지 않는다.
+    ...(identity.remote ? { repo: identity.remote } : {}),
+    repoRoot: identity.root,
+    rulesDigest: identity.rulesDigest,
+  }
+  const args = [TIMELINE, '--dir', dir, '--run', run, '--phase', 'run.start', '--data', JSON.stringify(data)]
   try {
     execFileSync(process.execPath, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
     return { ok: true, skipped: false }
@@ -184,6 +213,9 @@ const out = [
   `브랜치        ${branch}`,
   `base          ${base}`,
   `merge-base    ${mergeBase}`,
+  `HEAD          ${identity.head}`,
+  `작업 트리     ${identity.worktree === 'clean' ? 'clean' : `커밋하지 않은 변경 ${identity.dirtyFiles}개 (${identity.worktree})`}`,
+  `실행 ID       ${identity.runId}`,
   `변경 파일     ${changed.length}개`,
   '',
   `후보 모듈     ${candidates.length}개  ${candidates.map(module => module.id).join(' ')}`,
@@ -196,6 +228,10 @@ if (deferred.length) {
 }
 if (specialists.length) {
   out.push(`특수 패스     ${specialists.map(module => module.id).join(' ')} — 후보 수에 넣지 않는다`)
+}
+if (identity.worktree !== 'clean') {
+  out.push('')
+  out.push('작업 트리에 커밋하지 않은 변경이 있다. 리뷰 diff(merge-base..HEAD)에는 들어가지 않지만, 파일을 읽는 단계(위치 확인·추가 Read)는 그 내용을 본다. `리뷰 기준`에 이 사실을 적는다.')
 }
 out.push('')
 out.push(logged.skipped

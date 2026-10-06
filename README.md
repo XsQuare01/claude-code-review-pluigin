@@ -289,6 +289,14 @@ A verifier that cannot fit its objection into the closed list of rebuttal kinds 
 
 Verifier failure is not orchestration failure. An unverified finding stays in the report and keeps blocking, because treating "we could not check this" as "this was disproven" would make killing the verifier a way to erase findings.
 
+## Run identity and result snapshot (2.16.0)
+
+Every workflow's preflight now records **what** a run reviewed in its `run.start` line: a run id, `HEAD`, the base and merge-base, a fingerprint of uncommitted working-tree changes (`clean` when there are none), the repository (origin URL with credentials stripped, plus its root commit) and a digest of the rules directory. Two runs at the same `HEAD` with different working trees are different targets — producers and the location check read files from the working tree, not from the diff. The fingerprint ignores the index, uses git blob ids so line-ending settings do not change it, leaves the report directory out, and writes nothing to the reviewed repository.
+
+`/code-review-full` then runs `scripts/review-snapshot.mjs` after rendering and before writing the report. It writes `.timing/<run>.snapshot.json`: the recorded target, any drift between that target and the tree at snapshot time, the run status (`complete`, `partial` or `failed`), each module's state (`ok`, `failed`, `missing`, `skipped`, `unknown`) with its reason, every candidate's disposition under a run-scoped `ref` (`<runId>/<candidateId>`), the producers' open questions, and the sha256 of every file it read. It prints the `실행 계획` block from the file it just saved, so the report and the JSON cannot disagree; `--show <path>` prints the same block again from a saved snapshot.
+
+The snapshot is written to a temporary file, read back and validated, then renamed into place, so a failed write leaves the previous snapshot intact. Reading is strict: an empty, truncated, unknown-version or internally inconsistent snapshot is reported as unreadable rather than treated as a review with no findings. The `ref` is not a cross-run identity — matching findings between runs is not part of this release. The contract is `workflow-contract.md` C-10.
+
 ## Applicability metadata
 
 `review-rules/catalog.json` records **when** a module applies — required profile (FSD, Tailwind, RSC, Electron, TanStack Query, server code, contract provider), minimum React version, which workflows load it, and which individual rules carry a narrower gate than their module. The Markdown modules stay canonical for **what** a rule says; the catalog never generates documentation and never restates rule text.

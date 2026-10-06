@@ -416,28 +416,49 @@ export function withInstanceNumbers(candidates) {
  */
 export function labelFor(candidate, verdictByCandidateId, phaseByImpact, vocabulary) {
   const tokens = vocabulary.crossVerification
-  if (candidate.eligibility !== 'VERIFY') return tokens['not-eligible']
   const verdict = verdictByCandidateId.get(candidate.candidateId)
-  if (verdict === undefined) return tokens['verification-unavailable']
-  const { disposition, rebuttalKind } = verdict
-  if (disposition === 'needs-context') return tokens['scope-open']
+  const disposition = dispositionOf(candidate, verdict, 'ran')
   if (disposition === 'rejected') {
-    if (rebuttalKind === 'other') return tokens['rejected-other']
+    if (verdict.rebuttalKind === 'other') return tokens['rejected-other']
     // 이 finding의 impact가 속한 phase만 본다 — high/low를 하나의 phase로
     // 합쳐 읽으면 한쪽의 독립 승인이 다른 쪽 값에 가려진다.
     const phase = phaseByImpact[candidate.impact]
     return phase === 'rollout-shadow' ? tokens['rejected-shadow'] : null
   }
-  // 닫힌 목록은 `upheld`·`rejected`·`needs-context` 셋뿐이다(C-6B). 여기까지
-  // 왔다는 것은 disposition이 그 셋 중 하나도 아니라는 뜻이라, 조용히
-  // `upheld`로 흘려보내지 않는다 — 그러면 반박됐거나 판정이 불확실한
-  // finding에 "교차검증: `유지`"라는 거짓 표기가 찍히고, 독자는 리포트만
-  // 보고는 그 사실을 알 방법이 없다. `tally-verdicts.mjs`가 같은 상황(닫힌
-  // 목록 밖 disposition)에서 죽는 것과 같은 이유로 여기서도 던진다.
-  if (disposition !== 'upheld') {
-    throw new Error(`labelFor: disposition이 C-6B의 닫힌 목록 밖이다 (${JSON.stringify(disposition)}) — candidateId: ${candidate.candidateId}`)
+  return tokens[disposition]
+}
+
+/**
+ * candidate 하나의 C-6B disposition을 정한다 — verifier가 낸 값과 오케스트레이터가
+ * 부여하는 값(`not-eligible`·`verification-disabled`·`verification-unavailable`·`scope-open`)을
+ * 함께.
+ *
+ * 리포트 표기(`labelFor`)와 결과 스냅숏(`lib/review-snapshot.mjs`)이 이 함수 하나를 쓴다.
+ * 둘이 각자 정하면 JSON과 리포트가 같은 후보를 다르게 말할 수 있고, 그것은 어느 쪽을
+ * 읽어도 알 수 없다.
+ *
+ * - eligibility가 `VERIFY`가 아니면 검증을 껐든 켰든 `not-eligible`이다. eligibility는
+ *   candidate 자체의 성질이다
+ * - `disabled`는 판정을 보지 않는다. 이 실행 전체가 검증을 끈 것이다
+ * - 판정이 없는 검증 대상은 입력 오류가 아니라 `verification-unavailable`이다
+ * - 최종 판정의 `needs-context`는 isolated에서도 닫히지 않은 것이라 `scope-open`이다
+ *   (bundle의 `needs-context`에 승격 판정이 없으면 `tally-verdicts.mjs`가 판정에서 뺀다)
+ *
+ * 닫힌 목록은 `upheld`·`rejected`·`needs-context` 셋뿐이다(C-6B). 그 밖의 값을 조용히
+ * `upheld`로 흘려보내면 반박됐거나 판정이 불확실한 finding에 "교차검증: `유지`"라는 거짓
+ * 표기가 찍히고, 독자는 리포트만 보고는 그 사실을 알 방법이 없다. `tally-verdicts.mjs`가
+ * 같은 상황에서 죽는 것과 같은 이유로 여기서도 던진다.
+ */
+export function dispositionOf(candidate, verdict, verificationState) {
+  if (!VERIFICATION_STATES.has(verificationState)) {
+    throw new Error(`dispositionOf: verificationState는 ran 또는 disabled다 (받은 값: ${JSON.stringify(verificationState)})`)
   }
-  return tokens.upheld
+  if (candidate.eligibility !== 'VERIFY') return 'not-eligible'
+  if (verificationState === 'disabled') return 'verification-disabled'
+  if (verdict === undefined) return 'verification-unavailable'
+  if (verdict.disposition === 'needs-context') return 'scope-open'
+  if (verdict.disposition === 'upheld' || verdict.disposition === 'rejected') return verdict.disposition
+  throw new Error(`dispositionOf: disposition이 C-6B의 닫힌 목록 밖이다 (${JSON.stringify(verdict.disposition)}) — candidateId: ${candidate.candidateId}`)
 }
 
 /**
@@ -636,9 +657,7 @@ export function render(candidates, verdictByCandidateId, phaseByImpact, vocabula
       // (`대상 아님`)로 남는다 — 그 사실은 이 실행이 검증을 돌렸는지와
       // 무관하다.
       : verificationState === 'disabled'
-        ? (candidate.eligibility === 'VERIFY'
-          ? vocabulary.crossVerification['verification-disabled']
-          : vocabulary.crossVerification['not-eligible'])
+        ? vocabulary.crossVerification[dispositionOf(candidate, undefined, 'disabled')]
         // 그 밖의 값은 "이 워크플로우에 교차검증 축이 없다"는 뜻이라 축 자체를 뺀다.
         : undefined
     // `null`은 이 phase에서 리포트에 나타나지 않는다는 뜻이다 — 정렬·순번을
