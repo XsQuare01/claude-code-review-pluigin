@@ -32,6 +32,7 @@ const NUMBERED = CATALOG.modules
   .filter(module => module.role === 'module' && module.workflows.includes('full') && module.phaseByWorkflow?.full !== 'post-verification-synthesis')
   .map(module => module.path.replace(/\.md$/, ''))
 const PASSES = ['props', 'math', 'exception']
+// `correctness`는 선택 패스다. run.start에 `correctness: 'on'`이 없으면 적용 대상이 아니다.
 const ALL = [...NUMBERED, ...PASSES]
 
 const runStart = extra => ({
@@ -76,7 +77,7 @@ test('모든 적용 모듈의 결과를 모았으면 완료다', () => {
   assert.equal(snapshot.schemaVersion, SNAPSHOT_SCHEMA_VERSION)
   assert.equal(snapshot.status, 'complete')
   assert.equal(snapshot.scope.counts.applied, ALL.length - 1)
-  assert.equal(snapshot.scope.counts.skipped, 1)
+  assert.equal(snapshot.scope.counts.skipped, 2, 'math와, 켜지 않은 선택 패스 correctness')
   const math = snapshot.scope.modules.find(module => module.name === 'math')
   assert.deepEqual(math, { name: 'math', kind: 'pass', state: 'skipped', reasonCode: 'no-linear-algebra', reason: '행렬 연산이 없다' })
 })
@@ -97,7 +98,7 @@ test('실패·기록 없음·수집되지 않음이 하나라도 있으면 부�
   assert.deepEqual(byName.get('04-state'), { name: '04-state', kind: 'module', state: 'failed', attempt: 2, failureClass: 'malformed-output' })
   assert.deepEqual(byName.get('12-accessibility'), { name: '12-accessibility', kind: 'module', state: 'missing', reason: 'no-record' })
   assert.deepEqual(byName.get('20-deletion-regression'), { name: '20-deletion-regression', kind: 'module', state: 'missing', reason: 'not-collected' })
-  assert.deepEqual(snapshot.scope.counts, { applied: ALL.length, ok: ALL.length - 3, failed: 1, missing: 2, skipped: 0, unknown: 0 })
+  assert.deepEqual(snapshot.scope.counts, { applied: ALL.length, ok: ALL.length - 3, failed: 1, missing: 2, skipped: 1, unknown: 0 })
 })
 
 test('성공한 모듈이 하나도 없으면 실패다', () => {
@@ -126,6 +127,38 @@ test('건너뛴 모듈은 마지막 modules.planned를 따르고, 번호 모듈�
   assert.equal(byName.get('21-rsc').state, 'skipped')
   assert.equal(byName.get('12-accessibility').state, 'unknown')
   assert.equal(snapshot.status, 'complete')
+})
+
+test('켜지 않은 선택 패스는 이유를 단 SKIPPED다 — 결과 없음으로 세지 않는다', () => {
+  const snapshot = buildSnapshot(fixture())
+  assert.deepEqual(snapshot.scope.modules.find(module => module.name === 'correctness'), {
+    name: 'correctness', kind: 'pass', state: 'skipped', reasonCode: 'not-requested',
+    reason: '선택 패스 — 이 실행은 --correctness on 없이 시작했다',
+  })
+  assert.equal(snapshot.status, 'complete')
+})
+
+test('켠 선택 패스는 적용 대상이다 — 결과가 없으면 부분 완료다', () => {
+  const events = [runStart({ correctness: 'on' }), ...fixture().events.slice(1)]
+  const missing = buildSnapshot(fixture({ events }))
+  assert.deepEqual(missing.scope.modules.find(module => module.name === 'correctness'), { name: 'correctness', kind: 'pass', state: 'missing', reason: 'no-record' })
+  assert.equal(missing.status, 'partial')
+
+  const collected = ALL.filter(name => name !== 'math').concat('correctness')
+  const done_ = buildSnapshot(fixture({
+    events: [...events, done('correctness', 'failed', 1, { failureClass: 'inactivity-timeout' }), done('correctness', 'ok', 2)],
+    routed: { candidates: [], collected: { sources: collected, excludedFailed: [] } },
+    verdicts: new Map(),
+  }))
+  assert.deepEqual(done_.scope.modules.find(module => module.name === 'correctness'), { name: 'correctness', kind: 'pass', state: 'ok', attempt: 2 })
+  assert.equal(done_.status, 'complete')
+})
+
+test('켜지 않은 선택 패스의 기록이 있으면 짚는다 — 모은 것으로 세지 않는다', () => {
+  const events = [...fixture().events, done('correctness', 'ok', 1)]
+  const snapshot = buildSnapshot(fixture({ events }))
+  assert.equal(snapshot.scope.modules.find(module => module.name === 'correctness').state, 'skipped')
+  assert.ok(snapshot.notes.some(note => /correctness/.test(note) && /켜지 않은/.test(note)), snapshot.notes.join(' / '))
 })
 
 test('앞 시도의 정정 줄이 뒤 시도의 성공을 덮지 않는다', () => {

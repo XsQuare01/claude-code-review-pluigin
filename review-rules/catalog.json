@@ -668,6 +668,25 @@
       "rulePrefixes": [
         "EX"
       ]
+    },
+    {
+      "id": "correctness",
+      "path": "correctness.md",
+      "title": "의도 대비 정확성",
+      "role": "specialist",
+      "workflows": [
+        "full"
+      ],
+      "requires": [],
+      "idFormat": "CR-{n}",
+      "rulePrefixes": [
+        "CR"
+      ],
+      "optIn": [
+        "full"
+      ],
+      "ruleClauses": false,
+      "notes": "optIn: full runs this pass only when preflight records correctness=on (--correctness on). ruleClauses false: CR-{n} numbers findings within the pass and names no clause in correctness.md, so the verifier gets the VERIFICATION_BASIS block instead of a clause."
     }
   ]
 }

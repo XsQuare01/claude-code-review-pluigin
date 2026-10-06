@@ -258,6 +258,7 @@ const RULE_MODULE_NEUTRALITY_FILES = [
   'review-rules/props.md',
   'review-rules/math.md',
   'review-rules/exception.md',
+  'review-rules/correctness.md',
 ]
 
 // 1. contiguous numbering, no duplicates
@@ -660,7 +661,7 @@ function conditionKeywords(qualifier) {
         fail('catalog', `${where}: 모듈 집합 "${declared}" is not a recognized form — phrase it as "numbered non-00 …" or "\`$RULES_DIR/x.md\` 단일 문서 …", or teach validate-rules.mjs the new form`)
       }
 
-      for (const specialist of ['props', 'math', 'exception']) {
+      for (const specialist of ['props', 'math', 'exception', 'correctness']) {
         if (new RegExp(`\\+\\s*${specialist}\\b`).test(declared) && !loads(byPath.get(`${specialist}.md`), wf)) {
           fail('catalog', `catalog.json: ${specialist}.md omits "${wf}", which ${where} adds to its module set`)
         }
@@ -764,6 +765,56 @@ const agentFiles = existsSync(AGENTS) ? readdirSync(AGENTS).filter(f => f.endsWi
       }
       if (!readmeText.includes(`${prefix}-{n}`)) {
         fail('agent', `${where}: ID prefix ${prefix}- is missing from the README rule-ID table`)
+      }
+    }
+  }
+}
+
+// ------------------------------------------------------- clauseless passes
+//
+// correctness 패스(#88 PR 1)의 `CR-{n}`은 지적의 순번이지 규칙 조항이 아니다. 그 사실을
+// catalog(`ruleClauses: false`)가 선언하고, 검증 준비 스크립트가 그 선언을 보고 검증자에게
+// 조항 대신 판정 기준 블록(`VERIFICATION_BASIS`)을 준다. 세 곳이 어긋나면 검증자가 없는
+// 조항을 받거나, 받을 것이 없어 스크립트가 멈춘다.
+{
+  const catalog = JSON.parse(rulesFile('catalog.json'))
+  for (const entry of (catalog.modules ?? []).filter(module => module.ruleClauses === false)) {
+    const where = `catalog.json: "${entry.id}"`
+    const prefixes = Array.isArray(entry.rulePrefixes) ? entry.rulePrefixes : []
+    if (!prefixes.length) fail('catalog', `${where} has ruleClauses false but no rulePrefixes — its findings cannot be told apart from rule IDs`)
+    if (!existsSync(join(RULES, entry.path ?? ''))) continue
+    const doc = rulesFile(entry.path)
+    const basis = doc.split('<!-- VERIFICATION_BASIS:BEGIN -->').length - 1
+    const basisEnd = doc.split('<!-- VERIFICATION_BASIS:END -->').length - 1
+    if (basis !== 1 || basisEnd !== 1) {
+      fail('catalog', `${entry.path}: ruleClauses false needs exactly one VERIFICATION_BASIS block — the verifier gets it instead of a clause (BEGIN=${basis}, END=${basisEnd})`)
+    }
+    // 조항이 없다고 선언한 문서에 조항 헤딩이 생기면, 검증자에게는 기준 블록이 가고 독자는
+    // 그 헤딩을 근거로 읽는다. 둘 중 하나는 거짓이다.
+    for (const prefix of prefixes) {
+      const heading = new RegExp(`^#{2,4}\\s+${prefix}-\\d+[.\\s]`, 'm')
+      if (heading.test(doc)) fail('catalog', `${entry.path}: declares ruleClauses false but has a ${prefix}-{n} clause heading — ${prefix}-{n} numbers findings, not clauses`)
+    }
+  }
+
+  // 직접 호출 에이전트와 full의 정확성 패스는 같은 판정 기준을 쓴다. 두 벌이므로, 에이전트의
+  // Do/Don't 항목이 판정 문서에 그대로 있는지 본다 — 한쪽만 고쳐지면 같은 이름의 패스가
+  // 부르는 길에 따라 다른 기준으로 판정한다.
+  const agentPath = join(AGENTS, 'correctness-reviewer.md')
+  const correctnessPath = join(RULES, 'correctness.md')
+  if (existsSync(agentPath) && existsSync(correctnessPath)) {
+    const agentText = read(agentPath)
+    const doc = read(correctnessPath)
+    const items = section => (agentText.split(new RegExp(`^## ${section}\\s*$`, 'm'))[1] ?? '')
+      .split(/^## /m)[0]
+      .split('\n')
+      .filter(line => /^\d+\.\s/.test(line))
+      .map(line => line.replace(/^\d+\.\s+/, '').trim())
+    const criteria = [...items('Do'), ...items("Don't")]
+    if (!criteria.length) fail('agent', 'agents/correctness-reviewer.md: no Do/Don\'t items found to compare with review-rules/correctness.md')
+    for (const item of criteria) {
+      if (!doc.includes(item)) {
+        fail('agent', `agents/correctness-reviewer.md: criterion is missing from review-rules/correctness.md, so the direct agent and the full pass judge differently — "${item.slice(0, 60)}…"`)
       }
     }
   }

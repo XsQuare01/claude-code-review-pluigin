@@ -383,7 +383,8 @@ claude-code-review-plugin/
 │   ├── fast.md
 │   ├── props.md
 │   ├── math.md
-│   └── exception.md
+│   ├── exception.md
+│   └── correctness.md
 └── README.md
 ```
 
