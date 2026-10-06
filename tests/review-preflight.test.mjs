@@ -96,6 +96,59 @@ test('run.start를 사이드카에 남긴다', t => {
   assert.equal(first.rules, RULES)
 })
 
+test('run.start에 무엇을 리뷰하는지를 남긴다 — 실행 ID, HEAD, 작업 트리, 저장소, 규칙 내용', t => {
+  // 브랜치와 merge-base만으로는 두 실행이 같은 대상을 봤는지 말할 수 없다. 같은 HEAD에서
+  // 작업 트리만 바뀐 두 실행이 기록상 똑같았다(#88 PR 0).
+  const dir = freshDir(t)
+  const repo = scratchRepo()
+  const out = preflight(dir)
+  assert.equal(out.status, 0, out.stderr)
+  const [first] = linesOf(dir)
+  assert.match(first.runId, /^[0-9a-f-]{36}$/)
+  assert.equal(first.head, execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repo.dir, encoding: 'utf8' }).trim())
+  assert.equal(first.base, repo.base)
+  assert.equal(first.worktree, 'clean')
+  assert.equal(first.dirtyFiles, 0)
+  assert.equal(first.repoRoot, repo.base)
+  assert.equal(first.repo, undefined, '원격이 없으면 필드를 비워 둔다 — 없는 값을 지어 넣지 않는다')
+  assert.match(first.rulesDigest, /^sha256:[0-9a-f]{64}$/)
+  assert.ok(out.stdout.includes(first.runId), out.stdout)
+  assert.match(out.stdout, /작업 트리 +clean/)
+})
+
+test('리포트 디렉터리가 저장소 안이어도 작업 트리를 바꾼 것으로 세지 않는다', t => {
+  // 기본 저장 위치 `./review-reports/`는 대상 저장소 안이다. preflight가 쓰는 타임라인이
+  // 대상을 바꾼 것으로 보이면, 그 뒤의 어떤 비교도 같은 실행을 다른 대상으로 읽는다.
+  const repoDir = mkdtempSync(join(tmpdir(), 'preflight-dirty-'))
+  t.after(() => rmSync(repoDir, { recursive: true, force: true }))
+  const git = (...args) => execFileSync('git', [
+    '-c', 'user.name=t', '-c', 'user.email=t@example.com', '-c', 'commit.gpgsign=false',
+    '-c', 'init.defaultBranch=main', ...args,
+  ], { cwd: repoDir, stdio: 'ignore' })
+  git('init', '-q')
+  writeFileSync(join(repoDir, 'a.txt'), 'a\n')
+  git('add', '-A')
+  git('commit', '-qm', 'base')
+  const reports = join(repoDir, 'review-reports')
+  const run = (dir, name) => spawnSync(process.execPath, [
+    SCRIPT, '--dir', dir, '--run', name, '--rules', RULES, '--workflow', 'full',
+    '--repo', repoDir, '--base', 'HEAD', '--host', 'test',
+  ], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+  assert.equal(run(reports, 'first').status, 0)
+  const second = run(reports, 'second')
+  assert.equal(second.status, 0, second.stderr)
+  const read = name => JSON.parse(readFileSync(join(reports, '.timing', `${name}.jsonl`), 'utf8').split('\n')[0])
+  assert.equal(read('second').worktree, 'clean')
+
+  // 커밋하지 않은 변경은 대상이다. diff에는 없지만 파일을 읽는 단계는 그 내용을 본다.
+  writeFileSync(join(repoDir, 'a.txt'), 'edited\n')
+  const dirty = run(reports, 'third')
+  assert.equal(dirty.status, 0, dirty.stderr)
+  assert.match(read('third').worktree, /^sha256:/)
+  assert.equal(read('third').dirtyFiles, 1)
+  assert.match(dirty.stdout, /커밋하지 않은 변경 1개/)
+})
+
 test('--dry-run은 계산만 하고 쓰지 않는다', t => {
   const dir = freshDir(t)
   const out = preflight(dir, ['--dry-run'])

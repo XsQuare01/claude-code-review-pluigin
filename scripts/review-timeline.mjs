@@ -125,7 +125,13 @@ const readLines = () => {
  * 끝만 남기면 여러 개를 연달아 돌린 구간이 통째로 하나의 이름 없는 덩어리가 된다.
  */
 const PHASES = new Map([
-  ['run.start', { required: ['host', 'rules', 'version', 'branch', 'changedFiles'], structured: [], allowed: ['candidates', 'workflow', 'mergeBase', 'os'] }],
+  // `runId`부터는 무엇을 리뷰했는지다(`lib/run-identity.mjs`). 결과 스냅숏이 이 줄에서
+  // 대상을 읽으므로, preflight가 쓴 기록만 스냅숏을 만들 수 있다.
+  ['run.start', {
+    required: ['host', 'rules', 'version', 'branch', 'changedFiles'],
+    structured: [],
+    allowed: ['candidates', 'workflow', 'mergeBase', 'os', 'runId', 'base', 'head', 'worktree', 'dirtyFiles', 'repo', 'repoRoot', 'rulesDigest'],
+  }],
   ['scope.done', { required: ['files', 'excluded'], structured: [], allowed: [] }],
   ['modules.planned', { required: ['candidates', 'applied'], structured: ['skipped', 'unknown'], allowed: [] }],
   ['dispatch.start', { required: ['modules', 'inflight'], structured: [], allowed: [] }],
