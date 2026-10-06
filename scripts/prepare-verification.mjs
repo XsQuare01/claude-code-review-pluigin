@@ -643,7 +643,9 @@ async function main() {
     if (gathered.problems.length) fail(`모듈별 결과를 모으지 못했다:\n  - ${gathered.problems.join('\n  - ')}`)
     for (const warning of gathered.warnings) process.stderr.write(`경고: ${warning}\n`)
     payload = gathered.payload
-    collected = { ...gathered.collected, ...(passes.length ? { optIn } : {}) }
+    // runId는 이 routed 출력이 어느 실행의 것인지다. 렌더러가 재현 근거 파일(C-11)이 같은 실행의
+    // 것인지 대조할 때 쓴다.
+    collected = { ...gathered.collected, ...(passes.length ? { optIn } : {}), ...(start.runId ? { runId: start.runId } : {}) }
   } else {
     source = inputPath === undefined ? 'stdin' : inputPath
     let raw = ''

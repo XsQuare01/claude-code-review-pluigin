@@ -18,6 +18,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 import { markedJson, CROSS_VERIFICATION_TOKEN_KEYS } from './lib/contract-blocks.mjs'
+import { assessEvidence, loadEvidence } from './lib/evidence.mjs'
 import { collectVerdicts } from './lib/verdicts.mjs'
 
 const IMPACTS = new Set(['high', 'low'])
@@ -308,7 +309,7 @@ const SLOTS = [
  * 이어붙이는 방식이면 다음 사람이 실수로 다시 합칠 수 있지만, 배열 + `\n`
  * join은 슬롯을 합칠 방법 자체가 없다.
  */
-export function renderFinding(candidate, { label, vocabulary, related = [] }) {
+export function renderFinding(candidate, { label, vocabulary, related = [], evidence = [] }) {
   const severity = severityOf(candidate.impact, candidate.confidence)
   // category는 계약상 impact가 high일 때만 존재한다(low는 category 자체를
   // 금지한다) — 그래도 candidate.category를 한 번 더 확인해 방어적으로 둔다.
@@ -338,7 +339,68 @@ export function renderFinding(candidate, { label, vocabulary, related = [] }) {
     ...(related.length ? [`관련 지적: ${related.join(', ')}`] : []),
     locationLine(candidate),
     ...slots,
+    // 이 지적을 어떻게 확인했는가(C-11). 슬롯 뒤에 둔다 — 슬롯은 producer의 주장이고, 이 줄은
+    // 오케스트레이터가 남긴 확인 기록이다. 등급·축·교차검증은 바꾸지 않는다.
+    ...evidence,
   ].join('\n')
+}
+
+const OUTCOME_TEXT = {
+  reproduced: '재현됨',
+  'not-reproduced': '재현 안 됨',
+  inconclusive: '판단 불가',
+  'env-failure': '환경 실패',
+}
+// 재현 결과는 결함의 반증이 아니다. 반증은 교차검증의 `rejected`다 — 둘을 같은 말로 쓰면,
+// 재현 절차가 결함을 건드리지 못한 것이 "결함이 없다"로 읽힌다.
+const OUTCOME_NOTE = {
+  'not-reproduced': ' — 반증이 아니다. 지적의 존부는 교차검증이 정한다',
+  'env-failure': ' — 결함 여부와 무관하다',
+}
+const COMPARISON_TEXT = {
+  'pre-existing': '변경 전에도 재현 → 기존 결함',
+  'new-regression': '변경 전에는 재현 안 됨 → 신규 회귀',
+  'base-unmeasured': 'base 미측정 — 기존 결함인지 신규 회귀인지 가르지 않았다',
+}
+const UNUSABLE_TEXT = {
+  'other-run': '다른 실행의 기록이다',
+  'other-target': '이 실행의 대상과 다른 코드에서 돌았다',
+  'tree-mutated': '재현 명령이 작업 트리를 바꿨다',
+  'artifact-missing': '로그 파일이 없다',
+  'artifact-changed': '기록한 뒤에 로그 파일이 바뀌었다',
+}
+
+/**
+ * 지적 하나의 재현 근거 줄(C-11). 근거 항목이 없으면 빈 배열이다 — 근거가 없는 지적은 예전과
+ * 똑같이 그린다.
+ *
+ * 짧게 쓴다: 확인 방법과 결과 한 줄, 조건·절차·기대·관찰 한 줄, 실행했으면 로그 경로 한 줄.
+ * 긴 출력은 로그 파일에 있고 여기서는 가리키기만 한다. 값은 모두 escape를 거친다 — 오케스트레이터가
+ * 적었어도 그 안의 글은 producer 산문을 옮긴 것일 수 있다.
+ */
+export function evidenceLines(assessed) {
+  if (!assessed) return []
+  if (assessed.problems?.length) return [`재현 근거: 기록이 계약에 맞지 않아 쓰지 않는다 — ${escapeProse(assessed.problems[0])}`]
+  const detail = [['condition', '조건'], ['procedure', '절차'], ['expected', '기대'], ['observed', '관찰']]
+    .filter(([key]) => typeof assessed[key] === 'string' && assessed[key].trim())
+    .map(([key, label]) => `${label}: ${escapeProse(assessed[key])}`)
+  const detailLine = detail.length ? [detail.join(' · ')] : []
+  if (assessed.method === 'static-trace') return ['재현 근거: 코드 경로 분석 — 실행하지 않았다', ...detailLine]
+  if (assessed.method === 'not-run') return [`재현 근거: 확인하지 않음 — ${escapeProse(assessed.reason ?? '사유가 기록되지 않았다')}`, ...detailLine]
+  const head = assessed.head
+  if (!head || !head.usable) {
+    const why = head ? UNUSABLE_TEXT[head.reason] ?? head.reason : '이 지적의 HEAD 쪽 실행 기록이 없다'
+    return [`재현 근거: 실행 기록을 근거로 쓰지 않는다 — ${why}`, ...detailLine]
+  }
+  const comparison = assessed.comparison ? ` · ${COMPARISON_TEXT[assessed.comparison]}` : ''
+  const exit = head.exit === null || head.exit === undefined ? '없음' : head.exit
+  const logs = [`실행 로그: ${codeSpan(`.timing/${head.artifact}`)}`]
+  if (assessed.base?.artifact) logs.push(`base ${codeSpan(`.timing/${assessed.base.artifact}`)}`)
+  return [
+    `재현 근거: 실행 — ${OUTCOME_TEXT[head.outcome] ?? head.outcome} · 종료 코드 ${exit} · ${codeSpan(head.id)}${comparison}${OUTCOME_NOTE[head.outcome] ?? ''}`,
+    ...detailLine,
+    logs.join(' · '),
+  ]
 }
 
 /** `04-10`이 `04-3`보다 앞에 오지 않게 한다 — 문자열 정렬은 여기서 틀린다. */
@@ -743,6 +805,7 @@ export function render(candidates, verdictByCandidateId, phaseByImpact, vocabula
     : `${codeSpan(id)} (상세 지적에 없음)`))
   const findingLines = candidate => renderFinding(candidate, {
     label: labelById.get(candidate.candidateId), vocabulary, related: relatedOf(candidate),
+    evidence: evidenceLines(options.evidence?.get(candidate.candidateId)),
   })
 
   const lines = ['## 상세 지적', '']
@@ -933,6 +996,20 @@ if (process.argv[1] && process.argv[1].endsWith('render-findings.mjs')) {
       })
     }
   }
+  // 재현 근거(C-11). 근거 파일은 실행 하나의 것이므로, 이 routed 출력과 같은 실행인지 먼저 본다.
+  // routed에 실행 ID가 없으면(`--collect`가 아닌 입력) 대조할 수 없으므로 받지 않는다.
+  let evidence
+  const evidencePath = flag('evidence')
+  if (evidencePath !== undefined) {
+    const runId = payload.collected?.runId
+    if (!runId) die('--evidence는 prepare-verification.mjs --collect의 출력과 함께 쓴다 — routed 출력에 collected.runId가 없어 근거 파일이 같은 실행의 것인지 확인할 수 없다')
+    const loaded = loadEvidence(evidencePath)
+    if (loaded.error) die(loaded.error)
+    if (loaded.doc.run.runId !== runId) die(`--evidence는 다른 실행(${loaded.doc.run.runId})의 근거 파일이다 — 이 routed 출력은 ${runId}다`)
+    for (const problem of loaded.problems) process.stderr.write(`경고: 근거 실행 기록 ${problem}\n`)
+    evidence = assessEvidence(loaded.doc, loaded.executions, new Set(payload.candidates.map(candidate => candidate.candidateId)))
+  }
+
   // render는 그릴 수 없는 입력(닫힌 목록 밖 disposition, kind가 module도
   // pass도 아닌 section)을 만나면 던진다. 여기서 잡지 않으면 CLI가 raw
   // stack trace와 기본 종료 코드(1)로 죽는다 — 이 파일의 다른 모든
@@ -948,6 +1025,7 @@ if (process.argv[1] && process.argv[1].endsWith('render-findings.mjs')) {
         // 켜지 않았는데 결과가 있어 모으지 않은 패스.
         optIn: payload.collected?.optIn,
         excludedNotRequested: new Set(payload.collected?.excludedNotRequested ?? []),
+        evidence,
       })
   } catch (error) {
     die(error.message)

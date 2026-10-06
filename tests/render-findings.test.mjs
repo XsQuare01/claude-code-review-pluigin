@@ -1482,3 +1482,90 @@ test('같은 자리의 다른 namespace 지적은 관련 지적 줄로 잇는다
   assert.match(markdown, /#### 🔴 `04-3` 제목\n[^\n]*\n관련 지적: `CR-1`\n/)
   assert.match(markdown, /출처 패스: correctness\n관련 지적: `04-3`, `11-6#1` \(상세 지적에 없음\)\n/)
 })
+
+// ------------------------------------------------- 재현 근거 (#88 PR 2)
+//
+// 근거 줄은 지적이 **어떻게 확인됐는지**를 말한다. 지적의 존부·등급·교차검증은 바꾸지 않는다 —
+// 재현하지 못했다는 이유만으로 성립한 결함을 지우지 않는다. 실행하지 않은 것을 실행했다고,
+// 다른 대상에서 돈 것을 이 지적의 재현이라고 그리지 않는다.
+
+const assessedHead = extra => ({
+  id: 'exec-1', side: 'head', outcome: 'reproduced', exit: 1, artifact: 'run.evidence/exec-1.log', usable: true, ...extra,
+})
+const evidenceFor = (candidateId, assessment) => new Map([[candidateId, { candidateId, ...assessment }]])
+const renderWithEvidence = (assessment, candidate = ok({ candidateId: '04-3#1', ruleId: '04-3' })) =>
+  render([candidate], new Map(), PHASES_BOTH, VOCAB, SECTIONS, false, { evidence: evidenceFor(candidate.candidateId, assessment) }).markdown
+
+test('코드 경로 분석은 실행하지 않았다고 쓰고 조건·절차·기대·관찰을 한 줄에 낸다', () => {
+  const markdown = renderWithEvidence({ method: 'static-trace', condition: '취소 뒤 응답', procedure: 'load → setState 추적', expected: '상태 유지', observed: '덮어씀' })
+  assert.match(markdown, /본문: 본문\n재현 근거: 코드 경로 분석 — 실행하지 않았다\n조건: 취소 뒤 응답 · 절차: load → setState 추적 · 기대: 상태 유지 · 관찰: 덮어씀\n/)
+})
+
+test('실행으로 재현한 지적은 결과·종료 코드·실행 ID·로그와 base 비교를 낸다', () => {
+  const markdown = renderWithEvidence({
+    method: 'executed', condition: 'c', expected: 'e',
+    head: assessedHead(), base: assessedHead({ id: 'exec-2', side: 'base', outcome: 'not-reproduced', exit: 0, artifact: 'run.evidence/exec-2.log' }),
+    comparison: 'new-regression',
+  })
+  assert.match(markdown, /재현 근거: 실행 — 재현됨 · 종료 코드 1 · `exec-1` · 변경 전에는 재현 안 됨 → 신규 회귀\n/)
+  assert.match(markdown, /실행 로그: `\.timing\/run\.evidence\/exec-1\.log` · base `\.timing\/run\.evidence\/exec-2\.log`/)
+})
+
+test('base를 재지 않았으면 미측정이라고 쓴다 — 신규 회귀로 읽지 않는다', () => {
+  const markdown = renderWithEvidence({ method: 'executed', condition: 'c', expected: 'e', head: assessedHead(), base: null, comparison: 'base-unmeasured' })
+  assert.match(markdown, /`exec-1` · base 미측정 — 기존 결함인지 신규 회귀인지 가르지 않았다/)
+})
+
+test('재현 안 됨·환경 실패·판단 불가는 서로 다르게 쓰고, 어느 것도 반증이라고 하지 않는다', () => {
+  const notReproduced = renderWithEvidence({ method: 'executed', condition: 'c', expected: 'e', head: assessedHead({ outcome: 'not-reproduced', exit: 0 }), comparison: null })
+  assert.match(notReproduced, /재현 근거: 실행 — 재현 안 됨 · 종료 코드 0 · `exec-1` — 반증이 아니다\. 지적의 존부는 교차검증이 정한다/)
+  const envFailure = renderWithEvidence({ method: 'executed', condition: 'c', expected: 'e', head: assessedHead({ outcome: 'env-failure', exit: null }), comparison: null })
+  assert.match(envFailure, /재현 근거: 실행 — 환경 실패 · 종료 코드 없음 · `exec-1` — 결함 여부와 무관하다/)
+  const inconclusive = renderWithEvidence({ method: 'executed', condition: 'c', expected: 'e', head: assessedHead({ outcome: 'inconclusive', exit: 2 }), comparison: null })
+  assert.match(inconclusive, /재현 근거: 실행 — 판단 불가 · 종료 코드 2 · `exec-1`/)
+  // 등급과 두 축은 그대로다
+  for (const markdown of [notReproduced, envFailure, inconclusive]) assert.match(markdown, /#### 🔴 `04-3` 제목\n영향: 높음/)
+})
+
+test('다른 대상에서 돈 실행은 이 지적의 재현으로 그리지 않는다', () => {
+  const markdown = renderWithEvidence({ method: 'executed', condition: 'c', expected: 'e', head: assessedHead({ usable: false, reason: 'other-target' }), comparison: null })
+  assert.match(markdown, /재현 근거: 실행 기록을 근거로 쓰지 않는다 — 이 실행의 대상과 다른 코드에서 돌았다/)
+  assert.doesNotMatch(markdown, /재현됨/)
+})
+
+test('미실행은 사유를, 계약에 맞지 않는 기록은 그 사실을 쓴다', () => {
+  assert.match(renderWithEvidence({ method: 'not-run', reason: '재현할 테스트 환경이 없다' }), /재현 근거: 확인하지 않음 — 재현할 테스트 환경이 없다\n/)
+  assert.match(renderWithEvidence({ method: 'executed', problems: ['04-3#1: executed에는 executions가 필요하다'] }),
+    // 기록의 글도 escape를 거친다(`#` → `\#`)
+    /재현 근거: 기록이 계약에 맞지 않아 쓰지 않는다 — 04-3\\#1: executed에는 executions가 필요하다/)
+})
+
+test('근거가 없는 지적은 예전 그대로다', () => {
+  const plain = render([ok()], new Map(), PHASES_BOTH, VOCAB, SECTIONS, false).markdown
+  const empty = render([ok()], new Map(), PHASES_BOTH, VOCAB, SECTIONS, false, { evidence: new Map() }).markdown
+  assert.equal(empty, plain)
+  assert.doesNotMatch(plain, /재현 근거/)
+})
+
+test('CLI는 --collect 출력이 아니거나 다른 실행의 근거 파일이면 거부한다', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'render-evidence-'))
+  const evidence = join(dir, 'run.evidence.json')
+  writeFileSync(evidence, JSON.stringify({ schemaVersion: 1, kind: 'review-evidence', run: { runId: 'r-1', head: 'a'.repeat(40), worktree: 'clean', mergeBase: 'b'.repeat(40) }, entries: [] }), 'utf8')
+  const withRouted = collected => {
+    const input = join(dir, 'targets.json')
+    writeFileSync(input, JSON.stringify({ candidates: [ok()], ...(collected ? { collected } : {}) }), 'utf8')
+    return spawnSync(process.execPath, [
+      SCRIPT, '--input', input, '--rules', RULES, '--phase-high', 'active-deletion', '--phase-low', 'active-deletion',
+      '--workflow', 'full', '--verification-state', 'disabled', '--evidence', evidence,
+    ], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+  }
+  const legacy = withRouted(null)
+  const foreign = withRouted({ sources: [], runId: 'r-2' })
+  const same = withRouted({ sources: [], runId: 'r-1' })
+  rmSync(dir, { recursive: true, force: true })
+  assert.equal(legacy.status, 2)
+  assert.match(legacy.stderr, /runId/)
+  assert.equal(foreign.status, 2)
+  assert.match(foreign.stderr, /다른 실행/)
+  assert.equal(same.status, 0, same.stderr)
+})
