@@ -693,6 +693,32 @@ These scenarios pin the behaviour that `review-rules/workflow-contract.md` promi
       ],
       "scenario": "A subscription run records costUsd from the result envelope",
       "expected": "The tokens are the record and the amount is a list-price valuation carried alongside; the report does not describe it as what the review cost"
+    },
+    {
+      "id": 90,
+      "clauses": [
+        "C-10"
+      ],
+      "scenario": "Two runs review the same HEAD, but the second has uncommitted edits to a file the first already reviewed",
+      "expected": "run.start records a different worktree fingerprint for the second run, so the two are different targets; HEAD alone never makes an earlier run's results apply to the edited tree"
+    },
+    {
+      "id": 91,
+      "clauses": [
+        "C-10",
+        "C-8"
+      ],
+      "scenario": "Writing the snapshot fails halfway, or a later reader finds a truncated or unknown-version snapshot file",
+      "expected": "The previous valid snapshot stays in place and the write reports an error; the reader reports the file as unreadable rather than treating it as a review with no findings"
+    },
+    {
+      "id": 92,
+      "clauses": [
+        "C-10",
+        "C-8"
+      ],
+      "scenario": "One applicable module timed out twice and another finished ok but was never collected",
+      "expected": "The snapshot status is partial with the first module FAILED and the second 결과 없음, and the 실행 계획 block pasted into the report is printed from that saved snapshot, so the report and the JSON state the same status and scope"
     }
   ],
   "defaultWorkflowOnlyCases": [

@@ -238,6 +238,8 @@ SDK 드리프트로 원래부터 그만큼 실패하고 있었고, 그 브랜치
 
 **ID는 동일 실행 안에서만 안정적이다.** 실행 간 안정성은 보장하지 않는다. 자유 서술을 hash해 실행 간 안정성까지 만들려면 정규화·충돌 처리·버전 이행이 따라붙는다. 실행 간 추적이 필요해지면 그때 별도로 설계한다.
 
+결과 스냅숏(C-10)은 지적을 `<runId>/<candidateId>` 꼴의 `ref`로 가리킨다. 이것도 실행 간 식별자가 아니다 — 어느 실행의 어느 후보인지가 섞이지 않게 할 뿐, 다른 실행의 지적과 같은 결함인지는 말하지 않는다.
+
 ### 실행 위치
 
 **검증은 exact dedup 이후에 한다.** 같은 결함을 여러 번 반박하는 낭비를 피한다. **위치 대조는 dedup보다 앞에 둔다** — dedup이 정규화 위치를 키로 쓰므로, 위치가 틀린 채로 병합하면 잘못된 병합이 만들어진다.
@@ -850,9 +852,9 @@ H1은 **`# {대상} {워크플로우 이름} 리포트`** 형식이며, 대상�
 | 레벨 | 섹션 | 내용 | 적용 |
 |------|------|------|------|
 | `#` | `{대상} {워크플로우 이름} 리포트` | 문서에 **하나뿐** | 전체 |
-| `##` | 리뷰 기준 | 범위, base, merge-base, `RULES_DIR`, 플러그인 버전, 프로젝트 프로파일 | 전체 |
+| `##` | 리뷰 기준 | 범위, base, merge-base, HEAD, 작업 트리(`clean` 또는 커밋하지 않은 변경 수), 실행 ID, `RULES_DIR`, 플러그인 버전, 프로젝트 프로파일 | 전체 |
 | `##` | 판정 | 결론 한 줄과 차단 사유. 길어야 서너 줄 | 전체 |
-| `##` | 실행 계획 | 후보 N / 적용 M / `SKIPPED`·`UNKNOWN` 목록과 사유 / 실패 클래스별 건수 | 모듈을 쓰는 워크플로우 |
+| `##` | 실행 계획 | 후보 N / 적용 M / `SKIPPED`·`UNKNOWN` 목록과 사유 / 실패 클래스별 건수. `full`은 맨 앞에 `review-snapshot.mjs` 블록(검토 상태와 모듈별 범위, C-10)을 그대로 붙인다 | 모듈을 쓰는 워크플로우 |
 | `##` | 상세 지적 | 아래 모듈 섹션을 담는다. `full`은 `render-findings.mjs` 출력을 그대로 붙인다 — 표기를 직접 만들지 않는다. 다른 워크플로우는 각자의 기존 producer 계약과 표 형식을 그대로 유지한다 | 전체 (`render-findings.mjs` 호출은 `full`만) |
 | `###` | `{NN} {모듈 제목}` | 모듈 하나당 하나 | 모듈을 쓰는 워크플로우 |
 | `####` | `{severity} {규칙 ID} {제목}` | finding 하나당 하나 | 전체 |
@@ -995,7 +997,8 @@ node <RULES_DIR>/../scripts/review-preflight.mjs --dir <리포트 디렉터리> 
 
 이 스크립트가 `run.start`를 쓰고, 동시에 `리뷰 기준`과 `실행 계획`에 적을 값을
 낸다 — 플러그인 버전, 해석된 규칙 경로, 브랜치, merge-base, 변경 파일 수, **후보
-모듈 수와 목록**. 그 값을 손으로 세지 않는다.
+모듈 수와 목록**. 그 값을 손으로 세지 않는다. 같은 줄에 **무엇을 리뷰하는지**도
+남긴다 — 실행 ID, HEAD, 작업 트리 fingerprint, 저장소, 규칙 digest(C-10).
 
 **왜 스크립트가 시작을 쓰는가.** "첫 sub-agent보다 먼저 남겨라"는 기억해야 하는
 지시였고, 그것으로는 부족했다. 한 실행(357개 파일, 3시간 28분)이 이 계약을 읽고도
@@ -1116,7 +1119,7 @@ UTF-16 파일도 읽는다 — PowerShell 5.1의 `Set-Content -Encoding UTF8`은
 
 | `--phase` | 시점 | `--set`/`--data`에 담는 것 |
 |---|---|---|
-| `run.start` | 가장 먼저 | `host`, `rules`(해석된 RULES_DIR), `version`, `branch`, `changedFiles` |
+| `run.start` | 가장 먼저 | `host`, `rules`(해석된 RULES_DIR), `version`, `branch`, `changedFiles` · 무엇을 리뷰하는지(C-10): `runId`, `base`, `head`, `worktree`, `dirtyFiles`, `repo`, `repoRoot`, `rulesDigest` — preflight가 쓴다 |
 | `scope.done` | 범위 확정(C-4) | `files`, `excluded` |
 | `modules.planned` | 적용 모듈 확정(C-3) | `candidates`, `applied` · `skipped`, `unknown`(중첩, `--data-file`) |
 | `dispatch.start` | **첫 sub-agent를 실제로 띄운 직후** | `modules`, `inflight` |
@@ -1473,6 +1476,112 @@ C-7 골격 표에 있다 — 붙일 자리가 없다고 만들지 않거나 다�
 같은 이유로, 실행되지 않은 단계의 줄을 사후에 채워 넣지 않는다. 빠진 줄은
 그 자체가 관측 결과다.
 
+## C-10. 실행 식별과 결과 스냅숏
+
+한 실행이 **무엇을** 리뷰했고, **어디까지** 끝냈고, **무엇을** 찾았는지를 파일 하나로
+남긴다. 다음 실행이 이전 실행과 비교하는 기능(증분 재리뷰·판정 기록)이 이 파일을
+읽는다. 오늘 스냅숏을 쓰는 워크플로우는 `full` 하나다. 실행 식별(`run.start`)은
+preflight를 쓰는 모든 워크플로우에 남는다.
+
+그 답은 지금까지 리포트 Markdown·타임라인·중간 파일 여럿에 흩어져 있었다. 비교할
+때마다 다시 조립하면, 조립하는 쪽마다 "끝난 모듈"과 "검토하지 않은 범위"를 다르게
+읽어 같은 실행이 비교마다 다른 실행이 된다. 그래서 그 판단을 스크립트가 한 번 하고
+파일로 남긴다.
+
+### 무엇을 리뷰했는가 — `run.start`
+
+브랜치와 merge-base만으로는 두 실행이 같은 대상을 봤는지 말할 수 없다. 같은 HEAD에서
+작업 트리만 바뀐 두 실행이 기록상 똑같은데, producer와 위치 대조는 작업 트리의 파일을
+읽으므로 두 실행은 다른 내용을 봤다. HEAD가 같다는 이유로 바뀐 작업 트리에 이전 판정을
+붙이면 안 된다.
+
+preflight가 `run.start`에 다음을 함께 남긴다(`scripts/lib/run-identity.mjs`).
+
+| 필드 | 뜻 |
+|------|-----|
+| `runId` | 실행마다 새로 만든 UUID. 리포트 basename은 같은 날 같은 브랜치에서 겹칠 수 있다 |
+| `head`, `base`, `mergeBase` | 리뷰한 커밋과 범위 |
+| `worktree`, `dirtyFiles` | HEAD에 대한 작업 트리 변경. 없으면 `clean`과 0, 있으면 `sha256:<hex>`와 파일 수 |
+| `repo`, `repoRoot` | 정규화한 원격 주소(자격 증명을 떼고, 원격이 없으면 필드를 남기지 않는다)와 root commit |
+| `rulesDigest` | 규칙 디렉터리 내용의 digest. 플러그인 버전이 같아도 홈 사본 규칙(C-1)이면 다르다. 검증자 지시와 결과 계약도 이 디렉터리에 있다 |
+
+작업 트리 fingerprint를 세는 규칙:
+
+- **index를 보지 않는다.** 리뷰가 읽는 것은 작업 트리다. 스테이징만 하고 되돌린 변경은 대상을 바꾸지 않는다
+- 추적하지 않는 파일(무시 규칙 밖)·지운 파일·mode 변경을 넣는다. 서브모듈은 내용을 열지 않고 commit id로만 센다
+- 내용은 git의 blob id로 센다. 줄 끝 설정이 달라도 같은 내용이면 같은 값이다
+- **리포트 디렉터리는 뺀다.** 기본 저장 위치는 대상 저장소 안이고, 실행이 스스로 쓰는 기록이 대상을 바꾼 것으로 보이면 안 된다
+- 대상 저장소에 아무것도 쓰지 않는다(`hash-object`에 `-w`를 주지 않고, `GIT_OPTIONAL_LOCKS=0`으로 인덱스 갱신을 막는다)
+
+**작업 트리 변경은 리뷰 diff(`merge-base..HEAD`)에 들어가지 않는다.** 그래도 대상의
+일부인 이유는 파일을 읽는 단계(위치 확인, 추가 Read)가 그 내용을 보기 때문이다.
+변경이 있으면 preflight가 그렇다고 출력한다 — `리뷰 기준`에 적는다.
+
+### 결과 스냅숏 — `<리포트 basename>.snapshot.json`
+
+```
+node <RULES_DIR>/../scripts/review-snapshot.mjs --dir <리포트 디렉터리> --run <리포트 basename> \
+     --rules <RULES_DIR> --verification-state <ran|disabled> [--repo <대상 저장소>]
+```
+
+렌더(`render-findings.mjs`) 뒤, 리포트를 쓰기 전에 돌린다. `.timing/` 아래 같은
+실행의 파일을 읽는다 — 타임라인, routed 출력(`prepare-verification.mjs --collect`),
+판정(`tally-verdicts.mjs --collect`), 모듈별 결과 파일. `--verification-state`는
+렌더러에 준 값과 같고, 기본값이 없다(C-6B — 검증을 끈 실행과 검증이 깨진 실행은 다르다).
+
+| 필드 | 내용 |
+|------|------|
+| `run` | `runId`, 리포트 basename, 워크플로우, 플러그인 버전, 규칙 경로·digest, host, 시작 시각 |
+| `target` | `run.start`가 기록한 대상 |
+| `drift` | 스냅숏을 쓸 때 다시 잰 HEAD·작업 트리·규칙 digest 중 기록과 다른 것 |
+| `status` | `complete` · `partial` · `failed` |
+| `scope` | 모듈마다 `ok` · `failed` · `missing` · `skipped` · `unknown`과 사유, 그리고 그 수 |
+| `verification` | `state`(`ran` · `disabled`) |
+| `findings` | 후보마다 `ref`, `candidateId`, 규칙 ID, `impact`·`confidence`, 출처, 위치, 위치 대조 결과, eligibility, route, disposition(C-6B) |
+| `openQuestions` | 수집한 producer 결과의 openQuestion과 그 출처 |
+| `inputs` | 읽은 파일의 역할·경로·sha256 |
+| `notes` | 스크립트가 짚은 기록의 빈 곳 |
+
+**모듈 상태와 실행 상태.**
+
+- `ok`는 **기록과 수집이 둘 다** 성공을 말할 때뿐이다. 기록의 최종 상태는 가장 큰
+  `attempt`의 `module.done`이다 — 파일의 마지막 줄이 아니다. 앞 시도를 나중에 정정한
+  줄이 뒤 시도의 성공을 덮지 않는다
+- `missing`은 적용 대상인데 결과가 없는 것이다 — `module.done`이 없다(`no-record`),
+  status가 `ok`도 `failed`도 아니다(`status-outside-list`), 성공으로 기록됐지만 수집되지
+  않았다(`not-collected`)
+- `skipped`·`unknown`은 마지막 `modules.planned`를 따른다. 그 줄이 없으면 후보 전부를
+  적용 대상으로 본다 — 건너뛴 사실을 지어내지 않는다
+- 적용 대상을 전부 모았으면 `complete`, 하나도 못 모았으면 `failed`, 그 사이는
+  `partial`이다. `SKIPPED`·`UNKNOWN`은 상태를 낮추지 않지만 범위에는 남는다.
+  `partial`과 `failed`는 `FAILED orchestration`이다(C-8)
+
+**리포트와 JSON은 같은 것을 말한다.** 스크립트는 `실행 계획`에 붙일 블록을 stdout으로
+내는데, 그 블록은 **방금 저장한 파일을 다시 읽어** 그린다. 그대로 붙이고 고치지 않는다.
+저장된 스냅숏에서 같은 블록을 다시 내려면 `--show <경로>`를 쓴다.
+
+**원본을 대신하지 않는다.** 타임라인과 중간 파일은 그대로 두고, 스냅숏은 그것들을
+sha256으로 가리킨다. 지적의 본문·근거 서술은 싣지 않는다 — C-6B의 영속 audit sidecar가
+원본 전문과 `evidence` 자유 서술을 빼는 것과 같은 이유다.
+
+**`ref`는 실행 간 식별자가 아니다.** `candidateId`는 같은 실행 안에서만 안정적이다
+(C-6B). `ref`(`<runId>/<candidateId>`)는 어느 실행의 후보인지 섞이지 않게 할 뿐이고,
+다른 실행의 지적과 같은 결함인지는 말하지 않는다.
+
+### 쓰기와 읽기
+
+- **임시 파일에 쓰고, 다시 읽어 확인한 뒤 교체한다.** 계약에 맞지 않는 스냅숏은 쓰지
+  않는다. 어느 단계에서 실패하든 앞의 정상 파일은 그대로이고 임시 파일은 남지 않는다
+- 다른 실행(`runId`가 다른)의 정상 스냅숏은 덮지 않는다. 깨진 파일은 덮는다
+- **읽을 수 없는 스냅숏을 빈 리뷰로 읽지 않는다.** 비었거나, 잘렸거나, `schemaVersion`이
+  다르거나, 필드가 빠졌거나, 수치·상태가 모듈 목록과 맞지 않으면 진단을 내고 값을 돌려주지
+  않는다. "이전 리뷰의 지적 0건"과 "이전 리뷰를 읽지 못했다"는 다르다
+- 스크립트가 스냅숏을 만들지 않고 멈추는 경우(종료 코드 2) — `run.start`나 `runId`가 없다
+  (2.16.0 이전 preflight로 시작한 실행), routed 출력이 없거나 `--collect` 출력이 아니다,
+  수집한 모듈의 결과 파일이 없다, 검증 대상이 있는데 판정 파일이 없다(검증자가 하나도
+  판정을 내지 못했으면 `--no-verdicts`), 검증을 끈 실행에 판정 파일을 줬다
+- 파일 생성을 원하지 않는 요청(C-6)에서는 돌리지 않는다
+
 ## 워크플로우별 차이 선언
 
 각 SKILL 문서는 이 계약을 참조한 뒤 아래 항목 중 자기 모드에서 달라지는 것만 적는다.
@@ -1484,3 +1593,4 @@ C-7 골격 표에 있다 — 붙일 자리가 없다고 만들지 않거나 다�
 | 분할 방식 | 단일 통합 pass | `full` — 모듈별 sub-agent, wave 단위 |
 | 출력 밀도 | 위반 전부 | `fast` — 파일당 최대 1개 |
 | 모듈 필터 | 없음 | `default` — `--module` |
+| 결과 스냅숏 | 없음 | `full` — `review-snapshot.mjs` (C-10) |
