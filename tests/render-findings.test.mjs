@@ -1047,6 +1047,8 @@ test('catalog에서 특수 패스 접두를 얻는다', () => {
     { kind: 'pass', id: 'props', title: 'Props', prefixes: ['P'], source: 'props' },
     { kind: 'pass', id: 'math', title: '수학', prefixes: ['A', 'C'], source: 'math' },
     { kind: 'pass', id: 'exception', title: '예외', prefixes: ['EX'], source: 'exception' },
+    // 선택 패스. full에서 켰을 때만 돈다(#88 PR 1) — catalog의 optIn이 그렇게 말한다.
+    { kind: 'pass', id: 'correctness', title: '정확성', prefixes: ['CR'], source: 'correctness', optIn: true },
   ])
 })
 
@@ -1432,4 +1434,51 @@ test('CLI가 routed의 collected로 수집되지 않은 모듈을 표시한다',
   assert.equal(out.status, 0, out.stderr)
   assert.match(out.stdout, /### 01 FSD 아키텍처\n\n결과 없음 — /)
   assert.match(out.stdout, /#### 🔴 `04-3` 제목/)
+})
+
+// ------------------------------------------------- 정확성 패스 (#88 PR 1)
+//
+// 선택 패스는 켰을 때만 돈다. 켜지 않은 실행에서 "지적 없음."을 찍으면 돌았는데 0건인 것처럼
+// 보이고, 섹션을 빼면 그런 패스가 있는지조차 보이지 않는다. 켰는지는 prepare-verification이
+// run.start에서 읽어 `collected.optIn`으로 넘긴다.
+
+const CORRECTNESS = { kind: 'pass', id: 'correctness', title: '정확성', prefixes: ['CR'], source: 'correctness', optIn: true }
+const WITH_CORRECTNESS = [...SECTIONS, CORRECTNESS]
+const crFinding = extra => ok({ candidateId: 'CR-1#1', ruleId: 'CR-1', source: 'correctness', impact: 'high', confidence: 'low',
+  content: { title: '취소 뒤 늦은 응답이 상태를 덮는다', body: '본문', evidence: '근거', reason: '취소 경로 일부만 읽었다' }, ...extra })
+
+test('켜지 않은 정확성 패스는 SKIPPED와 이유를 낸다 — 지적 없음으로 찍지 않는다', () => {
+  const { markdown } = render([], new Map(), PHASES_BOTH, VOCAB, WITH_CORRECTNESS, false,
+    { collected: new Set(['props', 'math', 'exception']), optIn: { correctness: 'off' } })
+  assert.match(markdown, /### 정확성\n\n`SKIPPED` — 선택 패스, 이 실행에서 켜지 않았다\(`--correctness on` 없음\) · 비차단\n/)
+})
+
+test('켜지 않았는데 결과가 있었던 정확성 패스는 모으지 않았다는 사실도 낸다', () => {
+  const { markdown } = render([], new Map(), PHASES_BOTH, VOCAB, WITH_CORRECTNESS, false,
+    { collected: new Set(), optIn: { correctness: 'off' }, excludedNotRequested: new Set(['correctness']) })
+  assert.match(markdown, /### 정확성\n\n`SKIPPED` — 선택 패스, .* 기록이나 결과 파일이 있었지만 이 실행의 결과로 모으지 않았다\./)
+})
+
+test('켠 정확성 패스는 다른 특수 패스와 같다 — 지적, 지적 없음, 결과 없음', () => {
+  const on = { optIn: { correctness: 'on' } }
+  const empty = render([], new Map(), PHASES_BOTH, VOCAB, WITH_CORRECTNESS, false, { ...on, collected: new Set(['correctness']) }).markdown
+  assert.match(empty, /### 정확성\n\n지적 없음\.\n/)
+  const failed = render([], new Map(), PHASES_BOTH, VOCAB, WITH_CORRECTNESS, false, { ...on, collected: new Set([]) }).markdown
+  assert.match(failed, /### 정확성\n\n결과 없음 — /)
+  const found = render([crFinding()], new Map(), PHASES_BOTH, VOCAB, WITH_CORRECTNESS, false, { ...on, collected: new Set(['correctness']) }).markdown
+  // 출처·영향·확신이 그대로 남는다
+  assert.match(found, /### 정확성\n\n#### 🟡 `CR-1` 취소 뒤 늦은 응답이 상태를 덮는다\n영향: 높음 \(데이터 손상·유실\) · 확신: 낮음\n출처 패스: correctness\n/)
+})
+
+test('켰는지 모르는 입력(--input 경로)은 CR 지적이 있을 때만 정확성 섹션을 낸다', () => {
+  assert.doesNotMatch(render([], new Map(), PHASES_BOTH, VOCAB, WITH_CORRECTNESS, false).markdown, /정확성/)
+  assert.match(render([crFinding()], new Map(), PHASES_BOTH, VOCAB, WITH_CORRECTNESS, false).markdown, /### 정확성\n\n#### /)
+})
+
+test('같은 자리의 다른 namespace 지적은 관련 지적 줄로 잇는다 — 상세 지적에 없는 것은 그렇다고 적는다', () => {
+  const rule = ok({ candidateId: '04-3#1', ruleId: '04-3', relatedCandidateIds: ['CR-1#1'] })
+  const cr = crFinding({ relatedCandidateIds: ['04-3#1', '11-6#1'] })
+  const { markdown } = render([rule, cr], new Map(), PHASES_BOTH, VOCAB, WITH_CORRECTNESS, false, { optIn: { correctness: 'on' } })
+  assert.match(markdown, /#### 🔴 `04-3` 제목\n[^\n]*\n관련 지적: `CR-1`\n/)
+  assert.match(markdown, /출처 패스: correctness\n관련 지적: `04-3`, `11-6#1` \(상세 지적에 없음\)\n/)
 })
