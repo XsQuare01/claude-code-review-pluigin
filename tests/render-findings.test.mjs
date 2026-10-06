@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url'
 
 import {
   validateCandidates, loadVocabulary, renderFinding, severityOf, escapeProse, codeSpan,
-  withInstanceNumbers, labelFor, compareCandidates, loadModuleSections, loadSpecialistPasses, render,
+  withInstanceNumbers, labelFor, dispositionOf, compareCandidates, loadModuleSections, loadSpecialistPasses, render,
 } from '../scripts/render-findings.mjs'
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)))
@@ -933,6 +933,22 @@ test('upheld 판정은 유지다', () => {
 // 거짓 표기가 찍히고, 독자는 리포트만 보고는 그 사실을 알 수 없다.
 // tally-verdicts.mjs가 같은 상황(C-6B 닫힌 목록 밖 disposition)에서 죽는
 // 것과 같은 이유로 여기서도 조용히 넘기지 않고 던진다.
+// 결과 스냅숏(#88 PR 0)과 리포트가 같은 함수로 disposition을 정한다. 두 곳이 각자
+// 정하면 JSON과 리포트가 같은 후보를 다르게 말할 수 있다.
+test('dispositionOf는 C-6B 표의 값을 낸다 — 오케스트레이터가 부여하는 값까지', () => {
+  const verify = ok({ eligibility: 'VERIFY' })
+  const skip = ok({ eligibility: 'SKIP-VERIFY' })
+  assert.equal(dispositionOf(skip, undefined, 'ran'), 'not-eligible')
+  assert.equal(dispositionOf(skip, undefined, 'disabled'), 'not-eligible', 'eligibility는 검증을 껐는지와 무관하다')
+  assert.equal(dispositionOf(verify, { disposition: 'upheld' }, 'disabled'), 'verification-disabled', 'disabled는 판정을 보지 않는다')
+  assert.equal(dispositionOf(verify, undefined, 'ran'), 'verification-unavailable')
+  assert.equal(dispositionOf(verify, { disposition: 'upheld' }, 'ran'), 'upheld')
+  assert.equal(dispositionOf(verify, { disposition: 'rejected' }, 'ran'), 'rejected')
+  assert.equal(dispositionOf(verify, { disposition: 'needs-context' }, 'ran'), 'scope-open')
+  assert.throws(() => dispositionOf(verify, { disposition: 'totally-bogus' }, 'ran'), /totally-bogus/)
+  assert.throws(() => dispositionOf(verify, undefined, undefined), /ran.*disabled/)
+})
+
 test('닫힌 목록 밖 disposition은 유지로 흘려보내지 않고 던진다', () => {
   const verdicts = new Map([['04-3#1', { disposition: 'totally-bogus' }]])
   assert.throws(
