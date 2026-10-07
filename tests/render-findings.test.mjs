@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url'
 
 import {
   validateCandidates, loadVocabulary, renderFinding, severityOf, escapeProse, codeSpan,
-  withInstanceNumbers, labelFor, dispositionOf, compareCandidates, loadModuleSections, loadSpecialistPasses, render,
+  withInstanceNumbers, labelFor, dispositionOf, compareCandidates, loadModuleSections, loadSpecialistPasses, render, lineageLine,
 } from '../scripts/render-findings.mjs'
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)))
@@ -1568,4 +1568,15 @@ test('CLI는 --collect 출력이 아니거나 다른 실행의 근거 파일이�
   assert.equal(foreign.status, 2)
   assert.match(foreign.stderr, /다른 실행/)
   assert.equal(same.status, 0, same.stderr)
+})
+
+// ── 이전 리뷰와의 관계(C-13) ───────────────────────────────────────────
+
+test('이전 리뷰 줄은 비교한 실행에만 나오고, 신규에는 그 자리가 이번에 바뀌었는지를 적는다', () => {
+  assert.equal(lineageLine(undefined), null)
+  assert.equal(lineageLine({ status: 'linked', previousRef: 'run-a/04-3#1' }), '이전 리뷰: 이어짐 — 이전 지적 `run-a/04-3#1`이 아직 남아 있다')
+  assert.equal(lineageLine({ status: 'new', fileChanged: true }), '이전 리뷰: 신규')
+  assert.equal(lineageLine({ status: 'new', fileChanged: false, ruleChanged: true }),
+    '이전 리뷰: 신규 — 이번 변경이 이 파일을 바꾸지 않았다 — 이전 리뷰가 놓쳤거나 판단이 달라진 것이다 · 이 지적의 규칙 문서가 바뀌었다')
+  assert.match(lineageLine({ status: 'recheck', reason: 'ambiguous' }), /^이전 리뷰: 재확인 필요 — 같은 규칙·같은 자리에/)
 })

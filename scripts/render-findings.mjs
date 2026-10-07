@@ -329,11 +329,14 @@ export function renderFinding(candidate, { label, vocabulary, related = [], evid
     .map(([key, head]) => `${head}: ${escapeProse(candidate.content[key])}`)
 
   const source = sourceLine(candidate)
+  const lineage = lineageLine(candidate.lineage)
 
   return [
     `#### ${severity} \`${candidate.renderedRuleId ?? candidate.ruleId}\` ${escapeProse(candidate.content.title)}`,
     axes.join(' · '),
     ...(source ? [source] : []),
+    // 이전 리뷰와의 관계(C-13). 이전 리뷰와 비교한 실행에만 있다.
+    ...(lineage ? [lineage] : []),
     // 같은 자리에 걸린 다른 namespace의 지적. 합치지 않고 잇기만 한다 — 근거가 다른 두
     // 지적이 같은 결함인지는 이 렌더러가 정하지 않는다. 값은 호출자가 이미 code span으로 만든다.
     ...(related.length ? [`관련 지적: ${related.join(', ')}`] : []),
@@ -343,6 +346,26 @@ export function renderFinding(candidate, { label, vocabulary, related = [], evid
     // 오케스트레이터가 남긴 확인 기록이다. 등급·축·교차검증은 바꾸지 않는다.
     ...evidence,
   ].join('\n')
+}
+
+const LINEAGE_REASON_TEXT = {
+  ambiguous: '같은 규칙·같은 자리에 이전 지적이 있지만 어느 것과 이어지는지 모른다',
+  'location-unverified': '위치를 확인하지 못한 지적이라 이전 지적과 잇지 못했다',
+  'previous-not-reviewed': '이전 리뷰가 이 모듈을 검토하지 않아 신규인지 말할 수 없다',
+}
+
+/**
+ * `이전 리뷰:` 줄(C-13). 신규는 "이전 리뷰에 없던 지적"이다 — 그 자리의 코드가 이번에 바뀌지 않았으면
+ * 이번 변경이 만든 결함이 아니라는 사실을 함께 적는다.
+ */
+export function lineageLine(lineage) {
+  if (!lineage) return null
+  if (lineage.status === 'linked') return `이전 리뷰: 이어짐 — 이전 지적 ${codeSpan(lineage.previousRef)}이 아직 남아 있다`
+  if (lineage.status === 'recheck') return `이전 리뷰: 재확인 필요 — ${LINEAGE_REASON_TEXT[lineage.reason] ?? codeSpan(lineage.reason)}`
+  const notes = []
+  if (lineage.fileChanged === false) notes.push('이번 변경이 이 파일을 바꾸지 않았다 — 이전 리뷰가 놓쳤거나 판단이 달라진 것이다')
+  if (lineage.ruleChanged) notes.push('이 지적의 규칙 문서가 바뀌었다')
+  return `이전 리뷰: 신규${notes.length ? ` — ${notes.join(' · ')}` : ''}`
 }
 
 const OUTCOME_TEXT = {
