@@ -1625,6 +1625,20 @@ test('--check는 특수 패스를 dispatch.end 집계에 넣지 않는다', t =>
   assert.doesNotMatch(out.stdout, /dispatch\.end`의 수치/)
 })
 
+test('--check는 앞 시도를 나중에 바로잡은 줄로 최종 상태를 정하지 않는다', t => {
+  // 최종은 가장 큰 시도다. 시도 1의 목록 밖 status를 시도 2가 성공한 뒤에 바로잡으면, 마지막 줄로
+  // 센 집계는 멀쩡한 dispatch.end(성공 1)를 틀렸다고 짚었다(PR #87 리뷰에서 재현).
+  const dir = freshDir(t)
+  const events = dispatched([
+    { at: '2026-09-18T00:02:10.000Z', seq: 8, phase: 'module.done', module: '01-fsd', attempt: 1, status: 'failed', failureClass: 'skill-injection-invalid', note: '시도 1의 status를 바로잡는다' },
+    { at: '2026-09-18T00:03:00.000Z', seq: 9, phase: 'dispatch.end', terminalOk: 1, terminalFailed: 0, attemptsTotal: 2, attemptsFailed: 1 },
+  ])
+  events[4] = { ...events[4], status: 'ERROR' }
+  plant(dir, events)
+  const out = check(dir)
+  assert.doesNotMatch(out.stdout, /dispatch\.end`의 수치/)
+})
+
 test('--check는 디스패치가 없던 실행에 dispatch.end를 요구하지 않는다', t => {
   const dir = freshDir(t)
   plant(dir, [
@@ -1917,3 +1931,4 @@ test('dispatch.end에 넘긴 수치가 기록과 다르면 경고하고 기록�
   assert.match(out.stderr, /terminalOk 3 → 기록으로 세면 2/)
   assert.equal(linesOf(dir).at(-1).terminalOk, 2)
 })
+

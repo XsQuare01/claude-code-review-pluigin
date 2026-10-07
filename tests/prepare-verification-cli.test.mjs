@@ -334,6 +334,22 @@ test('--collect는 목록 밖 status를 note 단 줄로 바로잡은 모듈을 �
   assert.deepEqual(JSON.parse(out.stdout).collected.sources, ['01-fsd'])
 })
 
+test('--collect는 앞 시도를 나중에 바로잡은 줄이 뒤 시도의 성공을 덮지 않게 한다', t => {
+  // PR #87 리뷰에서 재현한 순서다: 시도 1이 목록 밖 status로 끝나고, 시도 2가 성공하고, 그 뒤에
+  // 시도 1을 note 단 줄로 failed로 바로잡는다. 파일의 마지막 줄을 최종으로 읽으면 성공한 결과를 버린다.
+  const dir = startedWith(t, [
+    done('01-fsd', 'ERROR'),
+    { ...done('01-fsd', 'ok'), attempt: 2 },
+    { ...done('01-fsd', 'failed'), note: '시도 1의 status ERROR를 failed로 바로잡는다' },
+  ])
+  resultFile(dir, '01-fsd', RESULT)
+  const out = collect(dir)
+  assert.equal(out.status, 0, out.stderr)
+  const result = JSON.parse(out.stdout)
+  assert.deepEqual(result.collected.sources, ['01-fsd'])
+  assert.deepEqual(result.collected.excludedFailed, [])
+})
+
 test('--collect는 module.done 없이 결과 파일만 있는 모듈을 모으지 않고 거부한다', t => {
   // 결과 파일은 module.done보다 먼저 쓴다(SKILL). 기록이 없으면 그 모듈이 이번 실행에서
   // 끝났는지 알 수 없다 — 쓰다 만 파일이거나 앞 실행의 파일일 수 있다.

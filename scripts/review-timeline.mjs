@@ -28,6 +28,7 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs'
 import { basename, dirname, extname, join, resolve } from 'node:path'
 
+import { moduleOutcomes } from './lib/run-record.mjs'
 import { runNameProblem } from './lib/run-name.mjs'
 
 const die = message => {
@@ -258,8 +259,10 @@ const FAILURE_CLASSES = new Set([
 const dispatchCounts = events => {
   const { superseded } = moduleDoneCorrections(events)
   const attempts = events.filter(event => event.phase === 'module.done' && /^\d\d-/.test(String(event.module ?? '')) && !superseded.has(event))
+  // 최종 상태는 **가장 큰 시도**의 것이다. 파일의 마지막 줄로 정하면, 시도 1을 나중에 바로잡은
+  // 줄이 시도 2의 성공을 덮어 멀쩡한 `dispatch.end`를 틀렸다고 짚는다(PR #87 리뷰에서 재현).
   const terminal = new Map()
-  for (const event of attempts) terminal.set(String(event.module), event.status)
+  for (const [module, outcome] of moduleOutcomes(attempts)) terminal.set(module, outcome.status)
   return {
     countable: attempts.every(event => ['ok', 'failed'].includes(event.status)),
     modules: terminal.size,
