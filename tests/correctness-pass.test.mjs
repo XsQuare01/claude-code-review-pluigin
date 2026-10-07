@@ -266,3 +266,48 @@ test('켜지 않은 실행은 정확성을 SKIPPED로 그리고, 돌린 결과�
   assert.equal(saved.status, 'complete')
   assert.equal(saved.scope.modules.find(module => module.name === 'correctness').reasonCode, 'not-requested')
 })
+
+// 재현 근거(#88 PR 2)가 같은 파이프라인 끝까지 이어지는지 본다. 재현 명령은 node 한 줄이다 —
+// 이 테스트도 모델을 부르지 않고, 재현 스크립트가 결함을 "찾는다"는 것을 증명하지 않는다.
+test('재현 근거가 수집·렌더·스냅숏까지 이어지고, 지적의 등급과 판정은 바꾸지 않는다', t => {
+  const run = startRun(t, { correctness: 'on' })
+  for (const name of ALWAYS) finishModule(run, name, name === '04-state' ? [RULE_SAME_LINE] : [])
+  finishModule(run, 'correctness', [DELETED_GUARD, UNCHANGED_CALLER, REFUTED_BY_GUARD])
+  const { routed, routedPath } = collect(run)
+  assert.equal(routed.collected.runId, readFileSync(join(run.timing, `${RUN}.jsonl`), 'utf8').split('\n').map(line => line && JSON.parse(line)).find(event => event?.phase === 'run.start').runId)
+  answerVerifiers(routed)
+  assert.equal(node(run.repo, 'tally-verdicts.mjs', ['--dir', run.dir, '--run', RUN, '--rules', RULES, '--collect', '--targets', routedPath]).status, 0)
+
+  const evidence = args => node(run.repo, 'review-evidence.mjs', args)
+  const executed = evidence(['exec', '--dir', run.dir, '--run', RUN, '--candidate', 'CR-2#1', '--expect-exit', '1', '--expect-output', 'TypeError',
+    '--', process.execPath, '-e', "console.error('TypeError: Cannot read properties of undefined'); process.exit(1)"])
+  assert.equal(executed.status, 0, executed.stderr)
+  const execId = JSON.parse(executed.stdout).id
+  const input = join(run.dir, 'entries.json')
+  writeFileSync(input, JSON.stringify({ entries: [
+    { candidateId: 'CR-2#1', method: 'executed', condition: '이름 없는 사용자로 title 호출', procedure: 'title({})', expected: '빈 제목', observed: 'TypeError', executions: [execId] },
+    { candidateId: 'CR-1#1', method: 'static-trace', condition: '만료 세션', procedure: 'renew 경로 추적', expected: 'null', observed: 'refresh 호출' },
+    { candidateId: 'CR-3#1', method: 'not-run', reason: '취소 타이밍을 재현할 하네스가 없다' },
+  ] }))
+  assert.equal(evidence(['note', '--dir', run.dir, '--run', RUN, '--input', input]).status, 0)
+
+  const rendered = node(run.repo, 'render-findings.mjs', [
+    '--input', routedPath, '--verdicts', join(run.timing, `${RUN}.verdicts.json`), '--evidence', join(run.timing, `${RUN}.evidence.json`),
+    '--phase-high', 'rollout-shadow', '--phase-low', 'rollout-shadow', '--verification-state', 'ran', '--rules', RULES, '--workflow', 'full',
+  ])
+  assert.equal(rendered.status, 0, rendered.stderr)
+  const correctness = section(rendered.stdout, '정확성')
+  assert.match(correctness, /#### 🔴 `CR-2`[^\n]*\n[^\n]*교차검증: `유지`[\s\S]*?재현 근거: 실행 — 재현됨 · 종료 코드 1 · `exec-[^`]+` · base 미측정/)
+  assert.ok(correctness.includes(`\`${execId}\``), '실행 ID가 리포트에 남는다')
+  assert.match(correctness, /재현 근거: 코드 경로 분석 — 실행하지 않았다\n조건: 만료 세션/)
+  // 확인하지 않았다고 해서 반박된 지적의 상태가 바뀌지 않는다
+  assert.match(correctness, /#### 🟡 `CR-3`[^\n]*\n[^\n]*`반박됨 — 관찰 중`[\s\S]*?재현 근거: 확인하지 않음 — 취소 타이밍을 재현할 하네스가 없다/)
+
+  const snap = snapshot(run, ['--verification-state', 'ran'])
+  assert.equal(snap.status, 0, snap.stderr)
+  const saved = parseSnapshot(readFileSync(join(run.timing, `${RUN}.snapshot.json`), 'utf8')).value
+  const byId = new Map(saved.findings.map(finding => [finding.candidateId, finding]))
+  assert.deepEqual(byId.get('CR-2#1').evidence, { method: 'executed', valid: true, headOutcome: 'reproduced', headUsable: true, comparison: 'base-unmeasured' })
+  assert.equal(byId.get('CR-1#1').evidence.method, 'static-trace')
+  assert.equal(byId.get('CR-3#1').disposition, 'rejected')
+})

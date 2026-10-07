@@ -380,6 +380,27 @@ node "$RULES_DIR/../scripts/tally-verdicts.mjs" --dir "$REPORT_DIR" --run "$REPO
 - `--collect`는 판정 파일도 계약대로 검사한다. 교정 뒤에도 어긴 판정은 세지 않고 그 작업을 알리며, 그 후보는 `noVerdict`다(C-6A — 두 번째 `malformed-output`은 확정 실패). **교정한 작업 수(`malformedTasksCorrected`)는 `<taskId>.retry.md`가 있는 작업을 스크립트가 센다** — verdict가 아니라 verifier task 수다. `--input` 경로에서만 `--malformed-tasks-corrected <N>`으로 넘긴다
 - **교차검증은 synthesis보다 먼저 끝낸다.** synthesis는 반박된 지적을 입력에서 빼므로(C-6B), `synthesis.start` 뒤에 판정을 다시 받으면 synthesis의 입력과 최종 판정이 어긋난다. `--check`가 그 기록을 문제로 짚는다
 
+### 재현 근거 (C-11)
+
+**지적을 어떻게 확인했는지를 근거 파일로 남긴다.** 교차검증 집계 뒤, 렌더 전에 한다. 모든 지적에 강제하지 않는다 — 남기지 않은 지적은 리포트에 예전과 똑같이 나온다. 차단 후보(`impact = high`)처럼 확인한 방법이 판정에 걸리는 지적부터 남긴다.
+
+- **재현 명령은 직접 돌리지 않고 이 스크립트로 돌린다.** 직접 돌린 결과는 `executed`의 근거가 될 수 없다. 무엇이 재현인지는 돌리기 전에 `--expect-exit`(필요하면 `--expect-output`)로 정한다. 명령은 수정 옵션 없이 돈다(C-6) — 작업 트리를 바꾸면 스크립트가 기록하되 근거로 쓰지 않는다
+
+  ```bash
+  node "$RULES_DIR/../scripts/review-evidence.mjs" exec --dir "$REPORT_DIR" --run "$REPORT_BASENAME" --candidate <candidateId> --expect-exit <코드> -- <명령> <인자...>
+  ```
+
+- base 쪽 재현(`--side base --repo <merge-base를 꺼낸 깨끗한 트리>`)은 그런 트리가 이미 있거나 사용자가 만들기를 허용했을 때만 한다. 없으면 base는 미측정으로 남는다 — 미측정을 "변경 전에는 정상"으로 쓰지 않는다
+- **근거 항목은 JSON 파일로 써서 넘긴다.** 산문을 셸 인자로 넘기지 않는다. 항목은 `candidateId`·`method`(`static-trace`/`executed`/`not-run`)와 조건(`condition`)·절차(`procedure`)·기대(`expected`)·관찰(`observed`), `executed`면 `executions`(위 명령이 낸 실행 ID), `not-run`이면 `reason`이다
+
+  ```bash
+  node "$RULES_DIR/../scripts/review-evidence.mjs" note --dir "$REPORT_DIR" --run "$REPORT_BASENAME" --input <항목 JSON 경로>
+  ```
+
+- 스크립트가 거부하면(종료 코드 2) 아무것도 쓰지 않은 것이다. 실행 기록이 없는데 `executed`로 적었으면 `static-trace`나 `not-run`으로 고친다 — 실행했다고 쓰려면 실행한다
+- 재현 안 됨·환경 실패·판단 불가는 반증이 아니다. 그 결과를 이유로 지적을 빼거나 등급을 바꾸지 않는다. 반증은 교차검증이 정한다
+- 근거를 남겼으면 렌더러에 `--evidence "$REPORT_DIR/.timing/$REPORT_BASENAME.evidence.json"`을 준다. 스냅숏은 같은 자리의 근거 파일을 스스로 읽는다
+
 ## 리포팅
 - 문서 골격(섹션 이름·순서·헤딩 레벨)은 `workflow-contract.md` C-7의 **문서 골격** 표를 따른다. 매 실행마다 다른 골격을 만들지 않는다.
 - 패스의 결과를 각각 구분해 출력한다: 일반, Props, 수학, 예외, (켰으면) 정확성.
@@ -419,7 +440,8 @@ node "$RULES_DIR/../scripts/render-findings.mjs" \
      --verification-state <ran|disabled> \
      --rules "$RULES_DIR" \
      --workflow full \
-     [--planned <modules-planned 페이로드 경로>]
+     [--planned <modules-planned 페이로드 경로>] \
+     [--evidence "$REPORT_DIR/.timing/$REPORT_BASENAME.evidence.json"]
 ```
 
 **교차검증을 끝낸 뒤에 렌더한다.** `render.start`를 남긴 뒤 판정을 다시 받으면 이미 그린 지적과 판정이 어긋나고, `review-timeline.mjs --check`가 그 기록을 문제로 짚는다.

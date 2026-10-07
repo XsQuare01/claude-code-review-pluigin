@@ -187,3 +187,30 @@ test('모르는 플래그와 남은 토큰은 거부한다', t => {
   assert.equal(snapshot(dir, repo, ['--verification-state', 'ran', '--bogus', 'x']).status, 2)
   assert.equal(snapshot(dir, repo, ['--verification-state', 'ran', 'stray']).status, 2)
 })
+
+test('재현 근거 파일이 있으면 지적에 요약을 싣고 그 파일들의 해시를 남긴다', t => {
+  const { repo, dir, timing } = startedRun(t)
+  const evidence = args => spawnSync(process.execPath, [join(ROOT, 'scripts', 'review-evidence.mjs'), ...args], { cwd: repo, encoding: 'utf8' })
+  const executed = evidence(['exec', '--dir', dir, '--run', RUN, '--candidate', '04-3#1', '--expect-exit', '1', '--', process.execPath, '-e', 'process.exit(1)'])
+  assert.equal(executed.status, 0, executed.stderr)
+  const input = join(dir, 'entries.json')
+  writeFileSync(input, JSON.stringify({ entries: [{ candidateId: '04-3#1', method: 'executed', condition: 'c', expected: 'e', executions: [JSON.parse(executed.stdout).id] }] }))
+  const noted = evidence(['note', '--dir', dir, '--run', RUN, '--input', input])
+  assert.equal(noted.status, 0, noted.stderr)
+
+  const out = snapshot(dir, repo, ['--verification-state', 'ran'])
+  assert.equal(out.status, 0, out.stderr)
+  const saved = savedSnapshot(timing).value
+  assert.deepEqual(saved.findings[0].evidence, { method: 'executed', valid: true, headOutcome: 'reproduced', headUsable: true, comparison: 'base-unmeasured' })
+  const roles = saved.inputs.map(entry => entry.role)
+  assert.ok(roles.includes('evidence'))
+  assert.ok(roles.includes('execution'))
+})
+
+test('재현 근거 파일을 읽을 수 없으면 스냅숏을 쓰지 않는다 — 근거 없음으로 읽지 않는다', t => {
+  const { repo, dir, timing } = startedRun(t)
+  writeFileSync(join(timing, `${RUN}.evidence.json`), '{"schemaVersion": 1, "kind": "review-evid')
+  const out = snapshot(dir, repo, ['--verification-state', 'ran'])
+  assert.equal(out.status, 2)
+  assert.match(out.stderr, /근거/)
+})

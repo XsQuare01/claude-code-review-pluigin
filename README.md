@@ -312,6 +312,21 @@ The rule modules ask whether the code breaks a rule. The correctness pass asks w
 
 The direct agent stays available. Its Do/Don't criteria are a copy of the ones in `correctness.md`, and `validate-rules.mjs` fails the build when the two drift.
 
+## Per-finding reproduction evidence (2.18.0)
+
+A finding says why something is wrong; it did not say how that was checked. Whether the reviewer traced the code, actually ran something, or never checked at all came out as the same kind of prose, and nothing stopped a model from writing "verified by running it" about a command it never ran.
+
+`/code-review-full` can now attach a checking record to each finding, kept next to the run in a separate file rather than in the producers' output.
+
+- **Three methods.** `static-trace` (followed the code path — with condition, procedure, expected and observed), `executed` (ran a reproduction), `not-run` (with the reason).
+- **`executed` needs a real execution.** Only `scripts/review-evidence.mjs exec` creates an execution record: it runs the command without a shell, writes the output to a log, records the exit code, which `HEAD` and working tree it ran on, and whether the tree changed, and logs a `tool.start`/`tool.done` pair. `review-evidence.mjs note` refuses an `executed` entry that does not point at a usable record for the same finding.
+- **Only this run's target counts.** A record from another run, another `HEAD` or working tree, a run that modified the tree, or one whose log no longer matches its hash is kept but not used as evidence.
+- **Four outcomes, none of them a refutation.** What counts as "reproduced" is fixed before the run (`--expect-exit`, optionally `--expect-output`); the script classifies `reproduced`, `not-reproduced`, `inconclusive` and `env-failure`. Refutation remains the cross-verification verdict's job; evidence never removes a finding or changes its severity.
+- **Pre-existing or new.** When the same reproduction also ran on a clean checkout of the merge base (`--side base`), the report says whether the defect predates the change. Without it the comparison is `base unmeasured` — never "fine before".
+- **Rendered short.** With `--evidence`, `render-findings.mjs` adds the method and outcome, the condition/expected/observed line and the log path after each finding's slots; the snapshot carries a summary and the files' hashes. Findings without evidence render exactly as before.
+
+The contract is `workflow-contract.md` C-11.
+
 ## Applicability metadata
 
 `review-rules/catalog.json` records **when** a module applies — required profile (FSD, Tailwind, RSC, Electron, TanStack Query, server code, contract provider), minimum React version, which workflows load it, and which individual rules carry a narrower gate than their module. The Markdown modules stay canonical for **what** a rule says; the catalog never generates documentation and never restates rule text.

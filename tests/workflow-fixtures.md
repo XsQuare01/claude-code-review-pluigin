@@ -755,6 +755,41 @@ These scenarios pin the behaviour that `review-rules/workflow-contract.md` promi
       ],
       "scenario": "With --correctness on, the correctness producer times out twice, or returns malformed output twice",
       "expected": "module.done records the pass as failed with its failureClass, the run is a partial review (FAILED orchestration), and the report shows 결과 없음 for 정확성 — never zero findings or a pass"
+    },
+    {
+      "id": 97,
+      "clauses": [
+        "C-11"
+      ],
+      "scenario": "The orchestrator reasons through a code path and writes the evidence entry as executed without running anything",
+      "expected": "review-evidence.mjs note refuses the entry because no usable execution record of that finding exists, and writes nothing; the entry has to be static-trace or not-run, or the reproduction has to actually run through review-evidence.mjs exec"
+    },
+    {
+      "id": 98,
+      "clauses": [
+        "C-11",
+        "C-10"
+      ],
+      "scenario": "A reproduction ran before the working tree was edited, or on another run's target, and its record is cited as evidence",
+      "expected": "The record is kept but not used as evidence for this run's finding; the report says the execution ran on different code instead of showing it as reproduced"
+    },
+    {
+      "id": 99,
+      "clauses": [
+        "C-11",
+        "C-6B"
+      ],
+      "scenario": "A reproduction exits 0, times out, or exits with an unexpected code",
+      "expected": "The outcome is not-reproduced, env-failure or inconclusive respectively; none is a refutation, and the finding keeps its severity, axes and cross-verification verdict"
+    },
+    {
+      "id": 100,
+      "clauses": [
+        "C-11",
+        "C-6"
+      ],
+      "scenario": "A reproduction reproduces on HEAD but the merge base was never measured",
+      "expected": "The comparison is base unmeasured, not a new regression; it becomes pre-existing or new-regression only when the same reproduction ran on a clean checkout of the merge base"
     }
   ],
   "defaultWorkflowOnlyCases": [
