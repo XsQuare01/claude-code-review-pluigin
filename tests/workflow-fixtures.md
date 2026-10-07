@@ -884,6 +884,55 @@ These scenarios pin the behaviour that `review-rules/workflow-contract.md` promi
       ],
       "scenario": "The current review reports a finding in a file that has not changed since the earlier review, from a module the earlier review had reviewed",
       "expected": "The finding is new relative to the earlier review, and its 이전 리뷰 line says this change did not touch the file, so it is not presented as a regression introduced by the fix"
+    },
+    {
+      "id": 112,
+      "clauses": [
+        "C-13"
+      ],
+      "scenario": "Three reviews run in a row with --previous; the second confirms an earlier finding still holds through re-check, and another earlier finding gets no re-check verdict",
+      "expected": "The third comparison still lists both earlier findings (carried, with their original claim file and lineage) and re-checks them; neither disappears because the second run's producers did not report it"
+    },
+    {
+      "id": 113,
+      "clauses": [
+        "C-13"
+      ],
+      "scenario": "The earlier review reported CR-1 'saves without a permission check' on save(order) and the current review reports CR-2 'saves twice on retry' on the same line",
+      "expected": "The two are not linked by location alone; an identity task asks whether they are the same defect, and only an upheld verdict passes the earlier lineage on"
+    },
+    {
+      "id": 114,
+      "clauses": [
+        "C-13",
+        "C-6B"
+      ],
+      "scenario": "A current finding linked to an earlier one is rejected by cross-verification",
+      "expected": "The earlier finding is re-check (current-rejected), not persisting and not resolved; the 이전 리뷰 line says the current verification rejected it"
+    },
+    {
+      "id": 115,
+      "clauses": [
+        "C-11"
+      ],
+      "scenario": "The HEAD reproduction runs one command and the base reproduction runs a different command or expectation",
+      "expected": "The comparison is incomparable, not new-regression or pre-existing; both results stay in the records"
+    },
+    {
+      "id": 116,
+      "clauses": [
+        "C-12"
+      ],
+      "scenario": "A run halted at --max-tasks writes its partial report and run.end, and the user later asks to continue",
+      "expected": "review-tasks.mjs resume opens a new segment and next launches only the modules that were not launched; a run that ended without a halt is not resumable"
+    },
+    {
+      "id": 117,
+      "clauses": [
+        "C-6B"
+      ],
+      "scenario": "With --correctness on, the PR says failures are not retried and the correctness producer reports a missing automatic retry",
+      "expected": "The CR verifier prompt contains the PR description verbatim with its source and hash from review-intent.mjs, marked as untrusted data; rule-module verifier prompts do not"
     }
   ],
   "defaultWorkflowOnlyCases": [
