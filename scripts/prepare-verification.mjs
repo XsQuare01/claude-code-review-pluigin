@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { createHash } from 'node:crypto'
+import { createHash, randomBytes } from 'node:crypto'
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -761,7 +761,9 @@ async function main() {
   // 교차검증의 시작은 **검증자를 띄울 준비가 끝난 이 자리**에서 남긴다. 오케스트레이터가
   // 남기게 두었더니 2026-09-30 실행이 검증자 19개가 다 끝난 뒤에야 찍었고, 80분
   // 검증이 "무엇이 돌았는지 기록에 없는 5173초"로 보였다.
-  if (written.tasks.length) logPhase(dir, run, 'crossverify.start', { targets: result.counts.verify })
+  // 라운드마다 이름을 붙인다. 작업 대장이 claim과 응답 자리에 넣어, 검증을 다시 준비했을 때 앞 라운드의
+  // 늦은 응답이 새 라운드의 결과가 되지 않게 한다(C-12).
+  if (written.tasks.length) logPhase(dir, run, 'crossverify.start', { targets: result.counts.verify, round: randomBytes(4).toString('hex') })
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`)
 }
 

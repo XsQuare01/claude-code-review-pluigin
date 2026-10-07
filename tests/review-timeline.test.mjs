@@ -2024,3 +2024,35 @@ test('목록 밖 멈춤 이유와 취소 사유는 기록하되 경고한다', t
   assert.equal(out.status, 0)
   assert.match(out.stderr, /dispatch\.halt`의 reason "bored"는 C-9의 닫힌 목록에 없다/)
 })
+
+// ── PR #93 리뷰: 이어 간 부분 보고 ─────────────────────────────────────
+
+const resumedRun = (haltFirst = true) => ledgerRun({ maxTasks: 1 }, [
+  twoModules[0],
+  ...(haltFirst ? [{ at: '2026-10-07T00:00:07.500Z', seq: 41, phase: 'dispatch.halt', reason: 'max-tasks', stage: 'module', queuedTasks: ['02-type'], running: 1 }] : []),
+  { ...twoModules[3], seq: 42 },
+  { at: '2026-10-07T00:02:00.000Z', seq: 43, phase: 'crossverify.start', targets: 1, round: 'a' },
+  { at: '2026-10-07T00:03:00.000Z', seq: 44, phase: 'crossverify.end', upheld: 1, rejected: 0, needsContext: 0, noVerdict: 0 },
+  { at: '2026-10-07T00:04:00.000Z', seq: 45, phase: 'render.start', findings: 1 },
+  { at: '2026-10-07T00:04:10.000Z', seq: 46, phase: 'render.wrote', path: 'x.md', lines: 3 },
+  { at: '2026-10-07T00:04:20.000Z', seq: 47, phase: 'run.end', verdict: 'INCONCLUSIVE' },
+  { at: '2026-10-08T00:00:00.000Z', seq: 48, phase: 'run.resume', maxTasks: 3 },
+  { ...twoModules[1], at: '2026-10-08T00:00:01.000Z', seq: 49 },
+  { ...twoModules[4], at: '2026-10-08T00:01:00.000Z', seq: 50 },
+  { at: '2026-10-08T00:02:00.000Z', seq: 51, phase: 'crossverify.start', targets: 2, round: 'b' },
+  { at: '2026-10-08T00:03:00.000Z', seq: 52, phase: 'crossverify.end', upheld: 2, rejected: 0, needsContext: 0, noVerdict: 0 },
+  { at: '2026-10-08T00:04:00.000Z', seq: 53, phase: 'render.start', findings: 2 },
+])
+
+test('--check는 멈춘 구간의 부분 보고 뒤에 이어 간 실행을 문제로 짚지 않는다', t => {
+  const dir = freshDir(t)
+  plant(dir, resumedRun())
+  const out = check(dir)
+  assert.doesNotMatch(out.stdout, /`run\.end`\(seq 47\) 뒤에 줄이 더 있다|뒤에 교차검증 기록이 있다/, out.stdout)
+})
+
+test('--check는 멈추지 않은 구간의 run.end 뒤에 이어 간 기록을 짚는다', t => {
+  const dir = freshDir(t)
+  plant(dir, resumedRun(false))
+  assert.match(check(dir).stdout, /`run\.end`\(seq 47\) 뒤에 줄이 더 있다 — 이어 갈 수 있는 끝은/)
+})

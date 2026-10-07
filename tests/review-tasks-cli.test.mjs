@@ -390,3 +390,74 @@ test('--correctness on인 실행은 계획이 정확성 패스를 SKIPPED로 적
   const labels = json(next(dir)).dispatch.map(one => one.label)
   assert.ok(labels.includes('correctness#1'), labels.join(','))
 })
+
+// ── PR #93 리뷰 ────────────────────────────────────────────────────────
+
+const append = (dir, event) => writeFileSync(sidecar(dir), `${readFileSync(sidecar(dir), 'utf8')}${JSON.stringify({ at: ago(0), seq: eventsOf(dir).length + 1, ...event })}\n`, 'utf8')
+
+test('검증을 다시 준비하면 새 라운드의 응답 자리와 claim이 앞 라운드와 다르고, 늦은 앞 응답이 새 결과가 되지 않는다', t => {
+  const { dir, routed } = verifySetup(t)
+  const roundA = json(next(dir, 'verify')).dispatch.find(one => one.task === 'bundle-1')
+  assert.equal(tasks(dir, 'bind', '--task', 'bundle-1', '--attempt', '1', '--host-task', 'bg_A').status, 0)
+
+  // prepare-verification --discard-verdicts가 남기는 새 라운드
+  append(dir, { phase: 'crossverify.start', targets: 2, round: 'roundb' })
+  const roundB = json(next(dir, 'verify')).dispatch.find(one => one.task === 'bundle-1')
+  assert.equal(roundB.attempt, 1)
+  assert.notEqual(roundB.resultPath, roundA.resultPath)
+  assert.notEqual(roundB.claim, roundA.claim)
+  assert.match(roundB.claim, /@roundb\//)
+  assert.equal(tasks(dir, 'bind', '--task', 'bundle-1', '--attempt', '1', '--host-task', 'bg_B').status, 0)
+
+  const answerB = JSON.stringify({ schemaVersion: 1, verdicts: [verdict('04-3#1', 'upheld')] })
+  const answerA = JSON.stringify({ schemaVersion: 1, verdicts: [{ ...verdict('04-3#1', 'upheld'), evidence: '앞 라운드의 늦은 응답' }] })
+  writeFileSync(roundB.resultPath, answerB, 'utf8')
+  writeFileSync(roundA.resultPath, answerA, 'utf8')
+  assert.equal(tasks(dir, 'done', '--host-task', 'bg_A', '--status', 'ok', '--rules', RULES).status, 3)
+  const accepted = tasks(dir, 'done', '--host-task', 'bg_B', '--status', 'ok', '--rules', RULES)
+  assert.equal(accepted.status, 0, accepted.stderr)
+  assert.equal(readFileSync(routed.verifierTasks[0].verdict, 'utf8'), answerB)
+  const settled = eventsOf(dir).filter(event => event.phase === 'verify.done')
+  assert.equal(settled.at(-1).resultSha256, createHash('sha256').update(answerB).digest('hex'))
+})
+
+test('멈춘 실행은 부분 리포트와 run.end를 남긴 뒤에도 다른 프로세스에서 이어 갈 수 있다 — 띄우지 못한 모듈만 뜬다', t => {
+  const dir = fresh(t)
+  const repo = gitRepo(t)
+  const target = currentTarget(repo)
+  plant(dir, [startEvent({ maxTasks: 1, head: target.head, worktree: target.worktree }), planned(['01-fsd', '02-type'])])
+  const first = json(next(dir))
+  assert.equal(first.halted, 'max-tasks')
+  writeFileSync(first.dispatch[0].resultPath, RESULT, 'utf8')
+  assert.equal(tasks(dir, 'done', '--task', '01-fsd', '--attempt', '1', '--status', 'ok').status, 0)
+  // 확보한 결과로 부분 리포트를 쓰고 실행을 닫는다(SKILL의 리포팅 절차)
+  for (const event of [
+    { phase: 'render.start', findings: 0 },
+    { phase: 'render.wrote', path: join(dir, `${RUN}.md`), lines: 10 },
+    { phase: 'run.end', verdict: 'INCONCLUSIVE' },
+  ]) append(dir, event)
+  assert.match(tasks(dir, 'status', '--rules', RULES).stdout, /이어 갈 수 있다/)
+  assert.equal(next(dir).status, 2, 'run.end 뒤에는 resume 없이 띄우지 않는다')
+
+  const resumed = tasks(dir, 'resume', '--repo', repo, '--max-tasks', '3', '--rules', RULES)
+  assert.equal(resumed.status, 0, resumed.stderr)
+  assert.match(resumed.stdout, /새 한도 구간을 열었다/)
+  assert.deepEqual(json(next(dir)).dispatch.map(one => one.label), ['02-type#1'])
+  // 앞 구간의 기록은 그대로 남는다
+  const phases = eventsOf(dir).map(event => event.phase)
+  assert.ok(phases.indexOf('run.end') < phases.indexOf('run.resume'))
+})
+
+test('정상으로 끝난 실행은 run.end 뒤에 이어 가지 않는다', t => {
+  const dir = fresh(t)
+  const repo = gitRepo(t)
+  const target = currentTarget(repo)
+  plant(dir, [startEvent({ head: target.head, worktree: target.worktree }), planned(['01-fsd'])])
+  const [claim] = json(next(dir)).dispatch
+  writeFileSync(claim.resultPath, RESULT, 'utf8')
+  tasks(dir, 'done', '--task', '01-fsd', '--attempt', '1', '--status', 'ok')
+  append(dir, { phase: 'run.end', verdict: 'PASS' })
+  const out = tasks(dir, 'resume', '--repo', repo, '--max-tasks', '5', '--rules', RULES)
+  assert.equal(out.status, 2)
+  assert.match(out.stderr, /정상으로 끝난 실행이다/)
+})

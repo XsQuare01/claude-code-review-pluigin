@@ -144,7 +144,7 @@ const PHASES = new Map([
   ['module.done', { required: ['module', 'attempt', 'status'], structured: [], allowed: ['findings', 'failureClass', 'taskId', 'resultSha256', 'cancelReason'] }],
   // 검증 작업도 시도마다 시작과 끝을 남긴다(C-12). 남기지 않던 때 멈춘 검증자 하나와 task-not-found
   // 재시도 넷이 기록 어디에도 없었다. `task`는 routed 출력의 작업 이름이고 `taskId`는 호스트의 작업 ID다.
-  ['verify.start', { required: ['task', 'attempt'], structured: [], allowed: ['kind', 'claim', 'taskId'] }],
+  ['verify.start', { required: ['task', 'attempt'], structured: [], allowed: ['kind', 'claim', 'taskId', 'round'] }],
   ['verify.done', { required: ['task', 'attempt', 'status'], structured: [], allowed: ['failureClass', 'taskId', 'resultSha256', 'cancelReason'] }],
   // 띄운 시도에 호스트의 작업 ID를 묶는다. 같은 줄을 다시 남기면 그 작업이 아직 살아 있다는 확인이다.
   ['task.bind', { required: ['stage', 'task', 'attempt', 'taskId'], structured: [], allowed: [] }],
@@ -155,7 +155,7 @@ const PHASES = new Map([
   ['script.done', { required: ['ran'], structured: ['counts'], allowed: [] }],
   ['tool.start', { required: ['name'], structured: [], allowed: ['attempt', 'candidateId', 'evidenceId'] }],
   ['tool.done', { required: ['name', 'exit', 'treeSha'], structured: ['failing'], allowed: ['failedNow', 'failedBaseline', 'attempt', 'candidateId', 'evidenceId'] }],
-  ['crossverify.start', { required: ['targets'], structured: [], allowed: [] }],
+  ['crossverify.start', { required: ['targets'], structured: [], allowed: ['round'] }],
   ['crossverify.end', { required: ['upheld', 'rejected'], structured: [], allowed: ['needsContext', 'noVerdict', 'malformedTasksCorrected', 'countsFrom'] }],
   ['synthesis.start', { required: [], structured: [], allowed: ['findings'] }],
   ['synthesis.end', { required: [], structured: [], allowed: ['clusters'] }],
@@ -430,10 +430,24 @@ if (has('check')) {
 
   const finalPhase = events[events.length - 1].phase
   if (finalPhase !== 'run.end') {
-    problems.push(events.some(event => event.phase === 'run.end')
+    // 이어 간 구간이 아직 끝나지 않은 것은 끝이 없는 것이다 — 앞 구간의 끝 "뒤에 줄이 더 있다"가 아니다.
+    const phases = events.map(event => event.phase)
+    const lastEnd = phases.lastIndexOf('run.end')
+    const resumedAfter = lastEnd !== -1 && phases.lastIndexOf('run.resume') > lastEnd
+    problems.push(lastEnd !== -1 && !resumedAfter
       ? `\`run.end\` 뒤에 줄이 더 있다. 마지막 줄은 \`${finalPhase}\`다`
       : `\`run.end\`가 없다. 마지막으로 남은 단계는 \`${finalPhase}\`이고 실행은 거기서 끝나지 않았다`)
   }
+  // 끝이 마지막 자리가 아닌 것은 **이어 간 부분 보고**일 때만 정상이다(C-12): 그 구간에서 디스패치를
+  // 멈췄고(`dispatch.halt`), 끝 바로 다음 줄이 새 구간(`run.resume`)이다.
+  events.forEach((event, at) => {
+    if (event.phase !== 'run.end' || at === events.length - 1) return
+    const segmentStart = Math.max(...['run.start', 'run.resume'].map(phase => events.slice(0, at).map(one => one.phase).lastIndexOf(phase)))
+    const halted = events.slice(Math.max(segmentStart, 0), at).some(one => one.phase === 'dispatch.halt')
+    if (!halted || events[at + 1].phase !== 'run.resume') {
+      problems.push(`\`run.end\`(seq ${event.seq}) 뒤에 줄이 더 있다 — 이어 갈 수 있는 끝은 디스패치를 멈춘 구간의 부분 보고이고, 바로 다음 줄이 \`run.resume\`이다`)
+    }
+  })
 
   // 후보 수는 두 자리에 적힌다. 어긋나면 한쪽이 세다가 틀린 것이고, 실제로 한
   // 리포트가 후보를 20개가 아니라 21개로 적었다 — synthesis 전용 모듈을 후보로
@@ -747,12 +761,16 @@ if (has('check')) {
     // 판정을 입력으로 쓰는 단계는 synthesis와 렌더다. 둘 중 먼저 시작한 쪽 뒤에
     // 교차검증 기록이 있으면, 그 단계는 바뀌기 전의 판정으로 돈 것이다 —
     // synthesis는 반박된 지적을 입력에서 빼고(C-6B), 렌더는 판정을 축 줄에 찍는다.
-    const consumerAt = events.findIndex(event => event.phase === 'synthesis.start' || event.phase === 'render.start')
+    // 이어 간 실행(C-12)은 구간마다 검증하고 렌더한다 — 앞 구간의 렌더 뒤에 새 구간의 교차검증이 오는 것은
+    // 정상이다. 그래서 마지막 구간 안에서만 본다.
+    const segmentStart = Math.max(0, ...['run.start', 'run.resume'].map(phase => events.map(one => one.phase).lastIndexOf(phase)))
+    const inSegment = events.slice(segmentStart)
+    const consumerAt = inSegment.findIndex(event => event.phase === 'synthesis.start' || event.phase === 'render.start')
     const late = consumerAt === -1
       ? []
-      : events.slice(consumerAt + 1).filter(event => event.phase === 'crossverify.start' || event.phase === 'crossverify.end')
+      : inSegment.slice(consumerAt + 1).filter(event => event.phase === 'crossverify.start' || event.phase === 'crossverify.end')
     if (late.length) {
-      const consumer = events[consumerAt]
+      const consumer = inSegment[consumerAt]
       problems.push(`\`${consumer.phase}\`(seq ${consumer.seq}) 뒤에 교차검증 기록이 있다: seq ${late.map(event => event.seq).join(', ')}. 판정을 입력으로 쓰는 단계를 시작한 뒤 판정이 바뀌면 그 단계의 결과와 최종 판정이 어긋난다 — 교차검증을 끝낸 뒤 synthesis와 렌더를 시작한다`)
     }
   }

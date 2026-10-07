@@ -37,7 +37,7 @@ import { currentTarget } from './lib/run-identity.mjs'
 import {
   CANCEL_REASONS, DEFAULT_INFLIGHT, MAX_ATTEMPTS, STAGES, attemptsOf, budgetOf, claimOf, decideNext, decisionRecords,
   foldAttempts, haltOf, isTerminal, parseDuration, planStates, segmentOf, settleDecision, settleRecord, verifyPlan,
-  verifyRoundStart,
+  endState, verifyRoundOf, verifyRoundStart,
 } from './lib/task-ledger.mjs'
 import { checkTaskVerdict, loadVerdictValidator } from './lib/verdicts.mjs'
 import { buildRetryPrompt } from './lib/verifier-tasks.mjs'
@@ -213,7 +213,9 @@ const verifyPlanOf = (events, start, { required }) => {
 
 // ------------------------------------------------------------------ 기록
 
-const attemptPath = (task, attempt) => join(timing, `${run}.attempts`, `${task}.a${attempt}.json`)
+// 검증 작업의 응답 자리는 라운드마다 다르다 — 검증을 다시 준비해 같은 작업이 다시 시도 1로 떠도, 앞 라운드의
+// 늦은 응답이 새 시도의 자리에 쓰이지 않는다(PR #93 리뷰). 모듈 작업은 라운드가 없다.
+const attemptPath = (task, attempt, round = null) => join(timing, `${run}.attempts`, ...(round ? [round] : []), `${task}.a${attempt}.json`)
 const canonicalPath = (stage, entry) => (stage === 'module' ? join(timing, `${run}.${entry.task}.json`) : entry.verdict)
 const retryPromptOf = prompt => prompt.replace(/\.md$/, '.retry.md')
 
@@ -296,7 +298,12 @@ const next = () => {
   return withLock(() => {
     const events = readEvents(sidecar)
     const start = startOf(events)
-    if (events.some(event => event?.phase === 'run.end')) throw new LedgerError('이미 끝난 실행이다(run.end가 있다) — 새 작업을 띄우지 않는다')
+    const end = endState(events)
+    if (end.ended) {
+      throw new LedgerError(end.resumable
+        ? '부분 보고로 닫은 실행이다(run.end) — 이어 가려면 review-tasks.mjs resume으로 새 구간을 먼저 연다'
+        : '이미 끝난 실행이다(run.end가 있다) — 새 작업을 띄우지 않는다')
+    }
     const { plan } = stage === 'module' ? { plan: modulePlan(events, start) } : verifyPlanOf(events, start, { required: true })
     const fold = foldAttempts(events)
     const now = Date.now()
@@ -308,7 +315,8 @@ const next = () => {
     // 죽은 시도·취소·멈춤·디스패치의 시작과 끝·시도마다의 시작을 결정한 순서대로 남긴다. 디스패치의
     // 시작과 끝을 오케스트레이터가 남기던 때 끝이 빠진 실행이 있었고, 그 수치는 리포트에 손으로
     // 옮겨졌다(C-9).
-    if (decision.dispatch.length) mkdirSync(join(timing, `${run}.attempts`), { recursive: true })
+    const round = stage === 'verify' ? verifyRoundOf(events) : null
+    if (decision.dispatch.length) mkdirSync(join(timing, `${run}.attempts`, ...(round ? [round] : [])), { recursive: true })
     for (const { phase, data } of decisionRecords({ stage, decision, plan, fold, events, runId, inflight })) record(phase, data)
 
     const claims = decision.dispatch.map(one => {
@@ -319,8 +327,8 @@ const next = () => {
         attempt: one.attempt,
         kind: entry.kind,
         label: `${one.task}#${one.attempt}`,
-        claim: claimOf(runId, stage, one.task, one.attempt),
-        resultPath: attemptPath(one.task, one.attempt),
+        claim: claimOf(runId, stage, one.task, one.attempt, round),
+        resultPath: attemptPath(one.task, one.attempt, round),
         ...(stage === 'verify' ? { prompt: correction && existsSync(retryPromptOf(entry.prompt)) ? retryPromptOf(entry.prompt) : entry.prompt } : {}),
         ...(one.retryOf ? { retryOf: one.retryOf } : {}),
         ...(correction ? { correction: true } : {}),
@@ -419,7 +427,8 @@ const done = () => {
 
     let text
     if (status === 'ok') {
-      const path = flag('result') ?? (task !== undefined && attempt !== undefined ? attemptPath(task, attempt) : undefined)
+      const round = stage === 'verify' ? verifyRoundOf(events) : null
+      const path = flag('result') ?? (task !== undefined && attempt !== undefined ? attemptPath(task, attempt, round) : undefined)
       if (path === undefined || !existsSync(path)) {
         throw new LedgerError(`받은 결과 파일이 없다: ${path ?? '(경로를 정할 수 없다)'} — 호스트가 돌려준 응답을 next가 준 resultPath에 그대로 쓰거나 --result로 준다`)
       }
@@ -553,7 +562,7 @@ const statusOf = events => {
   return {
     run,
     runId: start.runId ?? null,
-    ended: events.some(event => event?.phase === 'run.end'),
+    ...(({ ended, resumable }) => ({ ended, resumable }))(endState(events)),
     budget,
     halted: halt ? { reason: halt.reason, at: halt.at } : null,
     host: { ...host, durationScope: durationLimitScope(host) },
@@ -562,7 +571,7 @@ const statusOf = events => {
 }
 
 const statusText = status => {
-  const lines = [`작업 대장 — ${status.run}${status.runId ? ` (실행 ID ${status.runId})` : ''}${status.ended ? ' · 끝난 실행' : ''}`]
+  const lines = [`작업 대장 — ${status.run}${status.runId ? ` (실행 ID ${status.runId})` : ''}${status.ended ? (status.resumable ? ' · 부분 보고로 닫은 실행(이어 갈 수 있다)' : ' · 끝난 실행') : ''}`]
   lines.push(`한도      ${budgetText(status.budget)} · 응답 없이 ${minutes(status.budget.staleAfterSec)}이 지나면 죽은 시도로 본다`)
   lines.push(`호스트    ${status.host.name}${status.host.known ? '' : ' (알려지지 않은 호스트)'} — ${status.host.durationScope}`)
   if (status.halted) lines.push(`멈춤      ${status.halted.reason} (${status.halted.at}) — 띄우지 못한 작업은 미검토 범위로 남는다`)
@@ -584,7 +593,7 @@ const statusText = status => {
   }
   const pending = STAGES.find(stage => status.stages[stage] && !status.stages[stage].complete)
   lines.push(status.ended
-    ? '다음      없음 — 끝난 실행이다'
+    ? (status.resumable ? '다음      더 돌리려면 review-tasks.mjs resume — 멈춰서 띄우지 못한 작업이 이어서 뜬다' : '다음      없음 — 끝난 실행이다')
     : pending
       ? `다음      review-tasks.mjs next --stage ${pending}`
       : '다음      띄울 작업이 없다 — 다음 단계(수집·집계·렌더)로 간다')
@@ -615,7 +624,8 @@ const resume = () => {
   return withLock(() => {
     const events = readEvents(sidecar)
     const start = startOf(events)
-    if (events.some(event => event?.phase === 'run.end')) throw new LedgerError('이미 끝난 실행이다 — 이어 가지 않는다. 새로 리뷰하려면 새 --run으로 preflight부터 시작한다')
+    const end = endState(events)
+    if (end.ended && !end.resumable) throw new LedgerError('정상으로 끝난 실행이다 — 이어 가지 않는다. 새로 리뷰하려면 새 --run으로 preflight부터 시작한다')
     // 대상 기록이 없으면 그대로인지 확인할 수 없다. 확인하지 못한 것을 "그대로다"로 읽지 않는다.
     if (start.head === undefined || start.worktree === undefined) {
       throw new LedgerError('run.start에 HEAD·작업 트리 기록이 없다(2.16.0 이전 preflight) — 대상이 그대로인지 확인할 수 없어 이어 가지 않는다. 새 --run으로 preflight부터 시작한다', 3)
@@ -645,7 +655,8 @@ const resume = () => {
     const spentOut = budget.expired || budget.exhausted
     const given = ['max-tasks', 'max-duration', 'stale-after'].filter(name => flag(name) !== undefined)
     let opened = false
-    if (halted || spentOut || given.length) {
+    // 부분 보고로 닫은 실행은 언제나 새 구간을 연다 — run.end 뒤에 이어 쓰는 첫 줄이 run.resume이어야 한다.
+    if (end.ended || halted || spentOut || given.length) {
       const read = (name, parse, fallback) => {
         const raw = flag(name)
         if (raw === undefined) return fallback

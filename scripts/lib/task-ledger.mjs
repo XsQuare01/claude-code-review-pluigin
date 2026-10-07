@@ -78,6 +78,21 @@ const PHASE_STAGE = new Map([
   ['task.bind', [null, 'bind']],
 ])
 
+/**
+ * 지금 검증 라운드의 이름. `crossverify.start`의 `round`이고, 없으면(그 필드가 생기기 전 기록) 그 줄의
+ * 위치로 만든다. 라운드가 없으면 null이다.
+ *
+ * 검증을 다시 준비하면 같은 작업이 다시 시도 1로 뜬다. 이름이 라운드를 가리지 않으면 앞 라운드의 늦은
+ * 응답과 새 라운드의 응답이 같은 파일 자리를 쓰고, 새 시도가 앞 시도의 응답을 받는다(PR #93 리뷰에서
+ * 재현). 그래서 claim과 응답 자리에 라운드 이름을 넣는다.
+ */
+export function verifyRoundOf(events) {
+  const at = verifyRoundStart(events)
+  if (at === -1) return null
+  const round = events[at].round
+  return typeof round === 'string' && /^[A-Za-z0-9-]+$/.test(round) ? round : `r${at}`
+}
+
 /** 이 실행의 마지막 `crossverify.start` 위치. 검증 단계는 그 뒤의 기록만 본다 — 검증을 처음부터 다시 하면 앞 라운드는 끝난 일이다. */
 export function verifyRoundStart(events) {
   let at = -1
@@ -210,6 +225,21 @@ export function budgetOf(events, now) {
     exhausted: segment.maxTasks !== null && used >= segment.maxTasks,
     staleAfterSec: segment.staleAfterSec,
   }
+}
+
+/**
+ * 실행이 끝났는가, 끝났다면 이어 갈 수 있는가.
+ *
+ * 끝은 지금 구간의 `run.end`다(그 뒤에 `run.resume`이 없다). **그 구간에서 디스패치를 멈췄으면**
+ * (`dispatch.halt`) 그 끝은 부분 보고이고 이어 갈 수 있다 — 한도에 닿으면 확보한 결과로 리포트를 쓰고
+ * `run.end`를 남기는 것이 정상 절차인데, 처음에는 그 뒤의 `resume`을 막아 "나중에 이어서"가 끊겼다(PR #93
+ * 리뷰에서 재현). 멈춘 적 없이 끝난 실행은 정상 종료이고 이어 가지 않는다.
+ */
+export function endState(events) {
+  const phases = events.map(event => event?.phase)
+  const lastEnd = phases.lastIndexOf('run.end')
+  const ended = lastEnd !== -1 && lastEnd > phases.lastIndexOf('run.resume')
+  return { ended, resumable: ended && haltOf(events) !== null }
 }
 
 /** 이 구간에서 디스패치를 멈춘 기록. 없으면 null이다. */
@@ -365,7 +395,7 @@ export function decideNext({ stage, plan, fold, events, now, inflight = DEFAULT_
 }
 
 /** 시도를 가리키는 이름. 기록과 호스트 작업 설명에 같은 값을 쓴다. */
-export const claimOf = (runId, stage, task, attempt) => `${runId}/${stage}/${task}#${attempt}`
+export const claimOf = (runId, stage, task, attempt, round = null) => `${runId}/${stage}${round ? `@${round}` : ''}/${task}#${attempt}`
 
 /** 시도 하나를 끝내는 줄. 모듈은 `module.done`, 검증은 `verify.done`이다. 값이 없는 필드는 싣지 않는다. */
 export function settleRecord(stage, task, attempt, fields) {
@@ -405,12 +435,13 @@ export function decisionRecords({ stage, decision, plan, fold, events, runId, in
     records.push({ phase: 'dispatch.start', data: { modules: plan.length, inflight } })
   }
   const kinds = new Map(plan.map(entry => [entry.task, entry.kind]))
+  const round = stage === 'verify' ? verifyRoundOf(events) : null
   for (const one of decision.dispatch) {
-    const claim = claimOf(runId, stage, one.task, one.attempt)
+    const claim = claimOf(runId, stage, one.task, one.attempt, round)
     const previous = attemptsOf(fold, stage, one.task).at(-1)
     records.push(stage === 'module'
       ? { phase: 'module.start', data: { module: one.task, attempt: one.attempt, claim, ...(previous?.hostTaskId ? { retryOf: previous.hostTaskId } : {}) } }
-      : { phase: 'verify.start', data: { task: one.task, attempt: one.attempt, kind: kinds.get(one.task), claim } })
+      : { phase: 'verify.start', data: { task: one.task, attempt: one.attempt, kind: kinds.get(one.task), claim, ...(round ? { round } : {}) } })
   }
   if (stage === 'module' && decision.complete && lastStart !== -1 && lastEnd < lastStart) {
     // 수치는 review-timeline.mjs가 번호 모듈의 module.done에서 센다. 셀 줄이 없으면(특수 패스만 돈
