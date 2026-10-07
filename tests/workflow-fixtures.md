@@ -842,6 +842,48 @@ These scenarios pin the behaviour that `review-rules/workflow-contract.md` promi
       ],
       "scenario": "A run on a host that cannot stop running tasks or wake the orchestrator at a time is started with --max-duration",
       "expected": "preflight and status say that the limit only stops new launches when the ledger is called and that running tasks may continue; the report never claims a hard time cap"
+    },
+    {
+      "id": 107,
+      "clauses": [
+        "C-13"
+      ],
+      "scenario": "After a fix commit inserts lines above an earlier finding and moves another file unchanged, the run is started with --previous and the producers report both findings again at their new lines and paths",
+      "expected": "Both current findings are linked to the earlier ones and inherit their lineageId; neither is reported as new"
+    },
+    {
+      "id": 108,
+      "clauses": [
+        "C-13"
+      ],
+      "scenario": "The earlier and current reviews each report two findings with the same rule on two identical lines of the same file",
+      "expected": "None of them is linked or merged; all four are re-check (ambiguous), and no re-check task is created for them"
+    },
+    {
+      "id": 109,
+      "clauses": [
+        "C-13",
+        "C-8"
+      ],
+      "scenario": "An earlier finding came from a module that failed in the current run, and no re-check verdict comes back for it",
+      "expected": "The earlier finding stays re-check (not-reviewed, then no-recheck-verdict); it is never reported as resolved"
+    },
+    {
+      "id": 110,
+      "clauses": [
+        "C-13",
+        "C-6B"
+      ],
+      "scenario": "A re-check verifier rejects an earlier finding with rebuttal kind other and a note, or with needs-context",
+      "expected": "The earlier finding stays re-check (recheck-unlocated or recheck-needs-context); only a rejection that cites the preventing code with a closed-list kind makes it resolved"
+    },
+    {
+      "id": 111,
+      "clauses": [
+        "C-13"
+      ],
+      "scenario": "The current review reports a finding in a file that has not changed since the earlier review, from a module the earlier review had reviewed",
+      "expected": "The finding is new relative to the earlier review, and its 이전 리뷰 line says this change did not touch the file, so it is not presented as a regression introduced by the fix"
     }
   ],
   "defaultWorkflowOnlyCases": [

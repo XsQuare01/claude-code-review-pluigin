@@ -5,9 +5,12 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
 import { markedBlock } from './lib/contract-blocks.mjs'
+import { CURRENT_STATUSES, countBy, linkFindings, pathChanges, recheckable } from './lib/review-compare.mjs'
+import { parseSnapshot } from './lib/review-snapshot.mjs'
+import { ruleDocDigests, rulesDigest } from './lib/run-identity.mjs'
 import { logPhase, moduleOutcomes, readEvents, requireStartedTimeline } from './lib/run-record.mjs'
 import {
-  buildTaskPrompt, docPathForRule, extractClause, instructionsWithManifest, planVerifierTasks,
+  buildRecheckPrompt, buildTaskPrompt, claimOf, docPathForRule, extractClause, instructionsWithManifest, planVerifierTasks,
 } from './lib/verifier-tasks.mjs'
 
 // Deterministic preparation for the cross-verification pass.
@@ -683,6 +686,24 @@ async function main() {
   })
   if (collected) result.collected = collected
 
+  // 이전 리뷰와 비교한다(C-13). preflight가 `--previous`로 받은 스냅숏을 run.start에 남겼을 때만이다.
+  let rechecks = []
+  if (start.previousSnapshot !== undefined) {
+    if (!collect) fail('이전 리뷰와 비교하는 실행(run.start에 previousSnapshot이 있다)은 --collect로 모은다 — 어느 모듈을 검토했는지가 비교에 필요하다')
+    const compared = compareWithPrevious({ start, result, catalog, namespaces, rulesDir, fail })
+    result.previous = compared.previous
+    rechecks = verifyMode === 'off' || locationsOnly ? [] : compared.rechecks
+    // 검증을 끈 실행은 재확인도 하지 않는다. 재확인할 이전 지적은 그 이유로 남는다 — 해결로 읽지 않는다.
+    if (verifyMode === 'off' || locationsOnly) {
+      result.previous.recheck = 'verification-off'
+      for (const entry of result.previous.entries) {
+        if (entry.status !== 'recheck' || entry.reason === 'ambiguous' || entry.reason === 'claim-unavailable') continue
+        entry.firstReason = entry.reason
+        entry.reason = 'verification-off'
+      }
+    }
+  }
+
   // 검증자 프롬프트는 여기서 파일로 만든다. 오케스트레이터는 그 내용을 넘기기만
   // 한다 — 다시 쓰지 않는다(`lib/verifier-tasks.mjs` 머리말).
   let written = { tasks: [], promotions: {} }
@@ -698,7 +719,13 @@ async function main() {
       if (claimed.length && !argv.includes('--discard-verdicts')) {
         fail(`이번 교차검증에서 검증 작업 ${claimed.length}개를 이미 띄웠다(verify.start) — 같은 실행을 이어 가는 중이면 이 스크립트를 다시 돌리지 않고 review-tasks.mjs status로 남은 작업을 본다. 검증을 처음부터 다시 하려면 --discard-verdicts를 준다`)
       }
-      written = writeVerifierTasks({ result, rulesDir, mergeBase, outDir: outDir.path, discardVerdicts: argv.includes('--discard-verdicts'), fail })
+      written = writeVerifierTasks({ result, rulesDir, mergeBase, outDir: outDir.path, discardVerdicts: argv.includes('--discard-verdicts'), fail, rechecks })
+      if (result.previous) {
+        const requested = new Map(written.tasks.filter(task => task.route === 'recheck').map(task => [task.candidateIds[0], task.taskId]))
+        for (const entry of result.previous.entries) {
+          if (requested.has(entry.ref)) entry.recheckTask = requested.get(entry.ref)
+        }
+      }
     }
     result.verifierTasks = written.tasks
     result.promotions = written.promotions
@@ -819,9 +846,9 @@ export function verifyDirOf(dir, run) {
  * 검증자가 받는 규칙이 같아야 한다. 디렉터리는 실행마다 새로 만든다. 앞 실행의
  * 파일이 남으면 이번 목록에 없는 작업이 디렉터리에는 있게 된다.
  */
-function writeVerifierTasks({ result, rulesDir, mergeBase, outDir, discardVerdicts, fail }) {
+function writeVerifierTasks({ result, rulesDir, mergeBase, outDir, discardVerdicts, fail, rechecks = [] }) {
   const planned = planVerifierTasks(result)
-  if (!planned.tasks.length) return { tasks: [], promotions: {} }
+  if (!planned.tasks.length && !rechecks.length) return { tasks: [], promotions: {} }
 
   const readRule = name => {
     try {
@@ -840,7 +867,7 @@ function writeVerifierTasks({ result, rulesDir, mergeBase, outDir, discardVerdic
   const catalog = JSON.parse(readRule('catalog.json'))
   const docs = new Map()
   const clauses = new Map()
-  for (const candidate of result.candidates) {
+  for (const candidate of [...result.candidates, ...rechecks.map(entry => entry.claim)]) {
     if (clauses.has(candidate.ruleId)) continue
     const docPath = docPathForRule(candidate.ruleId, catalog)
     if (docPath && !docs.has(docPath)) docs.set(docPath, readRule(docPath))
@@ -888,7 +915,136 @@ function writeVerifierTasks({ result, rulesDir, mergeBase, outDir, discardVerdic
     const { prompt, verdict } = write(task)
     return [task.candidateIds[0], { taskId: task.taskId, prompt, verdict }]
   }))
+
+  // 재확인 작업(C-13). 지시는 같은 문서의 `RECHECK_PROMPT` 블록이다 — 교차검증의 "기본 입장은 반박"을
+  // 그대로 쓰면, 반박이 곧 "해결됐다"인 이 작업에서 고치지 않은 결함이 해결로 보고된다.
+  if (rechecks.length) {
+    const recheckTemplate = markedBlock(readRule('verifier-prompt.md'), 'RECHECK_PROMPT')
+    if (recheckTemplate.error) fail(`verifier-prompt.md: ${recheckTemplate.error}`)
+    const recheckInstructions = instructionsWithManifest(recheckTemplate.value, manifest.value)
+    if (recheckInstructions.error) fail(recheckInstructions.error)
+    for (const entry of rechecks) {
+      const taskId = `recheck-${String(entry.claim.candidateId).replace(/[^A-Za-z0-9-]/g, '-')}`
+      const task = { taskId, kind: 'recheck', candidateIds: [entry.claim.candidateId] }
+      const { prompt, missingClauses } = buildRecheckPrompt({
+        instructions: recheckInstructions.value, task, claim: entry.claim, previousHead: entry.previousHead,
+        reason: entry.reason, movedTo: entry.movedTo, clauses,
+      })
+      const path = join(outDir, `${taskId}.md`)
+      writeFileSync(path, prompt, 'utf8')
+      tasks.push({
+        taskId, route: 'recheck', candidateIds: task.candidateIds, prompt: path,
+        verdict: join(outDir, `${taskId}.verdict.json`),
+        ...(missingClauses.length ? { missingClauses } : {}),
+      })
+    }
+  }
   return { tasks, promotions }
+}
+
+/**
+ * 이전 리뷰의 스냅숏과 이번 후보를 잇는다(C-13).
+ *
+ * - 스냅숏은 preflight가 남긴 해시와 같아야 한다. 그 사이에 바뀐 파일과 비교하면 preflight가 확인한
+ *   이전 리뷰가 아니다
+ * - 이전 지적의 글(제목·본문·근거)은 스냅숏에 없다. 이전 실행의 routed 출력에서 읽고, 스냅숏이 남긴
+ *   해시와 맞을 때만 쓴다. 못 읽으면 비교는 하되 재확인 작업은 만들지 않는다 — 지적의 글 없이 다시
+ *   판정하라고 하면 검증자가 주장을 지어낸다
+ * - 이번 후보마다 `lineage`(신규·이어짐·재확인 필요)를, 이전 지적마다 상태와 이유를 남긴다. 재확인할
+ *   지적은 재확인 작업으로 돌려준다
+ */
+function compareWithPrevious({ start, result, catalog, namespaces, rulesDir, fail }) {
+  const snapshotPath = start.previousSnapshot
+  let text
+  try {
+    text = readFileSync(snapshotPath, 'utf8')
+  } catch (error) {
+    fail(`이전 리뷰의 스냅숏을 읽지 못했다: ${snapshotPath} — ${error.message}`)
+  }
+  if (createHash('sha256').update(text).digest('hex') !== start.previousSha256) {
+    fail(`이전 리뷰의 스냅숏이 preflight 뒤에 바뀌었다: ${snapshotPath} — preflight가 확인한 파일과 다른 것과 비교하지 않는다`)
+  }
+  const parsed = parseSnapshot(text)
+  if (parsed.error) fail(`이전 리뷰의 스냅숏을 쓸 수 없다: ${snapshotPath} — ${parsed.error}`)
+  const before = parsed.value
+
+  // 이전 지적의 글.
+  let claims = null
+  let claimsProblem = null
+  const routedInput = before.inputs.find(input => input.role === 'routed')
+  if (!routedInput) {
+    claimsProblem = '스냅숏의 inputs에 routed 출력이 없다'
+  } else {
+    const path = resolve(dirname(snapshotPath), '..', routedInput.path)
+    try {
+      const routedText = readFileSync(path, 'utf8')
+      if (createHash('sha256').update(routedText).digest('hex') !== routedInput.sha256) {
+        claimsProblem = `${path}가 스냅숏을 쓴 뒤에 바뀌었다`
+      } else {
+        claims = new Map((JSON.parse(routedText).candidates ?? []).map(candidate => [candidate.candidateId, candidate]))
+      }
+    } catch (error) {
+      claimsProblem = `${path}를 읽지 못했다 — ${error.message}`
+    }
+  }
+
+  const paths = pathChanges(process.cwd(), before.target.head)
+  const currentDocs = ruleDocDigests(rulesDir, (catalog.modules ?? []).map(module => module.path).filter(Boolean))
+  const digestNow = rulesDigest(rulesDir)
+  const ruleChanged = ruleId => {
+    const doc = docPathForRule(ruleId, catalog)
+    if (!doc || !currentDocs[doc]) return true
+    const earlier = before.run.ruleDocs?.[doc]
+    // 문서별 digest가 없는 스냅숏(2.20.0 이전)은 디렉터리 전체로만 본다. 다르면 어느 문서가 바뀌었는지
+    // 모르므로 바뀐 것으로 본다.
+    if (earlier === undefined) return before.run.rulesDigest !== digestNow
+    return earlier !== currentDocs[doc]
+  }
+  const linked = linkFindings({
+    previous: before.findings,
+    current: result.candidates,
+    currentRunId: start.runId,
+    clauselessPrefixes: [...namespaces.values()].flat(),
+    reviewedNow: new Set(result.collected?.sources ?? []),
+    reviewedBefore: new Set(before.scope.modules.filter(module => module.state === 'ok').map(module => module.name)),
+    paths,
+    ruleChanged,
+  })
+  for (const candidate of result.candidates) candidate.lineage = linked.current.get(candidate.candidateId)
+
+  const rechecks = []
+  for (const entry of linked.previous) {
+    if (!recheckable(entry)) continue
+    const claim = claims?.get(entry.candidateId)
+    if (!claim) {
+      entry.claim = 'unavailable'
+      entry.firstReason = entry.reason
+      entry.reason = 'claim-unavailable'
+      continue
+    }
+    // 판정할 ID는 이전 지적의 ref다. 이번 실행의 candidateId와 섞이지 않는다.
+    rechecks.push({
+      claim: { ...claimOf(claim), candidateId: entry.ref },
+      previousHead: before.target.head,
+      reason: entry.reason,
+      movedTo: entry.location?.kind === 'verified' ? paths?.renamed?.get(entry.location.path) : undefined,
+    })
+  }
+  const currentStates = [...linked.current.values()]
+  return {
+    rechecks,
+    previous: {
+      snapshot: { path: snapshotPath, sha256: start.previousSha256, runId: before.run.runId, head: before.target.head, createdAt: before.createdAt, status: before.status },
+      paths: paths ? 'known' : 'unknown',
+      claims: claims ? 'available' : `unavailable — ${claimsProblem}`,
+      reused: 0,
+      counts: {
+        current: countBy(currentStates, CURRENT_STATUSES),
+        previous: countBy(linked.previous, ['linked', 'recheck']),
+      },
+      entries: linked.previous,
+    },
+  }
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

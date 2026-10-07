@@ -26,7 +26,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { join, relative } from 'node:path'
 
 import { requireStartedTimeline, readEvents } from './lib/run-record.mjs'
-import { currentTarget, rulesDigest } from './lib/run-identity.mjs'
+import { currentTarget, ruleDocDigests, rulesDigest } from './lib/run-identity.mjs'
 import { buildSnapshot, parseSnapshot, renderSnapshotMarkdown, writeSnapshotAtomic } from './lib/review-snapshot.mjs'
 import { assessEvidence, executionsDirOf, loadEvidence } from './lib/evidence.mjs'
 import { collectVerdicts } from './lib/verdicts.mjs'
@@ -171,6 +171,31 @@ if (existsSync(evidencePath)) {
   }
 }
 
+// 이전 리뷰와 비교한 실행(C-13)이면 그 스냅숏과 재확인 판정을 함께 가리킨다.
+const rechecks = new Map()
+if (routed.value.previous) {
+  const previousPath = routed.value.previous.snapshot?.path
+  if (typeof previousPath === 'string' && existsSync(previousPath)) {
+    inputs.push({ role: 'previous', path: relativeToDir(previousPath), sha256: digest(readText(previousPath, '이전 스냅숏')) })
+  }
+  const requested = routed.value.previous.entries.some(entry => entry.recheckTask !== undefined)
+  const rechecksPath = join(timing, `${run}.rechecks.json`)
+  if (existsSync(rechecksPath)) {
+    const loaded = readJson(rechecksPath, '재확인 판정 파일')
+    let list
+    try {
+      list = collectVerdicts(loaded.value)
+    } catch (error) {
+      die(`재확인 판정 파일에서 판정 목록을 찾지 못했다: ${rechecksPath} — ${error.message}`)
+    }
+    for (const verdict of list) rechecks.set(verdict.candidateId, verdict)
+    inputs.push({ role: 'rechecks', path: relativeToDir(rechecksPath), sha256: digest(loaded.text) })
+  } else if (requested) {
+    // 판정 파일이 없으면 재확인한 이전 지적이 모두 재확인 필요로 남는다. 해결로 읽지 않으므로 멈추지 않는다.
+    process.stderr.write(`경고: 재확인 판정 파일이 없다: ${rechecksPath} — tally-verdicts.mjs --collect가 쓴다. 재확인을 맡긴 이전 지적은 재확인 필요로 남는다\n`)
+  }
+}
+
 // 지금의 대상. 시작할 때 기록한 값과 다르면 실행 도중 대상이 바뀐 것이다.
 let current
 try {
@@ -184,6 +209,8 @@ try {
   snapshot = buildSnapshot({
     name: run, events, catalog, routed: routed.value, verdicts, verificationState,
     openQuestionsBySource, inputs, current, now: new Date().toISOString(), evidence,
+    ruleDocs: ruleDocDigests(rules, (catalog.modules ?? []).map(module => module.path).filter(Boolean)),
+    rechecks,
   })
 } catch (error) {
   die(`스냅숏을 만들지 못했다: ${error.message}`)

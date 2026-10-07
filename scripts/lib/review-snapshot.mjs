@@ -4,6 +4,7 @@ import { writeTextAtomic } from './atomic-write.mjs'
 
 import { codeSpan, dispositionOf, escapeProse } from '../render-findings.mjs'
 import { COMPARISONS, METHODS, OUTCOMES } from './evidence.mjs'
+import { CURRENT_STATUSES, PREVIOUS_STATUSES, RECHECK_REASONS, countBy, finalizePrevious } from './review-compare.mjs'
 import { moduleOutcomes } from './run-record.mjs'
 import { HALT_REASONS, haltOf } from './task-ledger.mjs'
 
@@ -34,7 +35,7 @@ const MODULE_STATES = ['ok', 'failed', 'missing', 'skipped', 'unknown']
 const MISSING_REASONS = ['no-record', 'status-outside-list', 'not-collected', 'halted']
 const DISPOSITIONS = ['upheld', 'rejected', 'scope-open', 'not-eligible', 'verification-disabled', 'verification-unavailable']
 const DRIFT_FIELDS = ['head', 'worktree', 'rulesDigest']
-const INPUT_ROLES = ['timeline', 'routed', 'verdicts', 'result', 'evidence', 'execution']
+const INPUT_ROLES = ['timeline', 'routed', 'verdicts', 'result', 'evidence', 'execution', 'previous', 'rechecks']
 const VERIFICATION_STATES = ['ran', 'disabled']
 
 const SHA256 = /^sha256:[0-9a-f]{64}$/
@@ -188,6 +189,48 @@ const countsOf = modules => {
  */
 const statusOf = counts => (counts.ok === counts.applied ? 'complete' : counts.ok === 0 ? 'failed' : 'partial')
 
+/** 후보의 `lineage`에서 스냅숏에 남길 것. `lineageId`는 지적의 위쪽 필드로 따로 싣는다. */
+function lineageOf(lineage) {
+  const { lineageId: _lineageId, ...rest } = lineage
+  return rest
+}
+
+/**
+ * 이전 리뷰와의 비교(C-13). routed 출력의 잇기 결과에 재확인 판정을 얹는다.
+ *
+ * 이전 지적은 `persisting`(미해결)·`resolved`(해결 확인)·`recheck`(재확인 필요)다. 해결 확인은 재확인
+ * 판정이 그 조건을 막는 지금 코드의 위치를 댄 반박일 때뿐이다. 재확인을 맡겼는데 판정이 없으면 해결이
+ * 아니라 재확인 필요다.
+ */
+function comparisonOf(previous, findings, rechecks, runId) {
+  const requested = new Set(previous.entries.filter(entry => entry.recheckTask !== undefined).map(entry => entry.ref))
+  const entries = finalizePrevious(previous.entries, rechecks, { recheckRequested: requested }).map(entry => ({
+    ref: entry.ref,
+    lineageId: entry.lineageId,
+    ruleId: entry.ruleId,
+    status: entry.status,
+    ...(entry.reason !== undefined ? { reason: entry.reason } : {}),
+    ...(entry.firstReason !== undefined ? { firstReason: entry.firstReason } : {}),
+    ...(entry.basis !== undefined ? { basis: entry.basis } : {}),
+    ...(entry.rebuttalKind !== undefined ? { rebuttalKind: entry.rebuttalKind } : {}),
+    ...(entry.currentCandidateId !== undefined ? { currentRef: `${runId}/${entry.currentCandidateId}` } : {}),
+    ...(entry.recheckTask !== undefined ? { recheckTask: entry.recheckTask } : {}),
+    ...(entry.claim === 'unavailable' ? { claim: 'unavailable' } : {}),
+  }))
+  return {
+    previous: previous.snapshot,
+    // 이 버전은 이전 결과를 가져다 쓰지 않는다 — 적용 대상 모듈을 모두 다시 리뷰한다. 재사용을 넣으면
+    // 이 수와 다시 검토한 범위를 함께 남긴다(#88 PR 4).
+    reused: 0,
+    recheck: previous.recheck ?? (requested.size ? 'requested' : 'none'),
+    claims: previous.claims,
+    paths: previous.paths,
+    current: countBy(findings.filter(finding => finding.lineage).map(finding => finding.lineage), CURRENT_STATUSES),
+    counts: countBy(entries, PREVIOUS_STATUSES),
+    entries,
+  }
+}
+
 /**
  * 재현 근거(C-11)의 요약 — 어떻게 확인했고, 실행했으면 무엇이 나왔는가.
  *
@@ -212,7 +255,7 @@ function evidenceSummary(assessed) {
  *
  * 그릴 재료가 모자라면 던진다. 모자란 채로 만든 스냅숏은 "지적 0건"이나 "완료"처럼 읽힌다.
  */
-export function buildSnapshot({ name, events, catalog, routed, verdicts, verificationState, openQuestionsBySource, inputs, current, now, evidence = new Map() }) {
+export function buildSnapshot({ name, events, catalog, routed, verdicts, verificationState, openQuestionsBySource, inputs, current, now, evidence = new Map(), ruleDocs, rechecks = new Map() }) {
   const start = events.find(event => event?.phase === 'run.start')
   if (!start) throw new Error('타임라인에 run.start가 없다 — 실행 식별 없이 스냅숏을 만들지 않는다')
   if (!nonEmpty(start.runId)) {
@@ -251,6 +294,10 @@ export function buildSnapshot({ name, events, catalog, routed, verdicts, verific
       eligibility: candidate.eligibility,
       route: candidate.route,
       disposition,
+      // 실행 간에 같은 지적을 가리키는 이름(C-13). 이전 리뷰의 지적과 이어졌으면 그 이름을 물려받고,
+      // 아니면 이 실행의 ref가 처음 이름이 된다. `candidateId`·`ref`는 이 실행 안의 이름이다.
+      lineageId: candidate.lineage?.lineageId ?? `${start.runId}/${candidate.candidateId}`,
+      ...(candidate.lineage ? { lineage: lineageOf(candidate.lineage) } : {}),
       ...(disposition === 'rejected' && verdict?.rebuttalKind !== undefined ? { rebuttalKind: verdict.rebuttalKind } : {}),
       ...(evidence.has(candidate.candidateId) ? { evidence: evidenceSummary(evidence.get(candidate.candidateId)) } : {}),
     }
@@ -274,6 +321,8 @@ export function buildSnapshot({ name, events, catalog, routed, verdicts, verific
     halted: halt ? { reason: halt.reason, at: halt.at } : null,
   }
 
+  const comparison = routed.previous ? comparisonOf(routed.previous, findings, rechecks, start.runId) : null
+
   const recorded = { head: start.head, worktree: start.worktree, rulesDigest: start.rulesDigest }
   const drift = DRIFT_FIELDS
     .filter(field => current?.[field] !== undefined && current[field] !== recorded[field])
@@ -292,6 +341,7 @@ export function buildSnapshot({ name, events, catalog, routed, verdicts, verific
       pluginVersion: start.version,
       rules: start.rules,
       rulesDigest: start.rulesDigest,
+      ...(ruleDocs ? { ruleDocs } : {}),
       host: start.host,
       startedAt: start.at,
       ...(nonEmpty(start.continues) ? { continues: start.continues } : {}),
@@ -312,6 +362,7 @@ export function buildSnapshot({ name, events, catalog, routed, verdicts, verific
     dispatch,
     verification: { state: verificationState },
     findings,
+    ...(comparison ? { comparison } : {}),
     openQuestions,
     inputs,
     notes,
@@ -389,6 +440,27 @@ export function snapshotProblems(snapshot) {
       !(dispatch.maxTasks === null || count(dispatch.maxTasks)) || !(dispatch.maxDurationSec === null || count(dispatch.maxDurationSec)) ||
       !(dispatch.halted === null || (isObject(dispatch.halted) && HALT_REASONS.includes(dispatch.halted.reason)))) {
       problems.push('dispatch가 계약 밖이다 — attempts·resumed·maxTasks·maxDurationSec·halted(reason)')
+    }
+  }
+  if (snapshot.comparison !== undefined) {
+    const comparison = snapshot.comparison
+    if (!isObject(comparison) || !Array.isArray(comparison.entries) || !isObject(comparison.counts) || !isObject(comparison.current) || !count(comparison.reused)) {
+      problems.push('comparison이 계약 밖이다 — previous·reused·current·counts·entries')
+    } else {
+      for (const entry of comparison.entries) {
+        if (!isObject(entry) || !nonEmpty(entry.ref) || !PREVIOUS_STATUSES.includes(entry.status)) problems.push(`comparison.entries의 ${JSON.stringify(entry?.ref)} 상태가 ${PREVIOUS_STATUSES.join('/')} 밖이다`)
+        else if (entry.status === 'recheck' && !RECHECK_REASONS.includes(entry.reason)) problems.push(`comparison.entries의 ${entry.ref}에 재확인 이유가 없다`)
+        else if (entry.status === 'resolved' && (!nonEmpty(entry.rebuttalKind) || entry.rebuttalKind === 'other')) problems.push(`comparison.entries의 ${entry.ref}는 위치를 댄 반박 없이 해결 확인이다`)
+      }
+      const recount = countBy(comparison.entries, PREVIOUS_STATUSES)
+      for (const key of PREVIOUS_STATUSES) {
+        if (comparison.counts[key] !== recount[key]) problems.push(`comparison.counts.${key}가 entries로 센 ${recount[key]}와 다르다`)
+      }
+    }
+  }
+  if (Array.isArray(snapshot.findings)) {
+    for (const finding of snapshot.findings) {
+      if (finding?.lineage !== undefined && !CURRENT_STATUSES.includes(finding.lineage?.status)) problems.push(`${finding.candidateId}의 lineage 상태가 ${CURRENT_STATUSES.join('/')} 밖이다`)
     }
   }
   if (isObject(scope) && Array.isArray(scope.modules)) {
@@ -506,6 +578,45 @@ const HALT_TEXT = {
 }
 const short = id => (typeof id === 'string' && OBJECT_ID.test(id) ? id.slice(0, 12) : String(id))
 
+const PREVIOUS_STATUS_TEXT = { persisting: '미해결', resolved: '해결 확인', recheck: '재확인 필요' }
+const RECHECK_REASON_TEXT = {
+  ambiguous: '같은 규칙·같은 자리에 지적이 여럿이라 어느 것과 이어지는지 모른다',
+  'location-unverified': '위치를 확인하지 못한 지적이라 잇지 못했다',
+  'not-reviewed': '이번 실행에서 이 지적을 낸 모듈의 결과가 없다',
+  'rule-changed': '규칙 문서가 바뀌었다',
+  'file-deleted': '파일이 지워졌다',
+  absent: '이번 리뷰가 같은 자리에서 다시 내지 않았다',
+  'previous-not-reviewed': '이전 리뷰가 이 모듈을 검토하지 않았다',
+  'claim-unavailable': '이전 지적의 글을 읽지 못했다',
+  'verification-off': '검증을 끈 실행이라 재확인하지 않았다',
+  'no-recheck-verdict': '재확인 판정을 받지 못했다',
+  'recheck-needs-context': '재확인 검증자가 파일 밖을 봐야 한다고 했다',
+  'recheck-unlocated': '재확인 검증자가 해결을 막는 코드의 위치를 대지 못했다',
+}
+
+/** 이전 리뷰와 비교한 결과의 블록. 이어진 미해결 지적은 이번 상세 지적에 있으므로 표에는 나머지만 싣는다. */
+function comparisonMarkdown(comparison) {
+  const { counts, current, previous } = comparison
+  const lines = [
+    `**이전 리뷰와 비교** — 이전 실행 ${codeSpan(previous.runId)}(HEAD ${codeSpan(short(previous.head))})의 지적 ${comparison.entries.length}개: 미해결 ${counts.persisting} · 해결 확인 ${counts.resolved} · 재확인 필요 ${counts.recheck}. 이번 지적: 신규 ${current.new} · 이전 지적과 이어짐 ${current.linked} · 재확인 필요 ${current.recheck}.`,
+    '',
+    `재사용 ${comparison.reused} — 이번 실행은 적용 대상 모듈을 모두 다시 리뷰했다. 이전 결과를 가져다 쓰지 않았다. 해결 확인은 그 지적을 지금 코드로 다시 판정해 막는 코드의 위치를 댄 것뿐이다 — 이번에 안 나왔다는 것은 해결의 증거가 아니다.`,
+  ]
+  if (comparison.recheck === 'verification-off') lines.push('', '검증을 끈 실행이라 이전 지적을 재확인하지 않았다 — 이어지지 않은 이전 지적은 모두 재확인 필요다.')
+  if (typeof comparison.claims === 'string' && comparison.claims !== 'available') lines.push('', `이전 지적의 글을 읽지 못해 재확인 작업을 만들지 않았다: ${escapeProse(comparison.claims.replace(/^unavailable — /, ''))}`)
+  const rows = comparison.entries.filter(entry => entry.status !== 'persisting' || entry.basis === 'recheck').map(entry => {
+    const detail = entry.status === 'resolved'
+      ? `재확인 판정이 막는 코드를 댔다(${codeSpan(entry.rebuttalKind)})`
+      : entry.status === 'persisting'
+        ? '재확인 판정이 지금도 성립한다고 했다'
+        : RECHECK_REASON_TEXT[entry.reason] ?? codeSpan(entry.reason)
+    const first = entry.firstReason !== undefined && entry.firstReason !== entry.reason ? ` (처음 이유: ${RECHECK_REASON_TEXT[entry.firstReason] ?? codeSpan(entry.firstReason)})` : ''
+    return `| ${codeSpan(entry.ref)} | ${codeSpan(entry.ruleId)} | ${PREVIOUS_STATUS_TEXT[entry.status]} | ${detail}${first} |`
+  })
+  if (rows.length) lines.push('', '| 이전 지적 | 규칙 | 상태 | 근거 |', '|------|------|------|------|', ...rows)
+  return lines
+}
+
 /**
  * `실행 계획`에 붙일 블록. **스냅숏 객체만 읽는다** — 그래서 리포트의 블록과 JSON은 같은
  * 것을 말하고, 저장된 JSON에서 언제든 같은 블록을 다시 만들 수 있다.
@@ -530,6 +641,8 @@ export function renderSnapshotMarkdown(snapshot) {
   if (halted) {
     lines.push('', `**디스패치를 멈췄다** — ${HALT_TEXT[halted.reason] ?? codeSpan(halted.reason)}(${codeSpan(halted.at)}). 멈춘 뒤 띄우지 못한 모듈과 검증 작업은 이 실행이 검토하지 않은 범위다 — 판정을 받지 못한 지적은 \`검증 실패\`로 표시된다.`)
   }
+
+  if (snapshot.comparison) lines.push('', ...comparisonMarkdown(snapshot.comparison))
 
   const { target, run } = snapshot
   const worktree = target.worktree === 'clean' ? 'clean' : `커밋하지 않은 변경 ${target.dirtyFiles}개 (${codeSpan(target.worktree.slice(0, 19))}…)`

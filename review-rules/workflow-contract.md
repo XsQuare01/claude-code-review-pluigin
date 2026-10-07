@@ -1133,7 +1133,7 @@ UTF-16 파일도 읽는다 — PowerShell 5.1의 `Set-Content -Encoding UTF8`은
 
 | `--phase` | 시점 | `--set`/`--data`에 담는 것 |
 |---|---|---|
-| `run.start` | 가장 먼저 | `host`, `rules`(해석된 RULES_DIR), `version`, `branch`, `changedFiles` · 무엇을 리뷰하는지(C-10): `runId`, `base`, `head`, `worktree`, `dirtyFiles`, `repo`, `repoRoot`, `rulesDigest` · 선택 패스를 켰는지: `correctness`(`on`/`off`, 선택 패스가 있는 워크플로우만) · 한도(C-12): `maxTasks`, `maxDurationSec`(준 것만), `staleAfterSec` · (새 실행으로 이어 받았으면) `continues` — preflight가 쓴다 |
+| `run.start` | 가장 먼저 | `host`, `rules`(해석된 RULES_DIR), `version`, `branch`, `changedFiles` · 무엇을 리뷰하는지(C-10): `runId`, `base`, `head`, `worktree`, `dirtyFiles`, `repo`, `repoRoot`, `rulesDigest` · 선택 패스를 켰는지: `correctness`(`on`/`off`, 선택 패스가 있는 워크플로우만) · 한도(C-12): `maxTasks`, `maxDurationSec`(준 것만), `staleAfterSec` · (새 실행으로 이어 받았으면) `continues` · (이전 리뷰와 비교하면, C-13) `previousSnapshot`, `previousRunId`, `previousSha256` — preflight가 쓴다 |
 | `run.resume` | 멈춘 실행을 이어 갈 때 (`review-tasks.mjs resume`이 쓴다) | 새 구간의 `maxTasks`·`maxDurationSec`·`staleAfterSec`, 다시 잰 `head`·`worktree` |
 | `scope.done` | 범위 확정(C-4) | `files`, `excluded` |
 | `modules.planned` | 적용 모듈 확정(C-3) | `candidates`, `applied` · `skipped`, `unknown`(중첩, `--data-file`) |
@@ -1550,16 +1550,17 @@ node <RULES_DIR>/../scripts/review-snapshot.mjs --dir <리포트 디렉터리> -
 
 | 필드 | 내용 |
 |------|------|
-| `run` | `runId`, 리포트 basename, 워크플로우, 플러그인 버전, 규칙 경로·digest, host, 시작 시각, (이어 받았으면) `continues` |
+| `run` | `runId`, 리포트 basename, 워크플로우, 플러그인 버전, 규칙 경로·digest, 규칙 문서별 digest(`ruleDocs` — C-13), host, 시작 시각, (이어 받았으면) `continues` |
 | `target` | `run.start`가 기록한 대상 |
 | `drift` | 스냅숏을 쓸 때 다시 잰 HEAD·작업 트리·규칙 digest 중 기록과 다른 것 |
 | `status` | `complete` · `partial` · `failed` |
 | `scope` | 모듈마다 `ok` · `failed` · `missing` · `skipped` · `unknown`과 사유, 그리고 그 수 |
 | `dispatch` | 시작된 시도 수, 한도(`maxTasks`·`maxDurationSec`, 없으면 `null`), 이어 간 구간 수(`resumed`), 마지막 구간의 멈춤(`halted` — `reason`·`at`, 없으면 `null`) (C-12) |
 | `verification` | `state`(`ran` · `disabled`) |
-| `findings` | 후보마다 `ref`, `candidateId`, 규칙 ID, `impact`·`confidence`, 출처, 위치, 위치 대조 결과, eligibility, route, disposition(C-6B), 근거가 있으면 근거 요약(C-11) |
+| `findings` | 후보마다 `ref`, `candidateId`, 실행 간 이름 `lineageId`(C-13), 규칙 ID, `impact`·`confidence`, 출처, 위치, 위치 대조 결과, eligibility, route, disposition(C-6B), 근거가 있으면 근거 요약(C-11), 이전 리뷰와 비교했으면 `lineage` |
+| `comparison` | 이전 리뷰와 비교한 실행에만 — 이전 스냅숏, `reused`, 이번 지적의 상태별 수, 이전 지적마다 상태·이유(C-13) |
 | `openQuestions` | 수집한 producer 결과의 openQuestion과 그 출처 |
-| `inputs` | 읽은 파일의 역할·경로·sha256. 재현 근거가 있으면 근거 파일(`evidence`)과 실행 기록(`execution`)도 |
+| `inputs` | 읽은 파일의 역할·경로·sha256. 재현 근거가 있으면 근거 파일(`evidence`)과 실행 기록(`execution`)도. 이전 리뷰와 비교했으면 이전 스냅숏(`previous`)과 재확인 판정(`rechecks`)도 |
 | `notes` | 스크립트가 짚은 기록의 빈 곳 |
 
 **모듈 상태와 실행 상태.**
@@ -1850,6 +1851,113 @@ max-duration`)로 끝낸다 — 그 결과는 받지 않는다. 호출 한도는
 - `dispatch.halt` 뒤에 같은 구간에서 시작된 시도가 있으면 문제다
 - 같은 검증 작업·시도가 한 라운드에서 두 번 시작되거나 끝났으면 문제다
 
+## C-13. 이전 리뷰와 비교 — 증분 재리뷰
+
+수정 커밋을 올리고 다시 리뷰하면, 읽는 사람이 알고 싶은 것은 **이전 지적이 고쳐졌는지와 새로 생긴
+문제가 무엇인지**다. 두 리포트를 나란히 놓고 눈으로 맞추면 두 가지가 틀린다 — 줄이 밀린 같은
+지적이 새 지적으로 보이고, 이번에 나오지 않은 지적은 고쳐진 것으로 보인다. 뒤의 것이 더 위험하다:
+모듈이 실패했거나, 모델이 이번에는 못 봤을 뿐인 결함이 "해결"로 사라진다.
+
+오늘 이 비교를 하는 워크플로우는 `full` 하나다. 이 버전은 **결과를 재사용하지 않는다** — 적용 대상
+모듈을 모두 다시 리뷰하고, 그 결과를 이전 리뷰와 잇는다.
+
+### 시작 — `--previous`
+
+```
+node <RULES_DIR>/../scripts/review-preflight.mjs … --previous <이전 리뷰의 스냅숏>
+```
+
+preflight가 스냅숏을 읽어 계약에 맞는지(C-10의 `parseSnapshot`), 같은 저장소(root commit)인지, 같은
+워크플로우인지 본다. 어느 하나라도 아니면 시작하지 않는다 — 읽을 수 없는 스냅숏을 "이전 지적 0건"으로
+읽으면 이전 지적이 전부 해결된 것처럼 보인다. 받으면 `run.start`에 `previousSnapshot`(경로)·
+`previousRunId`·`previousSha256`을 남기고, 뒤의 스크립트는 그 기록을 읽는다. **나중에 켤 수 없다.**
+
+### 같은 지적인지 — 잇기
+
+`prepare-verification.mjs --collect`가 이번 후보를 모은 뒤 이전 스냅숏의 지적과 잇는다
+(`scripts/lib/review-compare.mjs`). 이전 스냅숏은 preflight가 남긴 해시와 같아야 한다.
+
+**같은 지적의 열쇠는 규칙, 정규화한 위치, 위치의 종류다.**
+
+- 규칙은 규칙 ID다. 조항이 없는 패스(`CR-{n}`)는 번호가 지적의 순번이라 번호를 뺀다 — `CR-1`과
+  `CR-2`가 같은 자리면 같은 지적일 수 있다
+- 위치는 경로와 **인용한 코드 줄**(공백을 접은 것)이다. **줄 번호는 보지 않는다** — 위에 줄을 넣으면
+  번호만 바뀐다. 제목도 보지 않는다 — 실행마다 다르게 쓴다
+- `verified` 위치의 경로는 이전 HEAD와 지금 작업 트리 사이의 **git 이름 바꿈 대응**(`-M`)을 따라간다.
+  그 커밋을 찾을 수 없으면 경로를 그대로 쓴다
+- 위치를 확인하지 못한 지적(`unverified`)은 열쇠가 없다. 잇지 않는다
+
+**정확히 하나씩일 때만 잇는다.** 같은 열쇠에 이전 지적 하나와 이번 지적 하나가 있으면 잇는다. 어느
+쪽이든 둘 이상이면 어느 것이 어느 것인지 말할 수 없다 — **합치지 않고** 양쪽 모두 재확인 필요
+(`ambiguous`)로 둔다. 같은 규칙·같은 자리의 서로 다른 결함을 하나로 만들지 않기 위해서다.
+
+**실행 간 이름(`lineageId`).** 이어진 이번 지적은 이전 지적의 이름을 물려받고, 아니면 이번 실행의
+`ref`가 처음 이름이 된다. `candidateId`는 이 실행의 검증자 매핑에만 쓴다(C-6B) — 실행 간 이름으로 쓰지
+않는다. 비교하지 않은 실행의 스냅숏도 지적마다 `lineageId`를 갖는다(그 실행의 `ref`).
+
+### 이번 지적의 상태
+
+| 상태 | 뜻 |
+|------|-----|
+| `linked`(이어짐) | 같은 열쇠의 이전 지적과 이어졌다 — 그 결함은 아직 있다 |
+| `new`(신규) | **이전 리뷰에 없던 지적**이다. 그 자리의 파일이 이번에 바뀌었는지(`fileChanged`)와 규칙 문서가 바뀌었는지(`ruleChanged`)를 함께 남긴다 — 파일이 바뀌지 않았으면 이번 변경이 만든 결함이 아니라 이전 리뷰가 놓쳤거나 판단이 달라진 것이다 |
+| `recheck`(재확인 필요) | 이을 수 없다 — `ambiguous`, `location-unverified`, 이전 리뷰가 그 모듈을 검토하지 않았다(`previous-not-reviewed` — 그때 보지 않은 범위의 지적을 신규라고 하지 않는다) |
+
+### 이전 지적의 상태 — 해결 확인은 다시 판정한 것만
+
+이어지지 않은 이전 지적은 처음에는 모두 재확인 필요이고, 이유를 단다.
+
+| 이유 | 뜻 |
+|------|-----|
+| `not-reviewed` | 이번 실행에서 그 지적을 낸 모듈의 결과가 없다(실패·건너뜀·멈춤) |
+| `rule-changed` | 그 규칙의 문서가 바뀌었다. 스냅숏의 문서별 digest(`run.ruleDocs`)로 본다. 그 값이 없는 이전 스냅숏은 디렉터리 digest가 다르면 바뀐 것으로 본다 |
+| `file-deleted` | 그 파일이 지워졌다 |
+| `absent` | 위 어디에도 해당하지 않고, 이번 리뷰가 같은 자리에서 다시 내지 않았다 |
+| `location-unverified`·`ambiguous` | 위 잇기와 같다 |
+
+**이번에 나오지 않았다는 것은 해결의 증거가 아니다.** 해결 확인은 그 지적을 **지금 코드로 다시
+판정한 결과**가 있을 때만 준다 — 재확인 작업이다.
+
+- `ambiguous`가 아닌 재확인 필요 지적마다 재확인 작업을 만든다. 이전 지적의 글(제목·본문·근거)은
+  스냅숏에 없으므로 이전 실행의 routed 출력에서 읽고, 스냅숏이 남긴 해시와 맞을 때만 쓴다. 못 읽으면
+  작업을 만들지 않는다(`claim-unavailable`) — 글 없이 다시 판정하라고 하면 검증자가 주장을 지어낸다
+- 재확인 작업은 교차검증 작업과 같은 목록(`verifierTasks`, `route: recheck`)에 들어가 같은 작업
+  대장(C-12)으로 뜬다 — in-flight 상한과 호출 한도에 든다. 판정할 ID는 이전 지적의 `ref`다
+- **지시는 따로다**(`verifier-prompt.md`의 `RECHECK_PROMPT`). 교차검증 verifier의 기본 입장은 반박인데,
+  재확인에서 반박은 "해결됐다"는 뜻이다. 같은 기울기로 물으면 고치지 않은 결함이 해결로 보고된다.
+  재확인 검증자는 기울기 없이, 지금 코드로 확인한 것만 쓴다
+- `tally-verdicts.mjs --collect`는 재확인 판정을 교차검증 수치에 섞지 않고 `<run>.rechecks.json`에 따로
+  모은다. 이번 후보에 검증 대상이 없어도 재확인 작업이 있으면 교차검증의 끝을 0건으로 닫는다
+
+| 재확인 판정 | 이전 지적의 상태 |
+|-------------|------------------|
+| `upheld` | `persisting`(미해결) |
+| `rejected` + 막는 코드의 위치를 댄 `rebuttal.kind`(`other` 밖) | `resolved`(해결 확인) |
+| `rejected` + `other` | `recheck`(`recheck-unlocated`) — 위치를 대지 못한 반박은 해결이 아니다(C-6B의 `other`와 같은 이유) |
+| `needs-context` | `recheck`(`recheck-needs-context`) |
+| 없음(띄우지 못함·실패·계약 위반·한도) | `recheck`(`no-recheck-verdict`) |
+
+이어진 이전 지적은 `persisting`이다. 검증을 끈 실행(`--verify off`)은 재확인하지 않는다 — 이어지지 않은
+이전 지적은 `verification-off`로 남는다. 처음 이유는 `firstReason`에 남는다.
+
+**검토하지 않은 범위의 이전 지적은 자동으로 해결되지 않는다.** `not-reviewed`도 재확인 판정 없이는
+재확인 필요에 머문다.
+
+### 남는 것
+
+- routed 출력: 후보마다 `lineage`, 그리고 `previous`(이전 스냅숏·잇기 결과·재확인 작업 이름)
+- 스냅숏(C-10): 지적마다 `lineageId`와 `lineage`, `comparison`(이전 스냅숏, `reused`, 이번 지적의 상태별
+  수, 이전 지적의 상태·이유·처음 이유·반박 종류), `run.ruleDocs`, inputs의 `previous`·`rechecks`.
+  해결 확인인데 반박 종류가 없거나 `other`이면 계약 밖이다
+- 리포트: 지적마다 `이전 리뷰:` 줄(렌더러가 그린다), `실행 계획`의 스냅숏 블록에 **이전 리뷰와 비교**
+  (상태별 수, 재사용 0과 그 뜻, 해결 확인·재확인 필요·재확인으로 남은 미해결의 표)
+
+### 재사용
+
+이 버전의 `reused`는 언제나 0이다. 결과 재사용을 넣을 때는 재사용한 모듈과 다시 검토한 범위, 재사용
+조건(파일·심볼·참조 범위, 규칙·설정 버전)을 함께 남기고, 조건이 불명확하면 다시 검토한다. cached
+결과를 이번에 다시 검증한 것처럼 쓰지 않는다.
+
 ## 워크플로우별 차이 선언
 
 각 SKILL 문서는 이 계약을 참조한 뒤 아래 항목 중 자기 모드에서 달라지는 것만 적는다.
@@ -1864,3 +1972,4 @@ max-duration`)로 끝낸다 — 그 결과는 받지 않는다. 호출 한도는
 | 결과 스냅숏 | 없음 | `full` — `review-snapshot.mjs` (C-10) |
 | 재현 근거 | 없음 | `full` — `review-evidence.mjs` (C-11) |
 | 작업 상태·한도·재개 | 없음 | `full` — `review-tasks.mjs` (C-12) |
+| 이전 리뷰와 비교 | 없음 | `full` — `review-preflight.mjs --previous` (C-13) |

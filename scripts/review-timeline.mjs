@@ -133,7 +133,7 @@ const PHASES = new Map([
     required: ['host', 'rules', 'version', 'branch', 'changedFiles'],
     structured: [],
     allowed: ['candidates', 'workflow', 'mergeBase', 'os', 'runId', 'base', 'head', 'worktree', 'dirtyFiles', 'repo', 'repoRoot', 'rulesDigest', 'correctness',
-      'maxTasks', 'maxDurationSec', 'staleAfterSec', 'continues'],
+      'maxTasks', 'maxDurationSec', 'staleAfterSec', 'continues', 'previousSnapshot', 'previousRunId', 'previousSha256'],
   }],
   // 한도에 닿아 멈춘 실행을 이어 갈 때 새 한도 구간을 연다(C-12). 대상이 그대로인지 확인한 값을 함께 남긴다.
   ['run.resume', { required: [], structured: [], allowed: ['maxTasks', 'maxDurationSec', 'staleAfterSec', 'head', 'worktree'] }],
