@@ -162,3 +162,56 @@ test('실행 ID는 실행마다 다르다', () => {
   assert.match(first, /^[0-9a-f-]{36}$/)
   assert.notEqual(newRunId(), first)
 })
+
+// ── PR #89 리뷰 ────────────────────────────────────────────────────────
+
+test('새 파일은 stage했다가 되돌려도 같은 fingerprint다 — 읽을 내용이 같으면 같은 대상이다', t => {
+  const repo = freshRepo(t)
+  writeFileSync(join(repo, 'new.txt'), 'new\n')
+  const untracked = currentTarget(repo)
+  git(repo, 'add', 'new.txt')
+  const staged = currentTarget(repo)
+  git(repo, 'reset', '-q', 'new.txt')
+  const unstaged = currentTarget(repo)
+  assert.equal(staged.worktree, untracked.worktree)
+  assert.equal(unstaged.worktree, untracked.worktree)
+  assert.equal(untracked.dirtyFiles, 1)
+})
+
+test('서브모듈은 체크아웃된 commit으로 센다 — 상위에서 stage하지 않아도 B와 C는 다르다', t => {
+  const sub = mkdtempSync(join(tmpdir(), 'run-identity-sub-'))
+  t.after(() => rmSync(sub, { recursive: true, force: true }))
+  git(sub, 'init', '-q')
+  const commits = ['A', 'B', 'C'].map(name => {
+    writeFileSync(join(sub, 'lib.txt'), `${name}\n`)
+    git(sub, 'add', '-A')
+    git(sub, 'commit', '-qm', name)
+    return git(sub, 'rev-parse', 'HEAD')
+  })
+  const repo = freshRepo(t)
+  git(repo, '-c', 'protocol.file.allow=always', 'submodule', 'add', '-q', sub.replace(/\\/g, '/'), 'vendor/lib')
+  const inner = join(repo, 'vendor', 'lib')
+  git(inner, 'checkout', '-q', commits[0])
+  git(repo, 'add', '-A')
+  git(repo, 'commit', '-qm', 'submodule at A')
+  assert.equal(currentTarget(repo).worktree, 'clean')
+
+  git(inner, 'checkout', '-q', commits[1])
+  const atB = currentTarget(repo)
+  git(inner, 'checkout', '-q', commits[2])
+  const atC = currentTarget(repo)
+  assert.notEqual(atB.worktree, 'clean')
+  assert.notEqual(atB.worktree, atC.worktree)
+
+  git(inner, 'checkout', '-q', commits[1])
+  assert.equal(currentTarget(repo).worktree, atB.worktree)
+  // 상위 index에 gitlink를 stage해도 같은 체크아웃이면 같은 값이다
+  git(repo, 'add', 'vendor/lib')
+  assert.equal(currentTarget(repo).worktree, atB.worktree)
+
+  // 서브모듈 안의 파일만 바뀐 것은 대상이 아니다(안쪽 작업 트리는 추적하지 않는다)
+  git(repo, 'reset', '-q', 'vendor/lib')
+  git(inner, 'checkout', '-q', commits[0])
+  writeFileSync(join(inner, 'lib.txt'), 'dirty\n')
+  assert.equal(currentTarget(repo).worktree, 'clean')
+})
