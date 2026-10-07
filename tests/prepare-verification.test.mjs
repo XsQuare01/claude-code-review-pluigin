@@ -453,6 +453,13 @@ test('the git directory is refused', () => {
   assert.equal(resolveWithinRoot('.git', ROOT), null)
 })
 
+test('a root written with forward slashes still contains its files', () => {
+  // `git rev-parse --show-toplevel` prints `C:/…` on Windows while `resolve()` builds `C:\…`. Comparing the two
+  // spellings refused every working-tree read, and callers silently fell back to the HEAD blob.
+  const forward = ROOT.split('\\').join('/')
+  assert.equal(resolveWithinRoot('src/x.ts', forward), resolve(ROOT, 'src/x.ts'))
+})
+
 test('a directory that merely starts with .git is still readable', () => {
   // .github is not .git — comparing string prefixes instead of path segments would refuse it.
   assert.ok(resolveWithinRoot('.github/workflows/validate.yml', ROOT))

@@ -403,8 +403,11 @@ export function resolveWithinRoot(candidatePath, root) {
   if (segments.includes('..')) return null
   // Segment comparison, not a string prefix — .github is not .git.
   if (segments[0] === '.git') return null
-  const resolved = resolve(root, candidatePath)
-  const prefix = root.endsWith(sep) ? root : root + sep
+  // 루트도 같은 꼴로 맞춘다. Windows의 `git rev-parse --show-toplevel`은 `C:/…`를 돌려주고 `resolve()`는
+  // `C:\…`를 만든다 — 그대로 비교하면 작업 트리 읽기가 늘 실패하고, 호출자는 HEAD blob으로 조용히 물러섰다.
+  const base = resolve(root)
+  const resolved = resolve(base, candidatePath)
+  const prefix = base.endsWith(sep) ? base : base + sep
   return resolved.startsWith(prefix) ? resolved : null
 }
 
