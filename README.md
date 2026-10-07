@@ -343,6 +343,21 @@ The plugin still does not launch tasks — the host does. `/code-review-full` no
 
 The contract is `workflow-contract.md` C-12.
 
+## Incremental re-review (2.20.0)
+
+After a fix, the question is which earlier findings are fixed and what is new. Lining two reports up by eye gets both wrong: a finding whose line moved looks new, and a finding that simply did not come up this time looks fixed — including ones from a module that failed.
+
+`/code-review-full` can now compare a run with an earlier one. Pass the earlier run's snapshot to `review-preflight.mjs --previous`; it must be readable, from the same repository (root commit) and the same workflow.
+
+- **Same finding = rule + normalized location.** The key is the rule ID (the clauseless `CR-{n}` drops its number), the path and the quoted code line with whitespace collapsed. Line numbers and titles are never used. Paths follow git's rename detection between the earlier `HEAD` and the current tree.
+- **Only one-to-one links.** When two earlier or two current findings share a key, none of them is linked — distinct defects at the same rule and line are never merged; they are all marked for re-check.
+- **Lineage IDs.** A linked finding inherits the earlier finding's `lineageId`; others start one from their own `ref`. `candidateId` stays a within-run name.
+- **Not coming up again is not a fix.** An unlinked earlier finding is `re-check` with a reason (module not reviewed this time, rule document changed, file deleted, or simply absent). It becomes **resolved** only when a re-check verifier, given the earlier claim and today's code, rejects it and cites the code that now prevents it. A re-check that cannot point at that code (`other`), asks for more context, or never returns leaves it at re-check. Re-check prompts use their own instructions (`RECHECK_PROMPT`) with no default stance — the cross-verification verifier's "refute by default" would turn into "resolve by default" here.
+- **Re-checks run through the task ledger** like other verifier tasks and count toward its limits; `tally-verdicts.mjs` keeps their verdicts out of the cross-verification counts (`<run>.rechecks.json`).
+- **Reported.** Each finding gets an `이전 리뷰:` line (linked, new — with whether its file changed in this diff — or re-check), and the snapshot block gains a comparison with counts and a table of resolved and re-check findings. Nothing is reused yet: every applicable module is reviewed again, and the snapshot records `reused: 0`.
+
+The contract is `workflow-contract.md` C-13.
+
 ## Applicability metadata
 
 `review-rules/catalog.json` records **when** a module applies — required profile (FSD, Tailwind, RSC, Electron, TanStack Query, server code, contract provider), minimum React version, which workflows load it, and which individual rules carry a narrower gate than their module. The Markdown modules stay canonical for **what** a rule says; the catalog never generates documentation and never restates rule text.

@@ -28,6 +28,7 @@ description: Use when the user invokes /code-review-full or asks for a full code
 | 교차검증 | 1차 수집 후 **선별 반박 패스**. 기본 `--verify selective`, 삭제는 `rollout-shadow`에서 시작 |
 | 선택 패스 | `--correctness on`이면 정확성 패스(`correctness.md`, `CR-{n}`)를 더 띄운다. 기본은 꺼짐 |
 | 작업 대장 | 무엇을 띄울지와 결과를 받을지를 `review-tasks.mjs`가 정한다(C-12). 시간·호출 한도는 사용자가 줄 때만 |
+| 이전 리뷰와 비교 | `--previous <스냅숏>`이면 이번 지적을 이전 지적과 잇고, 이어지지 않은 이전 지적을 재확인한다(C-13) |
 
 ## 오케스트레이션
 1. 변경 집합만 기준으로 리뷰 범위를 결정한다.
@@ -51,7 +52,8 @@ description: Use when the user invokes /code-review-full or asks for a full code
 
 ```bash
 node "$RULES_DIR/../scripts/review-preflight.mjs" --dir "$REPORT_DIR" --run "$REPORT_BASENAME" --rules "$RULES_DIR" --workflow full --base "$BASE" --host <harness 이름> --correctness <on|off> \
-     [--max-duration <30m>] [--max-tasks <N>] [--stale-after <20m>] [--continues <앞 실행 ID>]
+     [--max-duration <30m>] [--max-tasks <N>] [--stale-after <20m>] [--continues <앞 실행 ID>] \
+     [--previous <이전 리뷰의 스냅숏>]
 ```
 
 **`$REPORT_DIR`와 `$REPORT_BASENAME`은 리포트를 실제로 저장할 곳과 그 파일 이름이다.** 여기서 정한 값이 사이드카의 자리를 결정하므로, 나중에 리포트를 다른 디렉터리나 다른 이름으로 쓰면 기록과 리포트가 서로를 못 찾는다. 실제로 한 실행이 리포트를 `Docs/`에 쓰고 사이드카는 워크트리에 남겨 **이름도 디렉터리도 달랐다.** `--check`가 `render.wrote`의 경로와 대조해 그 어긋남을 짚는다. **`$REPORT_BASENAME`에는 확장자를 붙이지 않는다** — `.md`로 끝나면 preflight와 기록 스크립트가 거부한다. 2026-09-30의 한 실행은 리포트 파일 이름을 그대로 넘겨 기록이 전부 `….md.jsonl`로 남았다.
@@ -63,6 +65,8 @@ C-9의 `run.start`를 이 스크립트가 쓴다. 동시에 `리뷰 기준`과 `
 **정확성 패스를 켰는지도 여기서 정해진다.** 사용자가 `--correctness on`을 줬을 때만 preflight에 `--correctness on`을 넘긴다. 주지 않았으면 `off`다 — 이 패스는 검출 효과와 추가 비용을 확인하기 전까지 명시적으로 켜서 쓴다(#88). preflight가 그 값을 `run.start`에 남기고, 뒤의 스크립트(검증 준비·렌더러·스냅숏)는 그 기록을 읽는다. **나중에 켤 수 없다** — 시작한 타임라인에는 두 번째 시작을 얹지 못한다. 켜지 않은 실행에서 패스를 돌려도 그 결과는 모이지 않는다(`prepare-verification.mjs`가 그렇다고 알린다).
 
 **한도도 여기서 정해진다(C-12).** 사용자가 리뷰에 쓸 시간이나 호출 수를 정했을 때만 `--max-duration`·`--max-tasks`를 넘긴다 — 정하지 않은 한도를 지어 넣지 않는다. 호출은 띄운 시도의 수이고 재시도·교정·승격도 하나씩이다. preflight가 이 호스트에서 시간 상한이 무엇을 보장하는지 함께 낸다 — 작업을 멈출 수 없는 호스트에서는 새 작업을 막을 뿐이다. 그 문장을 `리뷰 기준`에 옮기고, 지키지 못하는 상한을 지킨다고 쓰지 않는다. `--host`에는 harness 이름(`claude-code`·`opencode`)을 정확히 준다 — 모르는 이름이면 대장이 아무 능력도 가정하지 않는다.
+
+**이전 리뷰와 비교하는지도 여기서 정해진다(C-13).** 사용자가 고친 뒤 다시 리뷰해 달라고 하거나 이전 리뷰와 비교하라고 하면, 그 리뷰의 스냅숏(`<리포트 디렉터리>/.timing/<그 리포트 basename>.snapshot.json`)을 `--previous`로 넘긴다. 어느 리뷰인지 사용자가 말하지 않았으면 같은 브랜치의 가장 최근 리포트의 스냅숏을 쓰고, 그 경로를 `리뷰 기준`에 적는다. 찾지 못하면 비교하지 않는다고 적는다 — 리포트 Markdown을 읽어 비교를 손으로 만들지 않는다. preflight가 읽을 수 없거나 다른 저장소·다른 워크플로우의 스냅숏이면 거부한다. 이 버전은 결과를 재사용하지 않는다 — 모듈은 모두 다시 리뷰한다.
 
 **(1) 프로파일 판정 — 1회**
 
@@ -351,6 +355,7 @@ isolated 11)을 동시에 background dispatch한 결과, 1건만 2분 25초에 �
 - 셸이 필요 없다. **merge-base 기준 `deleted` 인용도 스크립트가 base blob에서 읽어 위치 대조 결과에 담는다** — verifier가 직접 조회할 일이 없다. anchor file 밖을 봐야 하는 경우(`usedCrossFileContext`)는 `Read`로 충분하다
 - **판정은 받는 즉시 파일로 남긴다.** 검증자가 돌려준 JSON을 한 글자도 고치지 않고 `next`가 준 `resultPath`에 쓰고 `review-tasks.mjs done`을 부른다. 대장이 계약을 검사해 맞으면 그 작업의 `verdict` 경로(`<taskId>.verdict.json`)에 쓴다 — 그 경로에 직접 쓰지 않는다. 모으고 순서를 정하는 일은 `tally-verdicts.mjs --collect`가 한다(아래 `검증 결과 집계`)
 - bundle이 `needs-context`로 돌린 후보의 승격 작업은 `next`가 `kind: promotion`으로 낸다. 그 항목의 `prompt`로 isolated verifier를 띄운다. 승격 프롬프트를 새로 쓰지 않는다
+- **이전 리뷰와 비교하는 실행(C-13)에는 재확인 작업(`kind: recheck`)도 나온다.** 이번 리뷰가 다시 내지 않은 이전 지적이 지금 코드에서 성립하는지 묻는 작업이다. 다른 검증 작업과 똑같이 띄운다 — `prompt` 파일을 그대로 넘기고, 응답을 `resultPath`에 쓰고 `done`을 부른다. 지시가 교차검증과 다르다(기본 입장이 없다) — 그래서 프롬프트를 자기 말로 다시 쓰지 않는다. 판정할 `candidateId`는 이전 지적의 `ref`다
 - **`CR-*` 후보에는 규칙 조항이 없다.** 스크립트가 조항 자리에 `correctness.md`의 판정 기준 블록을 붙이고, 검증자에게 조항을 찾거나 지어내지 말고 의도와 코드 경로로 판정하라고 적는다(C-6B `조항이 없는 지적`). 오케스트레이터가 조항을 찾아 붙이지 않는다
 - **isolated에서도 `needs-context`인 후보는 C-6B의 `scope-open`이다.** 다시 묻지 않고 `미해결 / 후속 확인`으로 옮긴다. 다른 판정과 모순돼 보이면 그 모순도 거기 함께 적는다 — 결론을 담은 프롬프트로 다시 물으면 그것은 검증이 아니라 유도다. 2026-09-30 실행은 리포트를 조립한 뒤 "이전 결론을 반복하지 말라"는 프롬프트로 다시 물어 판정을 뒤집었다
 
@@ -396,6 +401,7 @@ node "$RULES_DIR/../scripts/tally-verdicts.mjs" --dir "$REPORT_DIR" --run "$REPO
 - **이 스크립트가 `crossverify.end`를 남긴다.** 같은 줄을 따로 기록하지 않는다. 수치를 바로잡으려고 다시 돌릴 때는 `--note <사유>`를 준다 — 사유 없는 두 번째 `crossverify.end`는 `--check`가 "판정을 다시 받았다"로 짚는다
 - **판정 파일을 손으로 합치지 않는다.** `--collect`는 bundle 작업 → isolated 작업 → 승격 작업 순서로 읽는다. 후보별로 마지막 판정만 세므로, bundle이 `needs-context`로 돌리고 isolated가 다시 판정한 후보가 두 번 세어지지 않는다. 2026-09-30 실행은 서브에이전트가 세션 기록에서 판정을 긁어 파일 두 개를 만들었고(17분), 그 파일을 렌더러가 읽지 못해 모양을 다시 바꿨다(5분)
 - 모은 판정은 `$REPORT_BASENAME.verdicts.json` 한 파일로 남는다(stdout의 `verdictsFile`). 렌더러의 `--verdicts`에는 이 파일을 준다
+- 재확인 판정(C-13)은 교차검증 수치에 섞지 않고 `$REPORT_BASENAME.rechecks.json`에 따로 남는다(stdout의 `rechecks`). 스냅숏이 그 파일을 스스로 읽는다. 이번 후보에 검증 대상이 없어도 재확인 작업이 있으면 이 스크립트를 돌린다
 - 판정 파일이 없는 작업은 검증자가 결과를 내지 못한 것이다. 스크립트는 멈추지 않고 그 작업 이름을 알리며, 그 후보는 `noVerdict`로 센다(C-6B `verification-unavailable`)
 - **승격 판정은 bundle이 `needs-context`로 돌린 후보에만 쓰인다.** 그 후보의 승격 판정이 없거나 교정 뒤에도 계약을 어겼으면, 스크립트는 bundle의 `needs-context`도 최종 판정으로 쓰지 않고 `noVerdict`로 센다 — `미해결 / 후속 확인`은 isolated에서도 닫히지 않은 후보의 자리다. bundle이 이미 닫은 후보의 승격 판정은 세지 않고 알린다(계약에 없는 재검증)
 - **`--targets`를 빠뜨리지 않는다.** 판정을 받지 못한 후보를 개수가 아니라 ID로 센다. 개수만 맞추면 대상 밖 후보의 판정이 빠진 대상을 가리는데, 한 실행에서 verifier 타임아웃으로 판정을 못 받은 3건이 기록에서 통째로 사라진 적이 있다
@@ -494,6 +500,7 @@ node "$RULES_DIR/../scripts/review-snapshot.mjs" --dir "$REPORT_DIR" --run "$REP
 - `--verification-state`는 렌더러에 준 값과 같다. routed 출력과 판정은 위 명령들이 남긴 자리(`$REPORT_BASENAME.routed.json`·`.verdicts.json`)에서 읽는다
 - **`검토 상태`가 `완료`가 아니면 `판정`을 통과로 쓰지 않는다.** `부분 완료`와 `실패`는 `FAILED orchestration`이다(C-8). 표에 나온 모듈(`FAILED`·결과 없음·`SKIPPED`·`UNKNOWN`)이 이 실행이 검토하지 않은 범위다
 - `검토 도중 대상이 바뀌었다`가 찍히면 `판정`에도 한 줄 적는다 — 그 실행의 결과는 한 시점의 코드에 대한 것이 아니다
+- **이전 리뷰와 비교했으면(C-13) 블록에 `이전 리뷰와 비교`가 나온다.** `요약`에는 그 수를 옮기되 **해결 확인만 해결이라고 쓴다.** 재확인 필요는 해결도 미해결도 아니다 — 그 표의 항목을 `미해결 / 후속 확인`에 옮긴다. 이번에 나오지 않았다는 이유로 이전 지적을 해결됐다고 쓰지 않는다. 지적마다의 `이전 리뷰:` 줄은 렌더러가 그린다 — 직접 쓰지 않는다
 - 스크립트가 멈추면(종료 코드 2) 이유를 고치고 다시 돌린다. 검증 대상이 있는데 검증자가 하나도 판정을 내지 못했으면 `--no-verdicts`를 준다. 고칠 수 없으면 `실행 계획`에 스냅숏을 남기지 못했다고 적는다 — **블록을 손으로 만들지 않는다**
 
 ### 상세 지적 작성 규칙
