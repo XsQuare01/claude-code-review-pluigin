@@ -14,6 +14,7 @@
 //        --phase-low <active-deletion|rollout-shadow> \
 //        --verification-state <ran|disabled> --rules <RULES_DIR> --workflow <이름>
 
+import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
@@ -384,10 +385,12 @@ const COMPARISON_TEXT = {
   'pre-existing': '변경 전에도 재현 → 기존 결함',
   'new-regression': '변경 전에는 재현 안 됨 → 신규 회귀',
   'base-unmeasured': 'base 미측정 — 기존 결함인지 신규 회귀인지 가르지 않았다',
+  incomparable: '변경 전 재현과 재현 계획이 달라 비교하지 않았다 — 기존 결함인지 신규 회귀인지 가르지 않았다',
 }
 const UNUSABLE_TEXT = {
   'other-run': '다른 실행의 기록이다',
   'other-target': '이 실행의 대상과 다른 코드에서 돌았다',
+  'other-candidates': '지금의 후보 목록과 다른 후보 목록에서 돌았다 — 검증 준비를 다시 돌린 뒤라 같은 ID가 다른 지적일 수 있다',
   'tree-mutated': '재현 명령이 작업 트리를 바꿨다',
   'artifact-missing': '로그 파일이 없다',
   'artifact-changed': '기록한 뒤에 로그 파일이 바뀌었다',
@@ -951,8 +954,10 @@ if (process.argv[1] && process.argv[1].endsWith('render-findings.mjs')) {
   }
 
   let payload
+  let inputText
   try {
-    payload = JSON.parse(readFileSync(inputPath, 'utf8'))
+    inputText = readFileSync(inputPath, 'utf8')
+    payload = JSON.parse(inputText)
   } catch (error) {
     die(`--input을 읽지 못했다: ${inputPath} — ${error.message}`)
   }
@@ -1026,7 +1031,7 @@ if (process.argv[1] && process.argv[1].endsWith('render-findings.mjs')) {
   if (evidencePath !== undefined) {
     const runId = payload.collected?.runId
     if (!runId) die('--evidence는 prepare-verification.mjs --collect의 출력과 함께 쓴다 — routed 출력에 collected.runId가 없어 근거 파일이 같은 실행의 것인지 확인할 수 없다')
-    const loaded = loadEvidence(evidencePath)
+    const loaded = loadEvidence(evidencePath, { routedSha256: createHash('sha256').update(inputText).digest('hex') })
     if (loaded.error) die(loaded.error)
     if (loaded.doc.run.runId !== runId) die(`--evidence는 다른 실행(${loaded.doc.run.runId})의 근거 파일이다 — 이 routed 출력은 ${runId}다`)
     for (const problem of loaded.problems) process.stderr.write(`경고: 근거 실행 기록 ${problem}\n`)

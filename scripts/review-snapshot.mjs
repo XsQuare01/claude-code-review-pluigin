@@ -158,7 +158,7 @@ for (const source of Array.isArray(routed.value.collected?.sources) ? routed.val
 let evidence = new Map()
 const evidencePath = join(timing, `${run}.evidence.json`)
 if (existsSync(evidencePath)) {
-  const loaded = loadEvidence(evidencePath)
+  const loaded = loadEvidence(evidencePath, { routedSha256: digest(routed.text) })
   if (loaded.error) die(`재현 근거 파일을 읽지 못했다 — ${loaded.error}`)
   const start = events.find(event => event?.phase === 'run.start')
   if (loaded.doc.run.runId !== start?.runId) die(`${evidencePath}는 다른 실행(${loaded.doc.run.runId})의 근거 파일이다`)

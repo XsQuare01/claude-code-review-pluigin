@@ -132,16 +132,45 @@ test('모르는 지적, 모르는 방법, 계약 밖 키는 거부한다', () =>
 
 // ------------------------------------------------------------ 항목 평가
 
-test('executed 항목은 쓸 수 있는 HEAD 기록과 base 기록으로 평가한다', () => {
-  const base = record({ id: 'exec-2', side: 'base', outcome: 'not-reproduced', exit: 0, target: { head: RUN.mergeBase, worktree: 'clean', dirtyFiles: 0 } })
+test('executed 항목은 쓸 수 있는 HEAD 기록과 같은 계획의 base 기록으로 평가한다', () => {
+  const base = record({ id: 'exec-2', side: 'base', outcome: 'not-reproduced', exit: 0, planDigest: 'plan-a', target: { head: RUN.mergeBase, worktree: 'clean', dirtyFiles: 0 } })
   const executions = new Map([
-    ['exec-1', { record: record(), usability: { usable: true } }],
+    ['exec-1', { record: record({ planDigest: 'plan-a' }), usability: { usable: true } }],
     ['exec-2', { record: base, usability: { usable: true } }],
   ])
   const assessed = assessEntry({ candidateId: 'CR-1#1', method: 'executed', condition: 'c', expected: 'e', executions: ['exec-1', 'exec-2'] }, executions)
   assert.equal(assessed.head.outcome, 'reproduced')
   assert.equal(assessed.base.outcome, 'not-reproduced')
   assert.equal(assessed.comparison, 'new-regression')
+})
+
+test('HEAD와 base는 재현 계획이 같을 때만 비교한다 — 다르면 비교 불가다', () => {
+  const head = record({ planDigest: 'plan-a' })
+  const sameBase = record({ id: 'exec-2', side: 'base', outcome: 'not-reproduced', exit: 0, planDigest: 'plan-a', target: { head: RUN.mergeBase, worktree: 'clean', dirtyFiles: 0 } })
+  const otherBase = record({ id: 'exec-3', side: 'base', outcome: 'not-reproduced', exit: 0, planDigest: 'plan-b', target: { head: RUN.mergeBase, worktree: 'clean', dirtyFiles: 0 } })
+  const executions = new Map([
+    ['exec-1', { record: head, usability: { usable: true } }],
+    ['exec-2', { record: sameBase, usability: { usable: true } }],
+    ['exec-3', { record: otherBase, usability: { usable: true } }],
+  ])
+  const entry = ids => ({ candidateId: 'CR-1#1', method: 'executed', condition: 'c', expected: 'e', executions: ids })
+  assert.equal(assessEntry(entry(['exec-1', 'exec-2']), executions).comparison, 'new-regression')
+  // 같은 계획의 base가 있으면 그것과 짝짓는다 — 나중에 돈 다른 계획의 base가 있어도
+  const paired = assessEntry(entry(['exec-1', 'exec-2', 'exec-3']), executions)
+  assert.deepEqual([paired.comparison, paired.base.id], ['new-regression', 'exec-2'])
+  const mismatched = assessEntry(entry(['exec-1', 'exec-3']), executions)
+  assert.equal(mismatched.comparison, 'incomparable')
+  assert.match(mismatched.comparisonReason, /재현 계획/)
+  // 계획을 남기지 않은 옛 기록끼리도 비교하지 않는다
+  const legacy = new Map([['exec-1', { record: record(), usability: { usable: true } }], ['exec-2', { record: { ...sameBase, planDigest: undefined }, usability: { usable: true } }]])
+  assert.equal(assessEntry(entry(['exec-1', 'exec-2']), legacy).comparison, 'incomparable')
+})
+
+test('같은 실행이라도 지금과 다른 후보 목록에서 돈 재현은 근거로 쓰지 않는다', () => {
+  assert.deepEqual(executionUsability(record({ routedSha256: 'a'.repeat(64) }), { run: RUN, artifactSha256: SHA, routedSha256: 'b'.repeat(64) }), { usable: false, reason: 'other-candidates' })
+  assert.deepEqual(executionUsability(record({ routedSha256: 'a'.repeat(64) }), { run: RUN, artifactSha256: SHA, routedSha256: 'a'.repeat(64) }), { usable: true })
+  // 해시를 남기지 않은 옛 기록은 대조하지 않는다
+  assert.deepEqual(executionUsability(record(), { run: RUN, artifactSha256: SHA, routedSha256: 'b'.repeat(64) }), { usable: true })
 })
 
 test('쓸 수 있는 HEAD 기록이 없는 executed 항목은 실행 근거로 평가하지 않는다', () => {

@@ -31,7 +31,7 @@ const RECORD_KIND = 'review-execution'
 
 export const METHODS = ['static-trace', 'executed', 'not-run']
 export const OUTCOMES = ['reproduced', 'not-reproduced', 'inconclusive', 'env-failure']
-export const COMPARISONS = ['pre-existing', 'new-regression', 'base-unmeasured']
+export const COMPARISONS = ['pre-existing', 'new-regression', 'base-unmeasured', 'incomparable']
 const SIDES = ['head', 'base']
 const ENTRY_KEYS = new Set(['candidateId', 'method', 'condition', 'procedure', 'expected', 'observed', 'reason', 'codeRefs', 'executions'])
 
@@ -64,6 +64,27 @@ export function classifyOutcome({ spawnError = null, timedOut = false, signal = 
 }
 
 /**
+ * 재현 계획 — 무엇을 어떻게 돌렸고 무엇을 재현으로 정했는가. HEAD와 base의 결과는 계획이 같을 때만 비교한다.
+ *
+ * 서로 다른 명령의 결과를 비교하면 기존 결함과 신규 회귀가 뒤바뀐다 — HEAD에서는 `exit 1`, base에서는
+ * `exit 0`을 돌려도 "변경 전에는 재현 안 됨 → 신규 회귀"가 됐다(PR #92 리뷰에서 재현). 그래서 명령·셸 여부·
+ * 작업 위치·기대 결과를 계획으로 묶어 양쪽 기록에 남긴다. base와 HEAD는 서로 다른 checkout에서 돌므로,
+ * 명령 안의 저장소 루트 경로는 `<repo>`로 바꿔 같은 계획임을 알아볼 수 있게 한다.
+ */
+export function reproductionPlan({ command, shell, repoRoot, cwd, expectExit, expectOutput }) {
+  const roots = [repoRoot, repoRoot.split('\\').join('/'), repoRoot.split('/').join('\\')].filter(Boolean)
+  const normalize = text => roots.reduce((value, root) => value.split(root).join('<repo>'), String(text))
+  return {
+    mode: shell ? 'shell' : 'argv',
+    command: command.map(normalize),
+    cwd: normalize(cwd),
+    expect: { exit: [...expectExit].sort((left, right) => left - right), output: expectOutput ?? null },
+  }
+}
+
+export const planDigestOf = plan => sha256(JSON.stringify(plan))
+
+/**
  * 실행 기록 하나를 이 실행의 근거로 쓸 수 있는가.
  *
  * - `other-run` — 다른 실행의 기록이다
@@ -72,9 +93,13 @@ export function classifyOutcome({ spawnError = null, timedOut = false, signal = 
  * - `tree-mutated` — 재현 명령이 작업 트리를 바꿨다. read-only 계약(C-6) 밖의 실행이고, 바꾼
  *   뒤의 트리가 리뷰 대상과 같다고 말할 수 없다
  * - `artifact-missing`·`artifact-changed` — 로그가 없거나 기록 뒤에 바뀌었다
+ * - `other-candidates` — 지금의 routed 출력과 다른 후보 목록에서 돈 재현이다. 같은 실행에서 검증
+ *   준비를 다시 돌리면 같은 `candidateId`가 다른 지적을 가리킬 수 있다(PR #92 리뷰). 해시가 없는 옛
+ *   기록은 대조하지 않는다
  */
-export function executionUsability(record, { run, artifactSha256 }) {
+export function executionUsability(record, { run, artifactSha256, routedSha256 }) {
   if (record.runId !== run.runId) return { usable: false, reason: 'other-run' }
+  if (routedSha256 && record.routedSha256 && record.routedSha256 !== routedSha256) return { usable: false, reason: 'other-candidates' }
   const expected = record.side === 'base'
     ? { head: run.mergeBase, worktree: 'clean' }
     : { head: run.head, worktree: run.worktree }
@@ -176,6 +201,7 @@ const summarize = (found, id) => (found
     exit: found.record.exit,
     artifact: found.record.artifact?.path,
     head: found.record.target?.head,
+    ...(found.record.planDigest ? { planDigest: found.record.planDigest } : {}),
     usable: found.usability.usable,
     ...(found.usability.reason ? { reason: found.usability.reason } : {}),
   }
@@ -184,22 +210,35 @@ const summarize = (found, id) => (found
 /**
  * 항목 하나를 평가한다 — 렌더러와 스냅숏이 같은 결과를 쓴다.
  *
- * `executed`면 나열한 실행 중 쓸 수 있는 마지막 HEAD 기록(없으면 마지막 HEAD 기록)과 base
- * 기록을 고르고, 둘로 기존 결함·신규 회귀를 가른다.
+ * `executed`면 나열한 실행 중 쓸 수 있는 마지막 HEAD 기록(없으면 마지막 HEAD 기록)을 고르고, base
+ * 기록은 **그 HEAD 기록과 재현 계획이 같은 것**만 짝짓는다. 같은 계획의 base가 없는데 다른 계획의 base만
+ * 있으면 비교하지 않는다(`incomparable`) — 결과는 각각 남기되 기존 결함·신규 회귀를 가르지 않는다. 같은
+ * 지적에 재현을 바꿔 여러 번 돌렸어도 서로 다른 계획의 마지막 HEAD·base를 짝짓지 않는다.
  */
 export function assessEntry(entry, executions) {
   const assessed = { candidateId: entry.candidateId, method: entry.method }
   for (const key of ['condition', 'procedure', 'expected', 'observed', 'reason']) if (nonEmpty(entry[key])) assessed[key] = entry[key]
   if (entry.method !== 'executed') return assessed
-  const pick = side => {
-    const ids = (entry.executions ?? []).filter(id => executions.get(id)?.record.side === side && executions.get(id)?.record.candidateId === entry.candidateId)
+  const idsOf = side => (entry.executions ?? []).filter(id => executions.get(id)?.record.side === side && executions.get(id)?.record.candidateId === entry.candidateId)
+  const pick = ids => {
     const usable = ids.filter(id => executions.get(id).usability.usable)
     const id = (usable.length ? usable : ids).at(-1)
     return id === undefined ? null : summarize(executions.get(id), id)
   }
-  assessed.head = pick('head')
-  assessed.base = pick('base')
-  assessed.comparison = compareSides(assessed.head, assessed.base)
+  assessed.head = pick(idsOf('head'))
+  const bases = idsOf('base')
+  const plan = assessed.head?.planDigest
+  const samePlan = plan ? bases.filter(id => executions.get(id).record.planDigest === plan) : []
+  if (samePlan.length || !bases.length) {
+    assessed.base = pick(samePlan)
+    assessed.comparison = compareSides(assessed.head, assessed.base)
+    return assessed
+  }
+  assessed.base = pick(bases)
+  assessed.comparison = assessed.head?.usable && assessed.head.outcome === 'reproduced' ? 'incomparable' : null
+  if (assessed.comparison) {
+    assessed.comparisonReason = plan ? '변경 전 재현의 재현 계획(명령·입력·기대 결과)이 HEAD 쪽과 다르다' : '재현 계획을 기록하지 않은 실행이다'
+  }
   return assessed
 }
 
@@ -249,16 +288,16 @@ export const executionsDirOf = docPath => join(dirname(docPath), basename(docPat
  * 실행 기록마다 로그 파일을 다시 해시해 기록과 대조한다. 기록을 쓴 뒤 로그가 바뀌었거나
  * 없어졌으면 그 기록은 근거로 쓰지 않는다. 계약에 맞지 않는 기록은 `problems`로 알리고 뺀다.
  */
-export function loadEvidence(docPath, { fs = nodeFs } = {}) {
+export function loadEvidence(docPath, { fs = nodeFs, routedSha256 } = {}) {
   if (!fs.existsSync(docPath)) return { error: `근거 파일이 없다: ${docPath}` }
   const parsed = parseEvidenceDoc(fs.readFileSync(docPath, 'utf8'))
   if (parsed.error) return { error: `${docPath}: ${parsed.error}` }
   const doc = parsed.value
-  const { executions, problems } = loadExecutions(docPath, doc.run, { fs })
+  const { executions, problems } = loadExecutions(docPath, doc.run, { fs, routedSha256 })
   return { doc, executions, problems }
 }
 
-export function loadExecutions(docPath, run, { fs = nodeFs } = {}) {
+export function loadExecutions(docPath, run, { fs = nodeFs, routedSha256 } = {}) {
   const dir = executionsDirOf(docPath)
   const executions = new Map()
   const problems = []
@@ -278,7 +317,7 @@ export function loadExecutions(docPath, run, { fs = nodeFs } = {}) {
     }
     const artifactPath = join(dirname(docPath), record.artifact.path)
     const artifactSha256 = fs.existsSync(artifactPath) ? sha256(fs.readFileSync(artifactPath)) : null
-    executions.set(record.id, { record, usability: executionUsability(record, { run, artifactSha256 }) })
+    executions.set(record.id, { record, usability: executionUsability(record, { run, artifactSha256, routedSha256 }) })
   }
   return { executions, problems }
 }
