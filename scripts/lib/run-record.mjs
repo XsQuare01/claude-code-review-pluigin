@@ -71,7 +71,13 @@ export function moduleOutcomes(events) {
     const name = String(event.module)
     const previous = outcomes.get(name)
     if (previous && attempt < previous.attempt) continue
-    outcomes.set(name, { status: event.status, attempt, failureClass: event.failureClass })
+    outcomes.set(name, {
+      status: event.status,
+      attempt,
+      failureClass: event.failureClass,
+      ...(event.cancelReason !== undefined ? { cancelReason: event.cancelReason } : {}),
+      ...(event.resultSha256 !== undefined ? { resultSha256: event.resultSha256 } : {}),
+    })
   }
   return outcomes
 }

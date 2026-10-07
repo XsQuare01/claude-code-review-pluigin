@@ -19,6 +19,7 @@ import { currentTarget } from '../scripts/lib/run-identity.mjs'
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)))
 const SCRIPT = join(ROOT, 'scripts', 'review-tasks.mjs')
 const TIMELINE = join(ROOT, 'scripts', 'review-timeline.mjs')
+const TALLY = join(ROOT, 'scripts', 'tally-verdicts.mjs')
 const RULES = join(ROOT, 'review-rules')
 const RUN = 'code-review-full-feat-x-2026-10-07'
 const CATALOG = JSON.parse(readFileSync(join(RULES, 'catalog.json'), 'utf8'))
@@ -322,6 +323,46 @@ test('검증 단계: 계약에 맞는 판정만 판정 자리에 쓰고, bundle�
   assert.ok(existsSync(routed.verifierTasks[0].verdict))
   const promoted = json(next(dir, 'verify'))
   assert.deepEqual(promoted.dispatch.map(one => `${one.label}:${one.kind}`), ['isolated-04-3-1#1:promotion'])
+})
+
+test('검증 단계: 교정까지 계약을 어긴 작업은 끝나고, --validate는 그 작업 때문에 집계를 막지 않는다', t => {
+  // PR #87 리뷰의 P1이다: 교정 뒤에도 어긴 판정이 계속 교정 차례로 남아 ready가 오지 않았다.
+  const { dir, routed } = verifySetup(t)
+  const first = json(next(dir, 'verify'))
+  const broken = JSON.stringify({ schemaVersion: 1, verdicts: [{ candidateId: '02-1#1', disposition: 'confirmed' }] })
+  writeFileSync(first.dispatch[1].resultPath, broken, 'utf8')
+  const rejected = tasks(dir, 'done', '--task', 'isolated-02-1-1', '--attempt', '1', '--status', 'ok', '--rules', RULES)
+  assert.equal(rejected.status, 1)
+  const retryPrompt = json(rejected).retryPrompt
+  assert.ok(existsSync(retryPrompt))
+  assert.equal(existsSync(routed.verifierTasks[1].verdict), false)
+
+  writeFileSync(first.dispatch[0].resultPath, JSON.stringify({ schemaVersion: 1, verdicts: [verdict('04-3#1', 'upheld')] }), 'utf8')
+  tasks(dir, 'done', '--task', 'bundle-1', '--attempt', '1', '--status', 'ok', '--rules', RULES)
+  const correction = json(next(dir, 'verify')).dispatch
+  assert.deepEqual(correction.map(one => one.label), ['isolated-02-1-1#2'])
+  assert.equal(correction[0].prompt, retryPrompt)
+  assert.equal(correction[0].correction, true)
+  writeFileSync(correction[0].resultPath, broken, 'utf8')
+  const again = tasks(dir, 'done', '--task', 'isolated-02-1-1', '--attempt', '2', '--status', 'ok', '--rules', RULES)
+  assert.equal(again.status, 1)
+  assert.match(json(again).note, /시도를 다 썼다/)
+  assert.equal(json(next(dir, 'verify')).complete, true)
+
+  const validate = spawnSync(process.execPath, [TALLY, '--dir', dir, '--run', RUN, '--validate', '--targets', join(dir, '.timing', `${RUN}.routed.json`), '--rules', RULES], { encoding: 'utf8' })
+  const report = JSON.parse(validate.stdout)
+  assert.equal(report.ready, true, validate.stdout)
+  assert.deepEqual(report.exhausted.map(one => one.taskId), ['isolated-02-1-1'])
+})
+
+test('검증 단계: --validate는 돌고 있는 검증 작업을 남은 작업(pending)으로 다시 내지 않는다', t => {
+  const { dir } = verifySetup(t)
+  next(dir, 'verify')
+  const validate = spawnSync(process.execPath, [TALLY, '--dir', dir, '--run', RUN, '--validate', '--targets', join(dir, '.timing', `${RUN}.routed.json`), '--rules', RULES], { encoding: 'utf8' })
+  const report = JSON.parse(validate.stdout)
+  assert.deepEqual(report.pending, [])
+  assert.deepEqual(report.running.map(one => one.taskId), ['bundle-1', 'isolated-02-1-1'])
+  assert.equal(report.ready, false)
 })
 
 test('resume은 대상 기록이 없는 실행을 그대로라고 보지 않는다', t => {
