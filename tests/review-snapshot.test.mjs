@@ -379,3 +379,59 @@ test('근거 요약의 값이 닫힌 목록 밖이면 스냅숏을 거부한다'
   const bad = { ...good, findings: [{ ...good.findings[0], evidence: { ...good.findings[0].evidence, method: 'guessed' } }] }
   assert.ok(snapshotProblems(bad).some(problem => /evidence/.test(problem)))
 })
+
+// ── 작업 대장의 멈춤과 취소(C-12) ─────────────────────────────────────
+
+test('디스패치를 멈춰 띄우지 못한 모듈은 기록이 없는 모듈과 다른 이유로 미검토 범위에 남는다', () => {
+  const ran = ALL.filter(name => !['math', '20-deletion-regression', 'exception'].includes(name))
+  const snapshot = buildSnapshot(fixture({
+    events: [
+      runStart({ maxTasks: 30 }),
+      planned([{ module: 'math', reasonCode: 'no-linear-algebra', reason: '행렬 연산이 없다' }]),
+      ...ran.map(name => done(name)),
+      { at: '2026-10-06T00:30:00.000Z', phase: 'dispatch.halt', reason: 'max-tasks', stage: 'module', queuedTasks: ['20-deletion-regression', 'exception'], running: 0 },
+    ],
+    routed: { candidates: [candidate()], collected: { sources: ran, excludedFailed: [] } },
+  }))
+  assert.deepEqual(snapshotProblems(snapshot), [])
+  assert.equal(snapshot.status, 'partial')
+  const halted = snapshot.scope.modules.filter(module => module.reason === 'halted')
+  assert.deepEqual(halted.map(module => `${module.name}:${module.haltReason}`), ['20-deletion-regression:max-tasks', 'exception:max-tasks'])
+  assert.deepEqual(snapshot.dispatch.halted, { reason: 'max-tasks', at: '2026-10-06T00:30:00.000Z' })
+  assert.equal(snapshot.dispatch.maxTasks, 30)
+  const block = renderSnapshotMarkdown(snapshot)
+  assert.match(block, /\| `exception` \| 결과 없음 \| 디스패치를 멈춰 띄우지 않았다 \(호출 한도를 다 썼다\) \|/)
+  assert.match(block, /\*\*디스패치를 멈췄다\*\* — 호출 한도를 다 썼다/)
+})
+
+test('시간 상한으로 취소된 모듈은 실패로 세고 취소 사유를 함께 남긴다', () => {
+  const snapshot = buildSnapshot(fixture({
+    events: [
+      runStart({ maxDurationSec: 1800 }),
+      planned([{ module: 'math', reasonCode: 'no-linear-algebra', reason: '행렬 연산이 없다' }]),
+      ...ALL.filter(name => !['math', 'exception'].includes(name)).map(name => done(name)),
+      done('exception', 'failed', 1, { failureClass: 'cancelled', cancelReason: 'max-duration' }),
+      { at: '2026-10-06T00:30:00.000Z', phase: 'dispatch.halt', reason: 'max-duration', stage: 'module', queuedTasks: [], running: 1 },
+    ],
+    routed: { candidates: [candidate()], collected: { sources: ALL.filter(name => !['math', 'exception'].includes(name)), excludedFailed: [] } },
+  }))
+  assert.deepEqual(snapshotProblems(snapshot), [])
+  const exception = snapshot.scope.modules.find(module => module.name === 'exception')
+  assert.deepEqual([exception.state, exception.failureClass, exception.cancelReason], ['failed', 'cancelled', 'max-duration'])
+  assert.match(renderSnapshotMarkdown(snapshot), /\| `exception` \| `FAILED` \| 시도 1 · `cancelled` · 시간 상한이 지났다 \|/)
+})
+
+test('멈춤 기록이 없으면 띄우지 않은 모듈은 여전히 기록 없음이다 — 한도 탓으로 돌리지 않는다', () => {
+  const snapshot = buildSnapshot(fixture({
+    events: [runStart(), planned([{ module: 'math', reasonCode: 'no-linear-algebra', reason: '행렬 연산이 없다' }]),
+      ...ALL.filter(name => !['math', 'exception'].includes(name)).map(name => done(name))],
+    routed: { candidates: [candidate()], collected: { sources: ALL.filter(name => !['math', 'exception'].includes(name)), excludedFailed: [] } },
+  }))
+  assert.equal(snapshot.scope.modules.find(module => module.name === 'exception').reason, 'no-record')
+  assert.equal(snapshot.dispatch.halted, null)
+})
+
+test('멈춤 이유가 목록 밖인 스냅숏은 계약 밖이다', () => {
+  const snapshot = buildSnapshot(fixture())
+  assert.deepEqual(snapshotProblems({ ...snapshot, dispatch: { ...snapshot.dispatch, halted: { reason: 'tired', at: 'x' } } }).length, 1)
+})

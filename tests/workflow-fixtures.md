@@ -790,6 +790,58 @@ These scenarios pin the behaviour that `review-rules/workflow-contract.md` promi
       ],
       "scenario": "A reproduction reproduces on HEAD but the merge base was never measured",
       "expected": "The comparison is base unmeasured, not a new regression; it becomes pre-existing or new-regression only when the same reproduction ran on a clean checkout of the merge base"
+    },
+    {
+      "id": 101,
+      "clauses": [
+        "C-12"
+      ],
+      "scenario": "While four modules are running, a user message, a duplicate completion notification, or a context compaction wakes the orchestrator and it asks review-tasks.mjs next again",
+      "expected": "next returns no dispatch for the running attempts because their module.start was recorded before they were launched; a duplicate done for the same attempt is recorded once and counted once"
+    },
+    {
+      "id": 102,
+      "clauses": [
+        "C-12",
+        "C-6A"
+      ],
+      "scenario": "A verifier returns a contract-violating verdict, and its correction attempt violates the contract again",
+      "expected": "The ledger never writes either response to the verdict path, ends the task as failed after two attempts, and tally-verdicts --validate reports it as exhausted with ready true, so the remaining verdicts are aggregated and that candidate is noVerdict"
+    },
+    {
+      "id": 103,
+      "clauses": [
+        "C-12",
+        "C-8",
+        "C-10"
+      ],
+      "scenario": "The run started with --max-tasks and reaches the limit while modules are still queued",
+      "expected": "next records dispatch.halt with the queued modules and launches nothing more; results already received are collected and rendered, the snapshot marks the unlaunched modules missing (halted) and the run partial, and the report does not call it a completed review or a pass"
+    },
+    {
+      "id": 104,
+      "clauses": [
+        "C-12"
+      ],
+      "scenario": "A launched attempt sends no completion for longer than staleAfterSec, and its response arrives after the next attempt was launched",
+      "expected": "next ends the silent attempt as inactivity-timeout and launches the retry; done refuses the late response (exit 3) and the result path keeps the retry's result"
+    },
+    {
+      "id": 105,
+      "clauses": [
+        "C-12",
+        "C-10"
+      ],
+      "scenario": "The run stopped at its time limit, the user commits a fix, and asks to resume the same run",
+      "expected": "review-tasks.mjs resume measures HEAD and the working tree again, refuses to continue the run because the target changed, and asks for a new run started with --continues <previous runId>"
+    },
+    {
+      "id": 106,
+      "clauses": [
+        "C-12"
+      ],
+      "scenario": "A run on a host that cannot stop running tasks or wake the orchestrator at a time is started with --max-duration",
+      "expected": "preflight and status say that the limit only stops new launches when the ledger is called and that running tasks may continue; the report never claims a hard time cap"
     }
   ],
   "defaultWorkflowOnlyCases": [

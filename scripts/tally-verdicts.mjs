@@ -27,10 +27,9 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { markedJson } from './lib/contract-blocks.mjs'
-import { validateVerdictPayload } from './lib/contract-validate.mjs'
-import { lastPhase, logPhase, requireStartedTimeline } from './lib/run-record.mjs'
-import { checkTaskVerdict, collectVerdicts } from './lib/verdicts.mjs'
+import { lastPhase, logPhase, readEvents, requireStartedTimeline } from './lib/run-record.mjs'
+import { MAX_ATTEMPTS, attemptsOf, budgetOf, foldAttempts, haltOf, isTerminal, segmentOf, taskState } from './lib/task-ledger.mjs'
+import { checkTaskVerdict, collectVerdicts, loadVerdictValidator } from './lib/verdicts.mjs'
 import { buildRetryPrompt } from './lib/verifier-tasks.mjs'
 
 // C-6B의 닫힌 목록이다. 목록 밖 값을 만나면 세지 않고 멈춘다 — 모르는 값을 0으로
@@ -142,17 +141,11 @@ const routed = targetsPath === undefined ? undefined : readJson(targetsPath, '--
 // 플러그인의 것이고, `--rules`를 주면 검증자가 받은 그 디렉터리를 쓴다.
 const manifests = () => {
   const rulesDir = flag('rules') ?? join(dirname(fileURLToPath(import.meta.url)), '..', 'review-rules')
-  let contract
   try {
-    contract = readFileSync(join(rulesDir, 'workflow-contract.md'), 'utf8')
+    return loadVerdictValidator(rulesDir)
   } catch (error) {
-    die(`workflow-contract.md를 읽지 못했다: ${rulesDir} — ${error.message}`)
+    die(error.message)
   }
-  const verdict = markedJson(contract, 'REVIEW_VERDICT_CONTRACT_V1')
-  const result = markedJson(contract, 'REVIEW_RESULT_CONTRACT_V1')
-  if (verdict.error) die(`workflow-contract.md: ${verdict.error}`)
-  if (result.error) die(`workflow-contract.md: ${result.error}`)
-  return payload => validateVerdictPayload(payload, verdict.value, result.value)
 }
 
 // 작업 목록 — bundle, isolated, 그다음 승격 순서가 정본 순서다.
@@ -176,17 +169,50 @@ const retryPathOf = task => task.prompt.replace(/\.md$/, '.retry.md')
  * 실행(2026-09-30)은 검증자 하나가 context 압축 직전에 떠서 끝나지 않았고, 호스트는 띄운
  * 작업이 전부 끝나야 오케스트레이터를 깨웠다 — 웨이브마다 멈춰 17건에 37시간이 걸렸고,
  * 무엇이 남았는지는 오케스트레이터의 기억에만 있었다. 판정 파일 자리는 이미 정해져
- * 있으므로 남은 일은 파일에서 센다. `ready`는 셋이 모두 비었을 때만 참이고, 그때만 0으로 끝난다.
+ * 있으므로 남은 일은 파일에서 센다. `ready`는 넷이 모두 비었을 때만 참이고, 그때만 0으로 끝난다.
+ *
+ * **작업 대장(C-12)의 기록이 있으면 그것을 먼저 본다.** 판정 파일이 없다는 것만으로는 "아직 안
+ * 띄웠다"와 "돌고 있다"와 "다 시도했지만 못 받았다"가 갈리지 않는다. 앞의 둘을 같은 `pending`으로
+ * 내면 돌고 있는 작업을 다시 띄우고, 셋째를 `pending`으로 두면 `ready`가 영영 오지 않는다 — 시도를
+ * 다 쓴 작업이 교정 차례로 계속 남던 것이 PR #87 리뷰의 P1이었다. 그래서 돌고 있는 작업은 `running`,
+ * 시도를 다 썼거나 취소된 작업은 `exhausted`(집계를 막지 않는다 — 그 후보는 판정 없음이다),
+ * 디스패치를 멈춰 띄우지 못한 작업은 `notRun`이다.
  */
-const validateTasks = plan => {
+const validateTasks = (plan, events) => {
   const validate = manifests()
+  const fold = foldAttempts(events)
+  const halted = haltOf(events)
+  const staleAfterSec = budgetOf(events, Date.now())?.staleAfterSec
+  const segmentStartedAt = segmentOf(events)?.startedAt
+  const ledger = task => {
+    const attempts = attemptsOf(fold, 'verify', task.taskId)
+    return attempts.length ? taskState(attempts, { now: Date.now(), staleAfterSec, segmentStartedAt }) : null
+  }
   const malformed = []
   const pending = []
   const awaiting = []
+  const running = []
+  const exhausted = []
+  const notRun = []
   let checked = 0
   for (const task of tasksOf(plan)) {
+    const state = ledger(task)
+    if (state?.state === 'running') {
+      running.push({ taskId: task.taskId, attempt: state.attempt })
+      continue
+    }
     if (!existsSync(task.verdict)) {
-      if (!task.promotion) pending.push({ taskId: task.taskId, route: task.route, prompt: task.prompt, verdict: task.verdict })
+      if (task.promotion) continue
+      if (state && isTerminal(state.state)) exhausted.push({ taskId: task.taskId, state: state.state, ...(state.failureClass !== undefined ? { failureClass: state.failureClass } : {}) })
+      else if (halted) notRun.push(task.taskId)
+      else {
+        // 대장이 계약 위반으로 거절한 응답의 다음 시도는 교정이다. 그 프롬프트는 done이 만들어 두었다.
+        const correction = state?.retryOf?.failureClass === 'malformed-output' && existsSync(retryPathOf(task))
+        pending.push({
+          taskId: task.taskId, route: task.route, prompt: correction ? retryPathOf(task) : task.prompt, verdict: task.verdict,
+          ...(state ? { attempt: state.nextAttempt } : {}),
+        })
+      }
       continue
     }
     checked += 1
@@ -201,21 +227,32 @@ const validateTasks = plan => {
       }
       continue
     }
+    // 교정까지 받은 작업이다. 다시 교정 차례로 내면 끝나지 않는다 — 두 번째 malformed-output은 확정 실패다(C-6A).
+    if (state && state.spent >= MAX_ATTEMPTS) {
+      exhausted.push({ taskId: task.taskId, state: 'failed', failureClass: 'malformed-output' })
+      continue
+    }
     const original = existsSync(task.prompt) ? readFileSync(task.prompt, 'utf8') : ''
     const retryPrompt = retryPathOf(task)
     writeFileSync(retryPrompt, buildRetryPrompt(original, problems, raw), 'utf8')
     malformed.push({ taskId: task.taskId, problems, retryPrompt })
   }
-  const promotionsDue = awaiting
-    .map(candidateId => ({ candidateId, task: plan?.promotions?.[candidateId] }))
-    .filter(({ task }) => task !== undefined && !existsSync(task.verdict))
-    .map(({ candidateId, task }) => ({ candidateId, taskId: task.taskId, prompt: task.prompt, verdict: task.verdict }))
-  const ready = !malformed.length && !pending.length && !promotionsDue.length
-  return { checked, malformed, pending, promotionsDue, ready }
+  const promotionsDue = []
+  for (const candidateId of awaiting) {
+    const task = plan?.promotions?.[candidateId]
+    if (task === undefined || existsSync(task.verdict)) continue
+    const state = ledger(task)
+    if (state?.state === 'running') running.push({ taskId: task.taskId, attempt: state.attempt })
+    else if (state && isTerminal(state.state)) exhausted.push({ taskId: task.taskId, state: state.state, ...(state.failureClass !== undefined ? { failureClass: state.failureClass } : {}) })
+    else if (halted) notRun.push(task.taskId)
+    else promotionsDue.push({ candidateId, taskId: task.taskId, prompt: task.prompt, verdict: task.verdict })
+  }
+  const ready = !malformed.length && !pending.length && !promotionsDue.length && !running.length
+  return { checked, malformed, pending, promotionsDue, running, exhausted, notRun, ready }
 }
 
 if (validateMode) {
-  const report = validateTasks(routed)
+  const report = validateTasks(routed, readEvents(sidecar))
   process.stdout.write(`${JSON.stringify(report, null, 2)}\n`)
   process.exit(report.ready ? 0 : 1)
 }

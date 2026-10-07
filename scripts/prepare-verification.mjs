@@ -1,10 +1,11 @@
 import { execFileSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
 import { markedBlock } from './lib/contract-blocks.mjs'
-import { logPhase, readEvents, requireStartedTimeline } from './lib/run-record.mjs'
+import { logPhase, moduleOutcomes, readEvents, requireStartedTimeline } from './lib/run-record.mjs'
 import {
   buildTaskPrompt, docPathForRule, extractClause, instructionsWithManifest, planVerifierTasks,
 } from './lib/verifier-tasks.mjs'
@@ -689,6 +690,14 @@ async function main() {
     if (verifyMode !== 'off') {
       const outDir = verifyDirOf(dir, run)
       if (outDir.error) fail(outDir.error)
+      // 작업 대장(C-12)이 이번 라운드의 검증 작업을 이미 내줬으면 그 프롬프트를 지우지 않는다. 판정
+      // 파일이 아직 없어도 검증자는 돌고 있을 수 있다 — 지우고 다시 만들면 돌고 있는 작업과 새 작업
+      // 목록이 어긋난다.
+      const round = events.map(event => event?.phase).lastIndexOf('crossverify.start')
+      const claimed = round === -1 ? [] : events.slice(round).filter(event => event?.phase === 'verify.start')
+      if (claimed.length && !argv.includes('--discard-verdicts')) {
+        fail(`이번 교차검증에서 검증 작업 ${claimed.length}개를 이미 띄웠다(verify.start) — 같은 실행을 이어 가는 중이면 이 스크립트를 다시 돌리지 않고 review-tasks.mjs status로 남은 작업을 본다. 검증을 처음부터 다시 하려면 --discard-verdicts를 준다`)
+      }
       written = writeVerifierTasks({ result, rulesDir, mergeBase, outDir: outDir.path, discardVerdicts: argv.includes('--discard-verdicts'), fail })
     }
     result.verifierTasks = written.tasks
@@ -706,7 +715,9 @@ async function main() {
 /**
  * 모듈별 결과 파일(`<run>.<규칙 문서 이름>.json`)을 envelope 입력으로 모은다.
  *
- * 기준은 파일이 아니라 **기록**이고, 모으는 것은 마지막 `module.done`이 `ok`인 모듈뿐이다.
+ * 기준은 파일이 아니라 **기록**이고, 모으는 것은 최종 `module.done`이 `ok`인 모듈뿐이다. 최종은
+ * **가장 큰 시도**의 마지막 줄이다(`moduleOutcomes`) — 파일의 마지막 줄로 읽으면, 시도 1을 나중에
+ * `failed`로 정정한 줄이 시도 2의 성공을 덮어 그 모듈의 결과를 버린다(PR #87 리뷰에서 재현).
  *
  * - `ok`인데 결과 파일이 없으면 거부한다. 모은 것만 보고 넘어가면 빠진 모듈이 "지적
  *   0건"과 구분되지 않는다
@@ -719,14 +730,15 @@ async function main() {
  *   쓰므로(SKILL), 기록이 없는 파일은 쓰다 만 것이거나 앞 실행의 것일 수 있다
  *
  * append 전용 기록이므로 상태를 바로잡는 방법은 같은 시도의 `module.done`을 `note`와
- * 함께 한 줄 더 남기는 것이다 — 마지막 줄이 정본이고, `review-timeline.mjs --check`는
- * 그 줄을 중복이 아니라 정정으로 받는다.
+ * 함께 한 줄 더 남기는 것이다 — 그 시도 안에서는 마지막 줄이 정본이고, `review-timeline.mjs
+ * --check`는 그 줄을 중복이 아니라 정정으로 받는다.
+ *
+ * 작업 대장(C-12)이 결과를 받았으면 `module.done`에 그 내용의 해시(`resultSha256`)가 있다. 파일이
+ * 그 해시와 다르면 거부한다 — 그 파일은 기록된 시도의 결과가 아니다(늦게 온 앞 시도의 응답이
+ * 덮었거나, 손으로 고쳤다).
  */
 export function collectResultFiles({ events, sourceNames, pathOf, read, notRequested = new Set() }) {
-  const finalStatus = new Map()
-  for (const event of events) {
-    if (event?.phase === 'module.done') finalStatus.set(String(event.module), event.status)
-  }
+  const outcomes = moduleOutcomes(events)
   const results = []
   const problems = []
   const warnings = []
@@ -734,7 +746,8 @@ export function collectResultFiles({ events, sourceNames, pathOf, read, notReque
   for (const name of sourceNames) {
     const path = pathOf(name)
     const raw = read(path)
-    const status = finalStatus.get(name)
+    const outcome = outcomes.get(name)
+    const status = outcome?.status
     // 켜지 않은 선택 패스. 기록이나 파일이 있어도 이 실행의 결과로 모으지 않는다 — 실행
     // 기록(run.start)이 그 패스를 켜지 않았다고 말한다. 조용히 버리지 않고 알린다.
     if (notRequested.has(name)) {
@@ -763,6 +776,10 @@ export function collectResultFiles({ events, sourceNames, pathOf, read, notReque
     }
     if (raw === undefined) {
       problems.push(`${name}는 module.done이 ok인데 결과 파일이 없다: ${path}`)
+      continue
+    }
+    if (outcome.resultSha256 !== undefined && createHash('sha256').update(raw).digest('hex') !== outcome.resultSha256) {
+      problems.push(`${name}의 결과 파일이 시도 ${outcome.attempt}에서 받은 내용과 다르다: ${path} — 작업 대장이 받은 뒤 파일이 바뀌었다. 늦게 온 앞 시도의 응답이 덮었을 수 있다. 결과 파일은 review-tasks.mjs done만 쓴다`)
       continue
     }
     let parsed

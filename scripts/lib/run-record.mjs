@@ -71,7 +71,13 @@ export function moduleOutcomes(events) {
     const name = String(event.module)
     const previous = outcomes.get(name)
     if (previous && attempt < previous.attempt) continue
-    outcomes.set(name, { status: event.status, attempt, failureClass: event.failureClass })
+    outcomes.set(name, {
+      status: event.status,
+      attempt,
+      failureClass: event.failureClass,
+      ...(event.cancelReason !== undefined ? { cancelReason: event.cancelReason } : {}),
+      ...(event.resultSha256 !== undefined ? { resultSha256: event.resultSha256 } : {}),
+    })
   }
   return outcomes
 }
@@ -102,11 +108,22 @@ export function readEvents(sidecar) {
  */
 export function logPhase(dir, run, phase, data) {
   try {
-    execFileSync(process.execPath, [
-      TIMELINE, '--dir', dir, '--run', run, '--phase', phase,
-      '--data', JSON.stringify(data),
-    ], { stdio: ['ignore', 'ignore', 'pipe'] })
+    recordPhase(dir, run, phase, data)
   } catch (error) {
     process.stderr.write(`경고: ${phase}를 남기지 못했다 — ${String(error.stderr || error.message).trim()}\n`)
   }
+}
+
+/**
+ * 한 줄 남기고, 남기지 못하면 **던진다.**
+ *
+ * `logPhase`는 기록 실패를 경고로 삼킨다 — 기록은 작업의 부산물이라서다. 작업 대장(C-12)에서는
+ * 기록이 곧 결정이다. "띄워도 된다"는 줄을 남기지 못했는데 띄우라고 답하면, 다음 호출은 그 작업이
+ * 돌고 있는 줄 모르고 다시 띄운다. 그래서 대장은 이 함수로 쓰고, 실패하면 아무것도 내주지 않는다.
+ */
+export function recordPhase(dir, run, phase, data) {
+  execFileSync(process.execPath, [
+    TIMELINE, '--dir', dir, '--run', run, '--phase', phase,
+    '--data', JSON.stringify(data),
+  ], { stdio: ['ignore', 'ignore', 'pipe'] })
 }

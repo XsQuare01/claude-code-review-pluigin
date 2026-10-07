@@ -27,6 +27,7 @@ description: Use when the user invokes /code-review-full or asks for a full code
 | 완료 판정 | 적용 대상 모듈 전부 수집 성공. 하나라도 실패하면 `FAILED orchestration` |
 | 교차검증 | 1차 수집 후 **선별 반박 패스**. 기본 `--verify selective`, 삭제는 `rollout-shadow`에서 시작 |
 | 선택 패스 | `--correctness on`이면 정확성 패스(`correctness.md`, `CR-{n}`)를 더 띄운다. 기본은 꺼짐 |
+| 작업 대장 | 무엇을 띄울지와 결과를 받을지를 `review-tasks.mjs`가 정한다(C-12). 시간·호출 한도는 사용자가 줄 때만 |
 
 ## 오케스트레이션
 1. 변경 집합만 기준으로 리뷰 범위를 결정한다.
@@ -49,7 +50,8 @@ description: Use when the user invokes /code-review-full or asks for a full code
 **(0) preflight — 리뷰의 첫 명령**
 
 ```bash
-node "$RULES_DIR/../scripts/review-preflight.mjs" --dir "$REPORT_DIR" --run "$REPORT_BASENAME" --rules "$RULES_DIR" --workflow full --base "$BASE" --host <harness 이름> --correctness <on|off>
+node "$RULES_DIR/../scripts/review-preflight.mjs" --dir "$REPORT_DIR" --run "$REPORT_BASENAME" --rules "$RULES_DIR" --workflow full --base "$BASE" --host <harness 이름> --correctness <on|off> \
+     [--max-duration <30m>] [--max-tasks <N>] [--stale-after <20m>] [--continues <앞 실행 ID>]
 ```
 
 **`$REPORT_DIR`와 `$REPORT_BASENAME`은 리포트를 실제로 저장할 곳과 그 파일 이름이다.** 여기서 정한 값이 사이드카의 자리를 결정하므로, 나중에 리포트를 다른 디렉터리나 다른 이름으로 쓰면 기록과 리포트가 서로를 못 찾는다. 실제로 한 실행이 리포트를 `Docs/`에 쓰고 사이드카는 워크트리에 남겨 **이름도 디렉터리도 달랐다.** `--check`가 `render.wrote`의 경로와 대조해 그 어긋남을 짚는다. **`$REPORT_BASENAME`에는 확장자를 붙이지 않는다** — `.md`로 끝나면 preflight와 기록 스크립트가 거부한다. 2026-09-30의 한 실행은 리포트 파일 이름을 그대로 넘겨 기록이 전부 `….md.jsonl`로 남았다.
@@ -59,6 +61,8 @@ C-9의 `run.start`를 이 스크립트가 쓴다. 동시에 `리뷰 기준`과 `
 **무엇을 리뷰하는지도 여기서 정해진다(C-10).** 출력의 `HEAD`·`작업 트리`·`실행 ID`를 `리뷰 기준`에 옮긴다. 작업 트리에 커밋하지 않은 변경이 있으면 스크립트가 그렇다고 말한다 — 그 변경은 diff(3a(3))에는 없지만 파일을 읽는 단계는 그 내용을 보므로, `리뷰 기준`에 그 사실을 적는다. 리뷰가 끝날 때 `review-snapshot.mjs`가 이 값을 다시 재서 실행 도중 대상이 바뀌었는지 본다(아래 `결과 스냅숏`).
 
 **정확성 패스를 켰는지도 여기서 정해진다.** 사용자가 `--correctness on`을 줬을 때만 preflight에 `--correctness on`을 넘긴다. 주지 않았으면 `off`다 — 이 패스는 검출 효과와 추가 비용을 확인하기 전까지 명시적으로 켜서 쓴다(#88). preflight가 그 값을 `run.start`에 남기고, 뒤의 스크립트(검증 준비·렌더러·스냅숏)는 그 기록을 읽는다. **나중에 켤 수 없다** — 시작한 타임라인에는 두 번째 시작을 얹지 못한다. 켜지 않은 실행에서 패스를 돌려도 그 결과는 모이지 않는다(`prepare-verification.mjs`가 그렇다고 알린다).
+
+**한도도 여기서 정해진다(C-12).** 사용자가 리뷰에 쓸 시간이나 호출 수를 정했을 때만 `--max-duration`·`--max-tasks`를 넘긴다 — 정하지 않은 한도를 지어 넣지 않는다. 호출은 띄운 시도의 수이고 재시도·교정·승격도 하나씩이다. preflight가 이 호스트에서 시간 상한이 무엇을 보장하는지 함께 낸다 — 작업을 멈출 수 없는 호스트에서는 새 작업을 막을 뿐이다. 그 문장을 `리뷰 기준`에 옮기고, 지키지 못하는 상한을 지킨다고 쓰지 않는다. `--host`에는 harness 이름(`claude-code`·`opencode`)을 정확히 준다 — 모르는 이름이면 대장이 아무 능력도 가정하지 않는다.
 
 **(1) 프로파일 판정 — 1회**
 
@@ -106,6 +110,27 @@ Trigger 섹션이 있는 모듈(`12`, `14`, `16`, `17`, `18`, `21`)은 diff에 �
 
   **이 지시는 지켜지지 않았고, 이제 세어서 드러난다.** 09-11 실행은 인플라이트가 4번, 09-17 실행은 6번 0으로 떨어졌다 — 4개를 띄우고 4개가 모두 끝나기를 기다린 모양이다. 쌓인 유휴는 각각 316초와 333초로 디스패치 벽시계의 약 20%다. `--summary`의 디스패치 블록이 그 횟수와 유휴를 내므로, **0이 아니면 리포트에 그대로 남는다.** 예정된 마지막 모듈 하나·props·예외 패스를 각각 혼자 돌리는 것도 같은 문제다 — 남은 것이 셋이면 셋을 함께 띄운다.
 - 대기열 순서는 모듈 번호 순으로 하되, 순서 자체가 정확성 요건은 아니다. 결과는 리포팅 시점에 모듈 번호로 정렬한다.
+
+#### 작업 대장으로 띄우고 받는다 (C-12)
+
+**무엇을 띄울지는 기억이 아니라 대장에 묻는다.** 위의 상한·배리어·재시도 규칙을 오케스트레이터가 세지 않는다 — `review-tasks.mjs`가 기록에서 세고 결정한다. `modules.planned`(3a(4))를 남긴 뒤 시작한다.
+
+```bash
+node "$RULES_DIR/../scripts/review-tasks.mjs" next --stage module --dir "$REPORT_DIR" --run "$REPORT_BASENAME" --rules "$RULES_DIR" [--inflight 4]
+```
+
+1. **`next`가 준 `dispatch`만 띄운다.** 항목마다 `label`을 작업 설명에 넣는다. 대장은 그 시도의 시작(`module.start`)을 띄우기 **전에** 이미 남겼다 — `module.start`·`module.done`·`dispatch.start`·`dispatch.end`를 직접 남기지 않는다
+2. 띄웠으면 호스트의 작업 ID를 묶는다: `review-tasks.mjs bind --task <task> --attempt <attempt> --host-task <작업 ID> …`. 압축 뒤에도 어느 호스트 작업이 어느 시도인지 기록에 남는다
+3. **끝 알림을 받을 때마다** 응답을 한 글자도 고치지 않고 그 항목의 `resultPath`에 쓰고 `done`을 부른다: `review-tasks.mjs done --host-task <작업 ID> --status ok …`. 실패했으면 결과 없이 `--status failed --failure-class <클래스>`(C-9의 닫힌 목록)를 준다
+4. 그리고 바로 다시 `next`를 부른다. 빈 슬롯만큼 다음 시도가 나온다 — 그것이 배리어 없는 sliding window다
+5. `complete: true`가 나오면 모듈 단계가 끝났다. 검증 준비(`prepare-verification.mjs --collect`)로 간다
+
+- **`done`의 답을 따른다.** `accepted`면 대장이 결과를 `$REPORT_BASENAME.<모듈>.json`에 썼다 — 그 파일을 직접 쓰지 않는다. `duplicate`(이미 받은 알림)와 `late`·`unknown`(종료 코드 3 — 취소됐거나 죽은 것으로 끝난 시도, 다른 실행의 작업)은 받지 않은 것이다. 그 응답을 다른 길로 결과에 넣지 않는다 — 늦은 응답이 새 시도의 결과를 덮는다. `rejected`(종료 코드 1)는 JSON으로 읽히지 않는 응답이다 — 다음 `next`가 교정 시도(`correction: true`)를 낸다
+- **`expired`에 나온 시도는 끝 알림 없이 `staleAfterSec`를 넘겨 대장이 끝낸 것이다.** 그 시도의 응답이 나중에 와도 `done`이 받지 않는다. 재시도는 같은 응답의 `dispatch`에 이미 있다
+- **`cancelled`에 나온 시도는 시간 상한이 지나 취소된 것이다.** 호스트가 작업을 멈출 수 있으면(`host.cancel`) 그 작업을 멈춘다. `halted`가 나오면 더 띄우지 않는다 — 이미 받은 결과로 다음 단계로 가고, 띄우지 못한 모듈은 스냅숏이 미검토 범위로 그린다(`FAILED orchestration`)
+- **사용자가 멈추라고 하면** `review-tasks.mjs cancel --all --reason user`를 부르고, 같은 방식으로 받은 결과까지 리포트를 쓴다
+- **깨어날 때마다** — 작업 완료 알림, 사용자 메시지, 컨텍스트 압축 뒤, 같은 실행에서 스킬을 다시 불렀을 때 — 먼저 `review-tasks.mjs status`로 남은 일을 보고 `next`를 부른다. 같은 실행을 다른 세션에서 이어 가면 `review-tasks.mjs resume --repo <대상 저장소>`부터 부른다. 대상이 바뀌었다고 하면(종료 코드 3) 이 실행을 이어 가지 않고, 새 `--run` 이름으로 preflight를 `--continues <앞 실행 ID>`와 함께 다시 시작한다. 한도에 닿아 멈춘 실행을 사용자가 더 돌리라고 하면 `resume`에 새 한도를 준다
+- 작업 하나가 끝나도 깨우지 않는 호스트(`host.perTaskNotification: false`, oh-my-openagent)에서는 `dispatch`를 전부 한 번에 foreground 병렬로 부르고, 돌아온 응답마다 `done`을 부른 뒤 `next`를 다시 부른다(아래 교차검증 `디스패치`와 같은 이유)
 
 **각 모듈 sub-agent prompt에 담을 것** — 3a에서 이미 확보했으므로 에이전트가 다시 조사하지 않는다.
 
@@ -188,14 +213,14 @@ Trigger 섹션이 있는 모듈(`12`, `14`, `16`, `17`, `18`, `21`)은 diff에 �
 
   이 에이전트가 셸 없이 일할 수 있는 이유는 3a(3)에 있다. diff를 스스로 뜨지 않고 받아 쓰며, **삭제된 파일의 옛 내용도 그 diff의 `-` 줄에 전부 들어 있다.** 런타임이 도구 제한을 지원하지 않으면 C-6의 대체 경로를 따른다.
 - 적용 대상 모듈마다 별도의 sub-agent 하나를 반드시 유지한다. in-flight 상한은 정확히 4이며, fast review, generic summary, 또는 다른 모듈이 누락된 숫자 모듈을 대체할 수 없다. 특히 `01-fsd.md`와 `20-deletion-regression.md`는 다른 architecture/deletion-regression 요약으로 대체하지 않는다.
-- 각 모듈 상태는 `PENDING → DISPATCHED → COMPLETED or fresh retry → FAILED_ORCHESTRATION` 순서로 기록한다.
+- 각 모듈 상태는 `PENDING → DISPATCHED → COMPLETED or fresh retry → FAILED_ORCHESTRATION` 순서로 간다. 기록은 작업 대장이 `queued → running → succeeded | failed | unavailable | cancelled`로 남긴다(C-12).
   **이 이름은 실행 타임라인에 쓰지 않는다.** `module.done`의 `status`는 `ok`/`failed` 둘뿐이다(C-9) — `COMPLETED`는 `ok`, `FAILED_ORCHESTRATION`은 `failed`로 적는다. 2026-09-30 실행이 `module.done` 22줄 전부에 `COMPLETED`를 적었고, `--check`는 그 실행을 "성공 0 · 실패 19"로 읽었다.
-- **producer 결과는 받는 즉시 파일로 남긴다.** C-6A validation을 통과하면, `module.done`을 남기기 **전에** producer가 돌려준 JSON을 한 글자도 고치지 않고 `$REPORT_DIR/.timing/$REPORT_BASENAME.<모듈>.json`에 쓴다. `<모듈>`은 `module.done`의 `module`과 같은 값(`01-fsd`, `04-state`, `props`, `math`, `exception`)이다. 결과를 대화에만 들고 있으면 context가 압축될 때 잃는다 — 2026-09-30 실행은 그렇게 잃은 22개를 서브에이전트가 세션 기록에서 다시 긁어 조립했고(13분), 그 과정에서 인용 하나가 잘려 교정에 8.5분이 더 들었다. 파일 없이 `module.done status=ok`를 남기면 `review-timeline.mjs`가 경고한다.
-- no-start, timeout, inactivity timeout, queue expiry, empty/missing result, `Task not found for session` 또는 session loss가 발생하면 해당 모듈은 죽은 세션으로 간주하고, fresh `rule-module-reviewer` background task로 최대 1회만 retry한다. dead/no-event/lost session은 `session_id`로 resume하지 않으며, synchronous task를 background task로 변환하지 않는다.
+- **producer 결과는 받는 즉시 파일로 남긴다.** C-6A validation을 통과하면, producer가 돌려준 JSON을 한 글자도 고치지 않고 `next`가 준 `resultPath`에 쓰고 `review-tasks.mjs done`을 부른다. 대장이 그 시도가 지금 돌고 있는 시도인지 확인한 뒤 `$REPORT_DIR/.timing/$REPORT_BASENAME.<모듈>.json`에 쓰고 `module.done`을 남긴다 — 그 파일을 직접 쓰지 않는다. `prepare-verification.mjs --collect`는 대장이 받은 내용과 다른 파일을 모으지 않는다. `<모듈>`은 `module.done`의 `module`과 같은 값(`01-fsd`, `04-state`, `props`, `math`, `exception`)이다. 결과를 대화에만 들고 있으면 context가 압축될 때 잃는다 — 2026-09-30 실행은 그렇게 잃은 22개를 서브에이전트가 세션 기록에서 다시 긁어 조립했고(13분), 그 과정에서 인용 하나가 잘려 교정에 8.5분이 더 들었다. 파일 없이 `module.done status=ok`를 남기면 `review-timeline.mjs`가 경고한다.
+- no-start, timeout, inactivity timeout, queue expiry, empty/missing result, `Task not found for session` 또는 session loss가 발생하면 해당 모듈은 죽은 세션으로 간주하고, `done --status failed --failure-class <클래스>`를 남긴다. 다음 `next`가 fresh `rule-module-reviewer` background task로 띄울 재시도를 최대 1회 낸다. dead/no-event/lost session은 `session_id`로 resume하지 않으며, synchronous task를 background task로 변환하지 않는다.
 - 정상 완료된 응답이 clarification만 요구하는 경우에는 live session을 재사용할 수 있다. 단, no-start, timeout, inactivity timeout, queue expiry, empty/missing result, `Task not found for session`, session loss 클래스는 live session으로 보지 않으며 재사용하지 않는다.
 - 런타임이 first-event 또는 heartbeat 관측을 지원하면 bounded startup window 안에서 첫 이벤트를 확인한다. 현재 task API처럼 completion/error notification만 노출되는 런타임에서는 첫 timeout, expiry, error에 반응하고 같은 session에 두 번째 long wait를 쓰지 않는다.
-- 각 숫자 모듈마다 가능한 경우 task ID, session ID, attempt count, last observed event/result, failure class를 기록한다. **failure class별 건수를 리포트에 남긴다** — in-flight 상한이 이 런타임에 맞는지 판단할 유일한 근거다.
-- 어느 모듈이든 terminal 상태가 되는 즉시 대기열의 다음 모듈을 그 슬롯에 투입한다. 다른 in-flight 모듈의 완료를 기다리지 않는다. retry도 슬롯 하나를 차지하며 같은 상한을 따른다.
+- 각 숫자 모듈마다 가능한 경우 task ID(`bind`), attempt, failure class(`done`)를 대장에 남긴다. **failure class별 건수를 리포트에 남긴다** — in-flight 상한이 이 런타임에 맞는지 판단할 유일한 근거다. 상한을 2로 내려야 하면 `next --inflight 2`를 준다.
+- 어느 모듈이든 terminal 상태가 되는 즉시 `done`과 `next`를 불러 그 슬롯에 다음 시도를 넣는다. 다른 in-flight 모듈의 완료를 기다리지 않는다. retry도 슬롯 하나와 호출 하나를 차지하며 같은 상한을 따른다.
 - retry까지 실패한 모듈은 정확한 모듈명을 `FAILED_ORCHESTRATION`으로 표시하고, 이미 완료된 다른 모듈의 partial result는 보존한다. 필수 숫자 모듈 실패는 전체 리뷰의 `FAILED orchestration` 상태를 유지한다.
 - `.claude/commands/review-pr.md`의 "skip errored/empty agent" 정책은 full review에 적용하지 않는다. full review는 빈 결과나 errored module을 건너뛰지 않고 실패한 필수 모듈로 보고한다.
  4. Props 패스 규칙.
@@ -216,8 +241,8 @@ Trigger 섹션이 있는 모듈(`12`, `14`, `16`, `17`, `18`, `21`)은 diff에 �
  6b. 정확성 패스 규칙 — `--correctness on`일 때만.
     - `$RULES_DIR/correctness.md`만 읽고, 지적 ID는 `CR-x`로 표기한다. 이 번호는 지적의 순번이고 규칙 조항이 아니다. 규칙 모듈의 ID를 쓰면 `prepare-verification.mjs`가 거부한다 — 그때는 교정 재시도로 다시 받는다.
     - 범위는 변경 파일과 그 호출자·피호출자다. 변경되지 않은 호출자도 본다(삭제된 동작을 전제하는 쪽). 관련 없는 저장소 전체를 훑지 않는다.
-    - 켰으면 **적용 대상이다.** 관련 범위가 없다는 이유로 `SKIPPED`로 두지 않는다 — 결과 파일은 `$REPORT_BASENAME.correctness.json`, `module.done`의 `module`은 `correctness`다. 시도마다 `module.start`/`module.done`을 남긴다 — 이 패스가 더한 호출량이 시도 수로 기록에 남는다.
-    - 실패 처리는 특수 패스와 같다. no-start·timeout은 fresh retry 1회, `malformed-output`은 교정 재시도 1회. 두 번째도 실패하면 `module.done`을 `status=failed`와 그 `failureClass`(`inactivity-timeout`·`malformed-output` 등)로 남기고 다음으로 간다. 그 실행은 `FAILED orchestration`(부분 완료)이고, 렌더러는 이 패스를 "결과 없음"으로, 스냅숏은 `FAILED`로 그린다. **지적 0건이나 통과로 쓰지 않는다.**
+    - 켰으면 **적용 대상이다.** 관련 범위가 없다는 이유로 `SKIPPED`로 두지 않는다 — 대장의 `next`가 다른 모듈과 같이 `correctness`를 낸다. 결과 파일은 `$REPORT_BASENAME.correctness.json`, `module.done`의 `module`은 `correctness`다. 대장이 시도마다 `module.start`/`module.done`을 남긴다 — 이 패스가 더한 호출량이 시도 수로 기록에 남고 호출 한도에 든다.
+    - 실패 처리는 특수 패스와 같다. no-start·timeout은 fresh retry 1회, `malformed-output`은 교정 재시도 1회. 두 번째도 실패하면 대장이 그 작업을 끝낸다(`done --status failed`와 그 `failureClass` — `inactivity-timeout`·`malformed-output` 등). 다음으로 간다. 그 실행은 `FAILED orchestration`(부분 완료)이고, 렌더러는 이 패스를 "결과 없음"으로, 스냅숏은 `FAILED`로 그린다. **지적 0건이나 통과로 쓰지 않는다.**
     - 껐으면 띄우지 않는다. `--planned`에 적지 않는다 — 렌더러와 스냅숏이 `run.start`에서 읽어 `SKIPPED`(선택 패스, 켜지 않았다)로 그린다.
     - 규칙 패스가 같은 자리를 지적했어도 이 패스의 지적을 버리지 않는다. 둘은 합쳐지지 않는다(exact dedup은 규칙 ID가 같아야 병합한다). `prepare-verification.mjs`가 같은 정규화 위치의 다른 namespace 지적을 `relatedCandidateIds`로 잇고, 렌더러가 `관련 지적:` 줄로 그린다.
  7. 요약/리포팅 규칙.
@@ -244,10 +269,9 @@ instanceId 부여
   → scripts/prepare-verification.mjs --collect   추가 sub-agent 호출 0회
       모듈별 결과 파일 수집 · 위치 대조 · exact dedup + candidateId · ownerCollision
       eligibility 판정 · bundle/isolated 라우팅 · 검증자 프롬프트 파일 · crossverify.start 기록
-  → bundle verifier      (in-flight 최대 4, isolated와 공유 · 판정은 작업별 파일로)
-  → isolated verifier    (승격분 + bundle이 needs-context로 돌린 것 · 같은 상한)
-  → scripts/tally-verdicts.mjs --validate        판정 형식 검사 · 어긴 작업의 교정 프롬프트(<taskId>.retry.md)
-  → 교정 verifier        (retry 파일 내용 그대로 · 작업당 1회)
+  → scripts/review-tasks.mjs next/done --stage verify   (작업 대장, C-12)
+      bundle · isolated verifier (in-flight 최대 4 · 호출 한도) · 판정 형식 검사 · 맞는 판정만 작업별 파일로
+      승격 verifier (bundle이 needs-context로 돌린 것) · 교정 verifier (<taskId>.retry.md 그대로 · 작업당 1회)
   → scripts/tally-verdicts.mjs --collect         추가 sub-agent 호출 0회
       작업별 판정 파일 수집 · 후보별 마지막 판정 집계 · verdicts.json · crossverify.end 기록
   → disposition 적용
@@ -265,7 +289,7 @@ node "$RULES_DIR/../scripts/prepare-verification.mjs" --merge-base "$MERGE_BASE"
 
 이 스크립트는 결과를 **stdout에만** 낸다. 리다이렉트를 빠뜨리면 이 출력을 담을 파일이 저장소 어디에도 없는데, 뒤의 `render-findings.mjs`는 `--input <경로>`만 받고 stdin 경로가 없다 — 그러면 다음 단계에서 붙일 경로를 운영자가 즉석에서 지어내야 한다. `.timing` 아래 다른 실행별 산출물과 같은 자리에 둔다.
 
-- **envelope를 손으로 조립하지 않는다.** `--collect`는 타임라인의 `module.done`을 기준으로 모으고, 모으는 것은 마지막 `module.done`이 `ok`인 모듈뿐이다
+- **envelope를 손으로 조립하지 않는다.** `--collect`는 타임라인의 `module.done`을 기준으로 모으고, 모으는 것은 최종(가장 큰 시도의) `module.done`이 `ok`인 모듈뿐이다. 대장이 받은 내용(`resultSha256`)과 다른 결과 파일은 모으지 않는다
   - `ok`인데 결과 파일이 없으면 거부하며 빠진 경로를 말한다. 그때는 그 모듈의 결과를 파일로 쓰고 다시 돌린다
   - `failed`로 끝난 모듈의 파일은 쓰지 않는다(C-6A — 부분 보정으로 통과시키지 않는다)
   - `ok`도 `failed`도 아닌 상태(`COMPLETED` 등)와 `module.done` 없이 파일만 있는 모듈은 거부한다. 성공했는지, 이번 실행의 파일인지 알 수 없기 때문이다. 기록은 고치지 않고 덧붙인다 — 같은 모듈·같은 `attempt`의 `module.done`을 `ok`/`failed`와 사유를 적은 `note`로 한 줄 더 남기고 다시 돌린다. 상태는 마지막 줄이 정본이고, `--check`는 이 줄을 중복이 아니라 정정으로 받는다(C-9)
@@ -298,9 +322,9 @@ isolated 11)을 동시에 background dispatch한 결과, 1건만 2분 25초에 �
   하나는 그 candidate에 대해 판정을 얻지 못했다는 뜻이다. 실패 클래스별 건수를
   남기지 않으면 다음 실행에서 상한을 조정할 근거가 사라진다
 
-**남은 작업은 기억이 아니라 `--validate`로 본다.** 오케스트레이터가 깨어날 때마다 — 작업 완료 알림, 사용자 메시지, context 압축 뒤, 같은 실행에서 스킬을 다시 불렀을 때 — 먼저 `tally-verdicts.mjs --validate --targets <routed>`를 돌린다. 그리고 출력의 `pending`(판정 파일이 없는 작업)·`promotionsDue`(띄워야 할 승격)·`malformed[].retryPrompt`(교정)만 상한 안에서 띄운다. `ready: true`(exit 0)가 되면 아래 `검증 결과 집계`로 넘어간다. 2026-09-30 `fix/anchor-vector-direction` 실행은 검증자 17건에 37시간이 걸렸다. 검증자 하나가 context 압축 직전에 떠서 끝나지 않았고, 그 뒤 웨이브마다 멈춰 사용자가 네 번 재촉하고 스킬을 다시 불러서야 끝났다. 무엇이 남았는지는 압축 요약에만 있었다.
+**남은 작업은 기억이 아니라 작업 대장으로 본다(C-12).** 모듈 단계와 같은 고리다 — `review-tasks.mjs next --stage verify --dir "$REPORT_DIR" --run "$REPORT_BASENAME" --rules "$RULES_DIR"`가 띄울 검증 작업을 내고(routed 출력은 `.timing/$REPORT_BASENAME.routed.json`에서 읽는다, 다른 자리면 `--targets`), 끝 알림마다 응답을 `resultPath`에 쓰고 `done`을 부른다. 대장이 판정의 계약 검사를 하고, 맞는 판정만 `verdict` 자리에 쓴다. bundle이 `needs-context`로 돌린 후보의 승격 작업과, 계약을 어긴 판정의 교정 시도(`correction: true` — 프롬프트는 대장이 만든 `<taskId>.retry.md`)도 `next`가 낸다. `complete: true`가 되면 아래 `검증 결과 집계`로 넘어간다. `tally-verdicts.mjs --validate --targets <routed>`는 같은 기록을 보고 형식과 남은 일을 다시 낸다 — 돌고 있는 작업은 `running`, 교정까지 어겼거나 시도를 다 쓴 작업은 `exhausted`(집계를 막지 않는다), 멈춰서 띄우지 못한 작업은 `notRun`이다. 2026-09-30 `fix/anchor-vector-direction` 실행은 검증자 17건에 37시간이 걸렸다. 검증자 하나가 context 압축 직전에 떠서 끝나지 않았고, 그 뒤 웨이브마다 멈춰 사용자가 네 번 재촉하고 스킬을 다시 불러서야 끝났다. 무엇이 남았는지는 압축 요약에만 있었다.
 
-- **같은 실행을 이어 갈 때는 preflight와 `prepare-verification.mjs`를 다시 돌리지 않는다.** 시작된 타임라인은 preflight가 거부한다. `prepare-verification.mjs`는 이미 받은 판정 파일이 있으면 프롬프트 디렉터리를 지우지 않고 거부한다(`--discard-verdicts`는 검증을 처음부터 다시 할 때만 준다). routed 출력과 판정 파일이 디스크에 있으므로 `--validate`부터 시작한다
+- **같은 실행을 이어 갈 때는 preflight와 `prepare-verification.mjs`를 다시 돌리지 않는다.** 시작된 타임라인은 preflight가 거부한다. `prepare-verification.mjs`는 이미 받은 판정 파일이 있거나 대장이 이번 교차검증의 작업을 이미 내줬으면 프롬프트 디렉터리를 지우지 않고 거부한다(`--discard-verdicts`는 검증을 처음부터 다시 할 때만 준다). routed 출력과 대장의 기록이 디스크에 있으므로 `review-tasks.mjs status`부터 시작한다
 - **완료 알림이 "전부 끝남"에서만 오케스트레이터를 깨우는 런타임에서는 검증자를 foreground 병렬 호출로 띄운다(한 번에 최대 4개).** oh-my-openagent가 그렇다. 작업 하나가 끝날 때의 알림에는 "You WILL be notified when ALL complete. Do NOT poll"이라는 문장과 응답하지 않는다는 표지가 붙고, 오케스트레이터는 띄운 작업이 모두 끝났다는 알림에만 깨어난다
   - 그 런타임에서는 background로 띄워도 웨이브 단위로만 다음 작업을 넣을 수 있어서 얻는 것이 없다. 반대로 작업 하나가 끝나지 않으면 "전부 끝남"이 영영 오지 않아 검증 전체가 멈춘다(위 37시간)
   - foreground로 함께 부르면 웨이브 모양은 같고, 기다림이 오케스트레이터의 턴 안에 있으므로 깨워 줄 알림에 기대지 않는다
@@ -325,8 +349,8 @@ isolated 11)을 동시에 background dispatch한 결과, 1건만 2분 25초에 �
 - **파일 내용을 그대로 프롬프트로 넘긴다.** 요약하거나 자기 형식으로 감싸 다시 쓰지 않는다. 런타임이 서브에이전트의 파일 읽기를 허용하면 "이 파일을 Read로 읽고 그 지시를 그대로 따르라"는 한 줄과 경로만 넘겨도 된다 — 어느 쪽이든 내용을 고치지 않는다
 - **둘 다 `subagent_type=react-code-review-plugin:rule-module-reviewer`로 띄운다.** verifier는 지적을 추가하지 않지만 지적의 생사를 판정하므로, 코드를 고칠 동기가 생기는 것은 producer와 같다. 이름이 검증처럼 들리는 다른 에이전트(`correctness-reviewer` 등)로 띄우지 않는다 — 그 에이전트는 셸을 가진다. 2026-09-30 실행은 검증자 19개를 `correctness-reviewer`로 띄웠고, 한 검증자는 셸로 다른 에이전트의 세션 기록에서 자기 후보 ID를 검색했다
 - 셸이 필요 없다. **merge-base 기준 `deleted` 인용도 스크립트가 base blob에서 읽어 위치 대조 결과에 담는다** — verifier가 직접 조회할 일이 없다. anchor file 밖을 봐야 하는 경우(`usedCrossFileContext`)는 `Read`로 충분하다
-- **판정은 받는 즉시 파일로 남긴다.** 검증자가 돌려준 JSON을 C-6A와 같은 방식으로 검사한 뒤, 그 작업의 `verdict` 경로(`<taskId>.verdict.json`)에 한 글자도 고치지 않고 쓴다. 모으고 순서를 정하는 일은 `tally-verdicts.mjs --collect`가 한다(아래 `검증 결과 집계`)
-- bundle이 `needs-context`로 돌린 후보는 `promotions[<candidateId>]`의 `prompt`로 isolated verifier를 띄우고, 판정은 그 항목의 `verdict` 경로에 쓴다. 승격 프롬프트를 새로 쓰지 않는다
+- **판정은 받는 즉시 파일로 남긴다.** 검증자가 돌려준 JSON을 한 글자도 고치지 않고 `next`가 준 `resultPath`에 쓰고 `review-tasks.mjs done`을 부른다. 대장이 계약을 검사해 맞으면 그 작업의 `verdict` 경로(`<taskId>.verdict.json`)에 쓴다 — 그 경로에 직접 쓰지 않는다. 모으고 순서를 정하는 일은 `tally-verdicts.mjs --collect`가 한다(아래 `검증 결과 집계`)
+- bundle이 `needs-context`로 돌린 후보의 승격 작업은 `next`가 `kind: promotion`으로 낸다. 그 항목의 `prompt`로 isolated verifier를 띄운다. 승격 프롬프트를 새로 쓰지 않는다
 - **`CR-*` 후보에는 규칙 조항이 없다.** 스크립트가 조항 자리에 `correctness.md`의 판정 기준 블록을 붙이고, 검증자에게 조항을 찾거나 지어내지 말고 의도와 코드 경로로 판정하라고 적는다(C-6B `조항이 없는 지적`). 오케스트레이터가 조항을 찾아 붙이지 않는다
 - **isolated에서도 `needs-context`인 후보는 C-6B의 `scope-open`이다.** 다시 묻지 않고 `미해결 / 후속 확인`으로 옮긴다. 다른 판정과 모순돼 보이면 그 모순도 거기 함께 적는다 — 결론을 담은 프롬프트로 다시 물으면 그것은 검증이 아니라 유도다. 2026-09-30 실행은 리포트를 조립한 뒤 "이전 결론을 반복하지 말라"는 프롬프트로 다시 물어 판정을 뒤집었다
 
@@ -358,7 +382,7 @@ isolated 11)을 동시에 background dispatch한 결과, 1건만 2분 25초에 �
 - **검증 에이전트 실패는 `FAILED orchestration`이 아니다.** 해당 candidate에 `verification-unavailable`을 부여하고 coverage에 건수를 남긴다. 보조 단계의 실패가 전체 리뷰를 실패로 만들면, 새로 붙인 단계가 리뷰 전체의 신뢰성을 떨어뜨린다
 - retry 1회 / in-flight 상한 공유 / 실패 클래스별 건수 기록 — 일반 모듈 정책을 그대로 재사용한다
 - verdict `malformed-output` → C-6A와 동일 (교정 재시도 1회, 두 번째 실패 시 확정). 반환된 `candidateId` 집합이 요청과 다르면 그것도 `malformed-output`이다
-- **형식 검사와 교정 프롬프트, 남은 작업 목록은 스크립트가 만든다.** 검증자가 돌아올 때마다 `tally-verdicts.mjs --validate --targets <routed>`를 돌린다(기록에는 아무것도 남기지 않는다). 판정 파일이 없는 작업(`pending`)과 띄워야 할 승격(`promotionsDue`)도 이 출력에 있다(위 `디스패치`). 계약을 어긴 작업마다 `<taskId>.retry.md`가 생기고 — 원래 지시에 오류 목록과 직전 응답 원문을 붙인 것이다 — 그 **파일 내용을 그대로** 새 `rule-module-reviewer`에게 넘긴다. 돌아온 JSON으로 같은 판정 파일을 덮어쓴다. 교정 프롬프트를 직접 쓰지 않고, 판정 근거를 요약해 불러 주지 않는다 — 2026-09-30 실행은 세션 재개가 `task-not-found`로 막히자 새 작업에 "이 근거를 보존하라"며 근거를 불러 줬고, 그 판정은 검증자가 아니라 오케스트레이터가 쓴 것이 됐다
+- **형식 검사와 교정 프롬프트, 남은 작업 목록은 스크립트가 만든다.** 검증자가 돌아올 때마다 `done`이 판정을 검사한다. 계약을 어긴 작업마다 `<taskId>.retry.md`가 생기고 — 원래 지시에 오류 목록과 직전 응답 원문을 붙인 것이다 — 다음 `next`가 그 경로를 교정 시도의 `prompt`로 낸다. 그 **파일 내용을 그대로** 새 `rule-module-reviewer`에게 넘기고, 돌아온 JSON을 그 시도의 `resultPath`에 쓰고 `done`을 부른다. 교정도 어기면 그 작업은 끝이다(판정 없음). 교정 프롬프트를 직접 쓰지 않고, 판정 근거를 요약해 불러 주지 않는다 — 2026-09-30 실행은 세션 재개가 `task-not-found`로 막히자 새 작업에 "이 근거를 보존하라"며 근거를 불러 줬고, 그 판정은 검증자가 아니라 오케스트레이터가 쓴 것이 됐다
 - `exhaustive` release-gate 실행에서 **차단 후보(`impact = high`)의 검증이 실패하면 최종 판정은 `INCONCLUSIVE`** 다. 개별 finding의 차단 여부와 gate 전체의 완결성 판정은 다른 값이다
 
 ### 검증 결과 집계
@@ -423,7 +447,7 @@ node "$RULES_DIR/../scripts/tally-verdicts.mjs" --dir "$REPORT_DIR" --run "$REPO
 - 요약 저장은 `workflow-contract.md` C-7을 따른다 (`workflow-name`은 `full`).
 - 프로젝트가 이미 다른 문서 저장 관례를 따르고 있으면 절대 경로를 강제하지 않는다.
 - 일반/Props/수학/예외 producer 결과는 수집 직후 `workflow-contract.md` C-6A validation 규칙으로 검사한다. JSON 파싱 실패, 필수 필드 누락, 금지 필드 `severity`, 허용되지 않은 enum/location 값은 `malformed-output`이다.
-- `malformed-output`이면 **같은 producer에 교정 재시도는 한 번만** 한다. 재시도 prompt에는 잘못된 점만 짧게 적고 다시 `REVIEW_RESULT_CONTRACT_V1` raw JSON 하나만 요구한다.
+- `malformed-output`이면 **같은 producer에 교정 재시도는 한 번만** 한다. `done --status failed --failure-class malformed-output`을 남기면(JSON으로 읽히지 않는 응답은 `done`이 스스로 그렇게 남긴다) 다음 `next`가 그 모듈의 교정 시도를 `correction: true`로 낸다. 재시도 prompt에는 잘못된 점만 짧게 적고 다시 `REVIEW_RESULT_CONTRACT_V1` raw JSON 하나만 요구한다.
 - 두 번째도 `malformed-output`이면 그 패스는 `FAILED malformed-output`으로 기록하고, 부분 보정이나 Markdown 해석으로 통과시키지 않는다. dispatch/result handling과 실패 기록은 이 skill이 책임진다.
 - aggregation은 **검증을 통과한 JSON만** 입력으로 받는다. 이 단계에서는 parsed finding/openQuestion을 패스 라벨과 함께 정렬·중복 제거·그룹화할 뿐, Markdown 헤딩이나 severity 문자열을 읽거나 재사용하지 않는다.
 - renderer가 구조화 필드에서 `상세 지적`과 `특수 패스`를 생성한다. `####` 헤딩, 섹션 이름, 상태 표, severity 이모지는 renderer가 만든다. **`미해결 / 후속 확인`은 renderer가 만들지 않는다** — `needs-context`(교차검증 `범위 미확정`)로 판정된 finding은 renderer가 상세 지적에서만 빼고, 무엇을 뺐는지를 **옮겨 적을 재료와 함께** stderr로 알린다 — 규칙 ID·candidate ID·title에 더해 verifier가 낸 `reason`, 본문·근거, 위치 줄, 출처 패스까지 이스케이프를 거친 상태로 나온다. 그 알림을 받아 `미해결 / 후속 확인`에 실제로 옮겨 적는 것은 이 skill(오케스트레이터)의 책임이다 — 옮겨 적지 않으면 그 finding은 리포트 어디에도 없는 채로 사라진다.

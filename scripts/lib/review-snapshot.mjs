@@ -5,6 +5,7 @@ import { writeTextAtomic } from './atomic-write.mjs'
 import { codeSpan, dispositionOf, escapeProse } from '../render-findings.mjs'
 import { COMPARISONS, METHODS, OUTCOMES } from './evidence.mjs'
 import { moduleOutcomes } from './run-record.mjs'
+import { HALT_REASONS, haltOf } from './task-ledger.mjs'
 
 // 한 실행의 결과 스냅숏 — 무엇을 리뷰했고, 어디까지 끝냈고, 무엇을 찾았는가(#88 PR 0).
 //
@@ -30,7 +31,7 @@ const KIND = 'review-snapshot'
 
 const STATUSES = ['complete', 'partial', 'failed']
 const MODULE_STATES = ['ok', 'failed', 'missing', 'skipped', 'unknown']
-const MISSING_REASONS = ['no-record', 'status-outside-list', 'not-collected']
+const MISSING_REASONS = ['no-record', 'status-outside-list', 'not-collected', 'halted']
 const DISPOSITIONS = ['upheld', 'rejected', 'scope-open', 'not-eligible', 'verification-disabled', 'verification-unavailable']
 const DRIFT_FIELDS = ['head', 'worktree', 'rulesDigest']
 const INPUT_ROLES = ['timeline', 'routed', 'verdicts', 'result', 'evidence', 'execution']
@@ -73,17 +74,14 @@ const matchPlanned = (entry, modules) => {
 }
 
 /**
- * 모듈마다 상태를 정한다. 기록(`module.done`)과 수집(`collected.sources`)이 **둘 다** 성공을
- * 말해야 `ok`다.
+ * 모듈마다 이 실행의 적용 대상인지 정한다 — 스냅숏과 작업 대장(C-12)이 같은 답을 쓴다.
  *
- * 기록만 보면, 성공으로 끝났는데 검증 준비가 모으지 않은 모듈이 "검토됨"으로 남는다 —
- * 그 모듈의 지적은 리포트에 없는데도. 그래서 그 경우는 `missing`(`not-collected`)이다.
+ * 마지막 `modules.planned`의 `skipped`·`unknown`과 `run.start`의 선택 패스 설정으로 정한다.
+ * `scope`는 `applied`·`skipped`·`unknown`·`not-requested` 중 하나다. `planned`가 거짓이면
+ * 계획 기록이 없어 후보 전부를 적용 대상으로 본 것이다.
  */
-function moduleStates({ modules, events, collected, notes, start }) {
+export function moduleScope({ modules, events, start, notes = [] }) {
   const lastPlanned = events.filter(event => event?.phase === 'modules.planned').at(-1)
-  if (!lastPlanned) {
-    notes.push('modules.planned가 없어 후보 전부를 적용 대상으로 봤다 — 건너뛴 모듈이 있었다면 기록되지 않았다')
-  }
   const skipped = new Map()
   const unknown = new Map()
   for (const [list, target] of [[lastPlanned?.skipped, skipped], [lastPlanned?.unknown, unknown]]) {
@@ -96,20 +94,44 @@ function moduleStates({ modules, events, collected, notes, start }) {
       target.set(module.name, isObject(entry) ? entry : {})
     }
   }
-
-  const outcomes = moduleOutcomes(events)
-  const states = modules.map(module => {
-    const base = { name: module.name, kind: module.kind }
+  const scope = modules.map(module => {
     // 켜지 않은 선택 패스는 적용 대상이 아니다. "결과 없음"으로 세면 기본 설정으로 돈
     // 실행이 전부 부분 완료가 된다. 그래도 범위에서 빼지 않고 이유를 단 SKIPPED로 남긴다.
-    if (module.optIn && start?.[module.id] !== 'on') {
+    if (module.optIn && start?.[module.id] !== 'on') return { module, scope: 'not-requested' }
+    if (skipped.has(module.name)) return { module, scope: 'skipped', entry: skipped.get(module.name) }
+    if (unknown.has(module.name)) return { module, scope: 'unknown', entry: unknown.get(module.name) }
+    return { module, scope: 'applied' }
+  })
+  return { planned: Boolean(lastPlanned), scope }
+}
+
+/**
+ * 모듈마다 상태를 정한다. 기록(`module.done`)과 수집(`collected.sources`)이 **둘 다** 성공을
+ * 말해야 `ok`다.
+ *
+ * 기록만 보면, 성공으로 끝났는데 검증 준비가 모으지 않은 모듈이 "검토됨"으로 남는다 —
+ * 그 모듈의 지적은 리포트에 없는데도. 그래서 그 경우는 `missing`(`not-collected`)이다.
+ */
+function moduleStates({ modules, events, collected, notes, start }) {
+  const { planned, scope } = moduleScope({ modules, events, start, notes })
+  if (!planned) {
+    notes.push('modules.planned가 없어 후보 전부를 적용 대상으로 봤다 — 건너뛴 모듈이 있었다면 기록되지 않았다')
+  }
+
+  const outcomes = moduleOutcomes(events)
+  // 작업 대장(C-12)이 디스패치를 멈춘 구간이면, 띄우지 못한 모듈은 "기록이 없다"가 아니라 "멈춰서
+  // 띄우지 않았다"다. 둘 다 미검토 범위지만 고칠 곳이 다르다 — 앞의 것은 오케스트레이터가 빠뜨린
+  // 것이고, 뒤의 것은 한도나 사용자가 정한 것이다.
+  const halt = haltOf(events)
+  const states = scope.map(({ module, scope: where, entry }) => {
+    const base = { name: module.name, kind: module.kind }
+    if (where === 'not-requested') {
       if (outcomes.has(module.name) || collected.has(module.name)) {
         notes.push(`켜지 않은 선택 패스 ${module.name}의 기록이나 결과가 있다 — 이 실행은 --${module.id} on 없이 시작했으므로 모은 것으로 세지 않는다`)
       }
       return { ...base, state: 'skipped', reasonCode: 'not-requested', reason: `선택 패스 — 이 실행은 --${module.id} on 없이 시작했다` }
     }
-    if (skipped.has(module.name)) {
-      const entry = skipped.get(module.name)
+    if (where === 'skipped') {
       return {
         ...base,
         state: 'skipped',
@@ -117,14 +139,23 @@ function moduleStates({ modules, events, collected, notes, start }) {
         ...((entry.reason ?? entry.evidence) !== undefined ? { reason: String(entry.reason ?? entry.evidence) } : {}),
       }
     }
-    if (unknown.has(module.name)) {
-      const entry = unknown.get(module.name)
+    if (where === 'unknown') {
       return { ...base, state: 'unknown', ...((entry.reason ?? entry.evidence) !== undefined ? { reason: String(entry.reason ?? entry.evidence) } : {}) }
     }
     const outcome = outcomes.get(module.name)
-    if (!outcome) return { ...base, state: 'missing', reason: 'no-record' }
+    if (!outcome) {
+      return halt
+        ? { ...base, state: 'missing', reason: 'halted', haltReason: String(halt.reason) }
+        : { ...base, state: 'missing', reason: 'no-record' }
+    }
     if (outcome.status === 'failed') {
-      return { ...base, state: 'failed', attempt: outcome.attempt, ...(outcome.failureClass !== undefined ? { failureClass: String(outcome.failureClass) } : {}) }
+      return {
+        ...base,
+        state: 'failed',
+        attempt: outcome.attempt,
+        ...(outcome.failureClass !== undefined ? { failureClass: String(outcome.failureClass) } : {}),
+        ...(outcome.cancelReason !== undefined ? { cancelReason: String(outcome.cancelReason) } : {}),
+      }
     }
     if (outcome.status !== 'ok') return { ...base, state: 'missing', reason: 'status-outside-list' }
     if (!collected.has(module.name)) return { ...base, state: 'missing', reason: 'not-collected' }
@@ -232,6 +263,17 @@ export function buildSnapshot({ name, events, catalog, routed, verdicts, verific
     for (const question of openQuestionsBySource.get(source) ?? []) openQuestions.push({ ...question, source: String(source) })
   }
 
+  // 디스패치의 한도와 멈춤(C-12). 한도를 주지 않은 실행에도 시도 수는 남긴다 — 다음 실행이 같은
+  // 대상을 다시 볼 때 이번에 몇 번 불렀는지가 비교의 재료다.
+  const halt = haltOf(events)
+  const dispatch = {
+    attempts: events.filter(event => event?.phase === 'module.start' || event?.phase === 'verify.start').length,
+    maxTasks: Number.isInteger(start.maxTasks) ? start.maxTasks : null,
+    maxDurationSec: Number.isInteger(start.maxDurationSec) ? start.maxDurationSec : null,
+    resumed: events.filter(event => event?.phase === 'run.resume').length,
+    halted: halt ? { reason: halt.reason, at: halt.at } : null,
+  }
+
   const recorded = { head: start.head, worktree: start.worktree, rulesDigest: start.rulesDigest }
   const drift = DRIFT_FIELDS
     .filter(field => current?.[field] !== undefined && current[field] !== recorded[field])
@@ -252,6 +294,7 @@ export function buildSnapshot({ name, events, catalog, routed, verdicts, verific
       rulesDigest: start.rulesDigest,
       host: start.host,
       startedAt: start.at,
+      ...(nonEmpty(start.continues) ? { continues: start.continues } : {}),
     },
     target: {
       repo: start.repo ?? null,
@@ -266,6 +309,7 @@ export function buildSnapshot({ name, events, catalog, routed, verdicts, verific
     drift,
     status: statusOf(counts),
     scope: { modules: states, counts },
+    dispatch,
     verification: { state: verificationState },
     findings,
     openQuestions,
@@ -337,6 +381,20 @@ export function snapshotProblems(snapshot) {
     }
     if (!STATUSES.includes(snapshot.status)) problems.push(`status ${JSON.stringify(snapshot.status)}는 ${STATUSES.join('/')} 밖이다`)
     else if (snapshot.status !== statusOf(recount)) problems.push(`status ${snapshot.status}가 scope.modules로 정한 ${statusOf(recount)}와 다르다`)
+  }
+
+  if (snapshot.dispatch !== undefined) {
+    const dispatch = snapshot.dispatch
+    if (!isObject(dispatch) || !count(dispatch.attempts) || !count(dispatch.resumed) ||
+      !(dispatch.maxTasks === null || count(dispatch.maxTasks)) || !(dispatch.maxDurationSec === null || count(dispatch.maxDurationSec)) ||
+      !(dispatch.halted === null || (isObject(dispatch.halted) && HALT_REASONS.includes(dispatch.halted.reason)))) {
+      problems.push('dispatch가 계약 밖이다 — attempts·resumed·maxTasks·maxDurationSec·halted(reason)')
+    }
+  }
+  if (isObject(scope) && Array.isArray(scope.modules)) {
+    for (const module of scope.modules) {
+      if (module?.reason === 'halted' && !HALT_REASONS.includes(module.haltReason)) problems.push(`${module.name}의 haltReason이 ${HALT_REASONS.join('/')} 밖이다`)
+    }
   }
 
   const state = snapshot.verification?.state
@@ -439,6 +497,12 @@ const MISSING_TEXT = {
   'no-record': '결과 없음 — `module.done`이 없다',
   'status-outside-list': '결과 없음 — `module.done`의 status가 ok도 failed도 아니다',
   'not-collected': '결과 없음 — 성공으로 기록됐지만 수집되지 않았다',
+  halted: '결과 없음 — 디스패치를 멈춰 띄우지 않았다',
+}
+const HALT_TEXT = {
+  'max-tasks': '호출 한도를 다 썼다',
+  'max-duration': '시간 상한이 지났다',
+  user: '사용자가 멈췄다',
 }
 const short = id => (typeof id === 'string' && OBJECT_ID.test(id) ? id.slice(0, 12) : String(id))
 
@@ -453,14 +517,19 @@ export function renderSnapshotMarkdown(snapshot) {
   ]
   const rows = modules.filter(module => module.state !== 'ok').map(module => {
     const reason = module.state === 'failed'
-      ? `시도 ${module.attempt}${module.failureClass !== undefined ? ` · ${codeSpan(module.failureClass)}` : ''}`
+      ? `시도 ${module.attempt}${module.failureClass !== undefined ? ` · ${codeSpan(module.failureClass)}` : ''}${module.cancelReason !== undefined ? ` · ${HALT_TEXT[module.cancelReason] ?? codeSpan(module.cancelReason)}` : ''}`
       : module.state === 'missing'
-        ? MISSING_TEXT[module.reason]
+        ? `${MISSING_TEXT[module.reason]}${module.reason === 'halted' ? ` (${HALT_TEXT[module.haltReason] ?? codeSpan(module.haltReason)})` : ''}`
         : module.reason !== undefined ? escapeProse(module.reason) : '사유가 기록되지 않았다'
     const state = { failed: '`FAILED`', missing: '결과 없음', skipped: '`SKIPPED`', unknown: '`UNKNOWN`' }[module.state]
     return `| ${codeSpan(module.name)} | ${state} | ${module.state === 'missing' ? reason.replace(/^결과 없음 — /, '') : reason} |`
   })
   if (rows.length) lines.push('', '| 모듈 | 상태 | 사유 |', '|------|------|------|', ...rows)
+
+  const halted = snapshot.dispatch?.halted
+  if (halted) {
+    lines.push('', `**디스패치를 멈췄다** — ${HALT_TEXT[halted.reason] ?? codeSpan(halted.reason)}(${codeSpan(halted.at)}). 멈춘 뒤 띄우지 못한 모듈과 검증 작업은 이 실행이 검토하지 않은 범위다 — 판정을 받지 못한 지적은 \`검증 실패\`로 표시된다.`)
+  }
 
   const { target, run } = snapshot
   const worktree = target.worktree === 'clean' ? 'clean' : `커밋하지 않은 변경 ${target.dirtyFiles}개 (${codeSpan(target.worktree.slice(0, 19))}…)`

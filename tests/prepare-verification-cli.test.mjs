@@ -1,6 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { execFileSync, spawnSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
@@ -334,6 +335,37 @@ test('--collect는 목록 밖 status를 note 단 줄로 바로잡은 모듈을 �
   assert.deepEqual(JSON.parse(out.stdout).collected.sources, ['01-fsd'])
 })
 
+test('--collect는 앞 시도를 나중에 바로잡은 줄이 뒤 시도의 성공을 덮지 않게 한다', t => {
+  // PR #87 리뷰에서 재현한 순서다: 시도 1이 목록 밖 status로 끝나고, 시도 2가 성공하고, 그 뒤에
+  // 시도 1을 note 단 줄로 failed로 바로잡는다. 파일의 마지막 줄을 최종으로 읽으면 성공한 결과를 버린다.
+  const dir = startedWith(t, [
+    done('01-fsd', 'ERROR'),
+    { ...done('01-fsd', 'ok'), attempt: 2 },
+    { ...done('01-fsd', 'failed'), note: '시도 1의 status ERROR를 failed로 바로잡는다' },
+  ])
+  resultFile(dir, '01-fsd', RESULT)
+  const out = collect(dir)
+  assert.equal(out.status, 0, out.stderr)
+  const result = JSON.parse(out.stdout)
+  assert.deepEqual(result.collected.sources, ['01-fsd'])
+  assert.deepEqual(result.collected.excludedFailed, [])
+})
+
+test('--collect는 대장이 받은 내용과 다른 결과 파일을 모으지 않는다', t => {
+  // 작업 대장은 결과를 받을 때 그 내용의 해시를 module.done에 남긴다. 파일이 다르면 그 파일은
+  // 기록된 시도의 결과가 아니다 — 늦게 온 앞 시도의 응답이 덮었을 수 있다.
+  const received = JSON.stringify(RESULT)
+  const sha = createHash('sha256').update(received).digest('hex')
+  const dir = startedWith(t, [{ ...done('01-fsd', 'ok'), attempt: 2, resultSha256: sha }])
+  resultFile(dir, '01-fsd', { ...RESULT, findings: [] })
+  const out = collect(dir)
+  assert.equal(out.status, 2)
+  assert.match(out.stderr, /01-fsd의 결과 파일이 시도 2에서 받은 내용과 다르다/)
+
+  resultFile(dir, '01-fsd', received)
+  assert.equal(collect(dir).status, 0)
+})
+
 test('--collect는 module.done 없이 결과 파일만 있는 모듈을 모으지 않고 거부한다', t => {
   // 결과 파일은 module.done보다 먼저 쓴다(SKILL). 기록이 없으면 그 모듈이 이번 실행에서
   // 끝났는지 알 수 없다 — 쓰다 만 파일이거나 앞 실행의 파일일 수 있다.
@@ -486,6 +518,27 @@ test('--discard-verdicts를 주면 받은 판정을 버리고 디렉터리를 �
   const { verdict, second } = prepareTwice(t, ['--discard-verdicts'])
   assert.equal(second.status, 0, second.stderr)
   assert.equal(existsSync(verdict), false)
+})
+
+test('작업 대장이 이번 교차검증의 작업을 이미 내줬으면 판정 파일이 없어도 프롬프트를 지우지 않는다', t => {
+  // 판정 파일이 아직 없어도 검증자는 돌고 있을 수 있다. 디렉터리를 지우고 다시 만들면 돌고 있는
+  // 작업이 받은 프롬프트와 새 작업 목록이 어긋난다(C-12).
+  const dir = started(t)
+  const input = join(dir, 'candidates.json')
+  writeFileSync(input, JSON.stringify(withHigh([HIGH])), 'utf8')
+  const prepare = (more = []) => spawnSync('node', [SCRIPT, '--merge-base', 'HEAD', '--dir', dir, '--run', RUN, '--input', input, ...more],
+    { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+  const first = prepare()
+  assert.equal(first.status, 0, first.stderr)
+  const { taskId, prompt } = JSON.parse(first.stdout).verifierTasks[0]
+  const path = join(dir, '.timing', `${RUN}.jsonl`)
+  writeFileSync(path, `${readFileSync(path, 'utf8')}${JSON.stringify({ at: '2026-10-07T00:00:00.000Z', seq: 99, phase: 'verify.start', task: taskId, attempt: 1 })}\n`, 'utf8')
+  const second = prepare()
+  assert.equal(second.status, 2)
+  assert.match(second.stderr, /검증 작업 1개를 이미 띄웠다/)
+  assert.match(second.stderr, /review-tasks\.mjs status/)
+  assert.equal(existsSync(prompt), true)
+  assert.equal(prepare(['--discard-verdicts']).status, 0)
 })
 
 test('--verify exhaustive는 검증 대상이 아니던 후보도 검증 작업으로 만든다', t => {

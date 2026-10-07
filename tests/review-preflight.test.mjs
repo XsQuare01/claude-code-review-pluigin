@@ -166,6 +166,41 @@ test('선택 패스는 켰는지를 run.start에 남긴다 — 기본은 꺼짐�
   assert.match(outOn.stdout, /선택 패스 +correctness 켜짐/)
 })
 
+test('시간·호출 한도와 죽은 시도로 볼 시간을 run.start에 남긴다 — 주지 않은 한도는 없다', t => {
+  // 작업 대장(C-12)이 이 값으로 디스패치를 멈춘다. 주지 않은 한도를 기본값으로 지어 넣으면 사용자가
+  // 정하지 않은 이유로 리뷰가 멈춘다.
+  const none = freshDir(t)
+  assert.equal(preflight(none).status, 0)
+  const plain = linesOf(none)[0]
+  assert.equal(plain.maxTasks, undefined)
+  assert.equal(plain.maxDurationSec, undefined)
+  assert.equal(plain.staleAfterSec, 1200)
+
+  const limited = freshDir(t)
+  const out = preflight(limited, ['--max-duration', '30m', '--max-tasks', '40', '--stale-after', '15m', '--continues', 'run-before'])
+  assert.equal(out.status, 0, out.stderr)
+  const start = linesOf(limited)[0]
+  assert.deepEqual([start.maxDurationSec, start.maxTasks, start.staleAfterSec, start.continues], [1800, 40, 900, 'run-before'])
+  assert.match(out.stdout, /한도 +호출 40개 · 시간 30분/)
+  assert.match(out.stdout, /이어 받음 +앞 실행 run-before/)
+})
+
+test('읽지 못하는 한도는 거부한다 — 잘못 읽은 한도는 한도가 없는 것보다 나쁘다', t => {
+  for (const extra of [['--max-duration', '0'], ['--max-duration', '30 minutes'], ['--max-tasks', '0'], ['--max-tasks', '2.5'], ['--stale-after', 'soon']]) {
+    const out = preflight(freshDir(t), extra)
+    assert.equal(out.status, 2, extra.join(' '))
+    assert.match(out.stderr, new RegExp(extra[0]))
+  }
+})
+
+test('호스트가 시간 상한을 어디까지 지킬 수 있는지 함께 낸다', t => {
+  const out = preflight(freshDir(t), ['--max-duration', '1h'])
+  assert.equal(out.status, 0, out.stderr)
+  // preflight 헬퍼는 --host test로 시작한다. 모르는 호스트에는 아무 능력도 가정하지 않는다.
+  assert.match(out.stdout, /알려지지 않은 호스트 — 아무 능력도 가정하지 않는다/)
+  assert.match(out.stdout, /멈추지 못한다/)
+})
+
 test('선택 패스가 없는 워크플로우에서 켜면 거부한다', t => {
   const dir = freshDir(t)
   const repo = scratchRepo()
