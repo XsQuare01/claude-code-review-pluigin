@@ -491,3 +491,43 @@ test('비교하지 않은 실행의 지적도 실행 간 이름을 갖는다 —
   assert.equal(snapshot.findings[0].lineageId, snapshot.findings[0].ref)
   assert.equal(snapshot.comparison, undefined)
 })
+
+// ── PR #90 리뷰: 켠 선택 패스는 계획 기록으로 빠지지 않는다 ─────────────────
+
+const correctnessOn = (planEntries, extraEvents = []) => buildSnapshot(fixture({
+  events: [
+    runStart({ correctness: 'on' }),
+    planned(...planEntries),
+    ...ALL.map(name => done(name)),
+    ...extraEvents,
+  ],
+  routed: { candidates: [candidate()], collected: { sources: ALL, excludedFailed: [] } },
+}))
+
+test('--correctness on인데 계획이 정확성 패스를 SKIPPED로 적어도 완료가 아니다', () => {
+  const snapshot = correctnessOn([[{ module: 'correctness', reason: 'no relevant scope' }]])
+  assert.deepEqual(snapshotProblems(snapshot), [])
+  assert.equal(snapshot.status, 'partial')
+  const pass = snapshot.scope.modules.find(module => module.name === 'correctness')
+  assert.deepEqual([pass.state, pass.reason], ['missing', 'no-record'])
+  assert.ok(snapshot.notes.some(note => /켠 선택 패스 correctness를 modules\.planned가 SKIPPED로 적었다/.test(note)))
+})
+
+test('--correctness on인데 계획이 UNKNOWN으로 적어도 완료가 아니다', () => {
+  const snapshot = correctnessOn([[], [{ module: 'correctness', reason: '모르겠다' }]])
+  assert.equal(snapshot.status, 'partial')
+  assert.equal(snapshot.scope.modules.find(module => module.name === 'correctness').state, 'missing')
+})
+
+test('--correctness on에서 실패한 정확성 패스는 SKIPPED 기록이 실패를 가리지 않는다', () => {
+  const snapshot = correctnessOn([[{ module: 'correctness', reason: 'skip' }]], [done('correctness', 'failed', 2, { failureClass: 'malformed-output' })])
+  const pass = snapshot.scope.modules.find(module => module.name === 'correctness')
+  assert.deepEqual([pass.state, pass.failureClass], ['failed', 'malformed-output'])
+  assert.equal(snapshot.status, 'partial')
+})
+
+test('--correctness off의 정상 경로는 그대로다 — 켜지 않은 패스는 SKIPPED(not-requested)', () => {
+  const snapshot = buildSnapshot(fixture())
+  assert.equal(snapshot.scope.modules.find(module => module.name === 'correctness').reasonCode, 'not-requested')
+  assert.equal(snapshot.status, 'complete')
+})

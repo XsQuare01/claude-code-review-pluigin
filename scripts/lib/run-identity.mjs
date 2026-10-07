@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
-import { readdirSync, readFileSync } from 'node:fs'
+import { lstatSync, readdirSync, readFileSync } from 'node:fs'
 import { isAbsolute, join, relative, resolve } from 'node:path'
 
 // 실행이 **무엇을** 리뷰했는지를 값으로 남긴다(#88 PR 0).
@@ -122,6 +122,34 @@ export function ruleDocDigests(rulesDir, paths) {
   return digests
 }
 
+/**
+ * 초기화된 서브모듈의 체크아웃된 commit. 그 디렉터리가 서브모듈 저장소가 아니면 null이다.
+ *
+ * 서브모듈이 초기화되지 않은 디렉터리에서 `rev-parse`를 부르면 git이 상위 저장소를 찾아 그 HEAD를
+ * 돌려준다 — 그래서 최상위 경로가 그 서브모듈인지부터 본다.
+ */
+function submoduleHead(top, path) {
+  const dir = join(top, path)
+  try {
+    const own = git(dir, ['rev-parse', '--show-toplevel']).trim()
+    if (resolve(own) !== resolve(dir)) return null
+    return git(dir, ['rev-parse', 'HEAD']).trim()
+  } catch {
+    return null
+  }
+}
+
+/** 추적하지 않는 파일을 stage했을 때 git이 매길 mode. 실행 비트는 `core.filemode`가 켜졌을 때만 본다. */
+function stagedModeOf(path, fileMode) {
+  try {
+    const stat = lstatSync(path)
+    if (stat.isSymbolicLink()) return '120000'
+    return fileMode && (stat.mode & 0o111) ? '100755' : '100644'
+  } catch {
+    return '100644'
+  }
+}
+
 /** `exclude`의 경로를 저장소 루트 기준 상대 경로(`/` 구분)로 바꾼다. 저장소 밖이면 버린다. */
 const excludedPrefixes = (top, exclude) => exclude
   .map(path => relative(resolve(top), resolve(path)))
@@ -139,7 +167,14 @@ const excludedPrefixes = (top, exclude) => exclude
  * - mode를 함께 넣는다. 실행 비트만 바뀐 파일도 다른 대상이다
  * - `exclude`의 디렉터리(리포트 디렉터리)는 뺀다. 기본 저장 위치는 대상 저장소 안이고,
  *   실행이 거기 쓰는 기록 때문에 대상이 바뀐 것으로 보이면 안 된다
- * - 서브모듈은 내용을 열지 않고 diff가 준 commit id로만 센다
+ * - 서브모듈은 내용을 열지 않고 **체크아웃된 commit id**로 센다. diff가 주는 id는 상위 저장소가
+ *   gitlink를 stage하지 않았으면 0이라, B와 C를 구별하지 못했다(PR #89 리뷰에서 재현). 그래서
+ *   서브모듈의 HEAD를 직접 읽는다 — stage 여부와 상관없이 같은 체크아웃이면 같은 값이다. HEAD의
+ *   gitlink와 같은 commit이면(안쪽 파일만 바뀌었으면) 대상에 넣지 않는다. 읽지 못하면
+ *   `submodule-unreadable`로 따로 남긴다
+ * - **새 파일은 stage 여부와 상관없이 같은 값이다.** 추적하지 않는 파일의 mode를 git이 stage할 때
+ *   매길 mode(심볼릭 링크 120000, 실행 비트 100755, 그 밖 100644)로 센다. 처음에는 `untracked`라는
+ *   표지를 넣어, 내용을 바꾸지 않고 `git add`만 해도 대상이 바뀐 것으로 보였다(PR #89 리뷰에서 재현)
  *
  * 변경이 없으면 `clean`, 있으면 `sha256:<hex>`다.
  */
@@ -162,7 +197,15 @@ export function currentTarget(repo, { exclude = [] } = {}) {
     if (status === 'D') {
       entries.set(path, { mode: '-', id: 'deleted' })
     } else if (newMode === '160000') {
-      entries.set(path, { mode: newMode, id: /^0+$/.test(newId) ? 'submodule-modified' : newId })
+      const checkedOut = submoduleHead(top, path)
+      if (checkedOut === null) {
+        entries.set(path, { mode: newMode, id: 'submodule-unreadable' })
+        continue
+      }
+      // 안쪽 파일만 바뀐 서브모듈은 대상이 아니다 — 서브모듈 안의 작업 트리는 추적하지 않는다.
+      const [, , oldId] = header.slice(1).split(/\s+/)
+      if (checkedOut === oldId) continue
+      entries.set(path, { mode: newMode, id: checkedOut })
     } else {
       entries.set(path, { mode: newMode, id: null })
       toHash.push(path)
@@ -170,9 +213,10 @@ export function currentTarget(repo, { exclude = [] } = {}) {
   }
 
   const untracked = git(top, ['ls-files', '--others', '--exclude-standard', '-z', '--full-name']).split('\0').filter(Boolean)
+  const fileMode = git(top, ['config', '--bool', '--default', 'true', 'core.filemode']).trim() === 'true'
   for (const path of untracked) {
     if (!keep(path)) continue
-    entries.set(path, { mode: 'untracked', id: null })
+    entries.set(path, { mode: stagedModeOf(join(top, path), fileMode), id: null })
     toHash.push(path)
   }
 

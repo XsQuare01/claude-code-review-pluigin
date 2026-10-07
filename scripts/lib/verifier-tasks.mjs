@@ -135,7 +135,7 @@ const KIND_TEXT = {
  * 검증자가 없는 조항을 찾거나 상상하면, 의도와 경로로 판정해야 할 주장을 규칙 문장으로
  * 판정한다.
  */
-export function buildTaskPrompt({ instructions, task, candidatesById, clauses, mergeBase }) {
+export function buildTaskPrompt({ instructions, task, candidatesById, clauses, mergeBase, intent }) {
   const members = task.candidateIds.map(id => candidatesById.get(id)).filter(Boolean)
   const ids = task.candidateIds.map(id => `\`${id}\``).join(', ')
   const lines = [
@@ -170,6 +170,12 @@ export function buildTaskPrompt({ instructions, task, candidatesById, clauses, m
 
   if (lines.at(-1) !== '') lines.push('')
   const missing = clauseLines(lines, members.map(candidate => candidate.ruleId), clauses)
+  // 조항 없는 지적(CR)은 "변경의 의도와 구현이 어긋난다"는 주장이다. 검증자가 그 주장을 의도의 원문과
+  // 대조할 수 있게, producer가 받은 원문을 그대로 붙인다(PR #90 리뷰). 규칙 지적에는 붙이지 않는다.
+  if (members.some(candidate => typeof clauses.get(candidate.ruleId)?.basis === 'string')) {
+    if (lines.at(-1) !== '') lines.push('')
+    lines.push(intent?.block ?? '### 변경 의도\n\n변경 의도를 기록하지 않았다(`review-intent.mjs`를 돌리지 않았다) — 지적이 전제한 의도를 원문과 대조할 수 없다. "전제한 의도가 다르다"로 반박하지 말고, 코드 경로로만 판정한다.', '')
+  }
   return { prompt: `${lines.join('\n').trimEnd()}\n`, missingClauses: missing }
 }
 
@@ -203,6 +209,35 @@ const RECHECK_REASON_TEXT = {
   'rule-changed': '이 지적의 규칙 문서가 이전 실행 뒤에 바뀌었다 — 아래 조항은 지금의 것이다',
   'file-deleted': '이 지적의 파일이 이전 HEAD 뒤에 지워졌다',
   'location-unverified': '이전 리뷰가 이 지적의 위치를 확인하지 못했다',
+}
+
+/**
+ * 같은 결함인지 묻는 작업 하나의 프롬프트(C-13). 이전 지적과 이번 지적의 글을 나란히 싣는다.
+ *
+ * 판정할 `candidateId`는 이전 지적의 `ref`다. 두 글 모두 축과 개선 제안은 뺀다(`claimOf`) — 같은 결함인지는
+ * 원인·조건·결과로 가르지, 영향도로 가르지 않는다.
+ */
+export function buildIdentityPrompt({ instructions, task, previousClaim, currentClaim, previousHead, clauses }) {
+  const lines = [
+    instructions.trim(),
+    '',
+    '## 이번 작업',
+    '',
+    `- 작업: \`${task.taskId}\` · 같은 결함인가 — 이전 리뷰의 지적과 이번 리뷰의 지적이 같은 결함을 말하는지 판정한다`,
+    `- 판정할 \`candidateId\`: \`${previousClaim.candidateId}\` — 이 값 그대로 verdict 하나를 돌려준다`,
+    `- 이전 지적의 위치는 이전 HEAD \`${previousHead}\` 기준이고, 이번 지적의 위치는 지금 작업 트리(HEAD) 기준이다`,
+    '',
+    '### 이전 리뷰의 지적',
+    '',
+    fenced('json', JSON.stringify(previousClaim, null, 2)),
+    '',
+    '### 이번 리뷰의 지적',
+    '',
+    fenced('json', JSON.stringify(currentClaim ?? null, null, 2)),
+    '',
+  ]
+  const missing = clauseLines(lines, [previousClaim.ruleId, ...(currentClaim ? [currentClaim.ruleId] : [])], clauses)
+  return { prompt: `${lines.join('\n').trimEnd()}\n`, missingClauses: missing }
 }
 
 /**

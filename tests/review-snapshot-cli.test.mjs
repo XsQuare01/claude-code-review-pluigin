@@ -71,7 +71,9 @@ const startedRun = (t, { candidates = [candidate()], verdicts = [{ candidateId: 
     writeFileSync(join(timing, `${RUN}.${name}.json`), JSON.stringify({ schemaVersion: 1, findings: [], openQuestions }))
     fs.appendFileSync(sidecar, `${JSON.stringify({ at: new Date().toISOString(), phase: 'module.done', module: name, attempt: 1, status: 'ok' })}\n`)
   }
-  writeFileSync(join(timing, `${RUN}.routed.json`), JSON.stringify({ candidates, collected: { sources: ALL, excludedFailed: [] } }))
+  // 재현 근거 CLI는 routed 출력이 이 실행의 것인지(collected.runId) 본다 — prepare-verification --collect의 출력처럼 싣는다
+  const runId = fs.readFileSync(sidecar, 'utf8').split('\n').filter(Boolean).map(line => JSON.parse(line)).find(event => event.phase === 'run.start').runId
+  writeFileSync(join(timing, `${RUN}.routed.json`), JSON.stringify({ candidates, collected: { sources: ALL, excludedFailed: [], runId } }))
   if (verdicts) writeFileSync(join(timing, `${RUN}.verdicts.json`), JSON.stringify({ verdicts }))
   return { repo, dir, timing }
 }

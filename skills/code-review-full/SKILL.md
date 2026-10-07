@@ -74,7 +74,13 @@ C-3에 따라 프로젝트 프로파일(FSD, Electron, Tailwind, RSC, SSR, Three
 
 **(1b) 변경 의도 수집 — 정확성 패스를 켰을 때만, 1회**
 
-정확성 패스는 "이 변경이 하려는 일을 하는가"를 묻는다. 그 "하려는 일"을 오케스트레이터가 한 번 모아 넘긴다. 출처를 함께 넘기고, 요약하지 않는다.
+정확성 패스는 "이 변경이 하려는 일을 하는가"를 묻는다. 그 "하려는 일"의 **원문을 스크립트가 모은다**. producer와 검증자가 같은 원문을 받아야 검증자가 producer의 해석을 원문과 대조할 수 있다(C-6B `조항이 없는 지적`).
+
+```bash
+node "$RULES_DIR/../scripts/review-intent.mjs" --dir "$REPORT_DIR" --run "$REPORT_BASENAME" [--request-file <사용자 요청 원문 파일>]
+```
+
+PR 설명은 스크립트가 `gh pr view`로 읽는다(gh가 없으면 그 명령의 출력을 담은 파일을 `--pr-json`으로 준다). 사용자 요청은 사용자가 쓴 문장 그대로를 파일에 담아 넘긴다 — 요약하지 않는다. 스크립트가 낸 블록을 정확성 producer 프롬프트에 그대로 붙인다. 검증자 프롬프트에는 `prepare-verification.mjs`가 같은 원문을 붙인다. 아래 표는 그 원문의 출처와 순서다.
 
 | 순서 | 출처 | 라벨 |
 |------|------|------|
@@ -133,6 +139,7 @@ node "$RULES_DIR/../scripts/review-tasks.mjs" next --stage module --dir "$REPORT
 - **`expired`에 나온 시도는 끝 알림 없이 `staleAfterSec`를 넘겨 대장이 끝낸 것이다.** 그 시도의 응답이 나중에 와도 `done`이 받지 않는다. 재시도는 같은 응답의 `dispatch`에 이미 있다
 - **`cancelled`에 나온 시도는 시간 상한이 지나 취소된 것이다.** 호스트가 작업을 멈출 수 있으면(`host.cancel`) 그 작업을 멈춘다. `halted`가 나오면 더 띄우지 않는다 — 이미 받은 결과로 다음 단계로 가고, 띄우지 못한 모듈은 스냅숏이 미검토 범위로 그린다(`FAILED orchestration`)
 - **사용자가 멈추라고 하면** `review-tasks.mjs cancel --all --reason user`를 부르고, 같은 방식으로 받은 결과까지 리포트를 쓴다
+- **멈춘 실행(`halted`)도 리포트를 쓰고 `run.end`를 남긴다** — 부분 보고다. 사용자가 더 돌리라고 하면 `review-tasks.mjs resume`이 새 구간을 열고, `next`가 멈춰서 띄우지 못한 모듈을 낸다. 모듈 단계를 마치면 `prepare-verification.mjs … --collect --discard-verdicts`로 다시 모으고 검증을 새 라운드로 한 뒤 리포트를 다시 쓴다. 멈춘 적 없이 끝난 실행은 이어 가지 않는다
 - **깨어날 때마다** — 작업 완료 알림, 사용자 메시지, 컨텍스트 압축 뒤, 같은 실행에서 스킬을 다시 불렀을 때 — 먼저 `review-tasks.mjs status`로 남은 일을 보고 `next`를 부른다. 같은 실행을 다른 세션에서 이어 가면 `review-tasks.mjs resume --repo <대상 저장소>`부터 부른다. 대상이 바뀌었다고 하면(종료 코드 3) 이 실행을 이어 가지 않고, 새 `--run` 이름으로 preflight를 `--continues <앞 실행 ID>`와 함께 다시 시작한다. 한도에 닿아 멈춘 실행을 사용자가 더 돌리라고 하면 `resume`에 새 한도를 준다
 - 작업 하나가 끝나도 깨우지 않는 호스트(`host.perTaskNotification: false`, oh-my-openagent)에서는 `dispatch`를 전부 한 번에 foreground 병렬로 부르고, 돌아온 응답마다 `done`을 부른 뒤 `next`를 다시 부른다(아래 교차검증 `디스패치`와 같은 이유)
 
@@ -355,6 +362,7 @@ isolated 11)을 동시에 background dispatch한 결과, 1건만 2분 25초에 �
 - 셸이 필요 없다. **merge-base 기준 `deleted` 인용도 스크립트가 base blob에서 읽어 위치 대조 결과에 담는다** — verifier가 직접 조회할 일이 없다. anchor file 밖을 봐야 하는 경우(`usedCrossFileContext`)는 `Read`로 충분하다
 - **판정은 받는 즉시 파일로 남긴다.** 검증자가 돌려준 JSON을 한 글자도 고치지 않고 `next`가 준 `resultPath`에 쓰고 `review-tasks.mjs done`을 부른다. 대장이 계약을 검사해 맞으면 그 작업의 `verdict` 경로(`<taskId>.verdict.json`)에 쓴다 — 그 경로에 직접 쓰지 않는다. 모으고 순서를 정하는 일은 `tally-verdicts.mjs --collect`가 한다(아래 `검증 결과 집계`)
 - bundle이 `needs-context`로 돌린 후보의 승격 작업은 `next`가 `kind: promotion`으로 낸다. 그 항목의 `prompt`로 isolated verifier를 띄운다. 승격 프롬프트를 새로 쓰지 않는다
+- **이전 리뷰와 비교하는 실행(C-13)에는 같은 결함 판정 작업(`kind: identity`)도 나온다.** 같은 자리의 이전 지적과 이번 지적이 같은 결함인지 묻는다(조항 없는 CR이나 위치 대조가 어긋난 지적). 다른 검증 작업과 똑같이 `prompt` 파일을 그대로 넘기고 `done`을 부른다
 - **이전 리뷰와 비교하는 실행(C-13)에는 재확인 작업(`kind: recheck`)도 나온다.** 이번 리뷰가 다시 내지 않은 이전 지적이 지금 코드에서 성립하는지 묻는 작업이다. 다른 검증 작업과 똑같이 띄운다 — `prompt` 파일을 그대로 넘기고, 응답을 `resultPath`에 쓰고 `done`을 부른다. 지시가 교차검증과 다르다(기본 입장이 없다) — 그래서 프롬프트를 자기 말로 다시 쓰지 않는다. 판정할 `candidateId`는 이전 지적의 `ref`다
 - **`CR-*` 후보에는 규칙 조항이 없다.** 스크립트가 조항 자리에 `correctness.md`의 판정 기준 블록을 붙이고, 검증자에게 조항을 찾거나 지어내지 말고 의도와 코드 경로로 판정하라고 적는다(C-6B `조항이 없는 지적`). 오케스트레이터가 조항을 찾아 붙이지 않는다
 - **isolated에서도 `needs-context`인 후보는 C-6B의 `scope-open`이다.** 다시 묻지 않고 `미해결 / 후속 확인`으로 옮긴다. 다른 판정과 모순돼 보이면 그 모순도 거기 함께 적는다 — 결론을 담은 프롬프트로 다시 물으면 그것은 검증이 아니라 유도다. 2026-09-30 실행은 리포트를 조립한 뒤 "이전 결론을 반복하지 말라"는 프롬프트로 다시 물어 판정을 뒤집었다
@@ -401,7 +409,7 @@ node "$RULES_DIR/../scripts/tally-verdicts.mjs" --dir "$REPORT_DIR" --run "$REPO
 - **이 스크립트가 `crossverify.end`를 남긴다.** 같은 줄을 따로 기록하지 않는다. 수치를 바로잡으려고 다시 돌릴 때는 `--note <사유>`를 준다 — 사유 없는 두 번째 `crossverify.end`는 `--check`가 "판정을 다시 받았다"로 짚는다
 - **판정 파일을 손으로 합치지 않는다.** `--collect`는 bundle 작업 → isolated 작업 → 승격 작업 순서로 읽는다. 후보별로 마지막 판정만 세므로, bundle이 `needs-context`로 돌리고 isolated가 다시 판정한 후보가 두 번 세어지지 않는다. 2026-09-30 실행은 서브에이전트가 세션 기록에서 판정을 긁어 파일 두 개를 만들었고(17분), 그 파일을 렌더러가 읽지 못해 모양을 다시 바꿨다(5분)
 - 모은 판정은 `$REPORT_BASENAME.verdicts.json` 한 파일로 남는다(stdout의 `verdictsFile`). 렌더러의 `--verdicts`에는 이 파일을 준다
-- 재확인 판정(C-13)은 교차검증 수치에 섞지 않고 `$REPORT_BASENAME.rechecks.json`에 따로 남는다(stdout의 `rechecks`). 스냅숏이 그 파일을 스스로 읽는다. 이번 후보에 검증 대상이 없어도 재확인 작업이 있으면 이 스크립트를 돌린다
+- 재확인 판정과 같은 결함 판정(C-13)은 교차검증 수치에 섞지 않고 `$REPORT_BASENAME.rechecks.json`에 따로 남는다(stdout의 `rechecks`·`rechecks.identities`). 렌더러에 `--rechecks`로 그 파일을 준다 — 주지 않으면 같은 결함 판정을 받은 지적도 `재확인 필요`로 그려진다. 스냅숏이 그 파일을 스스로 읽는다. 이번 후보에 검증 대상이 없어도 재확인 작업이 있으면 이 스크립트를 돌린다
 - 판정 파일이 없는 작업은 검증자가 결과를 내지 못한 것이다. 스크립트는 멈추지 않고 그 작업 이름을 알리며, 그 후보는 `noVerdict`로 센다(C-6B `verification-unavailable`)
 - **승격 판정은 bundle이 `needs-context`로 돌린 후보에만 쓰인다.** 그 후보의 승격 판정이 없거나 교정 뒤에도 계약을 어겼으면, 스크립트는 bundle의 `needs-context`도 최종 판정으로 쓰지 않고 `noVerdict`로 센다 — `미해결 / 후속 확인`은 isolated에서도 닫히지 않은 후보의 자리다. bundle이 이미 닫은 후보의 승격 판정은 세지 않고 알린다(계약에 없는 재검증)
 - **`--targets`를 빠뜨리지 않는다.** 판정을 받지 못한 후보를 개수가 아니라 ID로 센다. 개수만 맞추면 대상 밖 후보의 판정이 빠진 대상을 가리는데, 한 실행에서 verifier 타임아웃으로 판정을 못 받은 3건이 기록에서 통째로 사라진 적이 있다
@@ -419,6 +427,8 @@ node "$RULES_DIR/../scripts/tally-verdicts.mjs" --dir "$REPORT_DIR" --run "$REPO
   ```bash
   node "$RULES_DIR/../scripts/review-evidence.mjs" exec --dir "$REPORT_DIR" --run "$REPORT_BASENAME" --candidate <candidateId> --expect-exit <코드> -- <명령> <인자...>
   ```
+
+  셸이 필요한 명령(Windows의 `npm` 등)은 `--shell`을 주고 `--` 뒤에 **셸 명령 문자열 하나**를 준다(`-- "npm test -- --grep \"two words\""`). 인자 배열을 넘기면 거부한다 — 이어 붙이면 인자 안의 공백이 쪼개진다. HEAD 쪽과 base 쪽은 **같은 명령·같은 기대 결과**로 돌린다 — 계획이 다르면 기존 결함·신규 회귀를 가르지 않는다
 
 - base 쪽 재현(`--side base --repo <merge-base를 꺼낸 깨끗한 트리>`)은 그런 트리가 이미 있거나 사용자가 만들기를 허용했을 때만 한다. 없으면 base는 미측정으로 남는다 — 미측정을 "변경 전에는 정상"으로 쓰지 않는다
 - **근거 항목은 JSON 파일로 써서 넘긴다.** 산문을 셸 인자로 넘기지 않는다. 항목은 `candidateId`·`method`(`static-trace`/`executed`/`not-run`)와 조건(`condition`)·절차(`procedure`)·기대(`expected`)·관찰(`observed`), `executed`면 `executions`(위 명령이 낸 실행 ID), `not-run`이면 `reason`이다
@@ -471,7 +481,8 @@ node "$RULES_DIR/../scripts/render-findings.mjs" \
      --rules "$RULES_DIR" \
      --workflow full \
      [--planned <modules-planned 페이로드 경로>] \
-     [--evidence "$REPORT_DIR/.timing/$REPORT_BASENAME.evidence.json"]
+     [--evidence "$REPORT_DIR/.timing/$REPORT_BASENAME.evidence.json"] \
+     [--rechecks "$REPORT_DIR/.timing/$REPORT_BASENAME.rechecks.json"]
 ```
 
 **교차검증을 끝낸 뒤에 렌더한다.** `render.start`를 남긴 뒤 판정을 다시 받으면 이미 그린 지적과 판정이 어긋나고, `review-timeline.mjs --check`가 그 기록을 문제로 짚는다.

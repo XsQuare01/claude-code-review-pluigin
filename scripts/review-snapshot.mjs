@@ -158,7 +158,7 @@ for (const source of Array.isArray(routed.value.collected?.sources) ? routed.val
 let evidence = new Map()
 const evidencePath = join(timing, `${run}.evidence.json`)
 if (existsSync(evidencePath)) {
-  const loaded = loadEvidence(evidencePath)
+  const loaded = loadEvidence(evidencePath, { routedSha256: digest(routed.text) })
   if (loaded.error) die(`재현 근거 파일을 읽지 못했다 — ${loaded.error}`)
   const start = events.find(event => event?.phase === 'run.start')
   if (loaded.doc.run.runId !== start?.runId) die(`${evidencePath}는 다른 실행(${loaded.doc.run.runId})의 근거 파일이다`)
@@ -169,6 +169,12 @@ if (existsSync(evidencePath)) {
     const recordPath = join(executionsDirOf(evidencePath), `${record.id}.json`)
     inputs.push({ role: 'execution', path: relativeToDir(recordPath), sha256: digest(readText(recordPath, '실행 기록')) })
   }
+}
+
+// 정확성 패스의 변경 의도 원문(`review-intent.mjs`). 검증자가 받은 원문이 무엇이었는지를 해시로 가리킨다.
+const intentPath = join(timing, `${run}.intent.json`)
+if (routed.value.collected?.intent && existsSync(intentPath)) {
+  inputs.push({ role: 'intent', path: relativeToDir(intentPath), sha256: digest(readText(intentPath, '변경 의도 파일')) })
 }
 
 // 이전 리뷰와 비교한 실행(C-13)이면 그 스냅숏과 재확인 판정을 함께 가리킨다.

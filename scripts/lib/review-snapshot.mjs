@@ -4,7 +4,7 @@ import { writeTextAtomic } from './atomic-write.mjs'
 
 import { codeSpan, dispositionOf, escapeProse } from '../render-findings.mjs'
 import { COMPARISONS, METHODS, OUTCOMES } from './evidence.mjs'
-import { CURRENT_STATUSES, PREVIOUS_STATUSES, RECHECK_REASONS, countBy, finalizePrevious } from './review-compare.mjs'
+import { CURRENT_STATUSES, PREVIOUS_STATUSES, RECHECK_REASONS, countBy, finalizeCurrent, finalizePrevious } from './review-compare.mjs'
 import { moduleOutcomes } from './run-record.mjs'
 import { HALT_REASONS, haltOf } from './task-ledger.mjs'
 
@@ -35,7 +35,7 @@ const MODULE_STATES = ['ok', 'failed', 'missing', 'skipped', 'unknown']
 const MISSING_REASONS = ['no-record', 'status-outside-list', 'not-collected', 'halted']
 const DISPOSITIONS = ['upheld', 'rejected', 'scope-open', 'not-eligible', 'verification-disabled', 'verification-unavailable']
 const DRIFT_FIELDS = ['head', 'worktree', 'rulesDigest']
-const INPUT_ROLES = ['timeline', 'routed', 'verdicts', 'result', 'evidence', 'execution', 'previous', 'rechecks']
+const INPUT_ROLES = ['timeline', 'routed', 'verdicts', 'result', 'evidence', 'execution', 'previous', 'rechecks', 'intent']
 const VERIFICATION_STATES = ['ran', 'disabled']
 
 const SHA256 = /^sha256:[0-9a-f]{64}$/
@@ -99,6 +99,15 @@ export function moduleScope({ modules, events, start, notes = [] }) {
     // 켜지 않은 선택 패스는 적용 대상이 아니다. "결과 없음"으로 세면 기본 설정으로 돈
     // 실행이 전부 부분 완료가 된다. 그래도 범위에서 빼지 않고 이유를 단 SKIPPED로 남긴다.
     if (module.optIn && start?.[module.id] !== 'on') return { module, scope: 'not-requested' }
+    // 켠 선택 패스는 적용 대상이다. 계획 기록이 SKIPPED·UNKNOWN으로 적었어도 받지 않는다 — 그대로
+    // 받으면 돌지 않은 패스가 적용 대상에서 빠져 실행이 `complete`가 된다(PR #90 리뷰에서 재현).
+    // 결과가 없으면 결과 없음으로 세고, 실패했으면 실패로 센다.
+    if (module.optIn) {
+      for (const [list, label] of [[skipped, 'SKIPPED'], [unknown, 'UNKNOWN']]) {
+        if (list.has(module.name)) notes.push(`켠 선택 패스 ${module.name}를 modules.planned가 ${label}로 적었다 — --${module.id} on으로 시작한 실행에서 이 패스는 적용 대상이다`)
+      }
+      return { module, scope: 'applied' }
+    }
     if (skipped.has(module.name)) return { module, scope: 'skipped', entry: skipped.get(module.name) }
     if (unknown.has(module.name)) return { module, scope: 'unknown', entry: unknown.get(module.name) }
     return { module, scope: 'applied' }
@@ -191,7 +200,7 @@ const statusOf = counts => (counts.ok === counts.applied ? 'complete' : counts.o
 
 /** 후보의 `lineage`에서 스냅숏에 남길 것. `lineageId`는 지적의 위쪽 필드로 따로 싣는다. */
 function lineageOf(lineage) {
-  const { lineageId: _lineageId, ...rest } = lineage
+  const { lineageId: _lineageId, previousLineageId: _previousLineageId, ...rest } = lineage
   return rest
 }
 
@@ -204,10 +213,20 @@ function lineageOf(lineage) {
  */
 function comparisonOf(previous, findings, rechecks, runId) {
   const requested = new Set(previous.entries.filter(entry => entry.recheckTask !== undefined).map(entry => entry.ref))
-  const entries = finalizePrevious(previous.entries, rechecks, { recheckRequested: requested }).map(entry => ({
+  const identityRequested = new Set(previous.entries.filter(entry => entry.identityTask !== undefined).map(entry => entry.ref))
+  const currentDispositions = new Map(findings.map(finding => [finding.candidateId, finding.disposition]))
+  const entries = finalizePrevious(previous.entries, rechecks, { recheckRequested: requested, identityRequested, currentDispositions }).map(entry => ({
     ref: entry.ref,
     lineageId: entry.lineageId,
     ruleId: entry.ruleId,
+    // 다음 비교가 이 항목을 이어받는 데 필요한 것 — 처음 낸 실행의 후보 ID·위치와 그 위치의 코드 버전, 원래
+    // 주장 파일(PR #94 리뷰). 해결된 항목도 남긴다 — 이력이다.
+    ...(entry.candidateId !== undefined ? { candidateId: entry.candidateId } : {}),
+    ...(Array.isArray(entry.sources) ? { sources: entry.sources } : {}),
+    ...(entry.location !== undefined ? { location: entry.location } : {}),
+    ...(entry.locatedAt !== undefined ? { locatedAt: entry.locatedAt } : {}),
+    ...(entry.claimSource !== undefined ? { claimSource: entry.claimSource } : {}),
+    ...(entry.carried ? { carried: true } : {}),
     status: entry.status,
     ...(entry.reason !== undefined ? { reason: entry.reason } : {}),
     ...(entry.firstReason !== undefined ? { firstReason: entry.firstReason } : {}),
@@ -215,6 +234,7 @@ function comparisonOf(previous, findings, rechecks, runId) {
     ...(entry.rebuttalKind !== undefined ? { rebuttalKind: entry.rebuttalKind } : {}),
     ...(entry.currentCandidateId !== undefined ? { currentRef: `${runId}/${entry.currentCandidateId}` } : {}),
     ...(entry.recheckTask !== undefined ? { recheckTask: entry.recheckTask } : {}),
+    ...(entry.identityTask !== undefined ? { identityTask: entry.identityTask } : {}),
     ...(entry.claim === 'unavailable' ? { claim: 'unavailable' } : {}),
   }))
   return {
@@ -222,7 +242,8 @@ function comparisonOf(previous, findings, rechecks, runId) {
     // 이 버전은 이전 결과를 가져다 쓰지 않는다 — 적용 대상 모듈을 모두 다시 리뷰한다. 재사용을 넣으면
     // 이 수와 다시 검토한 범위를 함께 남긴다(#88 PR 4).
     reused: 0,
-    recheck: previous.recheck ?? (requested.size ? 'requested' : 'none'),
+    recheck: previous.recheck ?? (requested.size || identityRequested.size ? 'requested' : 'none'),
+    carried: Number.isInteger(previous.carried) ? previous.carried : 0,
     claims: previous.claims,
     paths: previous.paths,
     current: countBy(findings.filter(finding => finding.lineage).map(finding => finding.lineage), CURRENT_STATUSES),
@@ -296,8 +317,14 @@ export function buildSnapshot({ name, events, catalog, routed, verdicts, verific
       disposition,
       // 실행 간에 같은 지적을 가리키는 이름(C-13). 이전 리뷰의 지적과 이어졌으면 그 이름을 물려받고,
       // 아니면 이 실행의 ref가 처음 이름이 된다. `candidateId`·`ref`는 이 실행 안의 이름이다.
-      lineageId: candidate.lineage?.lineageId ?? `${start.runId}/${candidate.candidateId}`,
-      ...(candidate.lineage ? { lineage: lineageOf(candidate.lineage) } : {}),
+      ...(() => {
+        // 같은 결함인지 물은 지적은 그 판정으로 이어짐·신규가 정해진다(C-13).
+        const lineage = candidate.lineage ? finalizeCurrent(candidate.lineage, rechecks.get(candidate.lineage.previousRef)) : null
+        return {
+          lineageId: lineage?.lineageId ?? `${start.runId}/${candidate.candidateId}`,
+          ...(lineage ? { lineage: lineageOf(lineage) } : {}),
+        }
+      })(),
       ...(disposition === 'rejected' && verdict?.rebuttalKind !== undefined ? { rebuttalKind: verdict.rebuttalKind } : {}),
       ...(evidence.has(candidate.candidateId) ? { evidence: evidenceSummary(evidence.get(candidate.candidateId)) } : {}),
     }
@@ -592,6 +619,11 @@ const RECHECK_REASON_TEXT = {
   'no-recheck-verdict': '재확인 판정을 받지 못했다',
   'recheck-needs-context': '재확인 검증자가 파일 밖을 봐야 한다고 했다',
   'recheck-unlocated': '재확인 검증자가 해결을 막는 코드의 위치를 대지 못했다',
+  'identity-unconfirmed': '같은 자리의 이번 지적과 같은 결함인지 확인하지 못했다',
+  'identity-different': '같은 자리의 이번 지적은 다른 결함이다 — 이 지적은 따로 재확인해야 한다',
+  'current-rejected': '이어진 이번 지적을 교차검증이 반박했다 — 해결인지는 따로 재확인해야 한다',
+  'current-scope-open': '이어진 이번 지적의 검증이 범위를 확정하지 못했다',
+  'current-unverified': '이어진 이번 지적의 검증이 판정을 내지 못했다',
 }
 
 /** 이전 리뷰와 비교한 결과의 블록. 이어진 미해결 지적은 이번 상세 지적에 있으므로 표에는 나머지만 싣는다. */
@@ -602,9 +634,10 @@ function comparisonMarkdown(comparison) {
     '',
     `재사용 ${comparison.reused} — 이번 실행은 적용 대상 모듈을 모두 다시 리뷰했다. 이전 결과를 가져다 쓰지 않았다. 해결 확인은 그 지적을 지금 코드로 다시 판정해 막는 코드의 위치를 댄 것뿐이다 — 이번에 안 나왔다는 것은 해결의 증거가 아니다.`,
   ]
+  if (comparison.carried) lines.push('', `이전 실행이 계속 추적하던 지적 ${comparison.carried}개를 이어받아 함께 비교했다.`)
   if (comparison.recheck === 'verification-off') lines.push('', '검증을 끈 실행이라 이전 지적을 재확인하지 않았다 — 이어지지 않은 이전 지적은 모두 재확인 필요다.')
   if (typeof comparison.claims === 'string' && comparison.claims !== 'available') lines.push('', `이전 지적의 글을 읽지 못해 재확인 작업을 만들지 않았다: ${escapeProse(comparison.claims.replace(/^unavailable — /, ''))}`)
-  const rows = comparison.entries.filter(entry => entry.status !== 'persisting' || entry.basis === 'recheck').map(entry => {
+  const rows = comparison.entries.filter(entry => entry.status !== 'persisting' || (entry.basis !== 'linked' && entry.basis !== 'identity')).map(entry => {
     const detail = entry.status === 'resolved'
       ? `재확인 판정이 막는 코드를 댔다(${codeSpan(entry.rebuttalKind)})`
       : entry.status === 'persisting'

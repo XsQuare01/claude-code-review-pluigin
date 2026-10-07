@@ -14,11 +14,13 @@
 //        --phase-low <active-deletion|rollout-shadow> \
 //        --verification-state <ran|disabled> --rules <RULES_DIR> --workflow <이름>
 
+import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 import { markedJson, CROSS_VERIFICATION_TOKEN_KEYS } from './lib/contract-blocks.mjs'
 import { assessEvidence, loadEvidence } from './lib/evidence.mjs'
+import { finalizeCurrent } from './lib/review-compare.mjs'
 import { collectVerdicts } from './lib/verdicts.mjs'
 
 const IMPACTS = new Set(['high', 'low'])
@@ -309,7 +311,7 @@ const SLOTS = [
  * 이어붙이는 방식이면 다음 사람이 실수로 다시 합칠 수 있지만, 배열 + `\n`
  * join은 슬롯을 합칠 방법 자체가 없다.
  */
-export function renderFinding(candidate, { label, vocabulary, related = [], evidence = [] }) {
+export function renderFinding(candidate, { label, vocabulary, related = [], evidence = [], lineage = candidate.lineage, disposition }) {
   const severity = severityOf(candidate.impact, candidate.confidence)
   // category는 계약상 impact가 high일 때만 존재한다(low는 category 자체를
   // 금지한다) — 그래도 candidate.category를 한 번 더 확인해 방어적으로 둔다.
@@ -329,14 +331,14 @@ export function renderFinding(candidate, { label, vocabulary, related = [], evid
     .map(([key, head]) => `${head}: ${escapeProse(candidate.content[key])}`)
 
   const source = sourceLine(candidate)
-  const lineage = lineageLine(candidate.lineage)
+  const lineageText = lineageLine(lineage, disposition)
 
   return [
     `#### ${severity} \`${candidate.renderedRuleId ?? candidate.ruleId}\` ${escapeProse(candidate.content.title)}`,
     axes.join(' · '),
     ...(source ? [source] : []),
     // 이전 리뷰와의 관계(C-13). 이전 리뷰와 비교한 실행에만 있다.
-    ...(lineage ? [lineage] : []),
+    ...(lineageText ? [lineageText] : []),
     // 같은 자리에 걸린 다른 namespace의 지적. 합치지 않고 잇기만 한다 — 근거가 다른 두
     // 지적이 같은 결함인지는 이 렌더러가 정하지 않는다. 값은 호출자가 이미 code span으로 만든다.
     ...(related.length ? [`관련 지적: ${related.join(', ')}`] : []),
@@ -350,6 +352,7 @@ export function renderFinding(candidate, { label, vocabulary, related = [], evid
 
 const LINEAGE_REASON_TEXT = {
   ambiguous: '같은 규칙·같은 자리에 이전 지적이 있지만 어느 것과 이어지는지 모른다',
+  'identity-unconfirmed': '같은 자리의 이전 지적과 같은 결함인지 확인하지 못했다',
   'location-unverified': '위치를 확인하지 못한 지적이라 이전 지적과 잇지 못했다',
   'previous-not-reviewed': '이전 리뷰가 이 모듈을 검토하지 않아 신규인지 말할 수 없다',
 }
@@ -358,13 +361,20 @@ const LINEAGE_REASON_TEXT = {
  * `이전 리뷰:` 줄(C-13). 신규는 "이전 리뷰에 없던 지적"이다 — 그 자리의 코드가 이번에 바뀌지 않았으면
  * 이번 변경이 만든 결함이 아니라는 사실을 함께 적는다.
  */
-export function lineageLine(lineage) {
+export function lineageLine(lineage, disposition) {
   if (!lineage) return null
-  if (lineage.status === 'linked') return `이전 리뷰: 이어짐 — 이전 지적 ${codeSpan(lineage.previousRef)}이 아직 남아 있다`
+  if (lineage.status === 'linked') {
+    // 이어졌다는 것은 같은 결함이라는 뜻이지, 그 결함이 남아 있다는 뜻은 아니다 — 이번 검증이 반박했거나
+    // 확정하지 못했으면 이전 지적은 재확인 필요다(PR #94 리뷰).
+    if (disposition === 'rejected') return `이전 리뷰: 이어짐 — 이전 지적 ${codeSpan(lineage.previousRef)}과 같은 결함인데 이번 교차검증이 반박했다. 이전 지적은 재확인 필요다`
+    if (disposition === 'scope-open' || disposition === 'verification-unavailable') return `이전 리뷰: 이어짐 — 이전 지적 ${codeSpan(lineage.previousRef)}과 같은 결함인데 이번 검증이 확정되지 않았다. 이전 지적은 재확인 필요다`
+    return `이전 리뷰: 이어짐 — 이전 지적 ${codeSpan(lineage.previousRef)}이 아직 남아 있다`
+  }
   if (lineage.status === 'recheck') return `이전 리뷰: 재확인 필요 — ${LINEAGE_REASON_TEXT[lineage.reason] ?? codeSpan(lineage.reason)}`
   const notes = []
   if (lineage.fileChanged === false) notes.push('이번 변경이 이 파일을 바꾸지 않았다 — 이전 리뷰가 놓쳤거나 판단이 달라진 것이다')
   if (lineage.ruleChanged) notes.push('이 지적의 규칙 문서가 바뀌었다')
+  if (lineage.differsFrom) notes.push(`같은 자리의 이전 지적 ${codeSpan(lineage.differsFrom)}과는 다른 결함이다`)
   return `이전 리뷰: 신규${notes.length ? ` — ${notes.join(' · ')}` : ''}`
 }
 
@@ -384,10 +394,12 @@ const COMPARISON_TEXT = {
   'pre-existing': '변경 전에도 재현 → 기존 결함',
   'new-regression': '변경 전에는 재현 안 됨 → 신규 회귀',
   'base-unmeasured': 'base 미측정 — 기존 결함인지 신규 회귀인지 가르지 않았다',
+  incomparable: '변경 전 재현과 재현 계획이 달라 비교하지 않았다 — 기존 결함인지 신규 회귀인지 가르지 않았다',
 }
 const UNUSABLE_TEXT = {
   'other-run': '다른 실행의 기록이다',
   'other-target': '이 실행의 대상과 다른 코드에서 돌았다',
+  'other-candidates': '지금의 후보 목록과 다른 후보 목록에서 돌았다 — 검증 준비를 다시 돌린 뒤라 같은 ID가 다른 지적일 수 있다',
   'tree-mutated': '재현 명령이 작업 트리를 바꿨다',
   'artifact-missing': '로그 파일이 없다',
   'artifact-changed': '기록한 뒤에 로그 파일이 바뀌었다',
@@ -829,6 +841,11 @@ export function render(candidates, verdictByCandidateId, phaseByImpact, vocabula
   const findingLines = candidate => renderFinding(candidate, {
     label: labelById.get(candidate.candidateId), vocabulary, related: relatedOf(candidate),
     evidence: evidenceLines(options.evidence?.get(candidate.candidateId)),
+    // 이전 리뷰와의 관계(C-13)는 같은 결함인지 물은 판정과 이 지적의 최종 판정을 함께 본다.
+    lineage: candidate.lineage ? finalizeCurrent(candidate.lineage, options.rechecks?.get(candidate.lineage.previousRef)) : undefined,
+    disposition: verificationState === 'ran' || verificationState === 'disabled'
+      ? dispositionOf(candidate, verdictByCandidateId.get(candidate.candidateId), verificationState)
+      : undefined,
   })
 
   const lines = ['## 상세 지적', '']
@@ -951,8 +968,10 @@ if (process.argv[1] && process.argv[1].endsWith('render-findings.mjs')) {
   }
 
   let payload
+  let inputText
   try {
-    payload = JSON.parse(readFileSync(inputPath, 'utf8'))
+    inputText = readFileSync(inputPath, 'utf8')
+    payload = JSON.parse(inputText)
   } catch (error) {
     die(`--input을 읽지 못했다: ${inputPath} — ${error.message}`)
   }
@@ -1026,11 +1045,25 @@ if (process.argv[1] && process.argv[1].endsWith('render-findings.mjs')) {
   if (evidencePath !== undefined) {
     const runId = payload.collected?.runId
     if (!runId) die('--evidence는 prepare-verification.mjs --collect의 출력과 함께 쓴다 — routed 출력에 collected.runId가 없어 근거 파일이 같은 실행의 것인지 확인할 수 없다')
-    const loaded = loadEvidence(evidencePath)
+    const loaded = loadEvidence(evidencePath, { routedSha256: createHash('sha256').update(inputText).digest('hex') })
     if (loaded.error) die(loaded.error)
     if (loaded.doc.run.runId !== runId) die(`--evidence는 다른 실행(${loaded.doc.run.runId})의 근거 파일이다 — 이 routed 출력은 ${runId}다`)
     for (const problem of loaded.problems) process.stderr.write(`경고: 근거 실행 기록 ${problem}\n`)
     evidence = assessEvidence(loaded.doc, loaded.executions, new Set(payload.candidates.map(candidate => candidate.candidateId)))
+  }
+
+  // 재확인·같은 결함 판정(C-13). 이전 리뷰와 비교한 실행에서 tally-verdicts.mjs --collect가 남긴 파일이다.
+  let rechecks
+  const rechecksPath = flag('rechecks')
+  if (rechecksPath !== undefined) {
+    if (!payload.previous) die('--rechecks는 이전 리뷰와 비교한 실행(routed 출력에 previous가 있다)에서만 준다')
+    let list
+    try {
+      list = collectVerdicts(JSON.parse(readFileSync(rechecksPath, 'utf8')))
+    } catch (error) {
+      die(`--rechecks를 읽지 못했다: ${rechecksPath} — ${error.message}`)
+    }
+    rechecks = new Map(list.map(verdict => [verdict.candidateId, verdict]))
   }
 
   // render는 그릴 수 없는 입력(닫힌 목록 밖 disposition, kind가 module도
@@ -1049,6 +1082,7 @@ if (process.argv[1] && process.argv[1].endsWith('render-findings.mjs')) {
         optIn: payload.collected?.optIn,
         excludedNotRequested: new Set(payload.collected?.excludedNotRequested ?? []),
         evidence,
+        rechecks,
       })
   } catch (error) {
     die(error.message)

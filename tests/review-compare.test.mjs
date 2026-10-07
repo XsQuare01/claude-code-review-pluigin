@@ -6,7 +6,8 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 
 import {
-  anchorOf, finalizePrevious, fingerprintOf, linkFindings, normalizeQuote, pathChanges, recheckOutcome, recheckable, ruleKeyOf,
+  anchorOf, enclosingSymbol, finalizeCurrent, finalizePrevious, fingerprintOf, identityPending, linkFindings, normalizeQuote, pathChanges,
+  recheckOutcome, recheckable, ruleKeyOf,
 } from '../scripts/lib/review-compare.mjs'
 
 // 이전 리뷰와 이번 리뷰를 잇는 규칙(C-13, #88 PR 4)을 고정한다.
@@ -35,15 +36,91 @@ test('위치는 공백을 접은 인용과 경로로 본다 — 줄 번호는 �
   assert.notEqual(one, fingerprintOf({ repo: 'other', ruleKey: '04-3', anchor: anchorOf(at('src/a.ts', 3, 'x')) }))
 })
 
-test('조항 없는 지적은 번호를 빼고 잇는다 — CR-1과 CR-2는 다른 결함이라는 뜻이 아니다', () => {
+test('조항 없는 지적은 번호를 빼고 비교하되, 같은 결함이라는 판정이 있을 때만 잇는다', () => {
+  // CR의 번호는 지적의 순번이라 열쇠에서 뺀다. 그러나 규칙 ID가 결함의 종류를 말하지 않으므로, 같은 줄의
+  // 다른 결함(권한 검사 누락 → 재시도 중복 저장)도 열쇠는 같다(PR #94 리뷰). 위치만으로 잇지 않는다.
   assert.equal(ruleKeyOf('CR-7', ['CR']), 'CR-*')
   assert.equal(ruleKeyOf('04-3', ['CR']), '04-3')
   const { current, previous } = link(
     [prev('CR-1#1', 'CR-1', at('src/header.ts', 4, 'return formatName(user).toUpperCase()'), ['correctness'])],
     [cur('CR-2#1', 'CR-2', at('src/header.ts', 4, 'return formatName(user).toUpperCase()'), 'correctness')],
   )
-  assert.equal(current.get('CR-2#1').status, 'linked')
-  assert.equal(previous[0].status, 'linked')
+  assert.deepEqual([previous[0].status, previous[0].reason, previous[0].currentCandidateId], ['recheck', 'identity-unconfirmed', 'CR-2#1'])
+  assert.equal(identityPending(previous[0]), true)
+  assert.equal(recheckable(previous[0]), false)
+  const pending = current.get('CR-2#1')
+  assert.deepEqual([pending.status, pending.reason, pending.previousRef], ['recheck', 'identity-unconfirmed', 'run-a/CR-1#1'])
+  // 같다는 판정이 오면 이전의 이름을 물려받아 이어지고, 다르다는 판정이 오면 신규다
+  assert.deepEqual(finalizeCurrent(pending, { disposition: 'upheld' }), { status: 'linked', previousRef: 'run-a/CR-1#1', lineageId: 'run-a/CR-1#1', basis: 'identity' })
+  assert.equal(finalizeCurrent(pending, { disposition: 'rejected', rebuttal: { kind: 'other', note: '다른 원인' } }).status, 'new')
+  assert.equal(finalizeCurrent(pending, undefined).status, 'recheck')
+})
+
+test('같은 규칙·같은 인용 줄이라도 감싼 함수가 다르면 다른 자리다 — 잇지 않는다', () => {
+  const { current, previous } = link(
+    [{ ...prev('04-1#1', '04-1', at('src/x.ts', 3, 'save(order)')), symbol: 'checkout' }],
+    [{ ...cur('04-1#1', '04-1', at('src/x.ts', 9, 'save(order)')), symbol: 'retry' }],
+  )
+  assert.deepEqual([previous[0].status, previous[0].reason], ['recheck', 'absent'])
+  assert.equal(current.get('04-1#1').status, 'new')
+})
+
+test('규칙 조항으로 종류가 정해지는 지적은 같은 줄·같은 선언이면 잇고, 위치 대조가 어긋났으면 같은 결함인지 묻는다', () => {
+  const same = link(
+    [{ ...prev('04-3#1', '04-3', at('src/load.ts', 3, 'setState(data)')), symbol: 'load', locationCheck: 'location-ok' }],
+    [{ ...cur('04-3#1', '04-3', at('src/load.ts', 5, 'setState(data)')), symbol: 'load', locationCheck: 'location-ok' }],
+  )
+  assert.equal(same.current.get('04-3#1').status, 'linked')
+  const drifted = link(
+    [{ ...prev('04-3#1', '04-3', at('src/load.ts', 3, 'setState(data)')), symbol: 'load', locationCheck: 'location-ok' }],
+    [{ ...cur('04-3#1', '04-3', at('src/load.ts', 5, 'setState(data)')), symbol: 'load', locationCheck: 'location-mismatch' }],
+  )
+  assert.equal(drifted.current.get('04-3#1').reason, 'identity-unconfirmed')
+})
+
+test('이어진 이전 지적은 이번 후보의 최종 판정을 따른다 — 반박되거나 확정되지 않았으면 재확인 필요다', () => {
+  const entries = ['upheld', 'not-eligible', 'rejected', 'scope-open', 'verification-unavailable']
+    .map((disposition, at) => ({ ref: `run-a/${at}`, status: 'linked', currentCandidateId: `c${at}` }))
+  const currentDispositions = new Map(['upheld', 'not-eligible', 'rejected', 'scope-open', 'verification-unavailable'].map((disposition, at) => [`c${at}`, disposition]))
+  const final = finalizePrevious(entries, new Map(), { currentDispositions })
+  assert.deepEqual(final.map(entry => `${entry.status}:${entry.reason ?? entry.basis}`), [
+    'persisting:linked', 'persisting:linked', 'recheck:current-rejected', 'recheck:current-scope-open', 'recheck:current-unverified',
+  ])
+  // 반박된 이번 후보가 이전 지적의 해결 확인이 되지도 않는다
+  assert.ok(final.every(entry => entry.status !== 'resolved'))
+})
+
+test('같은 결함인지 물은 이전 지적은 그 판정과 이번 후보의 판정으로 정해진다', () => {
+  const entries = [
+    { ref: 'run-a/1', status: 'recheck', reason: 'identity-unconfirmed', currentCandidateId: 'c1' },
+    { ref: 'run-a/2', status: 'recheck', reason: 'identity-unconfirmed', currentCandidateId: 'c2' },
+    { ref: 'run-a/3', status: 'recheck', reason: 'identity-unconfirmed', currentCandidateId: 'c3' },
+    { ref: 'run-a/4', status: 'recheck', reason: 'identity-unconfirmed', currentCandidateId: 'c4' },
+  ]
+  const verdicts = new Map([
+    ['run-a/1', { disposition: 'upheld' }],
+    ['run-a/2', { disposition: 'rejected', rebuttal: { kind: 'other', note: 'n' } }],
+    ['run-a/4', { disposition: 'upheld' }],
+  ])
+  const final = finalizePrevious(entries, verdicts, {
+    identityRequested: new Set(entries.map(entry => entry.ref)),
+    currentDispositions: new Map([['c1', 'upheld'], ['c4', 'rejected']]),
+  })
+  assert.deepEqual(final.map(entry => `${entry.status}:${entry.reason ?? entry.basis}`), [
+    'persisting:identity', 'recheck:identity-different', 'recheck:identity-unconfirmed', 'recheck:current-rejected',
+  ])
+})
+
+test('감싼 선언은 중괄호로 찾는다 — 블록이 끝난 뒤의 줄은 그 블록 안이 아니다', () => {
+  const source = [
+    'export function checkout() {', '  save(order)', '}', '',
+    'export const retry = async (x) => {', '  if (x) {', '    save(order)', '  }', '}',
+    'save(order)',
+    'class Store {', '  flush(x) {', '    save(order)', '  }', '}',
+  ].join('\n')
+  assert.deepEqual([2, 7, 10, 13].map(line => enclosingSymbol(source, line)), ['checkout', 'retry', '', 'flush'])
+  assert.equal(enclosingSymbol('def f(x):\n    return x\n', 2), 'f')
+  assert.equal(enclosingSymbol(source, 99), null)
 })
 
 test('줄이 밀려도 같은 지적이다 — 신규로 중복되지 않는다', () => {

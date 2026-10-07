@@ -358,6 +358,17 @@ After a fix, the question is which earlier findings are fixed and what is new. L
 
 The contract is `workflow-contract.md` C-13.
 
+## Review follow-ups for #89–#94 (2.21.0)
+
+The reviews of PRs #89–#94 found twelve defects; all are fixed here.
+
+- **Run identity (#89).** A submodule now counts by the commit actually checked out, so switching it from B to C changes the fingerprint even when the parent did not stage the gitlink. A new file has the same fingerprint before and after `git add` — untracked files are counted with the mode git would give them when staged.
+- **Correctness pass (#90).** `review-intent.mjs` collects the change intent verbatim (PR description through `gh`, the user's request as a file, commit messages as an estimate) into `.timing/<run>.intent.json`, and the CR verifier prompts carry the same text with its source and hash, so a verifier can check a finding against the stated intent. With `--correctness on`, a plan that marks the pass SKIPPED or UNKNOWN no longer makes the run complete — the pass is still applicable, and the task ledger still launches it.
+- **Reproduction evidence (#92).** Execution records carry a reproduction plan (command with the repository root normalized, shell mode, working directory, expected result); HEAD and base results are compared only when the plans match, otherwise the comparison is `incomparable`. `--shell` takes one shell command string instead of joining an argv. `exec` and `note` refuse a routed output from another run, and a record made against an older candidate list is no longer usable.
+- **Task ledger (#93).** A run that was halted and closed with a partial report can be resumed; a run that completed normally still cannot. Each cross-verification round has its own name, used in claims and in response paths, so a late response from an earlier round cannot be accepted for the new attempt.
+- **Incremental re-review (#94).** Findings the previous run was still tracking (unresolved after re-check, or not yet resolved) are carried into the next comparison with their original claim file and lineage, instead of disappearing on the third review. A one-to-one key match links only when the enclosing declaration matches; clauseless `CR` findings, and findings whose location check failed, are linked only after a verifier confirms they are the same defect. A linked earlier finding is `persisting` only if the current finding survived cross-verification; otherwise it needs re-check.
+- Also fixed: on Windows, the working-tree reader in `prepare-verification.mjs` compared a `C:/…` root with a `C:\…` path and always fell back to the HEAD blob.
+
 ## Applicability metadata
 
 `review-rules/catalog.json` records **when** a module applies — required profile (FSD, Tailwind, RSC, Electron, TanStack Query, server code, contract provider), minimum React version, which workflows load it, and which individual rules carry a narrower gate than their module. The Markdown modules stay canonical for **what** a rule says; the catalog never generates documentation and never restates rule text.

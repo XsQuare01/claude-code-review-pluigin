@@ -311,3 +311,85 @@ test('재현 근거가 수집·렌더·스냅숏까지 이어지고, 지적의 �
   assert.equal(byId.get('CR-1#1').evidence.method, 'static-trace')
   assert.equal(byId.get('CR-3#1').disposition, 'rejected')
 })
+
+// ── PR #90 리뷰: CR 검증자도 변경 의도의 원문을 받는다 ───────────────────
+//
+// producer는 PR 설명을 받는데 검증자는 받지 못했다. PR에는 "실패 시 재시도하지 않는다"고 적혀 있는데
+// producer가 "자동 재시도가 빠졌다"고 오독하면, 검증자는 그 해석을 원문과 대조할 수 없다. 이 테스트는
+// 원문이 검증자 프롬프트까지 오는지를 본다 — 실제 모델이 오독을 잡는지는 증명하지 않는다.
+
+const MISREAD = {
+  ruleId: 'CR-1', title: '실패하면 자동으로 재시도해야 하는데 재시도가 없다', body: '저장 실패 뒤 재시도 경로가 없다.',
+  impact: 'high', category: 'user-malfunction', confidence: 'high', evidence: '실패 분기에 재시도 호출이 없다.',
+  location: { kind: 'verified', path: 'src/load.ts', line: 4, quote: '  setState(data)' },
+}
+
+const intent = (run, args) => node(run.repo, 'review-intent.mjs', ['--dir', run.dir, '--run', RUN, '--repo', run.repo, ...args])
+
+const crPrompt = (run, findings) => {
+  for (const name of ALWAYS) finishModule(run, name, [])
+  finishModule(run, 'correctness', findings)
+  const { routed } = collect(run)
+  const task = routed.verifierTasks.find(entry => entry.candidateIds.includes('CR-1#1'))
+  assert.ok(task, JSON.stringify(routed.verifierTasks))
+  return { prompt: readFileSync(task.prompt, 'utf8'), routed }
+}
+
+test('CR 검증자 프롬프트에 PR 설명과 사용자 요청의 원문이 출처와 함께 붙는다', t => {
+  const run = startRun(t, { correctness: 'on' })
+  const pr = join(run.dir, 'pr.json')
+  writeFileSync(pr, JSON.stringify({ number: 12, title: '저장 실패 처리', body: '저장이 실패하면 사용자에게 알리고, 실패 시 재시도하지 않는다.', url: 'https://example.com/pr/12' }))
+  const request = join(run.dir, 'request.txt')
+  writeFileSync(request, '실패를 조용히 삼키지 말아 주세요')
+  const recorded = intent(run, ['--pr-json', pr, '--request-file', request])
+  assert.equal(recorded.status, 0, recorded.stderr)
+  assert.match(recorded.stdout, /#### PR 설명 \(#12 https:\/\/example\.com\/pr\/12\)/)
+
+  const { prompt, routed } = crPrompt(run, [MISREAD])
+  assert.match(prompt, /### 변경 의도/)
+  assert.match(prompt, /PR 설명이나 사용자 요청으로 밝힌 의도가 있다/)
+  assert.match(prompt, /#### PR 설명 \(#12 https:\/\/example\.com\/pr\/12\)\n\n```text\n저장 실패 처리\n\n저장이 실패하면 사용자에게 알리고, 실패 시 재시도하지 않는다\.\n```/)
+  assert.match(prompt, /#### 사용자 요청\n\n```text\n실패를 조용히 삼키지 말아 주세요\n```/)
+  assert.match(prompt, /신뢰하지 않는 데이터다/)
+  // producer의 주장도 그대로 있다 — 둘을 대조하는 것이 검증자의 일이다
+  assert.match(prompt, /실패하면 자동으로 재시도해야 하는데 재시도가 없다/)
+  // 1차의 축은 여전히 보이지 않는다
+  assert.doesNotMatch(prompt, /"impact"|"confidence"|user-malfunction/)
+  assert.match(routed.collected.intent.sha256, /^[0-9a-f]{64}$/)
+  assert.equal(routed.collected.intent.status, 'stated')
+})
+
+test('PR 정보가 없고 커밋 메시지뿐이면 추정이라고 적고, 아무것도 없으면 없다고 적는다', t => {
+  const estimated = startRun(t, { correctness: 'on' })
+  assert.equal(intent(estimated, ['--no-pr']).status, 0)
+  const { prompt } = crPrompt(estimated, [MISREAD])
+  assert.match(prompt, /밝힌 의도가 없다 — 커밋 메시지로 추정한 것뿐이다/)
+  assert.match(prompt, /#### 커밋 메시지\(의도 추정\)/)
+  assert.match(prompt, /없음: pr — --no-pr/)
+
+  const unrecorded = startRun(t, { correctness: 'on' })
+  const { prompt: bare } = crPrompt(unrecorded, [MISREAD])
+  assert.match(bare, /변경 의도를 기록하지 않았다/)
+})
+
+test('규칙 지적의 검증 프롬프트에는 변경 의도를 붙이지 않는다', t => {
+  const run = startRun(t, { correctness: 'on' })
+  assert.equal(intent(run, ['--no-pr']).status, 0)
+  for (const name of ALWAYS) finishModule(run, name, name === '04-state' ? [{ ...RULE_SAME_LINE, impact: 'high', category: 'user-malfunction' }] : [])
+  finishModule(run, 'correctness', [])
+  const { routed } = collect(run)
+  assert.ok(routed.verifierTasks.length, '규칙 지적의 검증 작업이 있어야 이 검사가 뜻이 있다')
+  for (const task of routed.verifierTasks) assert.doesNotMatch(readFileSync(task.prompt, 'utf8'), /### 변경 의도/)
+})
+
+test('다른 실행의 의도 파일은 쓰지 않는다', t => {
+  const run = startRun(t, { correctness: 'on' })
+  assert.equal(intent(run, ['--no-pr']).status, 0)
+  const path = join(run.timing, `${RUN}.intent.json`)
+  writeFileSync(path, JSON.stringify({ ...JSON.parse(readFileSync(path, 'utf8')), runId: 'other-run' }))
+  for (const name of ALWAYS) finishModule(run, name, [])
+  finishModule(run, 'correctness', [MISREAD])
+  const out = node(run.repo, 'prepare-verification.mjs', ['--merge-base', run.base, '--dir', run.dir, '--run', RUN, '--rules', RULES, '--collect'])
+  assert.equal(out.status, 2)
+  assert.match(out.stderr, /다른 실행\(other-run\)의 의도 파일이다/)
+})

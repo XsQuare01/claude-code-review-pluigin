@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { execFileSync, spawnSync } from 'node:child_process'
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -44,11 +44,12 @@ const started = t => {
   const out = node(repo, 'review-preflight.mjs', ['--dir', dir, '--run', RUN, '--rules', RULES, '--workflow', 'full', '--base', base, '--host', 'test'])
   assert.equal(out.status, 0, out.stderr)
   const timing = join(dir, '.timing')
+  const runId = readFileSync(join(timing, `${RUN}.jsonl`), 'utf8').split('\n').filter(Boolean).map(line => JSON.parse(line)).find(event => event.phase === 'run.start').runId
   writeFileSync(join(timing, `${RUN}.routed.json`), JSON.stringify({
     candidates: [{ candidateId: 'CR-1#1', ruleId: 'CR-1' }, { candidateId: '04-3#1', ruleId: '04-3' }],
-    collected: { sources: [], excludedFailed: [] },
+    collected: { sources: [], excludedFailed: [], runId },
   }))
-  return { repo, dir, base, timing }
+  return { repo, dir, base, timing, runId }
 }
 
 const exec = (run, args, command, cwd = run.repo) => node(cwd, 'review-evidence.mjs', ['exec', '--dir', run.dir, '--run', RUN, ...args, '--', ...command])
@@ -160,8 +161,10 @@ test('base 쪽 재현은 merge-base를 꺼낸 깨끗한 트리에서만 돌리�
   assert.equal(wrong.status, 2)
   assert.match(wrong.stderr, /merge-base/)
 
-  const head = JSON.parse(exec(run, ['--candidate', 'CR-1#1', '--expect-exit', '1'], script('process.exit(1)')).stdout)
-  const base = exec(run, ['--candidate', 'CR-1#1', '--expect-exit', '1', '--side', 'base', '--repo', baseTree], script('process.exit(0)'), baseTree)
+  // 같은 재현 계획이다 — 명령은 같고, 결과는 트리의 내용(a.txt)에 따라 갈린다
+  const probe = script("process.exit(require('fs').readFileSync('a.txt', 'utf8').includes('changed') ? 1 : 0)")
+  const head = JSON.parse(exec(run, ['--candidate', 'CR-1#1', '--expect-exit', '1'], probe).stdout)
+  const base = exec(run, ['--candidate', 'CR-1#1', '--expect-exit', '1', '--side', 'base', '--repo', baseTree], probe, baseTree)
   assert.equal(base.status, 0, base.stderr)
   const baseResult = JSON.parse(base.stdout)
   assert.equal(baseResult.usable, true)
@@ -181,4 +184,93 @@ test('실행 기록 디렉터리에는 실행마다 기록과 로그가 하나�
   const files = readdirSync(join(run.timing, `${RUN}.evidence`)).sort()
   assert.equal(files.filter(file => file.endsWith('.json')).length, 3)
   assert.equal(files.filter(file => file.endsWith('.log')).length, 3)
+})
+
+// ── PR #92 리뷰 ────────────────────────────────────────────────────────
+
+const baseCheckout = (t, run) => {
+  const tree = mkdtempSync(join(tmpdir(), 'evidence-base-'))
+  t.after(() => rmSync(tree, { recursive: true, force: true }))
+  git(tree, 'clone', '-q', run.repo, '.')
+  git(tree, 'checkout', '-q', run.base)
+  return tree
+}
+
+test('재현 계획이 다른 HEAD·base 결과는 비교하지 않는다 — 신규 회귀로 확정하지 않는다', t => {
+  const run = started(t)
+  const tree = baseCheckout(t, run)
+  const head = JSON.parse(exec(run, ['--candidate', 'CR-1#1', '--expect-exit', '1'], script('process.exit(1)')).stdout)
+  const base = JSON.parse(exec(run, ['--candidate', 'CR-1#1', '--expect-exit', '1', '--side', 'base', '--repo', tree], script('process.exit(0)'), tree).stdout)
+  assert.equal(base.usable, true)
+  const written = note(run, [{ candidateId: 'CR-1#1', method: 'executed', condition: 'c', expected: 'e', executions: [head.id, base.id] }])
+  assert.equal(written.status, 0, written.stderr)
+  assert.match(written.stdout, /CR-1#1 executed reproduced · 변경 전 재현과 재현 계획이 달라 비교하지 않았다/)
+  assert.doesNotMatch(written.stdout, /신규 회귀/)
+})
+
+test('재현을 바꿔 여러 번 돌렸으면 마지막 HEAD와 같은 계획의 base만 짝짓는다', t => {
+  const run = started(t)
+  const tree = baseCheckout(t, run)
+  const probe = script("process.exit(require('fs').readFileSync('a.txt', 'utf8').includes('changed') ? 1 : 0)")
+  const first = JSON.parse(exec(run, ['--candidate', 'CR-1#1', '--expect-exit', '1'], probe).stdout)
+  const firstBase = JSON.parse(exec(run, ['--candidate', 'CR-1#1', '--expect-exit', '1', '--side', 'base', '--repo', tree], probe, tree).stdout)
+  // 계획을 바꿨다 — 같은 명령이라도 기대 결과가 다르면 다른 계획이다
+  const second = JSON.parse(exec(run, ['--candidate', 'CR-1#1', '--expect-exit', '1,2'], probe).stdout)
+  const written = note(run, [{ candidateId: 'CR-1#1', method: 'executed', condition: 'c', expected: 'e', executions: [first.id, firstBase.id, second.id] }])
+  assert.match(written.stdout, /비교하지 않았다/)
+  const same = note(run, [{ candidateId: 'CR-1#1', method: 'executed', condition: 'c', expected: 'e', executions: [first.id, firstBase.id] }])
+  assert.match(same.stdout, /신규 회귀/)
+})
+
+test('인자 배열은 공백·따옴표·괄호가 든 인자와 공백 있는 스크립트 경로를 그대로 넘긴다', t => {
+  const run = started(t)
+  // 대상 저장소 밖(리포트 디렉터리)에 둔다 — 작업 트리를 바꾸지 않는다
+  mkdirSync(join(run.dir, 'probe dir'))
+  const probe = join(run.dir, 'probe dir', 'echo args.cjs')
+  writeFileSync(probe, 'console.log(JSON.stringify(process.argv.slice(2)))\n')
+  const args = ['two words', 'say "hi"', 'f(x) && y']
+  const out = exec(run, ['--candidate', 'CR-1#1', '--expect-exit', '0', '--expect-output', JSON.stringify(args)], [process.execPath, probe, ...args])
+  assert.equal(out.status, 0, out.stderr)
+  assert.equal(JSON.parse(out.stdout).outcome, 'reproduced')
+})
+
+test('--shell은 셸 명령 문자열 하나만 받는다 — 인자 배열을 이어 붙이지 않는다', t => {
+  const run = started(t)
+  const joined = exec(run, ['--candidate', 'CR-1#1', '--expect-exit', '0', '--shell'], [process.execPath, '-e', 'console.log(1)'])
+  assert.equal(joined.status, 2)
+  assert.match(joined.stderr, /--shell은 셸 명령 문자열 하나를 받는다/)
+  const quoted = `"${process.execPath}" -e "console.log(process.argv.length)"`
+  const ok = exec(run, ['--candidate', 'CR-1#1', '--expect-exit', '0', '--shell'], [quoted])
+  assert.equal(ok.status, 0, ok.stderr)
+  const record = JSON.parse(readFileSync(join(run.timing, `${RUN}.evidence`, `${JSON.parse(ok.stdout).id}.json`), 'utf8'))
+  assert.deepEqual([record.shell, record.command, record.plan.mode], [true, [quoted], 'shell'])
+})
+
+test('다른 실행의 routed 출력이나 실행 ID가 없는 routed 출력으로는 재현도 근거도 받지 않는다', t => {
+  const run = started(t)
+  const other = join(run.dir, 'other.routed.json')
+  writeFileSync(other, JSON.stringify({ candidates: [{ candidateId: 'CR-99#1', ruleId: 'CR-99' }], collected: { sources: [], excludedFailed: [], runId: 'other-run' } }))
+  const foreign = exec(run, ['--candidate', 'CR-99#1', '--expect-exit', '1', '--routed', other], script('process.exit(1)'))
+  assert.equal(foreign.status, 2)
+  assert.match(foreign.stderr, /다른 실행\(other-run\)의 routed 출력이다/)
+  assert.equal(existsSync(join(run.timing, `${RUN}.evidence.json`)), false, '거부한 뒤에는 근거 파일을 만들지 않는다')
+
+  const bare = join(run.dir, 'bare.routed.json')
+  writeFileSync(bare, JSON.stringify({ candidates: [{ candidateId: 'CR-1#1', ruleId: 'CR-1' }], collected: { sources: [] } }))
+  const input = join(run.dir, 'entries.json')
+  writeFileSync(input, JSON.stringify({ entries: [{ candidateId: 'CR-1#1', method: 'not-run', reason: 'r' }] }))
+  const noted = node(run.repo, 'review-evidence.mjs', ['note', '--dir', run.dir, '--run', RUN, '--input', input, '--routed', bare])
+  assert.equal(noted.status, 2)
+  assert.match(noted.stderr, /실행 ID\(collected\.runId\)가 없다/)
+})
+
+test('검증 준비를 다시 돌려 후보 목록이 바뀌면 그 앞의 재현은 근거로 쓰지 않는다', t => {
+  const run = started(t)
+  const head = JSON.parse(exec(run, ['--candidate', 'CR-1#1', '--expect-exit', '1'], script('process.exit(1)')).stdout)
+  // 같은 실행에서 다시 모았다 — 같은 ID가 다른 지적을 가리킬 수 있다
+  const routedPath = join(run.timing, `${RUN}.routed.json`)
+  writeFileSync(routedPath, JSON.stringify({ candidates: [{ candidateId: 'CR-1#1', ruleId: 'CR-1', content: { title: '다른 지적' } }], collected: { sources: [], excludedFailed: [], runId: run.runId } }))
+  const written = note(run, [{ candidateId: 'CR-1#1', method: 'executed', condition: 'c', expected: 'e', executions: [head.id] }])
+  assert.equal(written.status, 2)
+  assert.match(written.stderr, /other-candidates/)
 })

@@ -276,7 +276,7 @@ const collectFromTasks = plan => {
   const validate = manifests()
   // 재확인 작업(C-13)의 판정은 이번 후보의 판정이 아니다. 교차검증 수치에 섞으면 대상 밖 판정으로
   // 세어지거나, 이전 지적의 판정이 이번 지적의 유지·반박이 된다 — 따로 모은다(`collectRechecks`).
-  const tasks = tasksOf(plan).filter(task => task.route !== 'recheck')
+  const tasks = tasksOf(plan).filter(task => task.route !== 'recheck' && task.route !== 'identity')
   const found = []
   const missing = []
   const malformed = []
@@ -339,28 +339,30 @@ const collectRechecks = plan => {
   const payloads = []
   const missing = []
   const malformed = []
-  for (const task of tasksOf(plan).filter(entry => entry.route === 'recheck')) {
+  // 같은 결함인지 묻는 작업(route identity)의 판정도 이전 지적에 대한 것이라 같은 파일에 모은다. 판정할 ID는
+  // 둘 다 이전 지적의 ref이고, 한 이전 지적은 둘 중 하나만 받는다.
+  const answered = []
+  for (const task of tasksOf(plan).filter(entry => entry.route === 'recheck' || entry.route === 'identity')) {
     if (!existsSync(task.verdict)) {
       missing.push(task.taskId)
       continue
     }
     const { payload, problems } = checkTaskVerdict(readFileSync(task.verdict, 'utf8'), task.candidateIds, validate)
     if (problems) malformed.push(task.taskId)
-    else payloads.push(payload)
+    else {
+      payloads.push(payload)
+      answered.push({ route: task.route, disposition: payload.verdicts[0]?.disposition })
+    }
   }
-  const count = disposition => payloads.filter(payload => payload.verdicts[0]?.disposition === disposition).length
-  return {
-    payloads,
-    missing,
-    malformed,
-    counts: {
-      requested: tasksOf(plan).filter(entry => entry.route === 'recheck').length,
-      upheld: count('upheld'),
-      rejected: count('rejected'),
-      needsContext: count('needs-context'),
-      noVerdict: missing.length + malformed.length,
-    },
+  const countsOf = route => {
+    const requested = tasksOf(plan).filter(entry => entry.route === route).length
+    const of = disposition => answered.filter(entry => entry.route === route && entry.disposition === disposition).length
+    const got = answered.filter(entry => entry.route === route).length
+    return route === 'recheck'
+      ? { requested, upheld: of('upheld'), rejected: of('rejected'), needsContext: of('needs-context'), noVerdict: requested - got }
+      : { requested, same: of('upheld'), different: of('rejected'), unknown: of('needs-context'), noVerdict: requested - got }
   }
+  return { payloads, missing, malformed, counts: countsOf('recheck'), identities: countsOf('identity') }
 }
 
 let payloads
@@ -389,12 +391,12 @@ if (collectMode) {
   writeFileSync(verdictsFile, `${JSON.stringify({ tasks: payloads }, null, 2)}\n`, 'utf8')
 
   const rechecked = collectRechecks(routed)
-  if (rechecked.counts.requested) {
+  if (rechecked.counts.requested || rechecked.identities.requested) {
     if (rechecked.missing.length) process.stderr.write(`경고: 판정 파일이 없는 재확인 작업 ${rechecked.missing.length}개: ${rechecked.missing.join(', ')} — 그 이전 지적은 재확인 필요로 남는다\n`)
     if (rechecked.malformed.length) process.stderr.write(`경고: 계약을 어긴 재확인 판정 ${rechecked.malformed.length}개를 세지 않았다: ${rechecked.malformed.join(', ')} — 그 이전 지적은 재확인 필요로 남는다\n`)
     const file = join(dir, '.timing', `${run}.rechecks.json`)
     writeFileSync(file, `${JSON.stringify({ tasks: rechecked.payloads }, null, 2)}\n`, 'utf8')
-    recheckReport = { ...rechecked.counts, file }
+    recheckReport = { ...rechecked.counts, ...(rechecked.identities.requested ? { identities: rechecked.identities } : {}), file }
   }
 } else {
   payloads = inputs.map(path => readJson(path, '--input'))

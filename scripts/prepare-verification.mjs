@@ -1,16 +1,17 @@
 import { execFileSync } from 'node:child_process'
-import { createHash } from 'node:crypto'
+import { createHash, randomBytes } from 'node:crypto'
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
 import { markedBlock } from './lib/contract-blocks.mjs'
-import { CURRENT_STATUSES, countBy, linkFindings, pathChanges, recheckable } from './lib/review-compare.mjs'
+import { intentBlock, intentProblems } from './lib/intent.mjs'
+import { CURRENT_STATUSES, countBy, enclosingSymbol, identityPending, linkFindings, pathChanges, recheckable } from './lib/review-compare.mjs'
 import { parseSnapshot } from './lib/review-snapshot.mjs'
 import { ruleDocDigests, rulesDigest } from './lib/run-identity.mjs'
 import { logPhase, moduleOutcomes, readEvents, requireStartedTimeline } from './lib/run-record.mjs'
 import {
-  buildRecheckPrompt, buildTaskPrompt, claimOf, docPathForRule, extractClause, instructionsWithManifest, planVerifierTasks,
+  buildIdentityPrompt, buildRecheckPrompt, buildTaskPrompt, claimOf, docPathForRule, extractClause, instructionsWithManifest, planVerifierTasks,
 } from './lib/verifier-tasks.mjs'
 
 // Deterministic preparation for the cross-verification pass.
@@ -403,8 +404,11 @@ export function resolveWithinRoot(candidatePath, root) {
   if (segments.includes('..')) return null
   // Segment comparison, not a string prefix — .github is not .git.
   if (segments[0] === '.git') return null
-  const resolved = resolve(root, candidatePath)
-  const prefix = root.endsWith(sep) ? root : root + sep
+  // 루트도 같은 꼴로 맞춘다. Windows의 `git rev-parse --show-toplevel`은 `C:/…`를 돌려주고 `resolve()`는
+  // `C:\…`를 만든다 — 그대로 비교하면 작업 트리 읽기가 늘 실패하고, 호출자는 HEAD blob으로 조용히 물러섰다.
+  const base = resolve(root)
+  const resolved = resolve(base, candidatePath)
+  const prefix = base.endsWith(sep) ? base : base + sep
   return resolved.startsWith(prefix) ? resolved : null
 }
 
@@ -688,11 +692,13 @@ async function main() {
 
   // 이전 리뷰와 비교한다(C-13). preflight가 `--previous`로 받은 스냅숏을 run.start에 남겼을 때만이다.
   let rechecks = []
+  let identities = []
   if (start.previousSnapshot !== undefined) {
     if (!collect) fail('이전 리뷰와 비교하는 실행(run.start에 previousSnapshot이 있다)은 --collect로 모은다 — 어느 모듈을 검토했는지가 비교에 필요하다')
-    const compared = compareWithPrevious({ start, result, catalog, namespaces, rulesDir, fail })
+    const compared = compareWithPrevious({ start, result, catalog, namespaces, rulesDir, mergeBase, fail })
     result.previous = compared.previous
     rechecks = verifyMode === 'off' || locationsOnly ? [] : compared.rechecks
+    identities = verifyMode === 'off' || locationsOnly ? [] : compared.identities
     // 검증을 끈 실행은 재확인도 하지 않는다. 재확인할 이전 지적은 그 이유로 남는다 — 해결로 읽지 않는다.
     if (verifyMode === 'off' || locationsOnly) {
       result.previous.recheck = 'verification-off'
@@ -702,6 +708,28 @@ async function main() {
         entry.reason = 'verification-off'
       }
     }
+  }
+
+  // 변경 의도의 원문(`review-intent.mjs`). 조항 없는 지적(CR)의 검증자가 producer와 같은 원문을 받는다.
+  // 다른 실행의 의도 파일이면 멈춘다 — 그 원문은 이 변경의 의도가 아니다.
+  let intent = null
+  const intentPath = join(dir, '.timing', `${run}.intent.json`)
+  if (existsSync(intentPath)) {
+    const text = readFileSync(intentPath, 'utf8')
+    let doc
+    try {
+      doc = JSON.parse(text)
+    } catch (error) {
+      fail(`변경 의도 파일이 JSON이 아니다: ${intentPath} — ${error.message}`)
+    }
+    const problems = intentProblems(doc)
+    if (problems.length) fail(`변경 의도 파일을 쓸 수 없다: ${intentPath} — ${problems.join(' / ')}`)
+    if (doc.runId !== (start.runId ?? null)) fail(`${intentPath}는 다른 실행(${doc.runId})의 의도 파일이다`)
+    const sha256 = createHash('sha256').update(text).digest('hex')
+    intent = { block: intentBlock(doc, { path: `.timing/${run}.intent.json`, sha256 }), sha256, status: doc.status }
+    if (result.collected) result.collected.intent = { path: `.timing/${run}.intent.json`, sha256, status: doc.status }
+  } else if (optIn.correctness === 'on') {
+    process.stderr.write(`경고: 변경 의도 파일이 없다: ${intentPath} — 정확성 패스의 검증자가 의도의 원문과 대조하지 못한다. review-intent.mjs를 preflight 뒤에 돌린다\n`)
   }
 
   // 검증자 프롬프트는 여기서 파일로 만든다. 오케스트레이터는 그 내용을 넘기기만
@@ -719,11 +747,12 @@ async function main() {
       if (claimed.length && !argv.includes('--discard-verdicts')) {
         fail(`이번 교차검증에서 검증 작업 ${claimed.length}개를 이미 띄웠다(verify.start) — 같은 실행을 이어 가는 중이면 이 스크립트를 다시 돌리지 않고 review-tasks.mjs status로 남은 작업을 본다. 검증을 처음부터 다시 하려면 --discard-verdicts를 준다`)
       }
-      written = writeVerifierTasks({ result, rulesDir, mergeBase, outDir: outDir.path, discardVerdicts: argv.includes('--discard-verdicts'), fail, rechecks })
+      written = writeVerifierTasks({ result, rulesDir, mergeBase, outDir: outDir.path, discardVerdicts: argv.includes('--discard-verdicts'), fail, rechecks, identities, intent })
       if (result.previous) {
-        const requested = new Map(written.tasks.filter(task => task.route === 'recheck').map(task => [task.candidateIds[0], task.taskId]))
-        for (const entry of result.previous.entries) {
-          if (requested.has(entry.ref)) entry.recheckTask = requested.get(entry.ref)
+        for (const task of written.tasks) {
+          if (task.route !== 'recheck' && task.route !== 'identity') continue
+          const entry = result.previous.entries.find(one => one.ref === task.candidateIds[0])
+          if (entry) entry[task.route === 'recheck' ? 'recheckTask' : 'identityTask'] = task.taskId
         }
       }
     }
@@ -735,7 +764,9 @@ async function main() {
   // 교차검증의 시작은 **검증자를 띄울 준비가 끝난 이 자리**에서 남긴다. 오케스트레이터가
   // 남기게 두었더니 2026-09-30 실행이 검증자 19개가 다 끝난 뒤에야 찍었고, 80분
   // 검증이 "무엇이 돌았는지 기록에 없는 5173초"로 보였다.
-  if (written.tasks.length) logPhase(dir, run, 'crossverify.start', { targets: result.counts.verify })
+  // 라운드마다 이름을 붙인다. 작업 대장이 claim과 응답 자리에 넣어, 검증을 다시 준비했을 때 앞 라운드의
+  // 늦은 응답이 새 라운드의 결과가 되지 않게 한다(C-12).
+  if (written.tasks.length) logPhase(dir, run, 'crossverify.start', { targets: result.counts.verify, round: randomBytes(4).toString('hex') })
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`)
 }
 
@@ -846,9 +877,9 @@ export function verifyDirOf(dir, run) {
  * 검증자가 받는 규칙이 같아야 한다. 디렉터리는 실행마다 새로 만든다. 앞 실행의
  * 파일이 남으면 이번 목록에 없는 작업이 디렉터리에는 있게 된다.
  */
-function writeVerifierTasks({ result, rulesDir, mergeBase, outDir, discardVerdicts, fail, rechecks = [] }) {
+function writeVerifierTasks({ result, rulesDir, mergeBase, outDir, discardVerdicts, fail, rechecks = [], identities = [], intent = null }) {
   const planned = planVerifierTasks(result)
-  if (!planned.tasks.length && !rechecks.length) return { tasks: [], promotions: {} }
+  if (!planned.tasks.length && !rechecks.length && !identities.length) return { tasks: [], promotions: {} }
 
   const readRule = name => {
     try {
@@ -867,7 +898,7 @@ function writeVerifierTasks({ result, rulesDir, mergeBase, outDir, discardVerdic
   const catalog = JSON.parse(readRule('catalog.json'))
   const docs = new Map()
   const clauses = new Map()
-  for (const candidate of [...result.candidates, ...rechecks.map(entry => entry.claim)]) {
+  for (const candidate of [...result.candidates, ...rechecks.map(entry => entry.claim), ...identities.map(entry => entry.previousClaim)]) {
     if (clauses.has(candidate.ruleId)) continue
     const docPath = docPathForRule(candidate.ruleId, catalog)
     if (docPath && !docs.has(docPath)) docs.set(docPath, readRule(docPath))
@@ -895,7 +926,7 @@ function writeVerifierTasks({ result, rulesDir, mergeBase, outDir, discardVerdic
   // 검증자가 돌려준 JSON을 남길 자리(`verdict`)도 여기서 정한다. 오케스트레이터가
   // 이름을 지으면 실행마다 달라지고, `tally-verdicts.mjs --collect`가 찾지 못한다.
   const write = task => {
-    const { prompt, missingClauses } = buildTaskPrompt({ instructions: instructions.value, task, candidatesById, clauses, mergeBase })
+    const { prompt, missingClauses } = buildTaskPrompt({ instructions: instructions.value, task, candidatesById, clauses, mergeBase, intent })
     const path = join(outDir, `${task.taskId}.md`)
     writeFileSync(path, prompt, 'utf8')
     return { prompt: path, verdict: join(outDir, `${task.taskId}.verdict.json`), missingClauses }
@@ -924,6 +955,7 @@ function writeVerifierTasks({ result, rulesDir, mergeBase, outDir, discardVerdic
     const recheckInstructions = instructionsWithManifest(recheckTemplate.value, manifest.value)
     if (recheckInstructions.error) fail(recheckInstructions.error)
     for (const entry of rechecks) {
+      // 작업 이름은 이전 지적의 ref에서 만든다 — 이월된 지적은 다른 실행의 같은 candidateId를 가질 수 있다.
       const taskId = `recheck-${String(entry.claim.candidateId).replace(/[^A-Za-z0-9-]/g, '-')}`
       const task = { taskId, kind: 'recheck', candidateIds: [entry.claim.candidateId] }
       const { prompt, missingClauses } = buildRecheckPrompt({
@@ -934,6 +966,30 @@ function writeVerifierTasks({ result, rulesDir, mergeBase, outDir, discardVerdic
       writeFileSync(path, prompt, 'utf8')
       tasks.push({
         taskId, route: 'recheck', candidateIds: task.candidateIds, prompt: path,
+        verdict: join(outDir, `${taskId}.verdict.json`),
+        ...(missingClauses.length ? { missingClauses } : {}),
+      })
+    }
+  }
+
+  // 같은 결함인지 묻는 작업(C-13). 열쇠는 1:1로 맞지만 조항이 결함의 종류를 말하지 않는 지적(CR)이나 위치가
+  // 확실하지 않은 지적은, 같은 결함이라는 판정이 있을 때만 이전의 이름을 물려받는다.
+  if (identities.length) {
+    const identityTemplate = markedBlock(readRule('verifier-prompt.md'), 'IDENTITY_PROMPT')
+    if (identityTemplate.error) fail(`verifier-prompt.md: ${identityTemplate.error}`)
+    const identityInstructions = instructionsWithManifest(identityTemplate.value, manifest.value)
+    if (identityInstructions.error) fail(identityInstructions.error)
+    for (const entry of identities) {
+      const taskId = `identity-${String(entry.previousClaim.candidateId).replace(/[^A-Za-z0-9-]/g, '-')}`
+      const task = { taskId, kind: 'identity', candidateIds: [entry.previousClaim.candidateId] }
+      const { prompt, missingClauses } = buildIdentityPrompt({
+        instructions: identityInstructions.value, task, previousClaim: entry.previousClaim, currentClaim: entry.currentClaim,
+        previousHead: entry.previousHead, clauses,
+      })
+      const path = join(outDir, `${taskId}.md`)
+      writeFileSync(path, prompt, 'utf8')
+      tasks.push({
+        taskId, route: 'identity', candidateIds: task.candidateIds, prompt: path,
         verdict: join(outDir, `${taskId}.verdict.json`),
         ...(missingClauses.length ? { missingClauses } : {}),
       })
@@ -953,7 +1009,7 @@ function writeVerifierTasks({ result, rulesDir, mergeBase, outDir, discardVerdic
  * - 이번 후보마다 `lineage`(신규·이어짐·재확인 필요)를, 이전 지적마다 상태와 이유를 남긴다. 재확인할
  *   지적은 재확인 작업으로 돌려준다
  */
-function compareWithPrevious({ start, result, catalog, namespaces, rulesDir, fail }) {
+function compareWithPrevious({ start, result, catalog, namespaces, rulesDir, mergeBase, fail }) {
   const snapshotPath = start.previousSnapshot
   let text
   try {
@@ -968,25 +1024,74 @@ function compareWithPrevious({ start, result, catalog, namespaces, rulesDir, fai
   if (parsed.error) fail(`이전 리뷰의 스냅숏을 쓸 수 없다: ${snapshotPath} — ${parsed.error}`)
   const before = parsed.value
 
-  // 이전 지적의 글.
-  let claims = null
-  let claimsProblem = null
+  // 비교할 이전 지적 = 그 실행이 낸 지적 + **그 실행이 계속 추적하던 이전 지적**(미해결·재확인 필요).
+  // 직전 스냅숏의 지적만 보면, 그 실행이 재확인으로 "지금도 성립한다"고 확인했거나 재확인하지 못한 이전
+  // 지적이 다음 비교에서 사라진다 — 가장 최근 스냅숏을 고르는 흐름에서 세 번째 리뷰마다 되풀이된다(PR #94
+  // 리뷰에서 재현). 이월 항목은 처음 낸 실행의 주장 파일(경로·해시)과 이름을 그대로 들고 간다. 같은 이름이
+  // 그 실행의 지적에도 있으면 지적 쪽을 쓴다 — 더 최근의 주장이다.
   const routedInput = before.inputs.find(input => input.role === 'routed')
-  if (!routedInput) {
-    claimsProblem = '스냅숏의 inputs에 routed 출력이 없다'
-  } else {
-    const path = resolve(dirname(snapshotPath), '..', routedInput.path)
-    try {
-      const routedText = readFileSync(path, 'utf8')
-      if (createHash('sha256').update(routedText).digest('hex') !== routedInput.sha256) {
-        claimsProblem = `${path}가 스냅숏을 쓴 뒤에 바뀌었다`
-      } else {
-        claims = new Map((JSON.parse(routedText).candidates ?? []).map(candidate => [candidate.candidateId, candidate]))
+  const ownClaims = routedInput ? { path: resolve(dirname(snapshotPath), '..', routedInput.path), sha256: routedInput.sha256 } : null
+  const locatedAt = { head: before.target.head, mergeBase: before.target.mergeBase }
+  const fromFindings = before.findings.map(finding => ({
+    ...finding, lineageId: finding.lineageId ?? finding.ref, locatedAt, ...(ownClaims ? { claimSource: ownClaims } : {}),
+  }))
+  const tracked = new Set(fromFindings.map(finding => finding.lineageId))
+  const carried = (before.comparison?.entries ?? [])
+    .filter(entry => entry.status !== 'resolved' && !tracked.has(entry.lineageId ?? entry.ref))
+    .map(entry => ({
+      ref: entry.ref,
+      lineageId: entry.lineageId ?? entry.ref,
+      candidateId: entry.candidateId ?? String(entry.ref).split('/').slice(1).join('/'),
+      ruleId: entry.ruleId,
+      sources: entry.sources ?? [],
+      location: entry.location,
+      ...(entry.locatedAt ? { locatedAt: entry.locatedAt } : {}),
+      ...(entry.claimSource ? { claimSource: entry.claimSource } : {}),
+      carried: true,
+    }))
+  const previous = [...fromFindings, ...carried]
+
+  // 주장 파일은 경로마다 한 번 읽고 해시를 맞춘다. 못 읽으면 그 파일에서 온 항목은 지우지 않고
+  // `claim-unavailable`로 남긴다 — 글이 없다고 추적을 멈추면 결함이 조용히 빠진다.
+  const claimFiles = new Map()
+  const claimsOf = source => {
+    if (!source?.path) return { problem: '주장 파일을 가리키는 기록이 없다' }
+    if (!claimFiles.has(source.path)) {
+      try {
+        const routedText = readFileSync(source.path, 'utf8')
+        claimFiles.set(source.path, createHash('sha256').update(routedText).digest('hex') !== source.sha256
+          ? { problem: `${source.path}가 그 스냅숏을 쓴 뒤에 바뀌었다` }
+          : { claims: new Map((JSON.parse(routedText).candidates ?? []).map(candidate => [candidate.candidateId, candidate])) })
+      } catch (error) {
+        claimFiles.set(source.path, { problem: `${source.path}를 읽지 못했다 — ${error.message}` })
       }
-    } catch (error) {
-      claimsProblem = `${path}를 읽지 못했다 — ${error.message}`
+    }
+    return claimFiles.get(source.path)
+  }
+  const claimOfEntry = entry => claimsOf(entry.claimSource).claims?.get(entry.candidateId) ?? null
+
+  // 감싼 선언(C-13). 같은 줄이 다른 함수에 있으면 다른 자리다. 이전 지적은 그 지적이 가리킨 코드의 버전에서,
+  // 이번 후보는 지금 트리(삭제는 merge-base)에서 읽는다.
+  const show = ref => {
+    try {
+      return execFileSync('git', ['show', ref], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'] })
+    } catch {
+      return null
     }
   }
+  const readers = gitReaders(mergeBase)
+  const symbolAt = (location, read) => {
+    if (location?.kind === 'verified') return enclosingSymbol(read('head', location.path), location.line)
+    if (location?.kind === 'deleted') return enclosingSymbol(read('base', location.path), location.lineBefore)
+    return null
+  }
+  for (const finding of previous) {
+    if (!finding.locatedAt) continue
+    finding.symbol = symbolAt(finding.location, (side, path) => show(`${side === 'head' ? finding.locatedAt.head : finding.locatedAt.mergeBase}:${path}`))
+  }
+  const currentWithSymbols = result.candidates.map(candidate => ({
+    ...candidate, symbol: symbolAt(candidate.location, (side, path) => (side === 'head' ? readers.working(path) : readers.base(path)) ?? null),
+  }))
 
   const paths = pathChanges(process.cwd(), before.target.head)
   const currentDocs = ruleDocDigests(rulesDir, (catalog.modules ?? []).map(module => module.path).filter(Boolean))
@@ -1001,8 +1106,8 @@ function compareWithPrevious({ start, result, catalog, namespaces, rulesDir, fai
     return earlier !== currentDocs[doc]
   }
   const linked = linkFindings({
-    previous: before.findings,
-    current: result.candidates,
+    previous,
+    current: currentWithSymbols,
     currentRunId: start.runId,
     clauselessPrefixes: [...namespaces.values()].flat(),
     reviewedNow: new Set(result.collected?.sources ?? []),
@@ -1011,33 +1116,50 @@ function compareWithPrevious({ start, result, catalog, namespaces, rulesDir, fai
     ruleChanged,
   })
   for (const candidate of result.candidates) candidate.lineage = linked.current.get(candidate.candidateId)
+  // 다음 비교가 이 항목을 이어받을 때 감싼 선언을 다시 셀 수 있게, 위치가 가리키는 코드의 버전을 남긴다.
+  const located = new Map(previous.map(finding => [finding.ref, finding.locatedAt]))
+  for (const entry of linked.previous) if (located.get(entry.ref)) entry.locatedAt = located.get(entry.ref)
 
+  const byId = new Map(result.candidates.map(candidate => [candidate.candidateId, candidate]))
   const rechecks = []
+  const identities = []
   for (const entry of linked.previous) {
-    if (!recheckable(entry)) continue
-    const claim = claims?.get(entry.candidateId)
+    const wantsRecheck = recheckable(entry)
+    const wantsIdentity = identityPending(entry)
+    if (!wantsRecheck && !wantsIdentity) continue
+    const claim = claimOfEntry(entry)
     if (!claim) {
       entry.claim = 'unavailable'
-      entry.firstReason = entry.reason
-      entry.reason = 'claim-unavailable'
+      if (wantsRecheck) {
+        entry.firstReason = entry.reason
+        entry.reason = 'claim-unavailable'
+      }
       continue
     }
     // 판정할 ID는 이전 지적의 ref다. 이번 실행의 candidateId와 섞이지 않는다.
+    const previousClaim = { ...claimOf(claim), candidateId: entry.ref }
+    if (wantsIdentity) {
+      identities.push({ previousClaim, currentClaim: claimOf(byId.get(entry.currentCandidateId)), previousHead: entry.locatedAt?.head ?? before.target.head })
+      continue
+    }
     rechecks.push({
-      claim: { ...claimOf(claim), candidateId: entry.ref },
-      previousHead: before.target.head,
+      claim: previousClaim,
+      previousHead: entry.locatedAt?.head ?? before.target.head,
       reason: entry.reason,
       movedTo: entry.location?.kind === 'verified' ? paths?.renamed?.get(entry.location.path) : undefined,
     })
   }
   const currentStates = [...linked.current.values()]
+  const problems = [...claimFiles.values()].map(file => file.problem).filter(Boolean)
   return {
     rechecks,
+    identities,
     previous: {
       snapshot: { path: snapshotPath, sha256: start.previousSha256, runId: before.run.runId, head: before.target.head, createdAt: before.createdAt, status: before.status },
       paths: paths ? 'known' : 'unknown',
-      claims: claims ? 'available' : `unavailable — ${claimsProblem}`,
+      claims: problems.length ? `unavailable — ${problems.join(' / ')}` : 'available',
       reused: 0,
+      carried: carried.length,
       counts: {
         current: countBy(currentStates, CURRENT_STATUSES),
         previous: countBy(linked.previous, ['linked', 'recheck']),
