@@ -20,8 +20,11 @@
 //
 //   review-preflight.mjs --dir <리포트 디렉터리> --run <리포트 basename> \
 //     --rules <RULES_DIR> --workflow full [--base main] [--host claude-code] [--repo .] \
-//     [--correctness on|off]
+//     [--correctness on|off] [--max-duration 30m] [--max-tasks 40] [--stale-after 20m] [--continues <runId>]
 //
+//   --max-duration·--max-tasks  이 실행의 시간·호출 한도(C-12). 작업 대장(review-tasks.mjs)이 지킨다
+//   --stale-after               끝을 받지 못한 시도를 죽은 것으로 볼 시간(기본 20m)
+//   --continues                 대상이 바뀌어 이어 가지 못한 앞 실행의 ID
 //   --dry-run  계산만 하고 타임라인에 쓰지 않는다
 //
 // 값에 공백이 있으면 감싼다. `--dir "C:\Users\...\바탕 화면\Docs"`
@@ -31,8 +34,10 @@ import { existsSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+import { durationLimitScope, hostCapabilities } from './lib/hosts.mjs'
 import { currentTarget, newRunId, repoIdentity, rulesDigest } from './lib/run-identity.mjs'
 import { runNameProblem } from './lib/run-name.mjs'
+import { DEFAULT_STALE_AFTER_SEC, parseDuration } from './lib/task-ledger.mjs'
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)))
 const TIMELINE = join(ROOT, 'scripts', 'review-timeline.mjs')
@@ -42,7 +47,7 @@ const die = message => {
   process.exit(2)
 }
 
-const VALUE_FLAGS = new Set(['dir', 'run', 'rules', 'workflow', 'base', 'host', 'repo', 'correctness'])
+const VALUE_FLAGS = new Set(['dir', 'run', 'rules', 'workflow', 'base', 'host', 'repo', 'correctness', 'max-duration', 'max-tasks', 'stale-after', 'continues'])
 const BOOL_FLAGS = new Set(['dry-run'])
 {
   const argv = process.argv.slice(2)
@@ -86,6 +91,20 @@ const repo = flag('repo', process.cwd())
 // 없는 것이 "켜지 않았다"인지 "켰는데 실패했다"인지 뒤의 스크립트가 가를 수 있다.
 const correctness = flag('correctness', 'off')
 if (!['on', 'off'].includes(correctness)) die(`--correctness는 on 또는 off다 (받은 값: ${JSON.stringify(correctness)})`)
+
+// 한도(C-12). 주지 않으면 한도가 없다 — 없는 한도를 기본값으로 지어 넣으면 사용자가 정하지 않은
+// 이유로 리뷰가 멈춘다. 읽지 못하는 값은 거부한다: 잘못 읽은 한도는 한도가 없는 것보다 나쁘다.
+const limitOf = (name, read, form) => {
+  const raw = flag(name)
+  if (raw === undefined) return null
+  const value = read(raw)
+  if (value === null) die(`--${name}는 ${form}이다 (받은 값: ${JSON.stringify(raw)})`)
+  return value
+}
+const maxDurationSec = limitOf('max-duration', parseDuration, '양의 시간(90, 90s, 30m, 2h)')
+const maxTasks = limitOf('max-tasks', raw => (/^\d+$/.test(raw) && Number(raw) > 0 ? Number(raw) : null), '양의 정수')
+const staleAfterSec = limitOf('stale-after', parseDuration, '양의 시간(90, 90s, 30m, 2h)') ?? DEFAULT_STALE_AFTER_SEC
+const continues = flag('continues')
 
 if (!dir || !run || !rules || !workflow) {
   die('usage: review-preflight.mjs --dir <리포트 디렉터리> --run <리포트 basename> --rules <RULES_DIR> --workflow <이름> [--base main] [--host 이름]')
@@ -210,6 +229,10 @@ const logged = (() => {
     // 선택 패스가 있는 워크플로우만 남긴다. 없는 워크플로우에 `off`를 적으면 "끌 수 있었는데
     // 껐다"로 읽힌다.
     ...(optional.some(module => module.id === 'correctness') ? { correctness } : {}),
+    ...(maxTasks !== null ? { maxTasks } : {}),
+    ...(maxDurationSec !== null ? { maxDurationSec } : {}),
+    staleAfterSec,
+    ...(continues !== undefined ? { continues } : {}),
   }
   const args = [TIMELINE, '--dir', dir, '--run', run, '--phase', 'run.start', '--data', JSON.stringify(data)]
   try {
@@ -246,6 +269,15 @@ if (specialists.length) {
 for (const module of optional) {
   const state = module.id === 'correctness' ? correctness : 'off'
   out.push(`선택 패스     ${module.id} ${state === 'on' ? '켜짐' : `꺼짐 — --${module.id} on일 때만 돈다`}`)
+}
+{
+  const capabilities = hostCapabilities(host)
+  const minutes = sec => (sec % 60 === 0 ? `${sec / 60}분` : `${sec}초`)
+  out.push('')
+  out.push(`한도          ${maxTasks === null && maxDurationSec === null ? '없음' : [maxTasks !== null ? `호출 ${maxTasks}개` : null, maxDurationSec !== null ? `시간 ${minutes(maxDurationSec)}` : null].filter(Boolean).join(' · ')} — 응답 없이 ${minutes(staleAfterSec)}이 지난 시도는 죽은 것으로 본다`)
+  out.push(`호스트        ${capabilities.name}${capabilities.known ? '' : ' (알려지지 않은 호스트 — 아무 능력도 가정하지 않는다)'}: 작업별 완료 알림 ${capabilities.perTaskNotification ? '있음' : '없음'} · 작업 중지 ${capabilities.cancel ? '가능' : '불가'}`)
+  if (maxDurationSec !== null) out.push(`              ${durationLimitScope(capabilities)}`)
+  if (continues !== undefined) out.push(`이어 받음     앞 실행 ${continues} — 대상이 바뀌어 새 실행으로 시작했다`)
 }
 if (identity.worktree !== 'clean') {
   out.push('')
