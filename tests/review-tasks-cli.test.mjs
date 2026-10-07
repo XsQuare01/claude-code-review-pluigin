@@ -383,3 +383,10 @@ test('resume은 멈춘 기록이 없어도 한도를 다 쓴 구간이면 새 �
   assert.match(out.stdout, /새 한도 구간을 열었다 — 앞 구간의 한도를 다 썼다/)
   assert.deepEqual(json(next(dir)).dispatch.map(one => one.label), ['01-fsd#1'])
 })
+
+test('--correctness on인 실행은 계획이 정확성 패스를 SKIPPED로 적어도 그 패스를 띄운다', t => {
+  const dir = fresh(t)
+  plant(dir, [startEvent({ correctness: 'on' }), { ...planned(['01-fsd']), skipped: [...planned(['01-fsd']).skipped, { module: 'correctness', reason: '범위 없음' }] }])
+  const labels = json(next(dir)).dispatch.map(one => one.label)
+  assert.ok(labels.includes('correctness#1'), labels.join(','))
+})

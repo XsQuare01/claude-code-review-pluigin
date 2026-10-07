@@ -135,7 +135,7 @@ const KIND_TEXT = {
  * 검증자가 없는 조항을 찾거나 상상하면, 의도와 경로로 판정해야 할 주장을 규칙 문장으로
  * 판정한다.
  */
-export function buildTaskPrompt({ instructions, task, candidatesById, clauses, mergeBase }) {
+export function buildTaskPrompt({ instructions, task, candidatesById, clauses, mergeBase, intent }) {
   const members = task.candidateIds.map(id => candidatesById.get(id)).filter(Boolean)
   const ids = task.candidateIds.map(id => `\`${id}\``).join(', ')
   const lines = [
@@ -170,6 +170,12 @@ export function buildTaskPrompt({ instructions, task, candidatesById, clauses, m
 
   if (lines.at(-1) !== '') lines.push('')
   const missing = clauseLines(lines, members.map(candidate => candidate.ruleId), clauses)
+  // 조항 없는 지적(CR)은 "변경의 의도와 구현이 어긋난다"는 주장이다. 검증자가 그 주장을 의도의 원문과
+  // 대조할 수 있게, producer가 받은 원문을 그대로 붙인다(PR #90 리뷰). 규칙 지적에는 붙이지 않는다.
+  if (members.some(candidate => typeof clauses.get(candidate.ruleId)?.basis === 'string')) {
+    if (lines.at(-1) !== '') lines.push('')
+    lines.push(intent?.block ?? '### 변경 의도\n\n변경 의도를 기록하지 않았다(`review-intent.mjs`를 돌리지 않았다) — 지적이 전제한 의도를 원문과 대조할 수 없다. "전제한 의도가 다르다"로 반박하지 말고, 코드 경로로만 판정한다.', '')
+  }
   return { prompt: `${lines.join('\n').trimEnd()}\n`, missingClauses: missing }
 }
 

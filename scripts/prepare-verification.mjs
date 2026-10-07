@@ -5,6 +5,7 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
 import { markedBlock } from './lib/contract-blocks.mjs'
+import { intentBlock, intentProblems } from './lib/intent.mjs'
 import { CURRENT_STATUSES, countBy, linkFindings, pathChanges, recheckable } from './lib/review-compare.mjs'
 import { parseSnapshot } from './lib/review-snapshot.mjs'
 import { ruleDocDigests, rulesDigest } from './lib/run-identity.mjs'
@@ -707,6 +708,28 @@ async function main() {
     }
   }
 
+  // 변경 의도의 원문(`review-intent.mjs`). 조항 없는 지적(CR)의 검증자가 producer와 같은 원문을 받는다.
+  // 다른 실행의 의도 파일이면 멈춘다 — 그 원문은 이 변경의 의도가 아니다.
+  let intent = null
+  const intentPath = join(dir, '.timing', `${run}.intent.json`)
+  if (existsSync(intentPath)) {
+    const text = readFileSync(intentPath, 'utf8')
+    let doc
+    try {
+      doc = JSON.parse(text)
+    } catch (error) {
+      fail(`변경 의도 파일이 JSON이 아니다: ${intentPath} — ${error.message}`)
+    }
+    const problems = intentProblems(doc)
+    if (problems.length) fail(`변경 의도 파일을 쓸 수 없다: ${intentPath} — ${problems.join(' / ')}`)
+    if (doc.runId !== (start.runId ?? null)) fail(`${intentPath}는 다른 실행(${doc.runId})의 의도 파일이다`)
+    const sha256 = createHash('sha256').update(text).digest('hex')
+    intent = { block: intentBlock(doc, { path: `.timing/${run}.intent.json`, sha256 }), sha256, status: doc.status }
+    if (result.collected) result.collected.intent = { path: `.timing/${run}.intent.json`, sha256, status: doc.status }
+  } else if (optIn.correctness === 'on') {
+    process.stderr.write(`경고: 변경 의도 파일이 없다: ${intentPath} — 정확성 패스의 검증자가 의도의 원문과 대조하지 못한다. review-intent.mjs를 preflight 뒤에 돌린다\n`)
+  }
+
   // 검증자 프롬프트는 여기서 파일로 만든다. 오케스트레이터는 그 내용을 넘기기만
   // 한다 — 다시 쓰지 않는다(`lib/verifier-tasks.mjs` 머리말).
   let written = { tasks: [], promotions: {} }
@@ -722,7 +745,7 @@ async function main() {
       if (claimed.length && !argv.includes('--discard-verdicts')) {
         fail(`이번 교차검증에서 검증 작업 ${claimed.length}개를 이미 띄웠다(verify.start) — 같은 실행을 이어 가는 중이면 이 스크립트를 다시 돌리지 않고 review-tasks.mjs status로 남은 작업을 본다. 검증을 처음부터 다시 하려면 --discard-verdicts를 준다`)
       }
-      written = writeVerifierTasks({ result, rulesDir, mergeBase, outDir: outDir.path, discardVerdicts: argv.includes('--discard-verdicts'), fail, rechecks })
+      written = writeVerifierTasks({ result, rulesDir, mergeBase, outDir: outDir.path, discardVerdicts: argv.includes('--discard-verdicts'), fail, rechecks, intent })
       if (result.previous) {
         const requested = new Map(written.tasks.filter(task => task.route === 'recheck').map(task => [task.candidateIds[0], task.taskId]))
         for (const entry of result.previous.entries) {
@@ -849,7 +872,7 @@ export function verifyDirOf(dir, run) {
  * 검증자가 받는 규칙이 같아야 한다. 디렉터리는 실행마다 새로 만든다. 앞 실행의
  * 파일이 남으면 이번 목록에 없는 작업이 디렉터리에는 있게 된다.
  */
-function writeVerifierTasks({ result, rulesDir, mergeBase, outDir, discardVerdicts, fail, rechecks = [] }) {
+function writeVerifierTasks({ result, rulesDir, mergeBase, outDir, discardVerdicts, fail, rechecks = [], intent = null }) {
   const planned = planVerifierTasks(result)
   if (!planned.tasks.length && !rechecks.length) return { tasks: [], promotions: {} }
 
@@ -898,7 +921,7 @@ function writeVerifierTasks({ result, rulesDir, mergeBase, outDir, discardVerdic
   // 검증자가 돌려준 JSON을 남길 자리(`verdict`)도 여기서 정한다. 오케스트레이터가
   // 이름을 지으면 실행마다 달라지고, `tally-verdicts.mjs --collect`가 찾지 못한다.
   const write = task => {
-    const { prompt, missingClauses } = buildTaskPrompt({ instructions: instructions.value, task, candidatesById, clauses, mergeBase })
+    const { prompt, missingClauses } = buildTaskPrompt({ instructions: instructions.value, task, candidatesById, clauses, mergeBase, intent })
     const path = join(outDir, `${task.taskId}.md`)
     writeFileSync(path, prompt, 'utf8')
     return { prompt: path, verdict: join(outDir, `${task.taskId}.verdict.json`), missingClauses }

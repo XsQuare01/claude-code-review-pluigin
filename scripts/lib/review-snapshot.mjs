@@ -35,7 +35,7 @@ const MODULE_STATES = ['ok', 'failed', 'missing', 'skipped', 'unknown']
 const MISSING_REASONS = ['no-record', 'status-outside-list', 'not-collected', 'halted']
 const DISPOSITIONS = ['upheld', 'rejected', 'scope-open', 'not-eligible', 'verification-disabled', 'verification-unavailable']
 const DRIFT_FIELDS = ['head', 'worktree', 'rulesDigest']
-const INPUT_ROLES = ['timeline', 'routed', 'verdicts', 'result', 'evidence', 'execution', 'previous', 'rechecks']
+const INPUT_ROLES = ['timeline', 'routed', 'verdicts', 'result', 'evidence', 'execution', 'previous', 'rechecks', 'intent']
 const VERIFICATION_STATES = ['ran', 'disabled']
 
 const SHA256 = /^sha256:[0-9a-f]{64}$/
@@ -99,6 +99,15 @@ export function moduleScope({ modules, events, start, notes = [] }) {
     // 켜지 않은 선택 패스는 적용 대상이 아니다. "결과 없음"으로 세면 기본 설정으로 돈
     // 실행이 전부 부분 완료가 된다. 그래도 범위에서 빼지 않고 이유를 단 SKIPPED로 남긴다.
     if (module.optIn && start?.[module.id] !== 'on') return { module, scope: 'not-requested' }
+    // 켠 선택 패스는 적용 대상이다. 계획 기록이 SKIPPED·UNKNOWN으로 적었어도 받지 않는다 — 그대로
+    // 받으면 돌지 않은 패스가 적용 대상에서 빠져 실행이 `complete`가 된다(PR #90 리뷰에서 재현).
+    // 결과가 없으면 결과 없음으로 세고, 실패했으면 실패로 센다.
+    if (module.optIn) {
+      for (const [list, label] of [[skipped, 'SKIPPED'], [unknown, 'UNKNOWN']]) {
+        if (list.has(module.name)) notes.push(`켠 선택 패스 ${module.name}를 modules.planned가 ${label}로 적었다 — --${module.id} on으로 시작한 실행에서 이 패스는 적용 대상이다`)
+      }
+      return { module, scope: 'applied' }
+    }
     if (skipped.has(module.name)) return { module, scope: 'skipped', entry: skipped.get(module.name) }
     if (unknown.has(module.name)) return { module, scope: 'unknown', entry: unknown.get(module.name) }
     return { module, scope: 'applied' }

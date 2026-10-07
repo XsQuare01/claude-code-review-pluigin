@@ -171,6 +171,12 @@ if (existsSync(evidencePath)) {
   }
 }
 
+// 정확성 패스의 변경 의도 원문(`review-intent.mjs`). 검증자가 받은 원문이 무엇이었는지를 해시로 가리킨다.
+const intentPath = join(timing, `${run}.intent.json`)
+if (routed.value.collected?.intent && existsSync(intentPath)) {
+  inputs.push({ role: 'intent', path: relativeToDir(intentPath), sha256: digest(readText(intentPath, '변경 의도 파일')) })
+}
+
 // 이전 리뷰와 비교한 실행(C-13)이면 그 스냅숏과 재확인 판정을 함께 가리킨다.
 const rechecks = new Map()
 if (routed.value.previous) {
