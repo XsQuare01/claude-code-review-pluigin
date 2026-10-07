@@ -662,3 +662,55 @@ test('--collect는 켜지 않은 선택 패스의 결과를 모으지 않고, �
   assert.ok(!result.candidates.some(candidate => candidate.ruleId === 'CR-1'))
   assert.match(out.stderr, /correctness/)
 })
+
+// ── 2.16.0 실행(2026-10-06) 후속 ─────────────────────────────────────────
+//
+// 1) routed 출력을 셸 리다이렉트로 받았더니 PowerShell 5.1이 한글을 CP949로 읽어 되돌릴 수 없게 깨뜨렸다.
+//    스크립트가 `--out`으로 직접 쓴다.
+
+const withInput = (dir, payload) => {
+  const input = join(dir, 'candidates.json')
+  writeFileSync(input, JSON.stringify(payload), 'utf8')
+  return input
+}
+
+test('--out은 routed 출력을 스크립트가 UTF-8로 직접 쓰고, 표준 출력에는 쓴 자리와 해시만 낸다', t => {
+  const dir = started(t)
+  const title = '한글 제목 — 셸을 거치면 깨졌다'
+  const input = withInput(dir, withHigh([{ ...HIGH, title }]))
+  const target = join(dir, '.timing', `${RUN}.routed.json`)
+  const out = spawnSync('node', [SCRIPT, '--merge-base', 'HEAD', '--dir', dir, '--run', RUN, '--input', input, '--out', target],
+    { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+  assert.equal(out.status, 0, out.stderr)
+  const summary = JSON.parse(out.stdout)
+  const bytes = readFileSync(target)
+  assert.equal(summary.sha256, createHash('sha256').update(bytes).digest('hex'))
+  assert.equal(summary.verifierTasks, 1)
+  assert.equal('candidates' in summary, false, '표준 출력에 같은 JSON을 다시 내지 않는다')
+  assert.ok(bytes[0] === 0x7b, 'BOM 없이 { 로 시작한다')
+  const routed = JSON.parse(bytes.toString('utf8'))
+  assert.equal(routed.candidates[0].content.title, title)
+  assert.equal(routed.verifierTasks.length, 1)
+  assert.deepEqual(timelineOf(dir).map(event => event.phase), ['run.start', 'script.start', 'script.done', 'crossverify.start'])
+})
+
+test('--out에 쓰지 못하면 준비를 끝내지 않고 교차검증도 시작하지 않는다', t => {
+  const dir = started(t)
+  const input = withInput(dir, withHigh([HIGH]))
+  const occupied = join(dir, 'occupied')
+  mkdirSync(occupied)
+  const out = spawnSync('node', [SCRIPT, '--merge-base', 'HEAD', '--dir', dir, '--run', RUN, '--input', input, '--out', occupied],
+    { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+  assert.equal(out.status, 2)
+  assert.match(out.stderr, /--out에 routed 출력을 쓰지 못했다/)
+  assert.deepEqual(timelineOf(dir).map(event => event.phase), ['run.start', 'script.start'])
+})
+
+test('--out에 경로가 없으면 거부한다', t => {
+  const dir = started(t)
+  const input = withInput(dir, withHigh([HIGH]))
+  const out = spawnSync('node', [SCRIPT, '--merge-base', 'HEAD', '--dir', dir, '--run', RUN, '--input', input, '--out'],
+    { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+  assert.equal(out.status, 2)
+  assert.match(out.stderr, /--out에는 routed 출력을 쓸 파일 경로를 준다/)
+})

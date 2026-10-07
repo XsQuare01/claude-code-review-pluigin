@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
+import { writeTextAtomic } from './lib/atomic-write.mjs'
 import { markedBlock } from './lib/contract-blocks.mjs'
 import { intentBlock, intentProblems } from './lib/intent.mjs'
 import { CURRENT_STATUSES, countBy, enclosingSymbol, identityPending, linkFindings, pathChanges, recheckable } from './lib/review-compare.mjs'
@@ -592,6 +593,15 @@ async function main() {
     process.stderr.write('--collect와 --input을 함께 줄 수 없다. 모듈별 결과 파일을 모으거나 입력 파일 하나를 넘긴다\n')
     process.exit(2)
   }
+  // 출력은 `--out`으로 받은 자리에 스크립트가 직접 UTF-8로 쓴다. 셸 리다이렉트(`>`)로 받으면 PowerShell 5.1이
+  // node의 UTF-8 출력을 시스템 코드 페이지로 읽어 한글을 되돌릴 수 없게 깨뜨린다 — 2026-10-06 실행은 그래서
+  // 검증 준비를 다시 돌렸고, 끝이 없는 교차검증 시작이 기록에 남았다.
+  const outIndex = argv.indexOf('--out')
+  const outPath = outIndex === -1 ? undefined : argv[outIndex + 1]
+  if (outIndex !== -1 && (outPath === undefined || outPath.startsWith('--'))) {
+    process.stderr.write('--out에는 routed 출력을 쓸 파일 경로를 준다(보통 <리포트 디렉터리>/.timing/<실행 이름>.routed.json)\n')
+    process.exit(2)
+  }
   const verifyIndex = argv.indexOf('--verify')
   const verifyMode = verifyIndex === -1 ? 'selective' : argv[verifyIndex + 1]
   if (!['selective', 'exhaustive', 'off'].includes(verifyMode)) {
@@ -760,6 +770,29 @@ async function main() {
     result.promotions = written.promotions
   }
 
+  // `--out`이면 기록보다 먼저 쓴다 — 쓰지 못했으면 이 준비는 끝나지 않은 것이고, 교차검증도 시작하지 않은 것이다.
+  const text = `${JSON.stringify(result, null, 2)}\n`
+  let outFile = null
+  if (outPath !== undefined) {
+    const path = resolve(outPath)
+    try {
+      mkdirSync(dirname(path), { recursive: true })
+      writeTextAtomic(path, text, {
+        verify: back => {
+          try {
+            JSON.parse(back)
+            return null
+          } catch (error) {
+            return `JSON으로 읽히지 않는다(${error.message})`
+          }
+        },
+      })
+    } catch (error) {
+      fail(`--out에 routed 출력을 쓰지 못했다: ${path} — ${error.message}`)
+    }
+    outFile = { path, sha256: createHash('sha256').update(text).digest('hex') }
+  }
+
   logPhase(dir, run, 'script.done', { ran: true, counts: result.counts })
   // 교차검증의 시작은 **검증자를 띄울 준비가 끝난 이 자리**에서 남긴다. 오케스트레이터가
   // 남기게 두었더니 2026-09-30 실행이 검증자 19개가 다 끝난 뒤에야 찍었고, 80분
@@ -767,7 +800,13 @@ async function main() {
   // 라운드마다 이름을 붙인다. 작업 대장이 claim과 응답 자리에 넣어, 검증을 다시 준비했을 때 앞 라운드의
   // 늦은 응답이 새 라운드의 결과가 되지 않게 한다(C-12).
   if (written.tasks.length) logPhase(dir, run, 'crossverify.start', { targets: result.counts.verify, round: randomBytes(4).toString('hex') })
-  process.stdout.write(`${JSON.stringify(result, null, 2)}\n`)
+  // `--out`이면 표준 출력에는 무엇을 어디에 썼는지만 낸다 — 같은 JSON을 다시 내면 리다이렉트로 받는 길이 남는다.
+  process.stdout.write(outFile === null ? text : `${JSON.stringify({
+    out: outFile.path,
+    sha256: outFile.sha256,
+    counts: result.counts,
+    verifierTasks: (result.verifierTasks ?? []).length,
+  }, null, 2)}\n`)
 }
 
 /**
