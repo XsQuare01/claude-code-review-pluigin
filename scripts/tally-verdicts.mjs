@@ -27,10 +27,8 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { markedJson } from './lib/contract-blocks.mjs'
-import { validateVerdictPayload } from './lib/contract-validate.mjs'
 import { lastPhase, logPhase, requireStartedTimeline } from './lib/run-record.mjs'
-import { checkTaskVerdict, collectVerdicts } from './lib/verdicts.mjs'
+import { checkTaskVerdict, collectVerdicts, loadVerdictValidator } from './lib/verdicts.mjs'
 import { buildRetryPrompt } from './lib/verifier-tasks.mjs'
 
 // C-6B의 닫힌 목록이다. 목록 밖 값을 만나면 세지 않고 멈춘다 — 모르는 값을 0으로
@@ -142,17 +140,11 @@ const routed = targetsPath === undefined ? undefined : readJson(targetsPath, '--
 // 플러그인의 것이고, `--rules`를 주면 검증자가 받은 그 디렉터리를 쓴다.
 const manifests = () => {
   const rulesDir = flag('rules') ?? join(dirname(fileURLToPath(import.meta.url)), '..', 'review-rules')
-  let contract
   try {
-    contract = readFileSync(join(rulesDir, 'workflow-contract.md'), 'utf8')
+    return loadVerdictValidator(rulesDir)
   } catch (error) {
-    die(`workflow-contract.md를 읽지 못했다: ${rulesDir} — ${error.message}`)
+    die(error.message)
   }
-  const verdict = markedJson(contract, 'REVIEW_VERDICT_CONTRACT_V1')
-  const result = markedJson(contract, 'REVIEW_RESULT_CONTRACT_V1')
-  if (verdict.error) die(`workflow-contract.md: ${verdict.error}`)
-  if (result.error) die(`workflow-contract.md: ${result.error}`)
-  return payload => validateVerdictPayload(payload, verdict.value, result.value)
 }
 
 // 작업 목록 — bundle, isolated, 그다음 승격 순서가 정본 순서다.

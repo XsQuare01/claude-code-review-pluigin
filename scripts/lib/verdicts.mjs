@@ -1,3 +1,9 @@
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
+
+import { markedJson } from './contract-blocks.mjs'
+import { validateVerdictPayload } from './contract-validate.mjs'
+
 // 판정 파일을 읽는 유일한 자리.
 //
 // 같은 판정 파일을 두 스크립트가 읽는다 — `tally-verdicts.mjs`는 세고,
@@ -64,4 +70,25 @@ export function checkTaskVerdict(raw, candidateIds, validateVerdict) {
     if (repeated.length) problems.push(`같은 candidateId를 두 번 이상 판정했다: ${repeated.join(', ')} — 후보마다 판정은 하나다`)
   }
   return problems.length ? { problems } : { payload }
+}
+
+/**
+ * 판정 계약 검사기를 규칙 디렉터리에서 만든다.
+ *
+ * manifest는 `workflow-contract.md`에 있다. 검증자가 받은 그 디렉터리의 것을 써야 검증자가 본
+ * 계약과 검사하는 계약이 같다. `tally-verdicts.mjs`와 작업 대장(`review-tasks.mjs`)이 같은 검사를
+ * 쓴다 — 대장이 받은 판정을 집계가 거부하거나 그 반대가 되지 않게.
+ */
+export function loadVerdictValidator(rulesDir) {
+  let contract
+  try {
+    contract = readFileSync(join(rulesDir, 'workflow-contract.md'), 'utf8')
+  } catch (error) {
+    throw new Error(`workflow-contract.md를 읽지 못했다: ${rulesDir} — ${error.message}`)
+  }
+  const verdict = markedJson(contract, 'REVIEW_VERDICT_CONTRACT_V1')
+  const result = markedJson(contract, 'REVIEW_RESULT_CONTRACT_V1')
+  if (verdict.error) throw new Error(`workflow-contract.md: ${verdict.error}`)
+  if (result.error) throw new Error(`workflow-contract.md: ${result.error}`)
+  return payload => validateVerdictPayload(payload, verdict.value, result.value)
 }

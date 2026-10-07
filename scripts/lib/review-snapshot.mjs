@@ -73,17 +73,14 @@ const matchPlanned = (entry, modules) => {
 }
 
 /**
- * 모듈마다 상태를 정한다. 기록(`module.done`)과 수집(`collected.sources`)이 **둘 다** 성공을
- * 말해야 `ok`다.
+ * 모듈마다 이 실행의 적용 대상인지 정한다 — 스냅숏과 작업 대장(C-12)이 같은 답을 쓴다.
  *
- * 기록만 보면, 성공으로 끝났는데 검증 준비가 모으지 않은 모듈이 "검토됨"으로 남는다 —
- * 그 모듈의 지적은 리포트에 없는데도. 그래서 그 경우는 `missing`(`not-collected`)이다.
+ * 마지막 `modules.planned`의 `skipped`·`unknown`과 `run.start`의 선택 패스 설정으로 정한다.
+ * `scope`는 `applied`·`skipped`·`unknown`·`not-requested` 중 하나다. `planned`가 거짓이면
+ * 계획 기록이 없어 후보 전부를 적용 대상으로 본 것이다.
  */
-function moduleStates({ modules, events, collected, notes, start }) {
+export function moduleScope({ modules, events, start, notes = [] }) {
   const lastPlanned = events.filter(event => event?.phase === 'modules.planned').at(-1)
-  if (!lastPlanned) {
-    notes.push('modules.planned가 없어 후보 전부를 적용 대상으로 봤다 — 건너뛴 모듈이 있었다면 기록되지 않았다')
-  }
   const skipped = new Map()
   const unknown = new Map()
   for (const [list, target] of [[lastPlanned?.skipped, skipped], [lastPlanned?.unknown, unknown]]) {
@@ -96,20 +93,40 @@ function moduleStates({ modules, events, collected, notes, start }) {
       target.set(module.name, isObject(entry) ? entry : {})
     }
   }
-
-  const outcomes = moduleOutcomes(events)
-  const states = modules.map(module => {
-    const base = { name: module.name, kind: module.kind }
+  const scope = modules.map(module => {
     // 켜지 않은 선택 패스는 적용 대상이 아니다. "결과 없음"으로 세면 기본 설정으로 돈
     // 실행이 전부 부분 완료가 된다. 그래도 범위에서 빼지 않고 이유를 단 SKIPPED로 남긴다.
-    if (module.optIn && start?.[module.id] !== 'on') {
+    if (module.optIn && start?.[module.id] !== 'on') return { module, scope: 'not-requested' }
+    if (skipped.has(module.name)) return { module, scope: 'skipped', entry: skipped.get(module.name) }
+    if (unknown.has(module.name)) return { module, scope: 'unknown', entry: unknown.get(module.name) }
+    return { module, scope: 'applied' }
+  })
+  return { planned: Boolean(lastPlanned), scope }
+}
+
+/**
+ * 모듈마다 상태를 정한다. 기록(`module.done`)과 수집(`collected.sources`)이 **둘 다** 성공을
+ * 말해야 `ok`다.
+ *
+ * 기록만 보면, 성공으로 끝났는데 검증 준비가 모으지 않은 모듈이 "검토됨"으로 남는다 —
+ * 그 모듈의 지적은 리포트에 없는데도. 그래서 그 경우는 `missing`(`not-collected`)이다.
+ */
+function moduleStates({ modules, events, collected, notes, start }) {
+  const { planned, scope } = moduleScope({ modules, events, start, notes })
+  if (!planned) {
+    notes.push('modules.planned가 없어 후보 전부를 적용 대상으로 봤다 — 건너뛴 모듈이 있었다면 기록되지 않았다')
+  }
+
+  const outcomes = moduleOutcomes(events)
+  const states = scope.map(({ module, scope: where, entry }) => {
+    const base = { name: module.name, kind: module.kind }
+    if (where === 'not-requested') {
       if (outcomes.has(module.name) || collected.has(module.name)) {
         notes.push(`켜지 않은 선택 패스 ${module.name}의 기록이나 결과가 있다 — 이 실행은 --${module.id} on 없이 시작했으므로 모은 것으로 세지 않는다`)
       }
       return { ...base, state: 'skipped', reasonCode: 'not-requested', reason: `선택 패스 — 이 실행은 --${module.id} on 없이 시작했다` }
     }
-    if (skipped.has(module.name)) {
-      const entry = skipped.get(module.name)
+    if (where === 'skipped') {
       return {
         ...base,
         state: 'skipped',
@@ -117,8 +134,7 @@ function moduleStates({ modules, events, collected, notes, start }) {
         ...((entry.reason ?? entry.evidence) !== undefined ? { reason: String(entry.reason ?? entry.evidence) } : {}),
       }
     }
-    if (unknown.has(module.name)) {
-      const entry = unknown.get(module.name)
+    if (where === 'unknown') {
       return { ...base, state: 'unknown', ...((entry.reason ?? entry.evidence) !== undefined ? { reason: String(entry.reason ?? entry.evidence) } : {}) }
     }
     const outcome = outcomes.get(module.name)
