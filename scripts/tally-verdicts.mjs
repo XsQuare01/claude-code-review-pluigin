@@ -274,7 +274,9 @@ if (validateMode) {
  */
 const collectFromTasks = plan => {
   const validate = manifests()
-  const tasks = tasksOf(plan)
+  // 재확인 작업(C-13)의 판정은 이번 후보의 판정이 아니다. 교차검증 수치에 섞으면 대상 밖 판정으로
+  // 세어지거나, 이전 지적의 판정이 이번 지적의 유지·반박이 된다 — 따로 모은다(`collectRechecks`).
+  const tasks = tasksOf(plan).filter(task => task.route !== 'recheck')
   const found = []
   const missing = []
   const malformed = []
@@ -326,9 +328,45 @@ const collectFromTasks = plan => {
   return { found: payloads, missing, malformed, unpromoted, unrequested, corrected }
 }
 
+/**
+ * 재확인 작업(C-13)의 판정을 모은다. 이전 리뷰의 지적이 지금 코드에서 성립하는지에 대한 판정이다.
+ *
+ * 계약을 어긴 판정은 세지 않는다 — 그 이전 지적은 판정 없음으로 남고, 스냅숏이 재확인 필요로 그린다.
+ * 판정을 받지 못한 것을 해결로 읽지 않는다.
+ */
+const collectRechecks = plan => {
+  const validate = manifests()
+  const payloads = []
+  const missing = []
+  const malformed = []
+  for (const task of tasksOf(plan).filter(entry => entry.route === 'recheck')) {
+    if (!existsSync(task.verdict)) {
+      missing.push(task.taskId)
+      continue
+    }
+    const { payload, problems } = checkTaskVerdict(readFileSync(task.verdict, 'utf8'), task.candidateIds, validate)
+    if (problems) malformed.push(task.taskId)
+    else payloads.push(payload)
+  }
+  const count = disposition => payloads.filter(payload => payload.verdicts[0]?.disposition === disposition).length
+  return {
+    payloads,
+    missing,
+    malformed,
+    counts: {
+      requested: tasksOf(plan).filter(entry => entry.route === 'recheck').length,
+      upheld: count('upheld'),
+      rejected: count('rejected'),
+      needsContext: count('needs-context'),
+      noVerdict: missing.length + malformed.length,
+    },
+  }
+}
+
 let payloads
 let verdictsFile
 let correctedByFiles
+let recheckReport
 if (collectMode) {
   const { found, missing, malformed, unpromoted, unrequested, corrected } = collectFromTasks(routed)
   if (missing.length) {
@@ -349,6 +387,15 @@ if (collectMode) {
   // 순서를 다시 사람이 정하게 되므로, 모은 순서 그대로 한 파일에 남긴다.
   verdictsFile = join(dir, '.timing', `${run}.verdicts.json`)
   writeFileSync(verdictsFile, `${JSON.stringify({ tasks: payloads }, null, 2)}\n`, 'utf8')
+
+  const rechecked = collectRechecks(routed)
+  if (rechecked.counts.requested) {
+    if (rechecked.missing.length) process.stderr.write(`경고: 판정 파일이 없는 재확인 작업 ${rechecked.missing.length}개: ${rechecked.missing.join(', ')} — 그 이전 지적은 재확인 필요로 남는다\n`)
+    if (rechecked.malformed.length) process.stderr.write(`경고: 계약을 어긴 재확인 판정 ${rechecked.malformed.length}개를 세지 않았다: ${rechecked.malformed.join(', ')} — 그 이전 지적은 재확인 필요로 남는다\n`)
+    const file = join(dir, '.timing', `${run}.rechecks.json`)
+    writeFileSync(file, `${JSON.stringify({ tasks: rechecked.payloads }, null, 2)}\n`, 'utf8')
+    recheckReport = { ...rechecked.counts, file }
+  }
 } else {
   payloads = inputs.map(path => readJson(path, '--input'))
 }
@@ -390,7 +437,8 @@ let weakNote
 if (routed !== undefined) {
   // ID로 본다. 빠진 것과 대상 밖의 것이 함께 드러난다.
   const targets = targetIds(routed)
-  if (!targets.size) die(`--targets에 검증 대상이 없다: ${targetsPath} — prepare-verification.mjs의 출력을 넘긴다`)
+  // 이번 후보에 검증 대상이 없어도 재확인 작업(C-13)은 있을 수 있다. 그때 교차검증의 끝은 0건으로 닫는다.
+  if (!targets.size && !recheckReport) die(`--targets에 검증 대상이 없다: ${targetsPath} — prepare-verification.mjs의 출력을 넘긴다`)
 
   const strays = [...counts.judged].filter(id => !targets.has(id))
   if (strays.length) {
@@ -428,4 +476,5 @@ process.stdout.write(`${JSON.stringify({
   ...reported,
   ...(noVerdict === undefined ? {} : { noVerdict }),
   ...(verdictsFile === undefined ? {} : { verdictsFile }),
+  ...(recheckReport === undefined ? {} : { rechecks: recheckReport }),
 }, null, 2)}\n`)
