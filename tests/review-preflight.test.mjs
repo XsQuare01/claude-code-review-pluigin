@@ -185,6 +185,48 @@ test('시간·호출 한도와 죽은 시도로 볼 시간을 run.start에 남�
   assert.match(out.stdout, /이어 받음 +앞 실행 run-before/)
 })
 
+// 이전 리뷰와 비교하는 실행(C-13). 같은 저장소의 읽을 수 있는 스냅숏만 받는다.
+const previousSnapshot = (dir, overrides = {}) => {
+  const repo = scratchRepo()
+  const root = execFileSync('git', ['rev-list', '--max-parents=0', 'HEAD'], { cwd: repo.dir, encoding: 'utf8' }).trim()
+  const snapshot = {
+    schemaVersion: 1, kind: 'review-snapshot', createdAt: '2026-10-06T00:00:00.000Z',
+    run: { runId: 'run-before', name: 'n', workflow: 'full', pluginVersion: 'v', rules: 'r', rulesDigest: `sha256:${'a'.repeat(64)}`, host: 'h', startedAt: 'x' },
+    target: { repo: null, repoRoot: root, branch: 'b', base: 'main', mergeBase: repo.base, head: repo.base, worktree: 'clean', dirtyFiles: 0 },
+    drift: [], status: 'complete', scope: { modules: [], counts: { applied: 0, ok: 0, failed: 0, missing: 0, skipped: 0, unknown: 0 } },
+    verification: { state: 'ran' }, findings: [], openQuestions: [], inputs: [], notes: [],
+    ...overrides,
+  }
+  const path = join(dir, `before-${Object.keys(overrides).join('-') || 'plain'}.snapshot.json`)
+  writeFileSync(path, JSON.stringify(snapshot))
+  return path
+}
+
+test('--previous는 이전 리뷰의 스냅숏을 해시와 함께 run.start에 남긴다', t => {
+  const dir = freshDir(t)
+  const path = previousSnapshot(dir)
+  const out = preflight(dir, ['--previous', path])
+  assert.equal(out.status, 0, out.stderr)
+  assert.doesNotMatch(out.stderr, /닫힌 목록에 없다/)
+  const start = linesOf(dir)[0]
+  assert.equal(start.previousRunId, 'run-before')
+  assert.match(start.previousSha256, /^[0-9a-f]{64}$/)
+  assert.ok(start.previousSnapshot.endsWith('before-plain.snapshot.json'))
+  assert.match(out.stdout, /이전 리뷰 +run-before/)
+})
+
+test('--previous는 읽을 수 없거나 계약에 맞지 않는 스냅숏이면 시작하지 않는다 — 이전 지적 0건으로 읽지 않는다', t => {
+  const dir = freshDir(t)
+  assert.equal(preflight(dir, ['--previous', join(dir, 'missing.json')]).status, 2)
+  const broken = join(dir, 'broken.json')
+  writeFileSync(broken, '{"schemaVersion":1,"kind":"review-snapshot"')
+  const out = preflight(dir, ['--previous', broken])
+  assert.equal(out.status, 2)
+  assert.match(out.stderr, /--previous의 스냅숏을 쓸 수 없다/)
+  const other = previousSnapshot(dir, { run: { runId: 'r', name: 'n', workflow: 'fast', pluginVersion: 'v', rules: 'r', rulesDigest: `sha256:${'a'.repeat(64)}`, host: 'h', startedAt: 'x' } })
+  assert.match(preflight(dir, ['--previous', other]).stderr, /같은 워크플로우의 리뷰와만 비교한다/)
+})
+
 test('읽지 못하는 한도는 거부한다 — 잘못 읽은 한도는 한도가 없는 것보다 나쁘다', t => {
   for (const extra of [['--max-duration', '0'], ['--max-duration', '30 minutes'], ['--max-tasks', '0'], ['--max-tasks', '2.5'], ['--stale-after', 'soon']]) {
     const out = preflight(freshDir(t), extra)

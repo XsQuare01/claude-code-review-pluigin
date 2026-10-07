@@ -20,21 +20,25 @@
 //
 //   review-preflight.mjs --dir <리포트 디렉터리> --run <리포트 basename> \
 //     --rules <RULES_DIR> --workflow full [--base main] [--host claude-code] [--repo .] \
-//     [--correctness on|off] [--max-duration 30m] [--max-tasks 40] [--stale-after 20m] [--continues <runId>]
+//     [--correctness on|off] [--max-duration 30m] [--max-tasks 40] [--stale-after 20m] [--continues <runId>] \
+//     [--previous <이전 스냅숏>]
 //
 //   --max-duration·--max-tasks  이 실행의 시간·호출 한도(C-12). 작업 대장(review-tasks.mjs)이 지킨다
 //   --stale-after               끝을 받지 못한 시도를 죽은 것으로 볼 시간(기본 20m)
 //   --continues                 대상이 바뀌어 이어 가지 못한 앞 실행의 ID
+//   --previous                  비교할 이전 리뷰의 스냅숏(C-13). 같은 저장소의 것만 받는다
 //   --dry-run  계산만 하고 타임라인에 쓰지 않는다
 //
 // 값에 공백이 있으면 감싼다. `--dir "C:\Users\...\바탕 화면\Docs"`
 
 import { execFileSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { durationLimitScope, hostCapabilities } from './lib/hosts.mjs'
+import { parseSnapshot } from './lib/review-snapshot.mjs'
 import { currentTarget, newRunId, repoIdentity, rulesDigest } from './lib/run-identity.mjs'
 import { runNameProblem } from './lib/run-name.mjs'
 import { DEFAULT_STALE_AFTER_SEC, parseDuration } from './lib/task-ledger.mjs'
@@ -47,7 +51,7 @@ const die = message => {
   process.exit(2)
 }
 
-const VALUE_FLAGS = new Set(['dir', 'run', 'rules', 'workflow', 'base', 'host', 'repo', 'correctness', 'max-duration', 'max-tasks', 'stale-after', 'continues'])
+const VALUE_FLAGS = new Set(['dir', 'run', 'rules', 'workflow', 'base', 'host', 'repo', 'correctness', 'max-duration', 'max-tasks', 'stale-after', 'continues', 'previous'])
 const BOOL_FLAGS = new Set(['dry-run'])
 {
   const argv = process.argv.slice(2)
@@ -105,6 +109,22 @@ const maxDurationSec = limitOf('max-duration', parseDuration, '양의 시간(90,
 const maxTasks = limitOf('max-tasks', raw => (/^\d+$/.test(raw) && Number(raw) > 0 ? Number(raw) : null), '양의 정수')
 const staleAfterSec = limitOf('stale-after', parseDuration, '양의 시간(90, 90s, 30m, 2h)') ?? DEFAULT_STALE_AFTER_SEC
 const continues = flag('continues')
+
+// 비교할 이전 리뷰(C-13). 읽을 수 없는 스냅숏을 "이전 지적 0건"으로 읽으면 이전 지적이 전부 해결된
+// 것처럼 보인다 — 읽지 못하면 시작하지 않는다. 해시를 남겨 두어, 비교하는 단계가 같은 파일을 읽는지 본다.
+const previous = (() => {
+  const path = flag('previous')
+  if (path === undefined) return null
+  let text
+  try {
+    text = readFileSync(path, 'utf8')
+  } catch (error) {
+    die(`--previous의 스냅숏을 읽지 못했다: ${path} — ${error.message}`)
+  }
+  const parsed = parseSnapshot(text)
+  if (parsed.error) die(`--previous의 스냅숏을 쓸 수 없다: ${path} — ${parsed.error}`)
+  return { path: resolve(path), sha256: createHash('sha256').update(text).digest('hex'), snapshot: parsed.value }
+})()
 
 if (!dir || !run || !rules || !workflow) {
   die('usage: review-preflight.mjs --dir <리포트 디렉터리> --run <리포트 basename> --rules <RULES_DIR> --workflow <이름> [--base main] [--host 이름]')
@@ -203,6 +223,17 @@ const identity = (() => {
   }
 })()
 
+// 다른 저장소의 리뷰와는 비교하지 않는다. 같은 경로·같은 규칙이라도 다른 코드다.
+if (previous) {
+  const before = previous.snapshot.target
+  if (before.repoRoot !== identity.root) {
+    die(`--previous의 스냅숏은 다른 저장소의 리뷰다(root commit ${before.repoRoot} ≠ ${identity.root}) — 비교하지 않는다`)
+  }
+  if (previous.snapshot.run.workflow !== workflow) {
+    die(`--previous의 스냅숏은 ${previous.snapshot.run.workflow} 워크플로우의 것이다 — 같은 워크플로우의 리뷰와만 비교한다`)
+  }
+}
+
 const logged = (() => {
   if (has('dry-run')) return { ok: true, skipped: true }
   // `--set`이 아니라 `--data`로 넘긴다. `--set`은 숫자로 되돌아오는 값을 숫자로 바꾸므로
@@ -233,6 +264,7 @@ const logged = (() => {
     ...(maxDurationSec !== null ? { maxDurationSec } : {}),
     staleAfterSec,
     ...(continues !== undefined ? { continues } : {}),
+    ...(previous ? { previousSnapshot: previous.path, previousRunId: previous.snapshot.run.runId, previousSha256: previous.sha256 } : {}),
   }
   const args = [TIMELINE, '--dir', dir, '--run', run, '--phase', 'run.start', '--data', JSON.stringify(data)]
   try {
@@ -278,6 +310,11 @@ for (const module of optional) {
   out.push(`호스트        ${capabilities.name}${capabilities.known ? '' : ' (알려지지 않은 호스트 — 아무 능력도 가정하지 않는다)'}: 작업별 완료 알림 ${capabilities.perTaskNotification ? '있음' : '없음'} · 작업 중지 ${capabilities.cancel ? '가능' : '불가'}`)
   if (maxDurationSec !== null) out.push(`              ${durationLimitScope(capabilities)}`)
   if (continues !== undefined) out.push(`이어 받음     앞 실행 ${continues} — 대상이 바뀌어 새 실행으로 시작했다`)
+  if (previous) {
+    const before = previous.snapshot
+    out.push(`이전 리뷰     ${before.run.runId} (HEAD ${before.target.head.slice(0, 12)} · ${before.createdAt}) — 지적 ${before.findings.length}개와 이번 결과를 비교한다`)
+    if (before.status !== 'complete') out.push(`              이전 리뷰는 ${before.status === 'partial' ? '부분 완료' : '실패'}였다 — 그때 검토하지 않은 모듈의 지적은 비교에서 신규로 쓰지 않는다`)
+  }
 }
 if (identity.worktree !== 'clean') {
   out.push('')
