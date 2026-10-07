@@ -435,3 +435,59 @@ test('멈춤 이유가 목록 밖인 스냅숏은 계약 밖이다', () => {
   const snapshot = buildSnapshot(fixture())
   assert.deepEqual(snapshotProblems({ ...snapshot, dispatch: { ...snapshot.dispatch, halted: { reason: 'tired', at: 'x' } } }).length, 1)
 })
+
+// ── 이전 리뷰와의 비교(C-13) ───────────────────────────────────────────
+
+const previousSection = entries => ({
+  snapshot: { path: '/x/before.snapshot.json', sha256: 'f'.repeat(64), runId: 'run-before', head: 'e'.repeat(40), createdAt: 'x', status: 'complete' },
+  paths: 'known', claims: 'available', reused: 0,
+  counts: { current: { new: 0, linked: 1, recheck: 0 }, previous: { linked: 1, recheck: entries.length - 1 } },
+  entries,
+})
+
+test('이전 리뷰와 비교한 실행은 재확인 판정이 막는 코드를 댄 것만 해결 확인으로 남긴다', () => {
+  const routed = {
+    candidates: [candidate({ lineage: { status: 'linked', previousRef: 'run-before/04-3#1', lineageId: 'run-0/04-3#1' } })],
+    collected: { sources: ALL.filter(name => name !== 'math'), excludedFailed: [] },
+    previous: previousSection([
+      { ref: 'run-before/04-3#1', lineageId: 'run-0/04-3#1', ruleId: '04-3', status: 'linked', currentCandidateId: '04-3#1' },
+      { ref: 'run-before/06-1#1', lineageId: 'run-before/06-1#1', ruleId: '06-1', status: 'recheck', reason: 'absent', recheckTask: 'recheck-06-1-1' },
+      { ref: 'run-before/04-2#1', lineageId: 'run-before/04-2#1', ruleId: '04-2', status: 'recheck', reason: 'absent', recheckTask: 'recheck-04-2-1' },
+      { ref: 'run-before/04-4#1', lineageId: 'run-before/04-4#1', ruleId: '04-4', status: 'recheck', reason: 'absent', recheckTask: 'recheck-04-4-1' },
+    ]),
+  }
+  const rechecks = new Map([
+    ['run-before/06-1#1', { disposition: 'rejected', rebuttal: { kind: 'guard-exists' } }],
+    ['run-before/04-2#1', { disposition: 'rejected', rebuttal: { kind: 'other', note: '모르겠다' } }],
+  ])
+  const snapshot = buildSnapshot(fixture({ routed, rechecks }))
+  assert.deepEqual(snapshotProblems(snapshot), [])
+  assert.equal(snapshot.findings[0].lineageId, 'run-0/04-3#1')
+  assert.deepEqual(snapshot.findings[0].lineage, { status: 'linked', previousRef: 'run-before/04-3#1' })
+  assert.deepEqual(snapshot.comparison.counts, { persisting: 1, resolved: 1, recheck: 2 })
+  assert.deepEqual(snapshot.comparison.entries.map(entry => `${entry.status}:${entry.reason ?? entry.rebuttalKind ?? entry.basis}`),
+    ['persisting:linked', 'resolved:guard-exists', 'recheck:recheck-unlocated', 'recheck:no-recheck-verdict'])
+  const block = renderSnapshotMarkdown(snapshot)
+  assert.match(block, /\*\*이전 리뷰와 비교\*\* — 이전 실행 `run-before`\(HEAD `eeeeeeeeeeee`\)의 지적 4개: 미해결 1 · 해결 확인 1 · 재확인 필요 2/)
+  assert.ok(block.includes('| `run-before/06-1#1` | `06-1` | 해결 확인 | 재확인 판정이 막는 코드를 댔다(`guard-exists`) (처음 이유: 이번 리뷰가 같은 자리에서 다시 내지 않았다) |'), block)
+  assert.match(block, /재확인 검증자가 해결을 막는 코드의 위치를 대지 못했다/)
+  // 이어진 미해결 지적은 이번 상세 지적에 있으므로 표에 다시 싣지 않는다
+  assert.ok(!block.includes('run-before/04-3#1'))
+})
+
+test('위치를 댄 반박 없이 해결 확인인 스냅숏은 계약 밖이다', () => {
+  const routed = {
+    candidates: [candidate()],
+    collected: { sources: ALL.filter(name => name !== 'math'), excludedFailed: [] },
+    previous: previousSection([{ ref: 'run-before/06-1#1', lineageId: 'l', ruleId: '06-1', status: 'recheck', reason: 'absent' }]),
+  }
+  const snapshot = buildSnapshot(fixture({ routed }))
+  const forged = { ...snapshot, comparison: { ...snapshot.comparison, entries: [{ ref: 'run-before/06-1#1', lineageId: 'l', ruleId: '06-1', status: 'resolved' }], counts: { persisting: 0, resolved: 1, recheck: 0 } } }
+  assert.ok(snapshotProblems(forged).some(problem => /위치를 댄 반박 없이 해결 확인이다/.test(problem)))
+})
+
+test('비교하지 않은 실행의 지적도 실행 간 이름을 갖는다 — 처음 이름은 그 실행의 ref다', () => {
+  const snapshot = buildSnapshot(fixture())
+  assert.equal(snapshot.findings[0].lineageId, snapshot.findings[0].ref)
+  assert.equal(snapshot.comparison, undefined)
+})
