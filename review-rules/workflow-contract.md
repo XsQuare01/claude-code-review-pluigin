@@ -1133,13 +1133,17 @@ UTF-16 파일도 읽는다 — PowerShell 5.1의 `Set-Content -Encoding UTF8`은
 
 | `--phase` | 시점 | `--set`/`--data`에 담는 것 |
 |---|---|---|
-| `run.start` | 가장 먼저 | `host`, `rules`(해석된 RULES_DIR), `version`, `branch`, `changedFiles` · 무엇을 리뷰하는지(C-10): `runId`, `base`, `head`, `worktree`, `dirtyFiles`, `repo`, `repoRoot`, `rulesDigest` · 선택 패스를 켰는지: `correctness`(`on`/`off`, 선택 패스가 있는 워크플로우만) — preflight가 쓴다 |
+| `run.start` | 가장 먼저 | `host`, `rules`(해석된 RULES_DIR), `version`, `branch`, `changedFiles` · 무엇을 리뷰하는지(C-10): `runId`, `base`, `head`, `worktree`, `dirtyFiles`, `repo`, `repoRoot`, `rulesDigest` · 선택 패스를 켰는지: `correctness`(`on`/`off`, 선택 패스가 있는 워크플로우만) · 한도(C-12): `maxTasks`, `maxDurationSec`(준 것만), `staleAfterSec` · (새 실행으로 이어 받았으면) `continues` — preflight가 쓴다 |
+| `run.resume` | 멈춘 실행을 이어 갈 때 (`review-tasks.mjs resume`이 쓴다) | 새 구간의 `maxTasks`·`maxDurationSec`·`staleAfterSec`, 다시 잰 `head`·`worktree` |
 | `scope.done` | 범위 확정(C-4) | `files`, `excluded` |
 | `modules.planned` | 적용 모듈 확정(C-3) | `candidates`, `applied` · `skipped`, `unknown`(중첩, `--data-file`) |
-| `dispatch.start` | **첫 sub-agent를 실제로 띄운 직후** | `modules`, `inflight` |
-| `module.start` | **모듈 하나를 띄운 직후** | `module`, `attempt`, `taskId`, (재시도면) `retryOf` |
-| `module.done` | **모듈 하나가 끝날 때마다** (full은 결과 파일을 먼저 쓴 뒤) | `module`, `attempt`, `status`(**`ok`/`failed`만** — SKILL의 상태 이름 `COMPLETED`가 아니다), `findings`, `failureClass`, `taskId`, (있으면) `tokensIn`·`tokensOut` |
-| `dispatch.end` | 전부 수집 후 | `terminalOk`, `terminalFailed`(최종 모듈 단위) · `attemptsTotal`, `attemptsFailed`(시도 단위) — **이 넷은 스크립트가 `module.done`에서 센다.** 넘기지 않아도 되고, 넘긴 값이 기록과 다르면 경고하고 센 값을 남긴다 · `attemptFailureClasses`(중첩, `--data-file`), (있으면) `tokensIn`·`tokensOut` |
+| `dispatch.start` | **첫 sub-agent를 실제로 띄운 직후** (full은 작업 대장이 첫 시도를 내줄 때 쓴다) | `modules`, `inflight` |
+| `module.start` | **모듈 하나를 띄운 직후** (full은 작업 대장이 띄우기 **전에** 쓴다 — C-12) | `module`, `attempt`, `taskId`, (재시도면) `retryOf` · 대장이 쓰면 `claim` |
+| `module.done` | **모듈 하나가 끝날 때마다** (full은 작업 대장이 결과 파일을 쓴 뒤) | `module`, `attempt`, `status`(**`ok`/`failed`만** — SKILL의 상태 이름 `COMPLETED`가 아니다), `findings`, `failureClass`, `taskId`, (있으면) `tokensIn`·`tokensOut` · 대장이 받으면 `resultSha256` · 취소면 `cancelReason`(`max-duration`/`user`) |
+| `verify.start` / `verify.done` | 검증 작업의 시도 하나를 띄우기 전 / 끝을 받을 때 (작업 대장이 쓴다 — C-12) | `task`(routed의 작업 이름), `attempt`, `kind`, `claim` / `task`, `attempt`, `status`(`ok`/`failed`), `failureClass`, `taskId`, `resultSha256`, `cancelReason` |
+| `task.bind` | 띄운 시도에 호스트 작업 ID를 묶을 때 — 다시 남기면 살아 있다는 확인 (작업 대장) | `stage`(`module`/`verify`), `task`, `attempt`, `taskId` |
+| `dispatch.halt` | 한도나 사용자가 디스패치를 멈췄을 때 (작업 대장) | `reason`(`max-tasks`/`max-duration`/`user`), `stage`, `queuedTasks`(띄우지 못한 작업), `running` |
+| `dispatch.end` | 전부 수집 후 (full은 작업 대장이 모듈 단계가 끝났을 때 쓴다) | `terminalOk`, `terminalFailed`(최종 모듈 단위) · `attemptsTotal`, `attemptsFailed`(시도 단위) — **이 넷은 스크립트가 `module.done`에서 센다.** 넘기지 않아도 되고, 넘긴 값이 기록과 다르면 경고하고 센 값을 남긴다 · `attemptFailureClasses`(중첩, `--data-file`), (있으면) `tokensIn`·`tokensOut` |
 | `script.start` | `prepare-verification.mjs` 진입 직후 (스크립트가 직접 남긴다) | `script` |
 | `script.done` | `prepare-verification.mjs` 실행 후 | `ran`, `counts`(중첩, 스크립트가 직접 남긴다) |
 | `tool.start` | **도구 하나를 돌리기 직전** | `name`, (재시도면) `attempt` · 재현 명령이면 `candidateId`·`evidenceId`(C-11, `review-evidence.mjs`가 쓴다) |
@@ -1152,7 +1156,7 @@ UTF-16 파일도 읽는다 — PowerShell 5.1의 `Set-Content -Encoding UTF8`은
 
 **교차검증은 시작과 끝이 짝을 이루고, 판정을 입력으로 쓰는 단계(`synthesis.start`·`render.start` 중 먼저 온 것)보다 앞에서 끝난다.** `--check`는 시작 없이 남은 끝, 끝나지 않은 시작, 그 단계 뒤의 교차검증 기록을 문제로 짚는다. 같은 날 다른 실행은 `synthesis.start` 뒤에 판정 하나를 다시 받아 유지를 반박으로 바꿨다. 2026-09-30 실행이 시작 하나에 끝 둘을 남겼고, 두 번째 끝은 리포트를 조립하다 판정 하나를 다시 받아 집계를 바꾼 것이었다. 잘못 센 끝을 바로잡는 줄은 예외다 — 앞 끝 바로 뒤에 `note`를 달아 다시 쓴다(append 전용 기록의 정정).
 
-**`module.done`의 목록 밖 status도 같은 방식으로 바로잡는다.** 같은 모듈·같은 `attempt`의 `module.done`을 `ok`/`failed`와 사유를 적은 `note`로 한 줄 더 남기면, `--check`는 그것을 중복 끝이 아니라 정정으로 받는다. 상태는 정정 줄이 정본이고 구간의 시각은 앞 줄이 정본이다. 정정으로 받는 것은 앞 줄의 status가 목록 밖일 때뿐이다 — `failed`를 `ok`로 바꾸는 것은 어휘 정정이 아니라 재시도이고, `attempt`를 올려 남긴다. `prepare-verification.mjs --collect`는 마지막 `module.done`이 `ok`인 모듈만 모으고, 목록 밖 status와 `module.done` 없는 결과 파일은 거부한다.
+**`module.done`의 목록 밖 status도 같은 방식으로 바로잡는다.** 같은 모듈·같은 `attempt`의 `module.done`을 `ok`/`failed`와 사유를 적은 `note`로 한 줄 더 남기면, `--check`는 그것을 중복 끝이 아니라 정정으로 받는다. 상태는 정정 줄이 정본이고 구간의 시각은 앞 줄이 정본이다. 정정으로 받는 것은 앞 줄의 status가 목록 밖일 때뿐이다 — `failed`를 `ok`로 바꾸는 것은 어휘 정정이 아니라 재시도이고, `attempt`를 올려 남긴다. `prepare-verification.mjs --collect`는 최종 `module.done`이 `ok`인 모듈만 모으고, 목록 밖 status와 `module.done` 없는 결과 파일은 거부한다. 최종은 **가장 큰 `attempt`**의 줄이다 — 파일의 마지막 줄로 읽으면, 시도 1을 시도 2가 성공한 뒤에 정정한 줄이 그 성공을 덮는다(PR #87 리뷰에서 재현). `dispatch.end`의 수치도 같은 규칙으로 센다.
 
 **full 워크플로우의 `module.done`은 결과 파일 뒤에 온다.** producer 결과는 C-6A validation을 통과하면 곧바로 `<리포트 basename>.<module>.json`에 그대로 쓰이고, `prepare-verification.mjs --collect`가 그 파일에서 검증 입력을 모은다. 결과 파일 없이 `status: ok`를 남기면 스크립트가 경고한다 — 결과를 대화에만 들고 있던 2026-09-30 실행은 context 압축으로 그것을 잃었다.
 
@@ -1320,6 +1324,7 @@ phase 이름만 닫아 두었더니 실패 클래스가 실행마다 새로 지�
 | `malformed-output` | 계약 위반 출력, 교정 후에도 | 그렇다 |
 | `provider-model-not-found` | provider/model을 해석하지 못함 | 그렇다 |
 | `poll-timeout` | 결과 회수 폴링이 시한 내 끝나지 않음 | 그렇다 |
+| `cancelled` | 한도나 사용자가 멈춤(C-12) — `cancelReason`을 함께 남긴다. 같은 구간에서는 다시 띄우지 않는다 | 그렇다 |
 | `unknown` | 위 어디에도 해당하지 않음 | 그렇다 |
 
 **`provider-model-not-found`는 `providerID`와 `modelID`를 함께 남긴다.** 한
@@ -1545,11 +1550,12 @@ node <RULES_DIR>/../scripts/review-snapshot.mjs --dir <리포트 디렉터리> -
 
 | 필드 | 내용 |
 |------|------|
-| `run` | `runId`, 리포트 basename, 워크플로우, 플러그인 버전, 규칙 경로·digest, host, 시작 시각 |
+| `run` | `runId`, 리포트 basename, 워크플로우, 플러그인 버전, 규칙 경로·digest, host, 시작 시각, (이어 받았으면) `continues` |
 | `target` | `run.start`가 기록한 대상 |
 | `drift` | 스냅숏을 쓸 때 다시 잰 HEAD·작업 트리·규칙 digest 중 기록과 다른 것 |
 | `status` | `complete` · `partial` · `failed` |
 | `scope` | 모듈마다 `ok` · `failed` · `missing` · `skipped` · `unknown`과 사유, 그리고 그 수 |
+| `dispatch` | 시작된 시도 수, 한도(`maxTasks`·`maxDurationSec`, 없으면 `null`), 이어 간 구간 수(`resumed`), 마지막 구간의 멈춤(`halted` — `reason`·`at`, 없으면 `null`) (C-12) |
 | `verification` | `state`(`ran` · `disabled`) |
 | `findings` | 후보마다 `ref`, `candidateId`, 규칙 ID, `impact`·`confidence`, 출처, 위치, 위치 대조 결과, eligibility, route, disposition(C-6B), 근거가 있으면 근거 요약(C-11) |
 | `openQuestions` | 수집한 producer 결과의 openQuestion과 그 출처 |
@@ -1563,7 +1569,8 @@ node <RULES_DIR>/../scripts/review-snapshot.mjs --dir <리포트 디렉터리> -
   줄이 뒤 시도의 성공을 덮지 않는다
 - `missing`은 적용 대상인데 결과가 없는 것이다 — `module.done`이 없다(`no-record`),
   status가 `ok`도 `failed`도 아니다(`status-outside-list`), 성공으로 기록됐지만 수집되지
-  않았다(`not-collected`)
+  않았다(`not-collected`), 작업 대장이 디스패치를 멈춰 띄우지 못했다(`halted`, `haltReason`과 함께
+  — C-12). 한도에 닿아 취소된 모듈은 `failed`(`cancelled`)이고 `cancelReason`을 함께 남긴다
 - `skipped`·`unknown`은 마지막 `modules.planned`를 따른다. 그 줄이 없으면 후보 전부를
   적용 대상으로 본다 — 건너뛴 사실을 지어내지 않는다
 - 선택 패스(catalog의 `optIn`)는 `run.start`가 켰다고 말할 때만 적용 대상이다. 켜지
@@ -1696,6 +1703,153 @@ sha256으로 가리킨다. 지적의 본문·근거 서술은 싣지 않는다 �
   싣지 않는다
 - 파일 생성을 원하지 않는 요청(C-6)에서는 남기지 않는다
 
+## C-12. 작업 상태·한도·재개
+
+띄울 작업과 돌고 있는 작업이 무엇인지는 오케스트레이터 모델의 기억에만 있었다. 기억은 컨텍스트
+압축과 세션 재시작에 지워지고, 지워진 뒤의 모델은 남은 일을 추측한다. 2026-09-30의 한 실행은
+검증자 하나가 끝나지 않아 17건에 37시간을 멈췄다 — 무엇이 남았는지는 압축 요약에만 있었고, 끝나지
+않는 작업을 끝내는 주체가 없었다. 사용자는 리뷰에 시간을 얼마나 쓸지 정할 수도, 지금 무엇이
+도는지 볼 수도 없었다.
+
+이 플러그인은 작업을 띄우지 않는다 — 띄우고 기다리고 멈추는 것은 호스트다. 대신 **무엇을 띄울지
+정하는 자리**와 **결과를 받는 자리**를 스크립트가 갖는다(`scripts/review-tasks.mjs`, 작업 대장).
+C-9에서 시작 기록을 모델이 출력을 필요로 하는 자리로 옮긴 것과 같은 방법이다. 오늘 대장을 쓰는
+워크플로우는 `full` 하나다.
+
+### 작업과 시도
+
+**작업**은 적용 대상 모듈 하나(모듈 단계) 또는 검증 작업 하나(검증 단계 — bundle·isolated·승격)다.
+**시도**는 작업을 한 번 띄운 것이다. 재시도와 교정은 같은 작업의 새 시도이고, 시도는 작업마다
+**최대 2**다(처음 한 번과 재시도 한 번 — C-6A의 교정 재시도 1회, SKILL의 fresh retry 1회와 같다).
+취소된 시도는 이 횟수에 세지 않는다 — 작업이 스스로 실패한 것이 아니다.
+
+| 상태 | 뜻 |
+|------|-----|
+| `queued` | 띄울 차례를 기다린다. 시도가 남은 실패 작업도 여기다 |
+| `running` | 띄웠고 끝을 받지 않았다 |
+| `succeeded` | 결과를 받았다 |
+| `failed` | 결과가 왔지만 쓸 수 없다(`malformed-output` 등) — 시도를 다 썼다 |
+| `unavailable` | 호스트에서 결과를 얻지 못했다(`no-start`·`task-not-found`·`inactivity-timeout`·`queue-expiry`·`empty-result` 등) — 시도를 다 썼다 |
+| `cancelled` | 한도나 사용자가 멈췄다. 그 구간에서는 다시 띄우지 않는다 — 새 구간(아래 `재개`)에서는 다시 차례가 온다 |
+
+**상태는 따로 저장하지 않는다.** 타임라인(C-9)의 `module.start`·`module.done`·`verify.start`·
+`verify.done`·`task.bind`를 접어 계산한다(`scripts/lib/task-ledger.mjs`). 한 시도 안에서는 나중 줄,
+시도 사이에서는 가장 큰 번호가 정본이다 — 앞 시도를 나중에 정정한 줄이 뒤 시도의 성공을 덮지
+않는다. 같은 사실을 두 파일에 두면 둘이 어긋날 때 어느 쪽이 정본인지가 다시 문제가 되므로, 실행
+기록 하나에서 계산한다. 그래서 프로세스가 다시 떠도 같은 기록을 접으면 같은 상태가 나온다.
+
+**결과 파일이 있다는 것만으로 상태를 정하지 않는다.** 판정 파일이 없다는 것은 "안 띄웠다"·"돌고
+있다"·"다 시도했지만 못 받았다" 중 무엇인지 말하지 않는다. 앞의 둘을 같은 "남은 작업"으로 내면
+돌고 있는 작업을 다시 띄우고, 셋째를 남은 작업으로 두면 집계가 영영 시작되지 않는다.
+
+### 대장 — `review-tasks.mjs`
+
+| 명령 | 하는 일 |
+|------|---------|
+| `next --stage module\|verify` | 띄워도 되는 시도를 정하고, **띄우기 전에** 그 시도의 시작(`module.start`·`verify.start`)을 남긴다. 시도마다 결과를 쓸 자리(`resultPath`)와, 검증이면 프롬프트 경로를 준다. 죽은 시도를 끝내고, 한도를 지키고, 모듈 단계의 `dispatch.start`·`dispatch.end`도 남긴다 |
+| `bind` | 띄운 시도에 호스트의 작업 ID를 묶는다(`task.bind`). 다시 부르면 그 작업이 아직 살아 있다는 확인이다 |
+| `done` | 끝 알림 하나를 받는다. 받으면 결과를 정해진 자리에 쓰고 끝(`module.done`·`verify.done`)을 남긴다 |
+| `cancel --task\|--all --reason user` | 사용자가 멈춘 시도를 취소로 끝낸다. `--all`은 디스패치도 멈춘다 |
+| `status [--json]` | 단계마다 상태별 수, 돌고 있는 시도와 소식 없는 시간, 멈춘 이유, 한도. JSON과 사람용 요약은 같은 계산에서 나온다 |
+| `resume` | 대상이 그대로인지 보고 이어 간다(아래 `재개`) |
+
+**같은 시도를 두 번 내주지 않는다.** `next`가 시작을 먼저 남기므로, 다음 호출은 그 시도가 돌고
+있다고 본다 — 사용자 메시지에 깨어나 다시 물어도, 알림이 두 번 와도, 세션이 다시 떠도 같다. 결정과
+기록 사이에 다른 호출이 끼지 않게 잠금(`.timing/<run>.tasks.lock`) 안에서 한다. 시작을 기록하지
+못하면 아무것도 내주지 않는다.
+
+**받는 것은 지금 돌고 있는 그 시도의 결과뿐이다.**
+
+- 같은 끝을 다시 받으면(`duplicate`) 기록하지 않는다 — 중복 알림을 두 번 세지 않는다
+- 취소됐거나 죽은 것으로 끝난 시도, 새 시도에 밀린 시도의 응답(`late`)은 받지 않는다(종료 코드 3).
+  결과 자리에 쓰지 않으므로 늦게 온 응답이 새 시도의 결과를 덮지 않는다
+- 이 실행에 묶이지 않은 호스트 작업이나 띄운 적 없는 작업(`unknown`)도 받지 않는다 — 다른 실행이
+  띄운 작업의 응답이 이 실행의 결과가 되지 않는다
+- 호스트 작업 ID로 알리면 어느 시도인지는 오케스트레이터의 기억이 아니라 호스트의 알림이 정한다
+- 받은 내용의 sha256을 끝 줄(`resultSha256`)에 남긴다. `prepare-verification.mjs --collect`는 결과
+  파일이 그 해시와 다르면 모으지 않는다 — 대장이 받은 뒤에 파일이 바뀐 것이다
+
+**받은 결과가 계약에 맞지 않으면 실패로 끝낸다(종료 코드 1).** 모듈 결과는 JSON으로 읽히는지,
+검증 판정은 `REVIEW_VERDICT_CONTRACT_V1`과 요청한 후보 집합에 맞는지를 `tally-verdicts.mjs`와 같은
+함수로 본다. 맞지 않는 응답은 정해진 자리에 쓰지 않고 `malformed-output`으로 끝낸다. 시도가 남았으면
+`next`가 교정 시도를 내준다 — 검증 작업이면 교정 프롬프트(`<taskId>.retry.md`)를 대장이 만든다.
+교정도 어기면 그 작업은 끝이고, 그 후보는 판정 없음(C-6B `verification-unavailable`)이다.
+`tally-verdicts.mjs --validate`도 대장의 기록을 보고, 시도를 다 쓴 작업(`exhausted`)과 돌고 있는
+작업(`running`)을 남은 작업과 가른다 — 교정까지 어긴 작업이 집계를 영영 막지 않는다.
+
+**끝 알림 없이 `staleAfterSec`를 넘긴 시도는 `next`가 죽은 것으로 끝낸다**(`inactivity-timeout`).
+그 시도의 결과가 나중에 와도 받지 않고, 시도가 남았으면 새 시도를 띄운다. 시계는 시도의 시작
+또는 마지막 `bind`부터 잰다.
+
+### 한도
+
+preflight가 `run.start`에 남긴다. 주지 않은 한도는 없다 — 기본값을 지어 넣으면 사용자가 정하지
+않은 이유로 리뷰가 멈춘다. 읽지 못하는 값은 거부한다.
+
+| 플래그 | 필드 | 뜻 |
+|--------|------|-----|
+| `--max-tasks N` | `maxTasks` | 띄운 시도의 수. **재시도·교정·승격도 하나씩이다** — 띄운 뒤 결과를 못 받아도 호출은 썼다 |
+| `--max-duration 30m` | `maxDurationSec` | 구간이 열린 뒤 지난 시간 |
+| `--stale-after 20m` | `staleAfterSec` | 소식 없는 시도를 죽은 것으로 볼 시간. 기본 20분 — 모듈 하나가 평균 4~5분 걸린 실측의 네 배쯤이다 |
+
+**한도에 닿으면 새로 띄우지 않는다.** `next`가 `dispatch.halt`에 이유(`max-tasks`·`max-duration`)와
+띄우지 못한 작업을 남긴다. 시간 상한이 지났으면 돌고 있던 시도도 취소(`cancelled`, `cancelReason
+max-duration`)로 끝낸다 — 그 결과는 받지 않는다. 호출 한도는 돌고 있는 시도를 취소하지 않는다(그
+시도의 호출은 한도 안에서 쓴 것이다). 이미 받은 결과는 그대로 모으고 렌더한다.
+
+**띄우지 못한 범위는 검토하지 않은 범위다.** 스냅숏은 그 모듈을 `missing`(`halted`)으로, 취소된
+모듈을 `failed`(`cancelled`)로 두고, 그 실행은 `partial`이다 — 완료나 통과로 쓰지 않는다(C-8).
+멈춘 뒤 띄우지 못한 검증 작업의 후보는 판정 없음이다.
+
+**토큰·금액 한도는 없다.** 그 한도의 뜻은 사용량을 어디까지 세는지(자식 에이전트·재시도·캐시 포함
+여부)에 달렸는데, 그 정의가 아직 없다(#78). 측정 범위가 정해진 호스트에만 더한다. 사용량을 재지
+못한 것을 0으로 세지 않는다.
+
+### 호스트가 지킬 수 있는 것
+
+대장은 상한을 **대장을 부를 때** 검사한다. 그 사이에 상한이 지나도 오케스트레이터를 깨워 줄 것이
+없으면 다음 호출까지 아무도 모른다 — 그래서 시간 상한은 강제 상한이 아니다. 호스트마다 무엇을 해
+줄 수 있는지는 `scripts/lib/hosts.mjs`가 선언하고, 확인한 것만 참으로 둔다.
+
+| 호스트 | 작업별 완료 알림 | 작업 중지 | 작업별 시간 상한 | 근거 |
+|--------|------------------|-----------|------------------|------|
+| `claude-code` | 있다 | 있다 | 없다 | background 작업 완료 알림과 작업 중지 도구 |
+| `opencode` | **없다** — 띄운 작업이 전부 끝나야 깨운다 | 확인하지 못했다 | 확인하지 못했다 | 2026-10-02 oh-my-openagent 세션 기록 |
+| 그 밖 | 없다고 본다 | 없다고 본다 | 없다고 본다 | — |
+
+작업을 멈출 수 없는 호스트에서 시간 상한은 **새 작업을 막고 늦은 결과를 받지 않을 뿐**이다 — 작업은
+끝날 때까지 돌 수 있다. preflight와 `status`가 그 문장을 함께 낸다. 지키지 못하는 상한을 지킨다고
+쓰지 않는다.
+
+### 재개
+
+**깨어날 때마다 기억이 아니라 대장에 묻는다** — 작업 완료 알림, 사용자 메시지, 컨텍스트 압축 뒤,
+같은 실행에서 스킬을 다시 불렀을 때. `status`가 남은 일을 말하고 `next`가 다음 시도를 낸다.
+
+`resume`은 이어 가기 전에 **대상이 그대로인지** 본다(C-10의 HEAD·작업 트리 fingerprint를 다시
+잰다). 바뀌었으면 이 실행을 이어 가지 않는다(종료 코드 3) — 앞에서 받은 결과는 바뀌기 전의 코드에
+대한 것이라, 이어서 받는 결과와 한 리포트에 섞으면 어느 시점의 리뷰인지 말할 수 없다. 새 `--run`
+이름으로 preflight를 다시 돌리고 `--continues <앞 실행 ID>`로 앞 실행을 가리킨다(`run.start.continues`,
+스냅숏의 `run.continues`).
+
+대상이 그대로이고 **한도에 닿아 멈춘 실행이거나 새 한도를 줬을 때만** `run.resume`으로 새 한도
+구간을 연다. 앞 구간에서 띄우지 못한 작업과 **취소된 작업이 다시 차례가 된다** — 취소를 끝으로만
+두면 이어서 돌려도 취소된 범위는 영영 검토되지 않는다. 호출 수와 시간은 구간마다 다시 잰다 — 다음 날 이어 가는 실행을 `run.start`부터 재면
+이어 가자마자 상한이 지나 있다. 압축 뒤에 다시 들어온 것만으로는 구간을 열지 않는다 — 그러면 한도가
+매번 처음부터 다시 잰다.
+
+같은 실행을 이어 가는 중에 `prepare-verification.mjs`를 다시 돌리지 않는다. 이번 교차검증에서
+대장이 검증 작업을 이미 내줬으면(`verify.start`) 판정 파일이 없어도 그 스크립트가 거부한다 —
+검증자는 돌고 있을 수 있고, 프롬프트를 지우고 다시 만들면 돌고 있는 작업과 작업 목록이 어긋난다.
+검증을 처음부터 다시 하면(`--discard-verdicts`, 새 `crossverify.start`) 앞 라운드의 시도는 이번
+라운드의 상태가 아니다.
+
+### `--check`가 보는 것
+
+- 구간마다 시작된 시도가 `maxTasks`를 넘었으면 문제다 — 대장을 거치지 않고 띄운 것이다
+- `dispatch.halt` 뒤에 같은 구간에서 시작된 시도가 있으면 문제다
+- 같은 검증 작업·시도가 한 라운드에서 두 번 시작되거나 끝났으면 문제다
+
 ## 워크플로우별 차이 선언
 
 각 SKILL 문서는 이 계약을 참조한 뒤 아래 항목 중 자기 모드에서 달라지는 것만 적는다.
@@ -1709,3 +1863,4 @@ sha256으로 가리킨다. 지적의 본문·근거 서술은 싣지 않는다 �
 | 모듈 필터 | 없음 | `default` — `--module` |
 | 결과 스냅숏 | 없음 | `full` — `review-snapshot.mjs` (C-10) |
 | 재현 근거 | 없음 | `full` — `review-evidence.mjs` (C-11) |
+| 작업 상태·한도·재개 | 없음 | `full` — `review-tasks.mjs` (C-12) |

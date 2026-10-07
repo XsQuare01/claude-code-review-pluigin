@@ -327,6 +327,22 @@ A finding says why something is wrong; it did not say how that was checked. Whet
 
 The contract is `workflow-contract.md` C-11.
 
+## Task ledger, limits and resume (2.19.0)
+
+Which producers and verifiers were running, and which were still due, used to live only in the orchestrating model's memory. Memory does not survive context compaction or a restarted session: one run stalled for 37 hours on a single verifier that never finished, and what was left to do existed only in a compaction summary. Users could not bound how long a review ran or see what it was doing.
+
+The plugin still does not launch tasks — the host does. `/code-review-full` now asks `scripts/review-tasks.mjs` (the task ledger) what to launch and hands it every result.
+
+- **No double launch, no double count.** `next` records an attempt's start *before* the orchestrator launches it, under a lock, so asking again after a user message, a duplicate notification or a restart returns nothing new. `done` accepts a result only for the attempt that is currently running; a duplicate notification is a no-op, and a late response from a cancelled, expired or superseded attempt is refused (exit 3) instead of overwriting the newer result. The ledger writes the result file itself and records its sha256; `prepare-verification.mjs --collect` refuses a result file that no longer matches.
+- **State from the run record.** Task states (`queued → running → succeeded | failed | unavailable | cancelled`) are folded from the run timeline, not stored separately; the final state of a module is its highest attempt, not the last line of the file (this also fixes the collection and `dispatch.end` counting bug found in the PR #87 review).
+- **Retries end.** A task has at most two attempts; an attempt cancelled by a limit or the user does not count, and a cancelled task comes back in the next segment. A verifier whose correction also breaks the verdict contract ends as failed, and `tally-verdicts.mjs --validate` reports it as `exhausted` instead of blocking aggregation forever.
+- **Limits, only when given.** `review-preflight.mjs --max-tasks N` counts launched attempts, retries, corrections and promotions included; `--max-duration 30m` is measured from the start of the current segment; `--stale-after 20m` (the default) ends an attempt that sent no completion for that long and launches its retry. When a limit is reached, `next` records `dispatch.halt` with the tasks it did not launch; results already received are still collected and rendered, and the snapshot marks the unlaunched modules `missing` (`halted`), so the run is partial — never complete or a pass.
+- **What a time limit can promise depends on the host.** `scripts/lib/hosts.mjs` declares only verified capabilities: Claude Code notifies per task and can stop a task; OpenCode with oh-my-openagent wakes the orchestrator only when every launched task has finished, and stopping a task is unverified. The limit is checked when the ledger is called, so it is not a hard cap; on a host that cannot stop tasks it only stops new launches and refuses late results. Preflight and `status` say so.
+- **Resume checks the target first.** `review-tasks.mjs resume` measures `HEAD` and the working tree again. If either changed, it refuses to continue the run and asks for a new run started with `--continues <previous runId>`; otherwise, for a halted run or new limits, it opens a new limit segment (`run.resume`).
+- **No token or cost limit yet.** Its meaning depends on what usage counts (children, retries, cache) — issue #78 — and unmeasured usage is never treated as zero.
+
+The contract is `workflow-contract.md` C-12.
+
 ## Applicability metadata
 
 `review-rules/catalog.json` records **when** a module applies — required profile (FSD, Tailwind, RSC, Electron, TanStack Query, server code, contract provider), minimum React version, which workflows load it, and which individual rules carry a narrower gate than their module. The Markdown modules stay canonical for **what** a rule says; the catalog never generates documentation and never restates rule text.
