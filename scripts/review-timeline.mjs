@@ -29,6 +29,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs'
 import { basename, dirname, extname, join, resolve } from 'node:path'
 
 import { moduleOutcomes } from './lib/run-record.mjs'
+import { CANCEL_REASONS, HALT_REASONS, STAGES } from './lib/task-ledger.mjs'
 import { runNameProblem } from './lib/run-name.mjs'
 
 const die = message => {
@@ -131,13 +132,24 @@ const PHASES = new Map([
   ['run.start', {
     required: ['host', 'rules', 'version', 'branch', 'changedFiles'],
     structured: [],
-    allowed: ['candidates', 'workflow', 'mergeBase', 'os', 'runId', 'base', 'head', 'worktree', 'dirtyFiles', 'repo', 'repoRoot', 'rulesDigest', 'correctness'],
+    allowed: ['candidates', 'workflow', 'mergeBase', 'os', 'runId', 'base', 'head', 'worktree', 'dirtyFiles', 'repo', 'repoRoot', 'rulesDigest', 'correctness',
+      'maxTasks', 'maxDurationSec', 'staleAfterSec', 'continues'],
   }],
+  // 한도에 닿아 멈춘 실행을 이어 갈 때 새 한도 구간을 연다(C-12). 대상이 그대로인지 확인한 값을 함께 남긴다.
+  ['run.resume', { required: [], structured: [], allowed: ['maxTasks', 'maxDurationSec', 'staleAfterSec', 'head', 'worktree'] }],
   ['scope.done', { required: ['files', 'excluded'], structured: [], allowed: [] }],
   ['modules.planned', { required: ['candidates', 'applied'], structured: ['skipped', 'unknown'], allowed: [] }],
   ['dispatch.start', { required: ['modules', 'inflight'], structured: [], allowed: [] }],
-  ['module.start', { required: ['module', 'attempt'], structured: [], allowed: ['taskId', 'retryOf'] }],
-  ['module.done', { required: ['module', 'attempt', 'status'], structured: [], allowed: ['findings', 'failureClass', 'taskId'] }],
+  ['module.start', { required: ['module', 'attempt'], structured: [], allowed: ['taskId', 'retryOf', 'claim'] }],
+  ['module.done', { required: ['module', 'attempt', 'status'], structured: [], allowed: ['findings', 'failureClass', 'taskId', 'resultSha256', 'cancelReason'] }],
+  // 검증 작업도 시도마다 시작과 끝을 남긴다(C-12). 남기지 않던 때 멈춘 검증자 하나와 task-not-found
+  // 재시도 넷이 기록 어디에도 없었다. `task`는 routed 출력의 작업 이름이고 `taskId`는 호스트의 작업 ID다.
+  ['verify.start', { required: ['task', 'attempt'], structured: [], allowed: ['kind', 'claim', 'taskId'] }],
+  ['verify.done', { required: ['task', 'attempt', 'status'], structured: [], allowed: ['failureClass', 'taskId', 'resultSha256', 'cancelReason'] }],
+  // 띄운 시도에 호스트의 작업 ID를 묶는다. 같은 줄을 다시 남기면 그 작업이 아직 살아 있다는 확인이다.
+  ['task.bind', { required: ['stage', 'task', 'attempt', 'taskId'], structured: [], allowed: [] }],
+  // 한도나 사용자가 디스패치를 멈췄다. 띄우지 못한 작업이 미검토 범위다.
+  ['dispatch.halt', { required: ['reason'], structured: ['queuedTasks'], allowed: ['stage', 'running'] }],
   ['dispatch.end', { required: ['terminalOk', 'terminalFailed', 'attemptsTotal', 'attemptsFailed'], structured: ['attemptFailureClasses'], allowed: [] }],
   ['script.start', { required: [], structured: [], allowed: ['script'] }],
   ['script.done', { required: ['ran'], structured: ['counts'], allowed: [] }],
@@ -202,7 +214,10 @@ const undeclaredKeys = (phase, data) => {
  * `failureClass`와 같은 이유로 줄은 거부하지 않는다. 경고하고 `--check`가 짚는다.
  */
 const CLOSED_VALUES = new Map([
-  ['module.done', { status: ['ok', 'failed'] }],
+  ['module.done', { status: ['ok', 'failed'], cancelReason: CANCEL_REASONS }],
+  ['verify.done', { status: ['ok', 'failed'], cancelReason: CANCEL_REASONS }],
+  ['task.bind', { stage: STAGES }],
+  ['dispatch.halt', { reason: HALT_REASONS }],
 ])
 
 const outsideClosedValues = (phase, data) => Object.entries(CLOSED_VALUES.get(phase) ?? {})
@@ -245,6 +260,7 @@ const FAILURE_CLASSES = new Set([
   'none', 'malformed-corrected',
   'no-start', 'task-not-found', 'inactivity-timeout', 'queue-expiry', 'empty-result',
   'skill-injection-invalid', 'malformed-output', 'provider-model-not-found', 'poll-timeout',
+  'cancelled',
   'unknown',
 ])
 
@@ -754,6 +770,57 @@ if (has('check')) {
     if (tools.unfinished.length) {
       notes.push(`끝을 남기지 않은 도구 ${tools.unfinished.length}개: ${tools.unfinished.map(name => `\`${name}\``).join(', ')}`)
     }
+  }
+
+  // 작업 대장(C-12)의 한도와 멈춤이 지켜졌는지 본다.
+  //
+  // 대장을 거치면 한도를 넘겨 띄울 수 없다. 그런데 오케스트레이터가 대장 없이 `module.start`를 직접
+  // 남기면 한도는 문서의 숫자일 뿐이다 — 그 사실이 기록에서 드러나야 "한도 30개"가 무엇을 말하는지
+  // 믿을 수 있다. 구간(`run.start`·`run.resume`)마다 센다.
+  {
+    const segments = []
+    events.forEach((event, at) => {
+      if (event.phase === 'run.start' || event.phase === 'run.resume') segments.push({ at, event })
+    })
+    segments.forEach((segment, index) => {
+      const end = segments[index + 1]?.at ?? events.length
+      const slice = events.slice(segment.at, end)
+      const starts = slice.filter(event => event.phase === 'module.start' || event.phase === 'verify.start')
+      const max = segment.event.maxTasks
+      if (Number.isInteger(max) && max > 0 && starts.length > max) {
+        problems.push(`호출 한도를 넘겨 띄웠다: \`${segment.event.phase}\`(seq ${segment.event.seq})의 maxTasks는 ${max}인데 그 구간에 시도 ${starts.length}개가 시작됐다. 한도는 review-tasks.mjs next가 지킨다 — 대장을 거치지 않고 띄우면 한도는 숫자일 뿐이다`)
+      }
+      const halt = slice.find(event => event.phase === 'dispatch.halt')
+      if (halt) {
+        const after = slice.filter(event => (event.phase === 'module.start' || event.phase === 'verify.start') && event.seq > halt.seq)
+        if (after.length) {
+          problems.push(`디스패치를 멈춘 뒤에 띄웠다: \`dispatch.halt\`(seq ${halt.seq}, ${halt.reason}) 뒤에 시작된 시도 ${after.length}개(seq ${after.map(event => event.seq).join(', ')}). 이어 가려면 review-tasks.mjs resume으로 새 구간을 연다`)
+        }
+      }
+    })
+  }
+
+  // 검증 작업도 시도마다 한 쌍이다. 같은 시도가 두 번 시작되거나 끝났으면 어느 끝이 어느 시작의
+  // 것인지 갈리지 않는다 — 대장이 막으려는 중복 실행·중복 집계가 기록에 남은 것이다.
+  {
+    const twice = new Set()
+    const doubled = new Set()
+    const startSeen = new Set()
+    const doneSeen = new Set()
+    for (const event of events) {
+      // 검증을 처음부터 다시 하면(`crossverify.start`가 새로 남으면) 같은 작업 이름이 다시 뜬다.
+      if (event.phase === 'crossverify.start') {
+        startSeen.clear()
+        doneSeen.clear()
+      }
+      if (event.phase !== 'verify.start' && event.phase !== 'verify.done') continue
+      const key = `${event.task}#${event.attempt ?? '?'}`
+      const seen = event.phase === 'verify.start' ? startSeen : doneSeen
+      if (seen.has(key)) (event.phase === 'verify.start' ? twice : doubled).add(key)
+      seen.add(key)
+    }
+    if (twice.size) problems.push(`같은 검증 작업·시도가 두 번 시작됐다: ${[...twice].join(', ')}`)
+    if (doubled.size) problems.push(`같은 검증 작업·시도가 두 번 끝났다: ${[...doubled].join(', ')}`)
   }
 
   if (malformed) notes.push(`읽지 못한 줄 ${malformed}개`)

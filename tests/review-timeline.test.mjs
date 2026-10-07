@@ -1932,3 +1932,95 @@ test('dispatch.end에 넘긴 수치가 기록과 다르면 경고하고 기록�
   assert.equal(linesOf(dir).at(-1).terminalOk, 2)
 })
 
+// ── 작업 대장(C-12)의 기록 ────────────────────────────────────────────
+//
+// 대장을 거치면 한도를 넘겨 띄울 수 없다. 오케스트레이터가 대장 없이 module.start를 직접 남기면 한도는
+// 문서의 숫자일 뿐이다 — 그 사실이 기록에서 드러나야 "한도 N개"를 믿을 수 있다.
+
+const ledgerRun = (limits, middle) => ([
+  { at: '2026-10-07T00:00:00.000Z', seq: 1, phase: 'run.start', host: 'claude-code', rules: 'r', version: '2.19.0', branch: 'b', changedFiles: 1, candidates: 2, staleAfterSec: 1200, ...limits },
+  { at: '2026-10-07T00:00:05.000Z', seq: 2, phase: 'modules.planned', candidates: 2, applied: 2 },
+  { at: '2026-10-07T00:00:06.000Z', seq: 3, phase: 'dispatch.start', modules: 2, inflight: 4 },
+  ...middle,
+  { at: '2026-10-07T00:10:00.000Z', seq: 90, phase: 'dispatch.end', terminalOk: 2, terminalFailed: 0, attemptsTotal: 2, attemptsFailed: 0 },
+  { at: '2026-10-07T00:20:00.000Z', seq: 91, phase: 'run.end', verdict: 'WARN' },
+])
+const twoModules = [
+  { at: '2026-10-07T00:00:07.000Z', seq: 4, phase: 'module.start', module: '01-fsd', attempt: 1, claim: 'run/module/01-fsd#1' },
+  { at: '2026-10-07T00:00:07.000Z', seq: 5, phase: 'module.start', module: '02-type', attempt: 1, claim: 'run/module/02-type#1' },
+  { at: '2026-10-07T00:00:08.000Z', seq: 6, phase: 'task.bind', stage: 'module', task: '01-fsd', attempt: 1, taskId: 'bg_1' },
+  { at: '2026-10-07T00:01:00.000Z', seq: 7, phase: 'module.done', module: '01-fsd', attempt: 1, status: 'ok', taskId: 'bg_1', resultSha256: 'a'.repeat(64) },
+  { at: '2026-10-07T00:01:00.000Z', seq: 8, phase: 'module.done', module: '02-type', attempt: 1, status: 'ok' },
+]
+
+test('--check는 대장이 남기는 단계와 필드를 표 밖이라고 짚지 않는다', t => {
+  const dir = freshDir(t)
+  plant(dir, ledgerRun({ maxTasks: 4, maxDurationSec: 1800 }, [
+    ...twoModules,
+    { at: '2026-10-07T00:02:00.000Z', seq: 9, phase: 'crossverify.start', targets: 1 },
+    { at: '2026-10-07T00:02:01.000Z', seq: 10, phase: 'verify.start', task: 'bundle-1', attempt: 1, kind: 'bundle', claim: 'run/verify/bundle-1#1' },
+    { at: '2026-10-07T00:03:00.000Z', seq: 11, phase: 'verify.done', task: 'bundle-1', attempt: 1, status: 'failed', failureClass: 'cancelled', cancelReason: 'max-duration' },
+    { at: '2026-10-07T00:03:00.000Z', seq: 12, phase: 'dispatch.halt', reason: 'max-duration', stage: 'verify', queuedTasks: [], running: 0 },
+    { at: '2026-10-07T00:04:00.000Z', seq: 13, phase: 'crossverify.end', upheld: 0, rejected: 0, needsContext: 0, noVerdict: 1 },
+  ]))
+  const out = check(dir)
+  assert.doesNotMatch(out.stdout, /표에 없는|닫힌 목록 밖|failureClass/, out.stdout)
+})
+
+test('--check는 호출 한도를 넘겨 띄운 구간을 짚는다', t => {
+  const dir = freshDir(t)
+  plant(dir, ledgerRun({ maxTasks: 1 }, twoModules))
+  const out = check(dir)
+  assert.equal(out.status, 1)
+  assert.match(out.stdout, /호출 한도를 넘겨 띄웠다: `run\.start`\(seq 1\)의 maxTasks는 1인데 그 구간에 시도 2개가 시작됐다/)
+})
+
+test('--check는 새 구간(run.resume)의 호출은 그 구간의 한도로 센다', t => {
+  const dir = freshDir(t)
+  plant(dir, ledgerRun({ maxTasks: 1 }, [
+    twoModules[0],
+    { at: '2026-10-07T00:00:07.500Z', seq: 41, phase: 'dispatch.halt', reason: 'max-tasks', stage: 'module', queuedTasks: ['02-type'], running: 1 },
+    { at: '2026-10-07T00:00:07.600Z', seq: 42, phase: 'run.resume', maxTasks: 1 },
+    { ...twoModules[1], seq: 43 },
+    ...twoModules.slice(2),
+  ]))
+  assert.doesNotMatch(check(dir).stdout, /한도를 넘겨|멈춘 뒤에/)
+})
+
+test('--check는 디스패치를 멈춘 뒤에 띄운 시도를 짚는다', t => {
+  const dir = freshDir(t)
+  plant(dir, ledgerRun({}, [
+    twoModules[0],
+    { at: '2026-10-07T00:00:07.500Z', seq: 41, phase: 'dispatch.halt', reason: 'user', running: 1 },
+    { ...twoModules[1], seq: 43 },
+    ...twoModules.slice(2),
+  ]))
+  const out = check(dir)
+  assert.equal(out.status, 1)
+  assert.match(out.stdout, /디스패치를 멈춘 뒤에 띄웠다: `dispatch\.halt`\(seq 41, user\) 뒤에 시작된 시도 1개\(seq 43\)/)
+})
+
+test('--check는 같은 검증 작업·시도가 두 번 시작되거나 끝난 것을 짚고, 새 교차검증 라운드는 따로 센다', t => {
+  const dir = freshDir(t)
+  const verifyOnce = (seq, minute) => ([
+    { at: `2026-10-07T00:0${minute}:00.000Z`, seq, phase: 'verify.start', task: 'bundle-1', attempt: 1 },
+    { at: `2026-10-07T00:0${minute}:30.000Z`, seq: seq + 1, phase: 'verify.done', task: 'bundle-1', attempt: 1, status: 'ok' },
+  ])
+  plant(dir, ledgerRun({}, [...twoModules, { at: '2026-10-07T00:02:00.000Z', seq: 20, phase: 'crossverify.start', targets: 1 }, ...verifyOnce(21, 3), ...verifyOnce(23, 4)]))
+  const out = check(dir)
+  assert.match(out.stdout, /같은 검증 작업·시도가 두 번 시작됐다: bundle-1#1/)
+  assert.match(out.stdout, /같은 검증 작업·시도가 두 번 끝났다: bundle-1#1/)
+
+  plant(dir, ledgerRun({}, [...twoModules,
+    { at: '2026-10-07T00:02:00.000Z', seq: 20, phase: 'crossverify.start', targets: 1 }, ...verifyOnce(21, 3),
+    { at: '2026-10-07T00:03:50.000Z', seq: 30, phase: 'crossverify.start', targets: 1 }, ...verifyOnce(31, 4)]))
+  assert.doesNotMatch(check(dir).stdout, /같은 검증 작업/)
+})
+
+test('목록 밖 멈춤 이유와 취소 사유는 기록하되 경고한다', t => {
+  const dir = freshDir(t)
+  log(dir, 'run.start', { host: 'h' })
+  const out = log(dir, 'dispatch.halt', { reason: 'bored' })
+  assert.equal(out.status, 0)
+  assert.match(out.stderr, /dispatch\.halt`의 reason "bored"는 C-9의 닫힌 목록에 없다/)
+})
