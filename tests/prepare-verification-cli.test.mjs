@@ -667,6 +667,8 @@ test('--collect는 켜지 않은 선택 패스의 결과를 모으지 않고, �
 //
 // 1) routed 출력을 셸 리다이렉트로 받았더니 PowerShell 5.1이 한글을 CP949로 읽어 되돌릴 수 없게 깨뜨렸다.
 //    스크립트가 `--out`으로 직접 쓴다.
+// 2) 리뷰 도중 같은 작업 폴더에서 커밋이 들어왔고, 위치 대조가 바뀐 코드를 읽어 위치 불일치 넷을 냈다.
+//    시작 때 작업 트리가 깨끗했으면 위치 대조는 그 HEAD를 읽는다.
 
 const withInput = (dir, payload) => {
   const input = join(dir, 'candidates.json')
@@ -713,4 +715,94 @@ test('--out에 경로가 없으면 거부한다', t => {
     { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
   assert.equal(out.status, 2)
   assert.match(out.stderr, /--out에는 routed 출력을 쓸 파일 경로를 준다/)
+})
+
+const ROW_LINE = '  return <div className="row" data-testid="robot-row">'
+const driftRepo = t => {
+  const repo = mkdtempSync(join(tmpdir(), 'drift-repo-'))
+  t.after(() => rmSync(repo, { recursive: true, force: true }))
+  const git = (...args) => execFileSync('git', args, { cwd: repo, encoding: 'utf8' }).trim()
+  git('init', '-q')
+  git('config', 'user.email', 't@e')
+  git('config', 'user.name', 't')
+  git('config', 'core.autocrlf', 'false')
+  writeFileSync(join(repo, 'status.tsx'), `export function Row() {\n${ROW_LINE}\n}\n`)
+  git('add', '-A')
+  git('commit', '-q', '-m', 'target')
+  return { repo, git, head: git('rev-parse', 'HEAD') }
+}
+// 리뷰를 시작한 기록. 리포트 디렉터리는 저장소 밖에 둔다.
+const startedOn = (t, start) => {
+  const dir = mkdtempSync(join(tmpdir(), 'prep-drift-'))
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  mkdirSync(join(dir, '.timing'), { recursive: true })
+  writeFileSync(join(dir, '.timing', `${RUN}.jsonl`), `${JSON.stringify({
+    at: '2026-10-06T00:00:00.000Z', seq: 1, phase: 'run.start',
+    host: 'test', rules: 'review-rules', version: '2.22.0', branch: 'b', changedFiles: 1, candidates: 20, ...start,
+  })}\n`, 'utf8')
+  return dir
+}
+const ROW = { ...HIGH, ruleId: '12-5', category: 'user-malfunction', location: { kind: 'verified', path: 'status.tsx', line: 2, quote: ROW_LINE } }
+const prepareIn = (repo, dir) => spawnSync('node', [SCRIPT, '--merge-base', 'HEAD', '--dir', dir, '--run', RUN, '--input', withInput(dir, withHigh([ROW]))],
+  { cwd: repo, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+const promptOf = result => readFileSync(result.verifierTasks[0].prompt, 'utf8')
+// 리뷰 도중 들어온 수정 — 2026-10-06 실행은 상태 행에 role="status"를 넣는 커밋이었다.
+const FIXED_LINE = '  return <div className="row" role="status" data-testid="robot-row">'
+const fixInPlace = repo => writeFileSync(join(repo, 'status.tsx'), `export function Row() {\n${FIXED_LINE}\n}\n`)
+
+test('리뷰 도중 커밋이 들어와도, 시작 때 작업 트리가 깨끗했으면 위치 대조는 시작한 HEAD를 읽는다', t => {
+  const { repo, git, head } = driftRepo(t)
+  const dir = startedOn(t, { head, worktree: 'clean' })
+  fixInPlace(repo)
+  git('commit', '-q', '-am', 'mid-run fix')
+  const out = prepareIn(repo, dir)
+  assert.equal(out.status, 0, out.stderr)
+  const result = JSON.parse(out.stdout)
+  assert.equal(result.candidates[0].locationCheck, 'location-ok')
+  assert.deepEqual([result.target.readFrom, result.target.drift, result.target.start.head], ['start-head', ['head'], head])
+  assert.match(out.stderr, /리뷰 도중 대상이 바뀌었다\(head\) — 위치 대조는 리뷰를 시작한 HEAD/)
+  // 검증자는 디스크의 파일을 읽는다 — 대상 뒤에 들어온 수정을 반박 근거로 쓰지 말라고 적는다
+  const prompt = promptOf(result)
+  assert.match(prompt, /`verified` 위치는 리뷰를 시작한 HEAD `[0-9a-f]{40}`/)
+  assert.match(prompt, /### 리뷰 도중 대상이 바뀌었다[\s\S]*지금 파일에만 있는 코드\(대상 뒤에 들어온 수정\)를 반박 근거로 쓰지 않는다/)
+})
+
+test('커밋하지 않은 수정이 들어와도 시작한 HEAD를 읽는다', t => {
+  const { repo, head } = driftRepo(t)
+  const dir = startedOn(t, { head, worktree: 'clean' })
+  fixInPlace(repo)
+  const result = JSON.parse(prepareIn(repo, dir).stdout)
+  assert.equal(result.candidates[0].locationCheck, 'location-ok')
+  assert.deepEqual([result.target.readFrom, result.target.drift], ['start-head', ['worktree']])
+})
+
+test('시작 때 작업 트리가 깨끗하지 않았으면 그때의 파일을 읽을 수 없다 — 지금 트리를 읽고 그 사실을 남긴다', t => {
+  const { repo, head } = driftRepo(t)
+  const dir = startedOn(t, { head, worktree: 'sha256:0000000000000000000000000000000000000000000000000000000000000000' })
+  fixInPlace(repo)
+  const out = prepareIn(repo, dir)
+  const result = JSON.parse(out.stdout)
+  assert.equal(result.candidates[0].locationCheck, 'location-mismatch')
+  assert.deepEqual([result.target.readFrom, result.target.reason], ['working-tree', 'start-worktree-dirty'])
+  assert.match(out.stderr, /시작 때 작업 트리가 깨끗하지 않아 그때의 파일을 다시 읽을 수 없다/)
+  assert.match(promptOf(result), /위치 불일치는 대상이 바뀐 탓일 수 있다/)
+})
+
+test('시작한 HEAD를 저장소에서 찾을 수 없으면 지금 트리를 읽는다', t => {
+  const { repo } = driftRepo(t)
+  const dir = startedOn(t, { head: 'f'.repeat(40), worktree: 'clean' })
+  const result = JSON.parse(prepareIn(repo, dir).stdout)
+  assert.equal(result.candidates[0].locationCheck, 'location-ok')
+  assert.deepEqual([result.target.readFrom, result.target.reason], ['working-tree', 'start-head-missing'])
+})
+
+test('대상이 그대로면 출력도 프롬프트도 바뀌지 않는다', t => {
+  const { repo, head } = driftRepo(t)
+  const dir = startedOn(t, { head, worktree: 'clean' })
+  const out = prepareIn(repo, dir)
+  const result = JSON.parse(out.stdout)
+  assert.equal('target' in result, false)
+  assert.doesNotMatch(out.stderr, /대상이 바뀌었다/)
+  assert.doesNotMatch(promptOf(result), /리뷰 도중 대상이 바뀌었다/)
+  assert.match(promptOf(result), /`verified` 위치는 작업 트리\(HEAD\)/)
 })
