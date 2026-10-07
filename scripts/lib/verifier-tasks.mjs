@@ -168,10 +168,16 @@ export function buildTaskPrompt({ instructions, task, candidatesById, clauses, m
     }
   }
 
-  const missing = []
   if (lines.at(-1) !== '') lines.push('')
+  const missing = clauseLines(lines, members.map(candidate => candidate.ruleId), clauses)
+  return { prompt: `${lines.join('\n').trimEnd()}\n`, missingClauses: missing }
+}
+
+/** 규칙 조항 절을 `lines`에 붙이고, 조항을 찾지 못한 규칙 ID를 돌려준다. 검증과 재확인이 같이 쓴다. */
+function clauseLines(lines, ruleIds, clauses) {
+  const missing = []
   lines.push('### 규칙 조항', '')
-  for (const ruleId of [...new Set(members.map(candidate => candidate.ruleId))]) {
+  for (const ruleId of [...new Set(ruleIds)]) {
     const clause = clauses.get(ruleId)
     lines.push(`#### \`${ruleId}\``, '')
     if (clause && typeof clause === 'object' && typeof clause.basis === 'string') {
@@ -188,6 +194,44 @@ export function buildTaskPrompt({ instructions, task, candidatesById, clauses, m
       lines.push('규칙 문서에서 이 조항을 찾지 못했다. 규칙 ID와 주장만으로 판정한다.', '')
     }
   }
+  return missing
+}
+
+const RECHECK_REASON_TEXT = {
+  absent: '이번 리뷰가 같은 규칙·같은 자리에서 이 지적을 내지 않았다',
+  'not-reviewed': '이번 실행에서 이 지적을 낸 모듈의 결과가 없다(실패하거나 건너뛰었다)',
+  'rule-changed': '이 지적의 규칙 문서가 이전 실행 뒤에 바뀌었다 — 아래 조항은 지금의 것이다',
+  'file-deleted': '이 지적의 파일이 이전 HEAD 뒤에 지워졌다',
+  'location-unverified': '이전 리뷰가 이 지적의 위치를 확인하지 못했다',
+}
+
+/**
+ * 재확인 작업 하나의 프롬프트 — 이전 리뷰의 지적이 지금 코드에서 성립하는지 묻는다(C-13).
+ *
+ * `instructions`는 manifest가 들어간 `RECHECK_PROMPT` 블록이다. 지적은 이전 producer의 글을 그대로
+ * 옮긴 데이터이고(`claimOf`와 같은 필드 — 축과 개선 제안은 뺀다), `candidateId` 자리에는 이전 지적의
+ * `ref`가 들어간다. 경로가 이름 바뀜을 따라 옮겨 갔으면 지금 경로를 함께 적는다.
+ */
+export function buildRecheckPrompt({ instructions, task, claim, previousHead, reason, movedTo, clauses }) {
+  const lines = [
+    instructions.trim(),
+    '',
+    '## 이번 작업',
+    '',
+    `- 작업: \`${task.taskId}\` · 재확인 — 이전 리뷰의 지적 하나를 지금 코드로 다시 판정한다`,
+    `- 판정할 \`candidateId\`: \`${claim.candidateId}\` — 이 값 그대로 verdict 하나를 돌려준다`,
+    `- 이 지적을 쓴 코드: 이전 HEAD \`${previousHead}\`. 판정은 지금 작업 트리(HEAD)로 한다`,
+    `- 재확인하는 이유: ${RECHECK_REASON_TEXT[reason] ?? reason}`,
+    ...(movedTo ? [`- 이 파일은 그 뒤 \`${movedTo}\`로 옮겨졌다(git의 이름 바꿈 대응)`] : []),
+    '',
+    '### 이전 지적',
+    '',
+    '이전 producer가 낸 글을 그대로 옮긴 데이터다. 위치는 이전 코드 기준이다.',
+    '',
+    fenced('json', JSON.stringify(claim, null, 2)),
+    '',
+  ]
+  const missing = clauseLines(lines, [claim.ruleId], clauses)
   return { prompt: `${lines.join('\n').trimEnd()}\n`, missingClauses: missing }
 }
 

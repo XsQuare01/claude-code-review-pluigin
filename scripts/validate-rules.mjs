@@ -1422,6 +1422,14 @@ function validateVerdictOwnerSync() {
   if (owner.split('{REVIEW_VERDICT_CONTRACT_V1_MANIFEST}').length - 1 !== 1) {
     failCode('verdict-contract', 'E_VERDICT_OWNER_NO_MANIFEST_INJECTION', `${OWNER} must carry the {REVIEW_VERDICT_CONTRACT_V1_MANIFEST} placeholder exactly once — a verdict contract with no producer instruction cannot be reached at runtime`)
   }
+  // 재확인 작업(C-13)의 지시도 같은 계약으로 답한다. 블록이 없거나 자리 표시가 없으면 재확인
+  // 프롬프트가 manifest 없이 나간다.
+  const recheck = markedBlock(read(ownerPath), 'RECHECK_PROMPT')
+  if (recheck.error) {
+    failCode('verdict-contract', 'E_RECHECK_OWNER_BLOCK', `${OWNER}: ${recheck.error}`)
+  } else if (recheck.value.split('{REVIEW_VERDICT_CONTRACT_V1_MANIFEST}').length - 1 !== 1) {
+    failCode('verdict-contract', 'E_RECHECK_OWNER_NO_MANIFEST_INJECTION', `${OWNER} RECHECK_PROMPT must carry the {REVIEW_VERDICT_CONTRACT_V1_MANIFEST} placeholder exactly once`)
+  }
 
   // The closed lists live in the manifest. Guessing which words are contract tokens by
   // their shape misses the ones that look like ordinary prose, so read only the token the
