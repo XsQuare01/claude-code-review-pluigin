@@ -212,6 +212,35 @@ const RECHECK_REASON_TEXT = {
 }
 
 /**
+ * 같은 결함인지 묻는 작업 하나의 프롬프트(C-13). 이전 지적과 이번 지적의 글을 나란히 싣는다.
+ *
+ * 판정할 `candidateId`는 이전 지적의 `ref`다. 두 글 모두 축과 개선 제안은 뺀다(`claimOf`) — 같은 결함인지는
+ * 원인·조건·결과로 가르지, 영향도로 가르지 않는다.
+ */
+export function buildIdentityPrompt({ instructions, task, previousClaim, currentClaim, previousHead, clauses }) {
+  const lines = [
+    instructions.trim(),
+    '',
+    '## 이번 작업',
+    '',
+    `- 작업: \`${task.taskId}\` · 같은 결함인가 — 이전 리뷰의 지적과 이번 리뷰의 지적이 같은 결함을 말하는지 판정한다`,
+    `- 판정할 \`candidateId\`: \`${previousClaim.candidateId}\` — 이 값 그대로 verdict 하나를 돌려준다`,
+    `- 이전 지적의 위치는 이전 HEAD \`${previousHead}\` 기준이고, 이번 지적의 위치는 지금 작업 트리(HEAD) 기준이다`,
+    '',
+    '### 이전 리뷰의 지적',
+    '',
+    fenced('json', JSON.stringify(previousClaim, null, 2)),
+    '',
+    '### 이번 리뷰의 지적',
+    '',
+    fenced('json', JSON.stringify(currentClaim ?? null, null, 2)),
+    '',
+  ]
+  const missing = clauseLines(lines, [previousClaim.ruleId, ...(currentClaim ? [currentClaim.ruleId] : [])], clauses)
+  return { prompt: `${lines.join('\n').trimEnd()}\n`, missingClauses: missing }
+}
+
+/**
  * 재확인 작업 하나의 프롬프트 — 이전 리뷰의 지적이 지금 코드에서 성립하는지 묻는다(C-13).
  *
  * `instructions`는 manifest가 들어간 `RECHECK_PROMPT` 블록이다. 지적은 이전 producer의 글을 그대로

@@ -92,7 +92,12 @@ const write = (repo, files) => {
 }
 
 /** 한 실행: preflight → 결과 파일·module.done → 수집 → 검증자(재확인 포함) → 집계 → 렌더 → 스냅숏. */
-const reviewOnce = ({ repo, dir, run, rules, base, findings, failed = [], previous, answerRecheck = () => undefined }) => {
+const SAME = () => ({ disposition: 'upheld', evidence: '원인·조건·결과가 같다', location: { kind: 'unverified', reason: '두 글을 대조했다' } })
+const reviewOnce = ({
+  repo, dir, run, rules, base, findings, failed = [], previous,
+  answerRecheck = () => undefined, answerIdentity = SAME,
+  answerCurrent = candidate => ({ disposition: 'upheld', evidence: '확인했다', location: candidate.location }),
+}) => {
   const catalog = JSON.parse(readFileSync(join(rules, 'catalog.json'), 'utf8'))
   const numbered = catalog.modules
     .filter(module => module.role === 'module' && module.workflows.includes('full') && module.phaseByWorkflow?.full !== 'post-verification-synthesis')
@@ -122,12 +127,12 @@ const reviewOnce = ({ repo, dir, run, rules, base, findings, failed = [], previo
 
   const byId = new Map(routed.candidates.map(candidate => [candidate.candidateId, candidate]))
   for (const task of routed.verifierTasks) {
-    if (task.route === 'recheck') {
-      const verdict = answerRecheck(task.candidateIds[0])
+    if (task.route === 'recheck' || task.route === 'identity') {
+      const verdict = (task.route === 'recheck' ? answerRecheck : answerIdentity)(task.candidateIds[0])
       if (verdict) writeFileSync(task.verdict, JSON.stringify({ schemaVersion: 1, verdicts: [{ candidateId: task.candidateIds[0], ...verdict }] }))
       continue
     }
-    const verdicts = task.candidateIds.map(candidateId => ({ candidateId, disposition: 'upheld', evidence: '확인했다', location: byId.get(candidateId).location }))
+    const verdicts = task.candidateIds.map(candidateId => ({ candidateId, ...answerCurrent(byId.get(candidateId)) }))
     writeFileSync(task.verdict, JSON.stringify({ schemaVersion: 1, verdicts }))
   }
   // 검증할 작업이 없으면 집계하지 않는다(SKILL). 이 시나리오의 지적은 모두 영향이 낮아 교차검증 대상이
@@ -136,8 +141,10 @@ const reviewOnce = ({ repo, dir, run, rules, base, findings, failed = [], previo
     ? node(repo, 'tally-verdicts.mjs', ['--dir', dir, '--run', run, '--rules', rules, '--collect', '--targets', routedPath])
     : null
   if (tallied) assert.equal(tallied.status, 0, tallied.stderr)
+  const rechecksPath = join(timing, `${run}.rechecks.json`)
   const rendered = node(repo, 'render-findings.mjs', [
     '--input', routedPath, ...(tallied ? ['--verdicts', join(timing, `${run}.verdicts.json`)] : []), '--phase-high', 'rollout-shadow', '--phase-low', 'rollout-shadow',
+    ...(existsSync(rechecksPath) ? ['--rechecks', rechecksPath] : []),
     '--verification-state', 'ran', '--rules', rules, '--workflow', 'full',
   ])
   assert.equal(rendered.status, 0, rendered.stderr)
@@ -147,7 +154,8 @@ const reviewOnce = ({ repo, dir, run, rules, base, findings, failed = [], previo
   return { routed, tally: tallied ? JSON.parse(tallied.stdout) : null, rendered: rendered.stdout, block: snap.stdout, snapshotPath, snapshot: parseSnapshot(readFileSync(snapshotPath, 'utf8')).value }
 }
 
-test('수정 뒤 다시 리뷰하면 이전 지적을 이어 붙이고, 재확인 판정이 막는 코드를 댄 것만 해결 확인이다', t => {
+/** 첫 실행 → 고침 → 두 번째 실행(--previous). 재확인과 같은 결함 판정은 이 파일이 정한 고정값이다. */
+const twoRuns = t => {
   const repo = mkdtempSync(join(tmpdir(), 'rereview-repo-'))
   const dir = mkdtempSync(join(tmpdir(), 'rereview-dir-'))
   const rules = mkdtempSync(join(tmpdir(), 'rereview-rules-'))
@@ -165,11 +173,6 @@ test('수정 뒤 다시 리뷰하면 이전 지적을 이어 붙이고, 재확�
   git(repo, 'commit', '-qm', 'feature')
 
   const first = reviewOnce({ repo, dir, run: RUN_A, rules, base, findings: FINDINGS_A })
-  assert.equal(first.snapshot.status, 'complete')
-  assert.equal(first.snapshot.comparison, undefined)
-  assert.ok(first.snapshot.run.ruleDocs['06-jsx.md'])
-  // 비교하지 않은 실행의 지적도 실행 간 이름을 갖는다 — 다음 비교의 출발점이다
-  assert.ok(first.snapshot.findings.every(entry => entry.lineageId === entry.ref))
 
   // 고친다: 줄 삽입, 그대로 옮기기, 결함 수정, 파일 삭제, 규칙 문서 변경
   write(repo, FILES_B)
@@ -200,12 +203,28 @@ test('수정 뒤 다시 리뷰하면 이전 지적을 이어 붙이고, 재확�
       return undefined
     },
   })
+  return { repo, dir, rules, base, first, second, refOf, fixedRef, goneRef, perfRef }
+}
+
+test('수정 뒤 다시 리뷰하면 이전 지적을 이어 붙이고, 재확인 판정이 막는 코드를 댄 것만 해결 확인이다', t => {
+  const { first, second, refOf, fixedRef, goneRef, perfRef } = twoRuns(t)
+  assert.equal(first.snapshot.status, 'complete')
+  assert.equal(first.snapshot.comparison, undefined)
+  assert.ok(first.snapshot.run.ruleDocs['06-jsx.md'])
+  // 비교하지 않은 실행의 지적도 실행 간 이름을 갖는다 — 다음 비교의 출발점이다
+  assert.ok(first.snapshot.findings.every(entry => entry.lineageId === entry.ref))
 
   // 검증 준비가 이번 후보와 이전 지적을 잇는다
   const lineage = Object.fromEntries(second.routed.candidates.map(candidate => [`${candidate.ruleId}@${candidate.location.path}:${candidate.location.line}`, candidate.lineage]))
   assert.equal(lineage['04-3@src/load.ts:4'].status, 'linked', '줄이 밀려도 이어진다')
   assert.equal(lineage['02-1@src/lib/move.ts:1'].status, 'linked', '그대로 옮긴 파일도 이어진다')
-  assert.equal(lineage['CR-2@src/header.ts:4'].status, 'linked', 'CR 번호가 달라도 이어진다')
+  // CR은 번호를 빼고 비교하지만, 규칙 ID가 결함의 종류를 말하지 않으므로 같은 결함인지 묻는다(PR #94 리뷰)
+  assert.deepEqual([lineage['CR-2@src/header.ts:4'].status, lineage['CR-2@src/header.ts:4'].reason], ['recheck', 'identity-unconfirmed'])
+  const identity = second.routed.verifierTasks.find(task => task.route === 'identity')
+  assert.deepEqual(identity.candidateIds, [refOf('CR-1', 'src/header.ts')])
+  const identityPrompt = readFileSync(identity.prompt, 'utf8')
+  assert.match(identityPrompt, /# 같은 결함인가 — 이전 리뷰의 지적과 이번 리뷰의 지적/)
+  assert.match(identityPrompt, /### 이전 리뷰의 지적[\s\S]*호출자가 문자열을 전제한다[\s\S]*### 이번 리뷰의 지적[\s\S]*호출자가 문자열을 전제한다/)
   assert.deepEqual([lineage['04-1@src/dup.ts:2'].status, lineage['04-1@src/dup.ts:4'].status], ['recheck', 'recheck'])
   assert.deepEqual(lineage['04-5@src/load.ts:5'], { status: 'new', lineageId: `${second.snapshot.run.runId}/04-5#1`, fileChanged: true, ruleChanged: false })
   assert.equal(lineage['CR-1@src/load.ts:3'].status, 'new')
@@ -224,6 +243,7 @@ test('수정 뒤 다시 리뷰하면 이전 지적을 이어 붙이고, 재확�
   assert.deepEqual(second.tally.rechecks && { requested: second.tally.rechecks.requested, upheld: second.tally.rechecks.upheld, rejected: second.tally.rechecks.rejected, needsContext: second.tally.rechecks.needsContext, noVerdict: second.tally.rechecks.noVerdict },
     { requested: 4, upheld: 1, rejected: 1, needsContext: 1, noVerdict: 1 })
   assert.equal(second.tally.rejected, 0)
+  assert.deepEqual(second.tally.rechecks.identities, { requested: 1, same: 1, different: 0, unknown: 0, noVerdict: 0 })
 
   // 스냅숏의 비교
   const { comparison } = second.snapshot
@@ -238,11 +258,16 @@ test('수정 뒤 다시 리뷰하면 이전 지적을 이어 붙이고, 재확�
   // 이어진 지적은 이전의 이름을 물려받는다
   const moved = second.snapshot.findings.find(entry => entry.ruleId === '02-1')
   assert.equal(moved.lineageId, refOf('02-1', 'src/move.ts'))
+  // 같은 결함이라는 판정을 받은 CR은 이어지고 이름을 물려받는다
+  const header = second.snapshot.findings.find(entry => entry.ruleId === 'CR-2')
+  assert.deepEqual([header.lineageId, header.lineage.status, header.lineage.basis], [refOf('CR-1', 'src/header.ts'), 'linked', 'identity'])
+  assert.deepEqual([statusOf(refOf('CR-1', 'src/header.ts')).status, statusOf(refOf('CR-1', 'src/header.ts')).basis], ['persisting', 'identity'])
   assert.ok(second.snapshot.inputs.some(input => input.role === 'previous'))
   assert.ok(second.snapshot.inputs.some(input => input.role === 'rechecks'))
 
   // 리포트
   assert.match(second.rendered, /이전 리뷰: 이어짐 — 이전 지적 `[^`]+\/02-1#1`이 아직 남아 있다/)
+  assert.match(second.rendered, /이전 리뷰: 이어짐 — 이전 지적 `[^`]+\/CR-1#1`이 아직 남아 있다/)
   assert.match(second.rendered, /이전 리뷰: 신규\n/)
   assert.match(second.rendered, /이전 리뷰: 재확인 필요 — 같은 규칙·같은 자리에 이전 지적이 있지만/)
   assert.match(second.block, /\*\*이전 리뷰와 비교\*\* — 이전 실행 `[^`]+`\(HEAD `[0-9a-f]{12}`\)의 지적 9개: 미해결 4 · 해결 확인 1 · 재확인 필요 4/)
@@ -274,4 +299,60 @@ test('다른 저장소의 스냅숏과는 비교하지 않는다', t => {
   assert.equal(out.status, 2)
   assert.match(out.stderr, /다른 저장소의 리뷰다/)
   assert.equal(existsSync(join(dir, '.timing', `${RUN_B}.jsonl`)), false)
+})
+
+// ── PR #94 리뷰: 세 번째 리뷰 ──────────────────────────────────────────
+//
+// 두 번째 실행이 재확인으로 "지금도 성립한다"고 확인했거나 재확인하지 못한 이전 지적은, 두 번째 실행의 지적이
+// 아니다(그 실행의 producer는 내지 않았다). 직전 스냅숏의 지적만 비교하면 세 번째 실행에서 사라진다.
+
+const FINDINGS_C = {
+  '04-state': [{ ...finding('04-3', '비동기 결과 반영 전 정리(다시 씀)', at('src/load.ts', 4, '  setState(data)')), impact: 'high', category: 'user-malfunction' }],
+  '02-type': [finding('02-1', 'any로 타입을 우회한다', at('src/lib/move.ts', 1, 'export const x: any = 1'))],
+}
+
+const thirdRun = (context, extra = {}) => reviewOnce({
+  repo: context.repo, dir: context.dir, run: 'code-review-full-feat-x-2026-10-08', rules: context.rules, base: context.base,
+  findings: FINDINGS_C, previous: context.second.snapshotPath,
+  // 이번 04-3 후보를 교차검증이 반박한다
+  answerCurrent: candidate => (candidate.ruleId === '04-3'
+    ? { disposition: 'rejected', evidence: '정리 코드가 있다', location: candidate.location, rebuttal: { kind: 'guard-exists', location: candidate.location } }
+    : { disposition: 'upheld', evidence: '확인했다', location: candidate.location }),
+  ...extra,
+})
+
+test('세 번째 리뷰는 앞 실행이 계속 추적하던 미해결·재확인 필요 지적을 이어받는다 — 사라지지 않는다', t => {
+  const context = twoRuns(t)
+  const otherRef = context.refOf('04-2', 'src/other.ts')
+  const third = thirdRun(context)
+  const { comparison } = third.snapshot
+  const entry = ref => comparison.entries.find(one => one.ref === ref)
+  // 두 번째 실행에서 재확인으로 미해결이었던 것, 재확인이 범위를 확정하지 못한 것, 판정을 받지 못한 것
+  for (const ref of [context.goneRef, context.perfRef, otherRef]) {
+    assert.ok(entry(ref), `${ref}가 비교에서 사라졌다`)
+    assert.equal(entry(ref).carried, true)
+    assert.equal(entry(ref).status, 'recheck')
+  }
+  // 이어받은 지적도 다시 재확인을 맡긴다 — 원래 주장의 글은 처음 낸 실행의 routed 출력에서 읽는다
+  const asked = third.routed.verifierTasks.filter(task => task.route === 'recheck').map(task => task.candidateIds[0])
+  for (const ref of [context.goneRef, context.perfRef, otherRef]) assert.ok(asked.includes(ref), ref)
+  // 해결 확인된 지적은 더 추적하지 않는다 — 이력은 두 번째 스냅숏에 있다
+  assert.equal(entry(context.fixedRef), undefined)
+  assert.equal(comparison.carried, third.routed.previous.carried)
+  assert.ok(comparison.carried >= 3)
+
+  // 이어진 이번 후보가 교차검증에서 반박되면 이전 지적은 미해결이 아니라 재확인 필요다
+  const stateRef = context.second.snapshot.findings.find(one => one.ruleId === '04-3').ref
+  assert.deepEqual([entry(stateRef).status, entry(stateRef).reason], ['recheck', 'current-rejected'])
+  assert.match(third.rendered, /이전 리뷰: 이어짐 — 이전 지적 `[^`]+`과 같은 결함인데 이번 교차검증이 반박했다/)
+})
+
+test('원래 주장의 파일을 읽을 수 없어도 이어받은 지적을 지우지 않고 claim-unavailable로 남긴다', t => {
+  const context = twoRuns(t)
+  rmSync(join(context.dir, '.timing', `${RUN_A}.routed.json`))
+  const third = thirdRun(context)
+  const entry = third.snapshot.comparison.entries.find(one => one.ref === context.perfRef)
+  assert.ok(entry, '읽을 수 없다고 추적을 멈추지 않는다')
+  assert.deepEqual([entry.status, entry.reason], ['recheck', 'claim-unavailable'])
+  assert.match(third.snapshot.comparison.claims, /^unavailable — /)
 })
