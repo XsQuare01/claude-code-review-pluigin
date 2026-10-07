@@ -103,6 +103,25 @@ export function rulesDigest(rulesDir) {
   return `sha256:${sha256(lines.join(''))}`
 }
 
+/**
+ * 규칙 문서마다의 digest — `{ "04-state.md": "sha256:<hex>" }`.
+ *
+ * 디렉터리 전체의 digest는 어느 문서가 바뀌었는지 말하지 않는다. 이전 리뷰와 비교할 때(C-13) 한
+ * 문서만 바뀌어도 모든 지적을 "규칙이 바뀌었다"로 돌리지 않으려고 문서마다 남긴다. 줄 끝은
+ * `rulesDigest`와 같이 LF로 맞춘다.
+ */
+export function ruleDocDigests(rulesDir, paths) {
+  const digests = {}
+  for (const path of [...new Set(paths)].sort()) {
+    try {
+      digests[path] = `sha256:${sha256(readFileSync(join(rulesDir, path), 'utf8').replace(/\r\n/g, '\n'))}`
+    } catch {
+      // 없는 문서는 싣지 않는다. 비교하는 쪽은 없는 문서를 "바뀌었다"로 본다.
+    }
+  }
+  return digests
+}
+
 /** `exclude`의 경로를 저장소 루트 기준 상대 경로(`/` 구분)로 바꾼다. 저장소 밖이면 버린다. */
 const excludedPrefixes = (top, exclude) => exclude
   .map(path => relative(resolve(top), resolve(path)))
