@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url'
 import {
   validateCandidates, loadVocabulary, renderFinding, severityOf, escapeProse, codeSpan,
   withInstanceNumbers, labelFor, dispositionOf, compareCandidates, loadModuleSections, loadSpecialistPasses, render, lineageLine,
-  checkCardinality,
+  checkCardinality, deletionBasis, deletionPhaseLine, gateDeletion, validateDeletionApproval,
 } from '../scripts/render-findings.mjs'
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)))
@@ -541,7 +541,7 @@ const runWith = (candidates, args = []) => {
   const input = join(dir, 'targets.json')
   writeFileSync(input, JSON.stringify({ candidates }), 'utf8')
   const out = spawnSync(process.execPath, [
-    SCRIPT, '--input', input, '--rules', RULES, '--phase-high', 'active-deletion', '--phase-low', 'active-deletion',
+    SCRIPT, '--input', input, '--rules', RULES, '--phase-high', 'rollout-shadow', '--phase-low', 'rollout-shadow',
     '--workflow', 'full', '--verification-state', 'disabled', ...args,
   ], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
   rmSync(dir, { recursive: true, force: true })
@@ -560,7 +560,7 @@ test('--phase-high가 없으면 거부한다 — 기본값을 두지 않는다',
   const input = join(dir, 'targets.json')
   writeFileSync(input, JSON.stringify({ candidates: [ok()] }), 'utf8')
   const out = spawnSync(process.execPath, [
-    SCRIPT, '--input', input, '--rules', RULES, '--phase-low', 'active-deletion', '--workflow', 'full',
+    SCRIPT, '--input', input, '--rules', RULES, '--phase-low', 'rollout-shadow', '--workflow', 'full',
     '--verification-state', 'disabled',
   ], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
   rmSync(dir, { recursive: true, force: true })
@@ -573,7 +573,7 @@ test('--phase-low가 없으면 거부한다 — high만으로는 low의 phase를
   const input = join(dir, 'targets.json')
   writeFileSync(input, JSON.stringify({ candidates: [ok()] }), 'utf8')
   const out = spawnSync(process.execPath, [
-    SCRIPT, '--input', input, '--rules', RULES, '--phase-high', 'active-deletion', '--workflow', 'full',
+    SCRIPT, '--input', input, '--rules', RULES, '--phase-high', 'rollout-shadow', '--workflow', 'full',
     '--verification-state', 'disabled',
   ], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
   rmSync(dir, { recursive: true, force: true })
@@ -586,7 +586,7 @@ test('--workflow가 없으면 거부한다 — 섹션 목록을 만들 수 없�
   const input = join(dir, 'targets.json')
   writeFileSync(input, JSON.stringify({ candidates: [ok()] }), 'utf8')
   const out = spawnSync(process.execPath, [
-    SCRIPT, '--input', input, '--rules', RULES, '--phase-high', 'active-deletion', '--phase-low', 'active-deletion',
+    SCRIPT, '--input', input, '--rules', RULES, '--phase-high', 'rollout-shadow', '--phase-low', 'rollout-shadow',
     '--verification-state', 'disabled',
   ], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
   rmSync(dir, { recursive: true, force: true })
@@ -599,7 +599,7 @@ test('--verification-state가 없으면 거부한다', () => {
   const input = join(dir, 'targets.json')
   writeFileSync(input, JSON.stringify({ candidates: [ok()] }), 'utf8')
   const out = spawnSync(process.execPath, [
-    SCRIPT, '--input', input, '--rules', RULES, '--phase-high', 'active-deletion', '--phase-low', 'active-deletion',
+    SCRIPT, '--input', input, '--rules', RULES, '--phase-high', 'rollout-shadow', '--phase-low', 'rollout-shadow',
     '--workflow', 'full',
   ], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
   rmSync(dir, { recursive: true, force: true })
@@ -612,7 +612,7 @@ test('--verification-state가 ran/disabled가 아니면 거부한다', () => {
   const input = join(dir, 'targets.json')
   writeFileSync(input, JSON.stringify({ candidates: [ok()] }), 'utf8')
   const out = spawnSync(process.execPath, [
-    SCRIPT, '--input', input, '--rules', RULES, '--phase-high', 'active-deletion', '--phase-low', 'active-deletion',
+    SCRIPT, '--input', input, '--rules', RULES, '--phase-high', 'rollout-shadow', '--phase-low', 'rollout-shadow',
     '--workflow', 'full', '--verification-state', 'off',
   ], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
   rmSync(dir, { recursive: true, force: true })
@@ -631,7 +631,7 @@ test('--verdicts와 --verification-state disabled를 함께 주면 거부한다'
   writeFileSync(input, JSON.stringify({ candidates: [ok()] }), 'utf8')
   writeFileSync(verdictsPath, JSON.stringify({ verdicts: [] }), 'utf8')
   const out = spawnSync(process.execPath, [
-    SCRIPT, '--input', input, '--rules', RULES, '--phase-high', 'active-deletion', '--phase-low', 'active-deletion',
+    SCRIPT, '--input', input, '--rules', RULES, '--phase-high', 'rollout-shadow', '--phase-low', 'rollout-shadow',
     '--workflow', 'full', '--verification-state', 'disabled', '--verdicts', verdictsPath,
   ], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
   rmSync(dir, { recursive: true, force: true })
@@ -687,7 +687,7 @@ test('CLI가 needs-context finding을 상세 지적에서 빼고 stderr에 이�
   }), 'utf8')
   writeFileSync(verdictsPath, JSON.stringify({ verdicts: [{ candidateId: '04-3#1', disposition: 'needs-context' }] }), 'utf8')
   const out = spawnSync(process.execPath, [
-    SCRIPT, '--input', input, '--rules', RULES, '--phase-high', 'active-deletion', '--phase-low', 'active-deletion',
+    SCRIPT, '--input', input, '--rules', RULES, '--phase-high', 'rollout-shadow', '--phase-low', 'rollout-shadow',
     '--workflow', 'full', '--verdicts', verdictsPath, '--verification-state', 'ran',
   ], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
   rmSync(dir, { recursive: true, force: true })
@@ -715,7 +715,7 @@ test('CLI가 needs-context의 reason·출처·위치·본문을 stderr로 넘긴
     verdicts: [{ candidateId: '04-3#1', disposition: 'needs-context', reason: '호출자 확인 필요' }],
   }), 'utf8')
   const out = spawnSync(process.execPath, [
-    SCRIPT, '--input', input, '--rules', RULES, '--phase-high', 'active-deletion', '--phase-low', 'active-deletion',
+    SCRIPT, '--input', input, '--rules', RULES, '--phase-high', 'rollout-shadow', '--phase-low', 'rollout-shadow',
     '--workflow', 'full', '--verdicts', verdictsPath, '--verification-state', 'ran',
   ], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
   rmSync(dir, { recursive: true, force: true })
@@ -743,7 +743,7 @@ test('CLI는 reason 없는 needs-context를 빈 칸이 아니라 사실로 적�
   }), 'utf8')
   writeFileSync(verdictsPath, JSON.stringify({ verdicts: [{ candidateId: '04-3#1', disposition: 'needs-context' }] }), 'utf8')
   const out = spawnSync(process.execPath, [
-    SCRIPT, '--input', input, '--rules', RULES, '--phase-high', 'active-deletion', '--phase-low', 'active-deletion',
+    SCRIPT, '--input', input, '--rules', RULES, '--phase-high', 'rollout-shadow', '--phase-low', 'rollout-shadow',
     '--workflow', 'full', '--verdicts', verdictsPath, '--verification-state', 'ran',
   ], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
   rmSync(dir, { recursive: true, force: true })
@@ -751,33 +751,218 @@ test('CLI는 reason 없는 needs-context를 빈 칸이 아니라 사실로 적�
   assert.match(out.stderr, /추가 확인 이유: \(verifier가 reason을 내지 않았다/)
 })
 
+// active-deletion은 승인 파일이 있어야 켜진다(C-6B, #47). 승인의 기준(basis)은 지금 규칙
+// 디렉터리에서 잰다 — 손으로 적은 해시는 계약이나 검증자 지시문이 바뀌는 순간 낡는다.
+const CURRENT_BASIS = deletionBasis(RULES).value
+
+const approvalFor = (impacts, { routes = ['isolated', 'bundle'], basis = CURRENT_BASIS, ...extra } = {}) => ({
+  schemaVersion: 1,
+  approvals: Object.fromEntries(impacts.map(impact => [impact, {
+    approvedBy: '홍길동',
+    approvedAt: '2026-10-01',
+    verifierModel: 'claude-opus-5-5 (기록용)',
+    falseSuppression: Object.fromEntries(routes.map(route => [route, { measured: 0.02, threshold: 0.05, samples: 120 }])),
+    basis,
+    ...extra,
+  }])),
+})
+
+const renderGated = ({ candidates, verdicts, approval, phases, args = [] }) => {
+  const dir = mkdtempSync(join(tmpdir(), 'render-gate-'))
+  const input = join(dir, 'targets.json')
+  writeFileSync(input, JSON.stringify({ candidates }), 'utf8')
+  const extra = []
+  if (verdicts) {
+    writeFileSync(join(dir, 'verdicts.json'), JSON.stringify({ verdicts }), 'utf8')
+    extra.push('--verdicts', join(dir, 'verdicts.json'))
+  }
+  if (approval !== undefined) {
+    writeFileSync(join(dir, 'approval.json'), typeof approval === 'string' ? approval : JSON.stringify(approval), 'utf8')
+    extra.push('--deletion-approval', join(dir, 'approval.json'))
+  }
+  const out = spawnSync(process.execPath, [
+    SCRIPT, '--input', input, '--rules', RULES, '--phase-high', phases[0], '--phase-low', phases[1],
+    '--workflow', 'full', '--verification-state', verdicts ? 'ran' : 'disabled', ...extra, ...args,
+  ], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+  rmSync(dir, { recursive: true, force: true })
+  return out
+}
+
+const rejectedHigh = (id, rebuttal, extra = {}) => ({
+  candidate: ok({ candidateId: id, ruleId: id.split('#')[0], impact: 'high', eligibility: 'VERIFY', route: 'isolated', content: { title: `지적 ${id.replace('#', ' ')}`, body: 'B' }, ...extra }),
+  verdict: { candidateId: id, disposition: 'rejected', rebuttal },
+})
+
 // PR #85 리뷰 지적 2 — CLI 전체 경로로도 active-deletion 삭제 채널이
 // stderr에 나오는지 본다. needs-context 알림과 같은 이유로 stdout에는 섞지
 // 않는다 — stdout은 두 섹션 자리에 그대로 붙일 Markdown 전용이다.
 test('CLI가 active-deletion 삭제를 stderr에 낸다', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'render-'))
-  const input = join(dir, 'targets.json')
-  const verdictsPath = join(dir, 'verdicts.json')
-  writeFileSync(input, JSON.stringify({
+  const out = renderGated({
     candidates: [ok({
-      candidateId: '04-3#1', ruleId: '04-3', impact: 'high', eligibility: 'VERIFY',
+      candidateId: '04-3#1', ruleId: '04-3', impact: 'high', eligibility: 'VERIFY', route: 'isolated',
       location: { kind: 'verified', path: 'src/a.ts', line: 1, quote: 'x' },
       content: { title: '지워지는 CLI 지적', body: 'B' },
     })],
-  }), 'utf8')
-  writeFileSync(verdictsPath, JSON.stringify({
     verdicts: [{ candidateId: '04-3#1', disposition: 'rejected', rebuttal: { kind: 'guard-exists' } }],
-  }), 'utf8')
-  const out = spawnSync(process.execPath, [
-    SCRIPT, '--input', input, '--rules', RULES, '--phase-high', 'active-deletion', '--phase-low', 'active-deletion',
-    '--workflow', 'full', '--verdicts', verdictsPath, '--verification-state', 'ran',
-  ], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
-  rmSync(dir, { recursive: true, force: true })
-  assert.equal(out.status, 0)
+    approval: approvalFor(['high', 'low']),
+    phases: ['active-deletion', 'active-deletion'],
+  })
+  assert.equal(out.status, 0, out.stderr)
   assert.doesNotMatch(out.stdout, /지워지는 CLI 지적/, '상세 지적(stdout)에 그대로 남아있다')
   assert.match(out.stderr, /04-3/, 'stderr 알림에 ruleId가 없다')
   assert.match(out.stderr, /src\/a\.ts/, 'stderr 알림에 anchor path가 없다')
   assert.match(out.stderr, /guard-exists/, 'stderr 알림에 rebuttal.kind가 없다')
+})
+
+// --------------------------------------------- active-deletion 승인 (C-6B, #47)
+//
+// 반박된 지적이 지워지는 것을 막는 것은 `rollout-shadow`가 기본이라는 계약 문장 하나였고,
+// `--phase-low active-deletion` 한 단어로 켜졌다. 이제 사람이 잰 승인 파일이 있어야 켜지고,
+// 승인이 잰 검증자(반박 kind 목록·검증자 지시문)가 바뀌면 그 impact는 rollout-shadow로 돈다.
+
+for (const phases of [['active-deletion', 'rollout-shadow'], ['rollout-shadow', 'active-deletion']]) {
+  test(`승인 파일 없이 ${phases.join('/')}을 주면 exit 2이고 아무것도 그리지 않는다`, () => {
+    const out = renderGated({ candidates: [ok()], phases })
+    assert.equal(out.status, 2)
+    assert.equal(out.stdout, '')
+    assert.match(out.stderr, /--deletion-approval/)
+    assert.match(out.stderr, /C-6B/)
+  })
+}
+
+test('승인 파일을 줬는데 지울 phase가 없으면 모순이라 거부한다', () => {
+  const out = renderGated({ candidates: [ok()], approval: approvalFor(['high', 'low']), phases: ['rollout-shadow', 'rollout-shadow'] })
+  assert.equal(out.status, 2)
+  assert.match(out.stderr, /--deletion-approval/)
+})
+
+test('기준이 맞는 승인이면 지우고, 상세 지적 맨 위에 삭제 단계와 승인을 적는다', () => {
+  const guard = rejectedHigh('04-3#1', { kind: 'guard-exists' })
+  const moved = rejectedHigh('04-4#1', { kind: 'location-wrong', location: { kind: 'verified', path: 'src/real.ts', line: 5, quote: 'real()' } })
+  const out = renderGated({
+    candidates: [guard.candidate, moved.candidate], verdicts: [guard.verdict, moved.verdict],
+    approval: approvalFor(['high']), phases: ['active-deletion', 'rollout-shadow'],
+  })
+  assert.equal(out.status, 0, out.stderr)
+  assert.ok(out.stdout.startsWith('## 상세 지적\n\n삭제 단계: 영향 높음 `active-deletion` (승인 홍길동 · 2026-10-01 · isolated·bundle 경로) · 영향 낮음 `rollout-shadow` — 반박돼 이 절에서 지운 지적의 흔적은 `미해결 / 후속 확인`에 있다\n\n### 01 '), out.stdout.slice(0, 300))
+  assert.doesNotMatch(out.stdout, /지적 04-3 1/, 'guard-exists 반박은 지워져야 한다')
+  assert.match(out.stderr, /04-3 \(src\/a\.ts\): guard-exists/)
+  // 결함을 인정한 반박은 승인이 있어도 지우지 않는다(#45)
+  assert.match(out.stdout, /#### 🔴 `04-4` 지적 04-4 1\n[^\n]*교차검증: `위치 이견 — 결함 유지`\n`src\/a\.ts:1` — `const a = 1`\n검증자가 짚은 위치\(대조하지 않음\): `src\/real\.ts:5` — `real\(\)`/)
+  assert.doesNotMatch(out.stderr, /04-4/, '위치 이견은 삭제 알림에 오르지 않는다')
+})
+
+test('승인 뒤에 반박 kind 목록이나 검증자 지시문이 바뀌었으면 rollout-shadow로 돌고 그 사실을 알린다', () => {
+  const guard = rejectedHigh('04-3#1', { kind: 'guard-exists' })
+  const stale = approvalFor(['low'], { basis: { ...CURRENT_BASIS, rebuttalSha256: '0'.repeat(64) } })
+  const out = renderGated({ candidates: [{ ...guard.candidate, impact: 'low', category: undefined }], verdicts: [guard.verdict], approval: stale, phases: ['rollout-shadow', 'active-deletion'] })
+  assert.equal(out.status, 0, out.stderr)
+  assert.match(out.stderr, /경고: 영향 낮음의 active-deletion 승인\(홍길동, 2026-10-01\)이 무효다 — 승인 뒤에 반박 kind 목록이 바뀌었다/)
+  assert.match(out.stdout, /^## 상세 지적\n\n삭제 단계: 영향 높음 `rollout-shadow` · 영향 낮음 `rollout-shadow` \(active-deletion 승인 무효 — 승인 뒤에 반박 kind 목록이 바뀌었다\) — 반박된 지적은 지우지 않고 모두 이 절에 있다\n/)
+  assert.match(out.stdout, /`04-3` 지적 04-3 1\n[^\n]*교차검증: `반박됨 — 관찰 중`/, '무효가 된 승인으로는 지우지 않는다')
+  assert.doesNotMatch(out.stderr, /지워진 finding/)
+})
+
+test('active-deletion을 준 impact의 승인이 파일에 없으면 exit 2다 — high와 low는 따로 승인한다', () => {
+  const out = renderGated({ candidates: [ok()], approval: approvalFor(['low']), phases: ['active-deletion', 'active-deletion'] })
+  assert.equal(out.status, 2)
+  assert.match(out.stderr, /approvals\.high/)
+})
+
+test('승인이 잰 경로 밖의 반박은 active-deletion이어도 지우지 않는다', () => {
+  const isolated = rejectedHigh('04-3#1', { kind: 'unreachable' }, { impact: 'low', category: undefined })
+  const bundle = rejectedHigh('04-3#2', { kind: 'unreachable' }, { impact: 'low', category: undefined, route: 'bundle' })
+  const out = renderGated({
+    candidates: [isolated.candidate, bundle.candidate], verdicts: [isolated.verdict, bundle.verdict],
+    approval: approvalFor(['low'], { routes: ['isolated'] }), phases: ['rollout-shadow', 'active-deletion'],
+  })
+  assert.equal(out.status, 0, out.stderr)
+  assert.match(out.stdout, /영향 낮음 `active-deletion` \(승인 홍길동 · 2026-10-01 · isolated 경로만\)/)
+  assert.doesNotMatch(out.stdout, /지적 04-3 1/, 'isolated 경로의 반박은 지운다')
+  assert.match(out.stdout, /지적 04-3 2\n[^\n]*교차검증: `반박됨 — 관찰 중`/, 'bundle 경로의 반박은 승인 밖이라 남는다')
+  assert.match(out.stderr, /impact 낮음: 1건/)
+})
+
+const brokenApprovals = [
+  ['JSON이 아니다', '{ "schemaVersion": 1,', /읽지 못했다/],
+  ['모르는 키', { ...approvalFor(['high']), note: 'x' }, /모르는 키 note/],
+  ['허용치를 넘는 측정', approvalFor(['high'], { falseSuppression: { isolated: { measured: 0.2, threshold: 0.05, samples: 30 } } }), /허용치 0\.05를 넘는다/],
+  ['표본 0', approvalFor(['high'], { falseSuppression: { isolated: { measured: 0, threshold: 0.05, samples: 0 } } }), /samples/],
+  ['모르는 경로', approvalFor(['high'], { falseSuppression: { all: { measured: 0, threshold: 0.05, samples: 3 } } }), /경로는 isolated·bundle뿐/],
+  ['날짜가 아니다', approvalFor(['high'], { approvedAt: '2026-02-30' }), /approvedAt/],
+  ['승인자 없음', approvalFor(['high'], { approvedBy: ' ' }), /approvedBy/],
+  ['basis가 해시가 아니다', approvalFor(['high'], { basis: { rebuttalSha256: 'abc', verifierPromptSha256: CURRENT_BASIS.verifierPromptSha256 } }), /rebuttalSha256/],
+  ['schemaVersion', { ...approvalFor(['high']), schemaVersion: 2 }, /schemaVersion/],
+]
+for (const [why, approval, pattern] of brokenApprovals) {
+  test(`계약에 맞지 않는 승인 파일은 exit 2다 — ${why}`, () => {
+    const out = renderGated({ candidates: [ok()], approval, phases: ['active-deletion', 'rollout-shadow'] })
+    assert.equal(out.status, 2)
+    assert.equal(out.stdout, '')
+    assert.match(out.stderr, pattern)
+  })
+}
+
+test('--print-deletion-basis는 승인 파일에 적을 지금의 기준을 JSON으로 낸다', () => {
+  const out = spawnSync(process.execPath, [SCRIPT, '--print-deletion-basis', '--rules', RULES], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+  assert.equal(out.status, 0, out.stderr)
+  const printed = JSON.parse(out.stdout)
+  assert.deepEqual(printed, { basis: CURRENT_BASIS })
+  assert.match(printed.basis.rebuttalSha256, /^[0-9a-f]{64}$/)
+  assert.match(printed.basis.verifierPromptSha256, /^[0-9a-f]{64}$/)
+})
+
+test('둘 다 rollout-shadow면 삭제 단계 줄이 없다 — 이 기능 전의 출력과 같다', () => {
+  const guard = rejectedHigh('04-3#1', { kind: 'guard-exists' })
+  const out = renderGated({ candidates: [guard.candidate], verdicts: [guard.verdict], phases: ['rollout-shadow', 'rollout-shadow'] })
+  assert.equal(out.status, 0, out.stderr)
+  assert.ok(out.stdout.startsWith('## 상세 지적\n\n### 01 '), out.stdout.slice(0, 200))
+  assert.doesNotMatch(out.stdout, /삭제 단계/)
+})
+
+// 같은 계약도 체크아웃에 따라 CRLF로 풀린다. 기준이 줄 끝에 흔들리면 승인을 쓴 기계에서만 삭제가 켜진다.
+test('삭제 기준은 줄 끝(CRLF·LF)에 흔들리지 않고, 반박 kind 목록이 바뀌면 달라진다', () => {
+  const copy = transform => {
+    const dir = mkdtempSync(join(tmpdir(), 'render-basis-'))
+    for (const name of ['workflow-contract.md', 'verifier-prompt.md']) {
+      writeFileSync(join(dir, name), transform(readFileSync(join(RULES, name), 'utf8').replace(/\r\n/g, '\n')), 'utf8')
+    }
+    const basis = deletionBasis(dir)
+    rmSync(dir, { recursive: true, force: true })
+    return basis.value
+  }
+  const lf = copy(text => text)
+  assert.deepEqual(copy(text => text.replace(/\n/g, '\r\n')), lf)
+  assert.deepEqual(lf, CURRENT_BASIS)
+  const relabelled = copy(text => text.replace('"other": "닫힌 목록 밖의 사유', '"other": "목록 밖의 사유'))
+  assert.notEqual(relabelled.rebuttalSha256, lf.rebuttalSha256)
+  assert.notEqual(relabelled.verifierPromptSha256, lf.verifierPromptSha256, '검증자 지시문에는 manifest가 주입된다')
+})
+
+test('삭제 기준을 만들 재료가 없으면 사유를 낸다', () => {
+  assert.match(deletionBasis(join(tmpdir(), 'no-such-rules-dir')).error, /workflow-contract\.md/)
+})
+
+test('validateDeletionApproval — 맞는 승인은 문제가 없다', () => {
+  assert.deepEqual(validateDeletionApproval(approvalFor(['high', 'low'])), [])
+  assert.deepEqual(validateDeletionApproval([]), ['승인 파일이 JSON 객체가 아니다'])
+  assert.ok(validateDeletionApproval({ schemaVersion: 1, approvals: { medium: {} } }).some(problem => /high·low뿐/.test(problem)))
+})
+
+test('gateDeletion — 승인이 맞는 impact만 지우고, 요청하지 않은 impact의 승인은 쓰지 않는다', () => {
+  const gate = gateDeletion({ high: 'rollout-shadow', low: 'active-deletion' }, approvalFor(['high', 'low'], { routes: ['isolated'] }), CURRENT_BASIS)
+  assert.deepEqual(gate.value.phaseByImpact, { high: 'rollout-shadow', low: 'active-deletion' })
+  assert.deepEqual(gate.value.impacts.low.routes, ['isolated'])
+  assert.deepEqual(gate.value.warnings, [])
+  const stale = gateDeletion({ high: 'active-deletion', low: 'rollout-shadow' }, approvalFor(['high'], { basis: { ...CURRENT_BASIS, verifierPromptSha256: 'f'.repeat(64) } }), CURRENT_BASIS)
+  assert.deepEqual(stale.value.phaseByImpact, { high: 'rollout-shadow', low: 'rollout-shadow' })
+  assert.deepEqual(stale.value.impacts.high.invalidated, ['검증자 지시문'])
+})
+
+test('render를 승인 정보 없이 active-deletion으로 불러도 삭제 단계 줄은 나온다 — 승인 기록이 없다고 적는다', () => {
+  assert.equal(deletionPhaseLine({ high: 'rollout-shadow', low: 'rollout-shadow' }), null)
+  const { markdown } = render([ok()], new Map(), { high: 'active-deletion', low: 'rollout-shadow' }, VOCAB, [{ kind: 'module', id: '04', title: '상태와 Effect' }], 'ran')
+  assert.ok(markdown.startsWith('## 상세 지적\n\n삭제 단계: 영향 높음 `active-deletion` (승인 기록 없음) · 영향 낮음 `rollout-shadow` — '), markdown)
 })
 
 // #45 — 판정 파일의 rebuttal.location이 CLI loader를 지나 렌더까지 살아 와야 한다. loader는
@@ -1323,7 +1508,7 @@ test('두 섹션 전문을 낸다 — golden', () => {
   const vocab = { categoryLabels: { 'data-loss': '데이터 손상·유실' },
     crossVerification: { upheld: '유지', 'not-eligible': '대상 아님' } }
 
-  assert.equal(render(candidates, verdicts, { high: 'active-deletion', low: 'active-deletion' }, vocab, SECTIONS, 'ran').markdown, [
+  assert.equal(render(candidates, verdicts, { high: 'rollout-shadow', low: 'rollout-shadow' }, vocab, SECTIONS, 'ran').markdown, [
     '## 상세 지적',
     '',
     '### 04 상태와 Effect',
@@ -1625,7 +1810,7 @@ test('CLI가 routed의 collected로 수집되지 않은 모듈을 표시한다',
   const input = join(dir, 'targets.json')
   writeFileSync(input, JSON.stringify({ candidates: [ok()], collected: { sources: ['04-state'] } }), 'utf8')
   const out = spawnSync(process.execPath, [
-    SCRIPT, '--input', input, '--rules', RULES, '--phase-high', 'active-deletion', '--phase-low', 'active-deletion',
+    SCRIPT, '--input', input, '--rules', RULES, '--phase-high', 'rollout-shadow', '--phase-low', 'rollout-shadow',
     '--workflow', 'full', '--verification-state', 'disabled',
   ], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
   rmSync(dir, { recursive: true, force: true })
@@ -1753,7 +1938,7 @@ test('CLI는 --collect 출력이 아니거나 다른 실행의 근거 파일이�
     const input = join(dir, 'targets.json')
     writeFileSync(input, JSON.stringify({ candidates: [ok()], ...(collected ? { collected } : {}) }), 'utf8')
     return spawnSync(process.execPath, [
-      SCRIPT, '--input', input, '--rules', RULES, '--phase-high', 'active-deletion', '--phase-low', 'active-deletion',
+      SCRIPT, '--input', input, '--rules', RULES, '--phase-high', 'rollout-shadow', '--phase-low', 'rollout-shadow',
       '--workflow', 'full', '--verification-state', 'disabled', '--evidence', evidence,
     ], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
   }
