@@ -369,6 +369,15 @@ The reviews of PRs #89–#94 found twelve defects; all are fixed here.
 - **Incremental re-review (#94).** Findings the previous run was still tracking (unresolved after re-check, or not yet resolved) are carried into the next comparison with their original claim file and lineage, instead of disappearing on the third review. A one-to-one key match links only when the enclosing declaration matches; clauseless `CR` findings, and findings whose location check failed, are linked only after a verifier confirms they are the same defect. A linked earlier finding is `persisting` only if the current finding survived cross-verification; otherwise it needs re-check.
 - Also fixed: on Windows, the working-tree reader in `prepare-verification.mjs` compared a `C:/…` root with a `C:\…` path and always fell back to the HEAD blob.
 
+## Follow-ups from a 2.16.0 run (2.22.0)
+
+An OpenCode run on Windows (2026-10-06) exposed four problems that the later versions had not fixed.
+
+- **Routed output is written by the script.** `prepare-verification.mjs --out <path>` writes the routed output as UTF-8 and prints only the path, sha256 and counts. Capturing stdout with `>` in PowerShell 5.1 re-encoded it through the system code page and destroyed the Korean text beyond repair, which forced a second preparation.
+- **Mid-run drift no longer moves the target.** If the worktree or HEAD changes while a review is running, `prepare-verification.mjs` checks locations against the HEAD the review started from (when the worktree was clean at start), records `target` in the routed output, and tells verifiers not to rebut a finding with code that only exists on disk now. The skill no longer lets the orchestrator re-scope the run or present its own choice as the user's request.
+- **The timeline check runs before `run.end`.** `review-timeline.mjs --check --before-end` is run right before the report is saved, so gaps go into the report and `run.end` stays the last line. A `crossverify.start` superseded by a re-prepared round is now a note instead of a missing end.
+- **Producers are told to write in Korean.** The rule-module reviewer agent now carries the 00-6 language rule; three modules in that run wrote their findings in English.
+
 ## Applicability metadata
 
 `review-rules/catalog.json` records **when** a module applies — required profile (FSD, Tailwind, RSC, Electron, TanStack Query, server code, contract provider), minimum React version, which workflows load it, and which individual rules carry a narrower gate than their module. The Markdown modules stay canonical for **what** a rule says; the catalog never generates documentation and never restates rule text.
