@@ -1,12 +1,19 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { existsSync, readdirSync, readFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 import {
   WRITE_TOOLS,
   checkProducerWriteAccess,
+  dispatchSignals,
   extractDispatchTargets,
+  extractTaskCalls,
   parseAgentTools,
 } from '../scripts/lib/producer-tools.mjs'
+
+const ROOT = dirname(dirname(fileURLToPath(import.meta.url)))
 
 // producer가 파일을 쓸 수 있는지 판정하는 규칙을 고정한다.
 //
@@ -104,5 +111,116 @@ test('셸은 쓰기 도구 목록에 있다', () => {
   }
   for (const tool of ['Read', 'Grep', 'Glob']) {
     assert.ok(!WRITE_TOOLS.has(tool), `${tool}은 쓰기 도구가 아니다`)
+  }
+})
+
+// ── dispatch 자리: 기본값은 거부 (#69) ─────────────────────────────────────
+//
+// 처음 이 검사는 `subagent_type=` 표기 하나만 찾았고, 여섯 워크플로우가
+// `task(category="unspecified-high", ...)`로 producer를 띄우는 동안 문제 0건을 냈다.
+// 아래는 표기가 아니라 "dispatch가 있는데 제한된 에이전트를 지목했는가"를 고정한다.
+
+const block = (...params) => `\`\`\`\ntask(\n${params.map(p => `  ${p},`).join('\n')}\n  prompt="리뷰하세요"\n)\n\`\`\``
+
+test('category만 준 task( 호출은 실패한다', () => {
+  const problems = check(block('category="unspecified-high"', 'load_skills=[]', 'run_in_background=false'))
+  assert.equal(problems.length, 1)
+  assert.match(problems[0], /dispatches a producer without naming a restricted agent/)
+  assert.match(problems[0], /category="unspecified-high"/)
+  assert.match(problems[0], /default deny/)
+  // 어느 호출인지 줄 번호로 짚는다 — 스킬 하나에 호출이 여럿일 수 있다.
+  assert.match(problems[0], /skills\/x\/SKILL\.md:2:/)
+})
+
+test('제한된 에이전트를 지목한 task( 호출은 통과한다', () => {
+  // 따옴표로 감싼 지목도 읽는다. 못 읽으면 고친 스킬이 고치기 전과 같은 이유로 실패한다.
+  assert.deepEqual(check(block('subagent_type="react-code-review-plugin:rule-module-reviewer"', 'load_skills=[]')), [])
+  assert.deepEqual(check(block("subagent_type='rule-module-reviewer'")), [])
+  assert.deepEqual(check(block('subagent_type=`rule-module-reviewer`')), [])
+})
+
+test('task( 호출이 general을 지목하면 실패한다', () => {
+  const problems = check(block('subagent_type="general"', 'run_in_background=true'))
+  assert.equal(problems.length, 1)
+  assert.match(problems[0], /general agent/)
+})
+
+test('호출 블록 없이 run_in_background만 있고 지목이 없으면 실패한다', () => {
+  // 산문으로 dispatch를 지시하면서 누구를 띄우는지 말하지 않는 형태다.
+  const problems = check('모듈마다 `run_in_background=true`로 띄운다.')
+  assert.equal(problems.length, 1)
+  assert.match(problems[0], /names no agent this check can read/)
+  assert.match(problems[0], /run_in_background/)
+})
+
+test('dispatch 정황이 전혀 없으면 문제도 없다', () => {
+  // 띄우지 않는 스킬(버전 확인 같은)까지 실패시키면 검사가 시끄러워져 곧 꺼진다.
+  assert.deepEqual(dispatchSignals('git diff를 확인하고 리포트를 쓴다.'), [])
+  assert.deepEqual(check('git diff를 확인하고 리포트를 쓴다.'), [])
+})
+
+test('두 task( 호출 중 지목이 없는 쪽만 짚는다', () => {
+  const text = [
+    block('subagent_type="react-code-review-plugin:rule-module-reviewer"'),
+    '',
+    '실패하면 아래로 다시 띄운다.',
+    '',
+    block('category="unspecified-high"'),
+  ].join('\n')
+  const problems = check(text)
+  assert.equal(problems.length, 1)
+  assert.match(problems[0], /without naming a restricted agent/)
+  // 지목한 첫 호출(2행)이 아니라 둘째 호출을 짚는다.
+  assert.match(problems[0], /SKILL\.md:11:/)
+})
+
+test('prompt 본문 속 subagent_type은 그 호출의 지목으로 세지 않는다', () => {
+  // prompt는 producer에게 주는 산문이다. 본문에 이름이 나온다고 그 에이전트로 띄우는 것이 아니다.
+  const text = '```\ntask(\n  category="unspecified-high",\n  prompt="subagent_type=rule-module-reviewer 처럼 쓰지 마세요 (예시)"\n)\n```'
+  const [call] = extractTaskCalls(text)
+  assert.deepEqual(call.targets, [])
+  assert.equal(call.category, 'unspecified-high')
+  assert.match(check(text)[0], /without naming a restricted agent/)
+})
+
+test('지목 자리를 읽지 못하면 통과가 아니라 실패다', () => {
+  // `subagent_type` 단어는 있는데 값이 템플릿 자리라 읽을 수 없는 경우.
+  const problems = check(block('subagent_type={AGENT}'))
+  assert.equal(problems.length, 1)
+  assert.match(problems[0], /cannot read/)
+})
+
+test('산문 속 지목은 여전히 target으로 센다', () => {
+  // `/code-review-full`은 호출 블록 없이 이 문장으로 dispatch를 지시한다.
+  const prose = '**아래 producer는 전부 `subagent_type=react-code-review-plugin:rule-module-reviewer`로 띄운다.**'
+  assert.deepEqual(extractDispatchTargets(prose), ['rule-module-reviewer'])
+  assert.deepEqual(check(`${prose}\n모듈마다 \`run_in_background=true\`로 실행한다.`), [])
+})
+
+// ── 저장소의 실제 스킬 ─────────────────────────────────────────────────────
+
+test('dispatch하는 모든 SKILL.md가 제한된 에이전트를 지목하고 문제가 0건이다', () => {
+  // validate-rules가 같은 판정을 돌리지만, 거기서는 "몇 개의 스킬이 실제로 검사됐는지"가
+  // 보이지 않는다. 처음 검사가 바로 그 자리에서 0개를 검사하고 초록불을 켰다.
+  const agentsDir = join(ROOT, 'agents')
+  const agents = new Map(readdirSync(agentsDir).filter(file => file.endsWith('.md')).map(file => {
+    const front = readFileSync(join(agentsDir, file), 'utf8').split('---')[1] ?? ''
+    return [front.match(/^\s*name:\s*(\S+)/m)?.[1] ?? file.replace(/\.md$/, ''), parseAgentTools(front)]
+  }))
+  const skillsDir = join(ROOT, 'skills')
+  const dispatching = []
+  for (const dir of readdirSync(skillsDir)) {
+    const path = join(skillsDir, dir, 'SKILL.md')
+    if (!existsSync(path)) continue
+    const text = readFileSync(path, 'utf8')
+    if (!/\btask\s*\(|\bsubagent_type\b/.test(text)) continue
+    dispatching.push(dir)
+    const where = `skills/${dir}/SKILL.md`
+    assert.ok(extractDispatchTargets(text).length > 0, `${where} dispatches but names no agent`)
+    assert.deepEqual(checkProducerWriteAccess({ where, text, agents }), [], `${where} has producer problems`)
+  }
+  // 일곱 워크플로우가 모두 producer를 띄운다. 하나라도 빠지면 그 스킬은 검사받지 않은 것이다.
+  for (const expected of ['code-review', 'code-review-commit', 'code-review-exception', 'code-review-fast', 'code-review-full', 'code-review-math', 'code-review-props']) {
+    assert.ok(dispatching.includes(expected), `skills/${expected}/SKILL.md was not checked as a dispatching skill`)
   }
 })
