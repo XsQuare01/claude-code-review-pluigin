@@ -140,12 +140,53 @@ export function loadVocabulary(rulesDir) {
   if (badTokens.length) {
     return { error: `CROSS_VERIFICATION_RENDER_TOKENS에 비어 있지 않은 문자열이 아닌 키가 있다: ${badTokens.join(', ')}` }
   }
+  const rebuttal = loadRebuttalTaxonomy(contract, crossVerification)
+  if (rebuttal.error) return { error: rebuttal.error }
   return {
     value: {
       categoryLabels,
       crossVerification,
+      ...rebuttal.value,
     },
   }
+}
+
+/**
+ * 반박이 지적을 지울 수 있는지는 판정 manifest의 `rebuttal.deletionAllowingKinds`가 정한다.
+ *
+ * 한때 렌더러는 `other`만 코드에 박아 두고 나머지 반박은 전부 지웠다. 그래서 manifest의
+ * 목록은 아무도 읽지 않는 선언이었고, 그 목록에 `location-wrong`("결함은 성립하나 위치가
+ * 틀렸다")이 들어 있어도 아무것도 걸리지 않았다 — 검증자가 결함을 **인정한** 지적이 줄
+ * 번호가 틀렸다는 이유로 active-deletion에서 사라질 수 있었다(#45). 목록을 여기서 읽고,
+ * 읽지 못하면 멈춘다. 기본값으로 지우는 길을 두면 같은 일이 다시 조용히 일어난다.
+ *
+ * 삭제를 허용하지 않는 kind마다 `rejected-<kind>` 토큰이 있어야 한다. 그 반박은 어느
+ * phase에서도 지적을 남기므로 제 이름의 표기가 필요한데, 토큰이 없으면 그리는 도중에야
+ * 알게 된다.
+ */
+function loadRebuttalTaxonomy(contract, crossVerification) {
+  const manifest = markedJson(contract, 'REVIEW_VERDICT_CONTRACT_V1')
+  if (manifest.error) return { error: manifest.error }
+  const kinds = manifest.value?.rebuttal?.kindEnum
+  const deleting = manifest.value?.rebuttal?.deletionAllowingKinds
+  const strings = value => Array.isArray(value) && value.every(item => typeof item === 'string' && item)
+  if (!strings(kinds) || !kinds.length) {
+    return { error: 'REVIEW_VERDICT_CONTRACT_V1의 rebuttal.kindEnum을 찾지 못했다 — 반박 kind를 가를 수 없다' }
+  }
+  if (!strings(deleting)) {
+    return { error: 'REVIEW_VERDICT_CONTRACT_V1의 rebuttal.deletionAllowingKinds를 찾지 못했다 — 어떤 반박이 지적을 지우는지 알 수 없어 멈춘다' }
+  }
+  const unknown = deleting.filter(kind => !kinds.includes(kind))
+  if (unknown.length) {
+    return { error: `rebuttal.deletionAllowingKinds에 kindEnum 밖의 값이 있다: ${unknown.join(', ')}` }
+  }
+  const unlabelled = kinds
+    .filter(kind => !deleting.includes(kind))
+    .filter(kind => typeof crossVerification[`rejected-${kind}`] !== 'string' || !crossVerification[`rejected-${kind}`])
+  if (unlabelled.length) {
+    return { error: `삭제를 허용하지 않는 반박 kind에 표기 토큰이 없다: ${unlabelled.map(kind => `rejected-${kind}`).join(', ')}` }
+  }
+  return { value: { rebuttalKinds: kinds, deletionAllowingKinds: deleting } }
 }
 
 const flag = name => {
@@ -245,9 +286,7 @@ export function codeSpan(text) {
  * 것이 지금 말하는 사실인데, 같은 줄에 한 번 더 찍으면 읽는 사람이 그것을
  * 코드로 읽는다. 대신 실제로 그 자리에 있던 것(`observed`)을 찍는다.
  */
-const locationLine = candidate => {
-  const location = candidate.location
-  if (location.kind === 'unverified') return `위치 미확인 사유: ${escapeProse(location.reason)}`
+const anchorText = location => {
   const start = location.kind === 'deleted' ? location.lineBefore : location.line
   // endLine은 계약(REVIEW_RESULT_CONTRACT_V1의 location.variants)이 verified·
   // deleted 모두에 허용하는 선택 필드다. start만 쓰면 여러 줄짜리 인용의
@@ -257,7 +296,13 @@ const locationLine = candidate => {
   const line = typeof location.endLine === 'number' && location.endLine !== start
     ? `${start}-${location.endLine}`
     : `${start}`
-  const anchor = codeSpan(`${location.path}:${line}`)
+  return codeSpan(`${location.path}:${line}`)
+}
+
+const locationLine = candidate => {
+  const location = candidate.location
+  if (location.kind === 'unverified') return `위치 미확인 사유: ${escapeProse(location.reason)}`
+  const anchor = anchorText(location)
   if (candidate.locationCheck === 'location-unresolvable') {
     return `위치 확인 실패: ${anchor} — 리뷰 대상 트리에서 그 경로를 읽지 못했습니다`
   }
@@ -271,6 +316,26 @@ const locationLine = candidate => {
     return `위치 확인 실패: ${anchor} — 인용과 실제 내용이 다릅니다${observed}`
   }
   return `${anchor} — ${codeSpan(location.quote)}`
+}
+
+/**
+ * `location-wrong` 반박이 짚은 자리를 그린다.
+ *
+ * 그 반박은 "결함은 성립하나 위치가 틀렸다"이고 `rebuttal.location`이 검증자가 본 결함의
+ * 자리다. 지적은 남기고(어느 phase에서도 지우지 않는다) producer의 위치 줄도 그대로 둔다 —
+ * 둘 중 어느 쪽이 맞는지는 이 렌더러가 정하지 않는다. 읽는 사람이 두 자리를 함께 봐야 한다.
+ *
+ * 이 위치는 `prepare-verification.mjs`의 위치 대조를 거치지 않은 검증자의 주장이다. 확인된
+ * 위치와 같은 모양으로 찍으면 00-10이 막는 것 — 확인하지 않은 위치를 사실처럼 쓰는 것 —
+ * 이 되므로, 줄 머리에 대조하지 않았다고 적는다. 판정에 위치가 없으면(계약 위반) 빈 칸 대신
+ * 그 사실을 적는다.
+ */
+const verifierLocationLine = location => {
+  if (!location || (location.kind !== 'verified' && location.kind !== 'deleted')) {
+    return '검증자가 짚은 위치: 판정에 위치가 없다'
+  }
+  const quote = typeof location.quote === 'string' && location.quote ? ` — ${codeSpan(location.quote)}` : ''
+  return `검증자가 짚은 위치(대조하지 않음): ${anchorText(location)}${quote}`
 }
 
 /**
@@ -311,7 +376,7 @@ const SLOTS = [
  * 이어붙이는 방식이면 다음 사람이 실수로 다시 합칠 수 있지만, 배열 + `\n`
  * join은 슬롯을 합칠 방법 자체가 없다.
  */
-export function renderFinding(candidate, { label, vocabulary, related = [], evidence = [], lineage = candidate.lineage, disposition }) {
+export function renderFinding(candidate, { label, vocabulary, related = [], evidence = [], lineage = candidate.lineage, disposition, verifierLocation }) {
   const severity = severityOf(candidate.impact, candidate.confidence)
   // category는 계약상 impact가 high일 때만 존재한다(low는 category 자체를
   // 금지한다) — 그래도 candidate.category를 한 번 더 확인해 방어적으로 둔다.
@@ -343,6 +408,9 @@ export function renderFinding(candidate, { label, vocabulary, related = [], evid
     // 지적이 같은 결함인지는 이 렌더러가 정하지 않는다. 값은 호출자가 이미 code span으로 만든다.
     ...(related.length ? [`관련 지적: ${related.join(', ')}`] : []),
     locationLine(candidate),
+    // `location-wrong` 반박이 짚은 자리. `undefined`면 그 반박이 아니라 줄이 없고, `null`이면
+    // 그 반박인데 위치가 빠진 판정이다 — 그때는 없다는 사실을 적는다.
+    ...(verifierLocation !== undefined ? [verifierLocationLine(verifierLocation)] : []),
     ...slots,
     // 이 지적을 어떻게 확인했는가(C-11). 슬롯 뒤에 둔다 — 슬롯은 producer의 주장이고, 이 줄은
     // 오케스트레이터가 남긴 확인 기록이다. 등급·축·교차검증은 바꾸지 않는다.
@@ -498,15 +566,24 @@ export function withInstanceNumbers(candidates) {
  * 사라지면 안 되는 사실이라 그대로 표기한다.
  *
  * `verdictByCandidateId`의 값은 disposition 문자열 하나가 아니라
- * `{ disposition, rebuttalKind }`다. `rebuttal.kind`를 같이 실어야 하는
- * 이유는 계약(C-6B)이 `rebuttal.kind = other`를 세 번 못박기 때문이다 —
- * "`other`는 어떤 phase에서도 finding의 상태를 바꾸지 않는다", "삭제를
- * 유발하지 않는다", "차단 우회로가 되어서는 안 된다". disposition만 보고
- * `rejected`면 무조건 active-deletion에서 지우면, `other`로 반박된
- * high-impact finding까지 계약이 금지한 그 우회로로 사라진다. `kind`가
- * `other`인 반박은 그래서 `rejected`의 일반 경로(active-deletion에서
- * null, rollout-shadow에서 `rejected-shadow`)를 타지 않고 모든 phase에서
- * `rejected-other`로 남는다.
+ * `{ disposition, rebuttalKind, … }`다. 반박이 지적을 지울 수 있는지는 `rebuttal.kind`가
+ * 정하고, 그 목록은 판정 manifest의 `deletionAllowingKinds`다(`vocabulary`로 받는다).
+ * 목록 밖의 kind는 `rejected`의 일반 경로(active-deletion에서 null, rollout-shadow에서
+ * `rejected-shadow`)를 타지 않고 모든 phase에서 제 이름의 토큰(`rejected-<kind>`)으로
+ * 남는다 — 원 severity와 차단 여부도 그대로다.
+ *
+ * - `other`: 위치를 대지 못한 반박이다. 계약(C-6B)은 "어떤 phase에서도 finding의 상태를
+ *   바꾸지 않는다", "차단 우회로가 되어서는 안 된다"고 못박는다
+ * - `location-wrong`: 검증자가 결함을 **인정**하고 위치만 틀렸다고 한 반박이다. 이것으로
+ *   지우면 줄 번호가 틀렸다는 이유로 진짜 결함이 사라진다(#45)
+ *
+ * 한때 `other`만 여기 박아 두고 나머지 반박은 전부 지웠다. 그 동안 manifest의 목록은
+ * 아무도 읽지 않았고, 목록과 코드가 갈라져도 걸리는 데가 없었다.
+ *
+ * kind가 없거나 닫힌 목록 밖이면 던진다. 판정 계약은 `rejected`에 `rebuttal.kind`를
+ * 요구하고 `tally-verdicts.mjs`가 그것을 검사한다 — 여기까지 온 그런 판정은 지울지 말지
+ * 정할 근거가 없는 입력이고, 어느 쪽으로든 흘려보내면 리포트가 사실과 다르게 그려진다.
+ * phase도 같다: 두 값 밖이면 지우는 쪽으로 넘어가지 않고 던진다.
  *
  * `phaseByImpact`는 `{ high, low }` 객체다. phase는 전역이 아니라 `impact`별
  * 오케스트레이터 설정이다 — 문자열 하나였다면 "high는 아직 rollout-shadow인
@@ -519,13 +596,33 @@ export function labelFor(candidate, verdictByCandidateId, phaseByImpact, vocabul
   const verdict = verdictByCandidateId.get(candidate.candidateId)
   const disposition = dispositionOf(candidate, verdict, 'ran')
   if (disposition === 'rejected') {
-    if (verdict.rebuttalKind === 'other') return tokens['rejected-other']
+    if (!rebuttalDeletes(candidate, verdict, vocabulary)) return tokens[`rejected-${verdict.rebuttalKind}`]
     // 이 finding의 impact가 속한 phase만 본다 — high/low를 하나의 phase로
     // 합쳐 읽으면 한쪽의 독립 승인이 다른 쪽 값에 가려진다.
     const phase = phaseByImpact[candidate.impact]
-    return phase === 'rollout-shadow' ? tokens['rejected-shadow'] : null
+    if (phase === 'rollout-shadow') return tokens['rejected-shadow']
+    if (phase === 'active-deletion') return null
+    throw new Error(`labelFor: impact ${candidate.impact}의 phase가 ${[...PHASES].join('·')} 밖이다 (${JSON.stringify(phase)}) — 지울지 말지 정할 수 없다`)
   }
   return tokens[disposition]
+}
+
+/**
+ * 이 반박이 phase에 따라 지적을 지울 수 있는 kind인가 — manifest의 `deletionAllowingKinds`.
+ *
+ * 목록을 받지 못했으면 던진다. 비어 있는 목록을 "아무것도 지우지 않는다"로 읽는 것과 목록이
+ * 없는 것을 "전부 지운다"로 읽는 것은 둘 다 기본값이고, 이 결정은 기본값으로 정하지 않는다.
+ */
+export function rebuttalDeletes(candidate, verdict, vocabulary) {
+  const { rebuttalKinds, deletionAllowingKinds } = vocabulary
+  if (!Array.isArray(rebuttalKinds) || !Array.isArray(deletionAllowingKinds)) {
+    throw new Error('삭제를 허용하는 반박 kind 목록(REVIEW_VERDICT_CONTRACT_V1의 rebuttal.deletionAllowingKinds)을 받지 못했다 — 반박된 지적을 지울지 정할 수 없다')
+  }
+  const kind = verdict?.rebuttalKind
+  if (!rebuttalKinds.includes(kind)) {
+    throw new Error(`${candidate.candidateId}: rejected 판정의 rebuttal.kind가 닫힌 목록 밖이다 (${JSON.stringify(kind)}) — 지울지 말지 정할 수 없다`)
+  }
+  return deletionAllowingKinds.includes(kind)
 }
 
 /**
@@ -779,10 +876,10 @@ export function render(candidates, verdictByCandidateId, phaseByImpact, vocabula
     // (리뷰 fix round 1, Important 1 — 순번을 먼저 매기고 나중에 거르면
     // 분모가 걸러지기 전 건수로 굳어 남는다.)
     if (label === null) {
-      // labelFor가 null을 내는 유일한 경로는 active-deletion phase에서
-      // rejected(kind!=='other')로 지워지는 경우다(labelFor 참고). 그 삭제를
-      // 조용히 흘려보내지 않고 두 번째 채널로 담아 돌려준다 — movedToOpenQuestions와
-      // 같은 이유다.
+      // labelFor가 null을 내는 유일한 경로는 active-deletion phase에서 삭제를
+      // 허용하는 kind(manifest의 deletionAllowingKinds)로 반박돼 지워지는 경우다
+      // (labelFor 참고). 그 삭제를 조용히 흘려보내지 않고 두 번째 채널로 담아
+      // 돌려준다 — movedToOpenQuestions와 같은 이유다.
       const verdict = verdictByCandidateId.get(candidate.candidateId)
       if (candidate.impact === 'high') {
         activeDeletionRemovals.high.push({
@@ -838,15 +935,27 @@ export function render(candidates, verdictByCandidateId, phaseByImpact, vocabula
   const relatedOf = candidate => (candidate.relatedCandidateIds ?? []).map(id => (renderedName.has(id)
     ? codeSpan(renderedName.get(id))
     : `${codeSpan(id)} (상세 지적에 없음)`))
-  const findingLines = candidate => renderFinding(candidate, {
-    label: labelById.get(candidate.candidateId), vocabulary, related: relatedOf(candidate),
-    evidence: evidenceLines(options.evidence?.get(candidate.candidateId)),
-    // 이전 리뷰와의 관계(C-13)는 같은 결함인지 물은 판정과 이 지적의 최종 판정을 함께 본다.
-    lineage: candidate.lineage ? finalizeCurrent(candidate.lineage, options.rechecks?.get(candidate.lineage.previousRef)) : undefined,
-    disposition: verificationState === 'ran' || verificationState === 'disabled'
-      ? dispositionOf(candidate, verdictByCandidateId.get(candidate.candidateId), verificationState)
-      : undefined,
-  })
+  // 실제로 그린 지적 수. 아래 cardinality 검사가 "라벨을 받았다"가 아니라 "상세 지적이나
+  // 특수 패스에 실제로 찍혔다"를 센다 — 라벨을 받고도 어느 절에도 실리지 않는 길이 생기면
+  // 그것이 #45가 말하는 조용한 소멸이다.
+  let drawn = 0
+  const findingLines = candidate => {
+    drawn += 1
+    const verdict = verificationState === 'ran' ? verdictByCandidateId.get(candidate.candidateId) : undefined
+    return renderFinding(candidate, {
+      label: labelById.get(candidate.candidateId), vocabulary, related: relatedOf(candidate),
+      evidence: evidenceLines(options.evidence?.get(candidate.candidateId)),
+      // 이전 리뷰와의 관계(C-13)는 같은 결함인지 물은 판정과 이 지적의 최종 판정을 함께 본다.
+      lineage: candidate.lineage ? finalizeCurrent(candidate.lineage, options.rechecks?.get(candidate.lineage.previousRef)) : undefined,
+      disposition: verificationState === 'ran' || verificationState === 'disabled'
+        ? dispositionOf(candidate, verdictByCandidateId.get(candidate.candidateId), verificationState)
+        : undefined,
+      // 결함은 인정하고 위치만 틀렸다는 반박 — 검증자가 본 자리를 함께 그린다.
+      verifierLocation: verdict?.disposition === 'rejected' && verdict.rebuttalKind === 'location-wrong'
+        ? verdict.rebuttalLocation ?? null
+        : undefined,
+    })
+  }
 
   const lines = ['## 상세 지적', '']
   const titleById = new Map(moduleSections.map(section => [section.id, section.title]))
@@ -926,7 +1035,30 @@ export function render(candidates, verdictByCandidateId, phaseByImpact, vocabula
     }
   }
 
+  checkCardinality(candidates.length, {
+    drawn,
+    moved: movedToOpenQuestions.length,
+    removedHigh: activeDeletionRemovals.high.length,
+    removedLow: activeDeletionRemovals.lowCount,
+  })
   return { markdown: lines.join('\n'), movedToOpenQuestions, activeDeletionRemovals }
+}
+
+/**
+ * 들어온 후보는 모두 정확히 한 곳으로 간다 — 그린 지적, `미해결 / 후속 확인`으로 옮길 목록,
+ * active-deletion이 지운 목록(high는 건별, low는 건수).
+ *
+ * 2.5.7 실사용 리포트가 `후보 27 = 유지 12 + 반박됨 4 + 분류 밖 1 + 범위 미확정 4 + 대상 아님 6`을
+ * 맞췄지만, 그 등식은 모델이 손으로 재구성한 사본 위에서 맞은 것이었다(#45). 성실한 실행과
+ * 성실하지 않은 실행이 같은 출력을 내면 등식이 근거가 되지 못한다. 그래서 등식을 산문이
+ * 아니라 렌더러가 센다. 맞지 않으면 그리지 않고 던진다(CLI는 exit 2로 끝낸다) — 어느 절에도
+ * 없는 지적이 생긴 리포트는 깨끗해 보이는 쪽으로 틀린다.
+ */
+export function checkCardinality(total, { drawn, moved, removedHigh, removedLow }) {
+  const accounted = drawn + moved + removedHigh + removedLow
+  if (accounted !== total) {
+    throw new Error(`render: 후보 ${total}건 중 ${accounted}건만 행선지가 있다 — 그린 지적 ${drawn} + 범위 미확정 이동 ${moved} + active-deletion 삭제 high ${removedHigh}·low ${removedLow}. 어느 절에도 없이 사라진 지적이 있다`)
+  }
 }
 
 // 이 파일이 직접 실행될 때만 CLI로 동작한다. 테스트는 함수를 import한다.
@@ -1008,11 +1140,15 @@ if (process.argv[1] && process.argv[1].endsWith('render-findings.mjs')) {
       die(`--verdicts를 읽지 못했다: ${path} — ${error.message}`)
     }
     // labelFor는 disposition만으로 rejected를 판단하지 않는다 —
-    // rebuttal.kind가 'other'인지도 봐야 그 반박을 계약(C-6B)대로 모든
-    // phase에서 살려둘 수 있다. 그래서 문자열 하나가 아니라
-    // { disposition, rebuttalKind } 객체를 싣는다. rebuttal이 없는
+    // rebuttal.kind가 삭제를 허용하는 kind인지도 봐야 `other`·`location-wrong`
+    // 같은 반박을 계약(C-6B)대로 모든 phase에서 살려둘 수 있다. 그래서 문자열
+    // 하나가 아니라 { disposition, rebuttalKind, … } 객체를 싣는다. rebuttal이 없는
     // disposition(upheld·needs-context)에서는 rebuttalKind가 그냥
     // undefined로 남고 labelFor는 그 값을 보지 않는다.
+    //
+    // `rebuttalLocation`은 `location-wrong` 반박이 짚은 결함의 자리다. 지적은 남고
+    // 렌더러가 그 자리를 함께 그린다 — 여기서 버리면 "위치가 틀렸다"는 말만 남고
+    // 어디가 맞는지는 리포트에서 사라진다.
     //
     // `reason`도 함께 싣는다. labelFor는 이 값을 쓰지 않지만, 계약이
     // `needs-context`에 필수로 요구하는 필드이고(disposition.requires)
@@ -1034,6 +1170,7 @@ if (process.argv[1] && process.argv[1].endsWith('render-findings.mjs')) {
       byCandidateId.set(verdict.candidateId, {
         disposition: verdict.disposition,
         rebuttalKind: verdict.rebuttal?.kind,
+        rebuttalLocation: verdict.rebuttal?.location,
         reason: verdict.reason,
       })
     }

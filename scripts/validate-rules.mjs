@@ -14,6 +14,7 @@ import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { validateEffectiveCommonContext } from './lib/effective-common-context-validator.mjs'
 import { markedBlock, CROSS_VERIFICATION_TOKEN_KEYS } from './lib/contract-blocks.mjs'
+import { NON_RESOLVING_KINDS } from './lib/review-compare.mjs'
 import {
   addError, hasOwn, manifestAllowedSet, scanForbiddenSeverity, validateLocationAgainst, validatePlainObject,
   validateRequiredString, validateUnknownKeys, validateVerdictPayload,
@@ -1393,6 +1394,40 @@ function validateVerdictContractAndFixtures() {
 }
 
 validateVerdictContractAndFixtures()
+
+// 반박이 지적을 지울 수 있는지는 manifest의 `rebuttal.deletionAllowingKinds`가 정하고, 렌더러가
+// 그 목록을 그대로 읽는다(#45). 한때 그 목록에 `location-wrong`("결함은 성립하나 위치가
+// 틀렸다")이 들어 있었다 — 렌더러가 목록을 읽지 않던 동안에는 아무 일도 없어 보였지만, 읽기
+// 시작하는 순간 검증자가 인정한 결함이 줄 번호 때문에 지워진다. 목록이 렌더러에 닿기 전에
+// 여기서 막는다.
+//
+// 기준은 목록 자신이 아니라 증분 재리뷰가 쓰는 `NON_RESOLVING_KINDS`다. 지우지 않는 반박은
+// 재확인에서도 해결로 읽히면 안 되므로 두 목록은 같은 집합이어야 하고, 자기 자신을 기준으로
+// 삼은 검사는 검사가 아니다(`CROSS_VERIFICATION_TOKEN_KEYS`와 같은 이유).
+function validateDeletionTaxonomy() {
+  const manifest = getVerdictManifest()
+  if (!manifest) return
+  const kinds = manifest.rebuttal?.kindEnum ?? []
+  const deleting = manifest.rebuttal?.deletionAllowingKinds
+  if (!Array.isArray(deleting)) {
+    failCode('verdict-contract', 'E_DELETION_KINDS_MISSING', 'REVIEW_VERDICT_CONTRACT_V1 must declare rebuttal.deletionAllowingKinds — render-findings.mjs stops without it')
+    return
+  }
+  for (const kind of deleting.filter(kind => !kinds.includes(kind))) {
+    failCode('verdict-contract', 'E_DELETION_KIND_UNKNOWN', `rebuttal.deletionAllowingKinds names "${kind}", which is not in kindEnum`)
+  }
+  const keeping = kinds.filter(kind => !deleting.includes(kind)).sort()
+  const expected = [...NON_RESOLVING_KINDS].sort()
+  if (keeping.join('|') !== expected.join('|')) {
+    failCode('verdict-contract', 'E_DELETION_KINDS_DRIFT', `rebuttal kinds that never delete a finding are [${keeping.join(', ')}] but review-compare.mjs NON_RESOLVING_KINDS is [${expected.join(', ')}] — other and location-wrong must never delete, and a kind that never deletes must never resolve a previous finding either`)
+  }
+  for (const kind of keeping) {
+    if (CROSS_VERIFICATION_TOKEN_KEYS.includes(`rejected-${kind}`)) continue
+    failCode('verdict-contract', 'E_DELETION_KIND_UNLABELLED', `rebuttal kind "${kind}" never deletes a finding, so it needs its own render token rejected-${kind} in CROSS_VERIFICATION_TOKEN_KEYS`)
+  }
+}
+
+validateDeletionTaxonomy()
 
 function validateVerdictOwnerSync() {
   const manifest = getVerdictManifest()

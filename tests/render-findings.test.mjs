@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url'
 import {
   validateCandidates, loadVocabulary, renderFinding, severityOf, escapeProse, codeSpan,
   withInstanceNumbers, labelFor, dispositionOf, compareCandidates, loadModuleSections, loadSpecialistPasses, render, lineageLine,
+  checkCardinality,
 } from '../scripts/render-findings.mjs'
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)))
@@ -16,11 +17,17 @@ const SCRIPT = join(ROOT, 'scripts', 'render-findings.mjs')
 const RULES = join(ROOT, 'review-rules')
 
 // renderFinding 테스트 전용 어휘 — loadVocabulary가 실제 계약에서 읽어오는
-// { categoryLabels, crossVerification } 모양만 흉내 낸 최소 fixture다. 실제
-// 계약 파일을 읽는 경로는 위 loadVocabulary 테스트가 이미 검증한다.
+// { categoryLabels, crossVerification, rebuttalKinds, deletionAllowingKinds } 모양만
+// 흉내 낸 최소 fixture다. 실제 계약 파일을 읽는 경로는 위 loadVocabulary 테스트가
+// 이미 검증한다. 반박 kind 두 목록은 계약과 같게 둔다 — 반박된 지적을 지울지는 이
+// 목록이 정하고(#45), 목록이 없으면 labelFor가 던진다.
+const REBUTTAL_KINDS = ['guard-exists', 'idempotent-or-safe', 'unreachable', 'contract-differs', 'location-wrong', 'other']
+const DELETION_ALLOWING_KINDS = ['guard-exists', 'idempotent-or-safe', 'unreachable', 'contract-differs']
 const VOCAB = {
   categoryLabels: { 'data-loss': '데이터 손상·유실', 'user-malfunction': '사용자에게 보이는 오동작 또는 사용 불가' },
   crossVerification: { upheld: '유지', 'not-eligible': '대상 아님' },
+  rebuttalKinds: REBUTTAL_KINDS,
+  deletionAllowingKinds: DELETION_ALLOWING_KINDS,
 }
 
 const ok = extra => ({
@@ -156,7 +163,7 @@ test('impact.categoryLabels가 없으면 loadVocabulary가 거부한다', () => 
 // 토큰은 다르다. 키 하나가 빠지면 라벨이 undefined가 되고 축 줄이 통째로
 // 사라져, 검증을 끈 실행이 "교차검증 축 자체가 없는 워크플로우"와 구분되지
 // 않는다. 그 상태로도 렌더는 성공한다.
-const writeTokenRulesDir = tokens => {
+const writeTokenRulesDir = (tokens, rebuttal = { kindEnum: REBUTTAL_KINDS, deletionAllowingKinds: DELETION_ALLOWING_KINDS }) => {
   const dir = mkdtempSync(join(tmpdir(), 'render-rules-'))
   writeFileSync(join(dir, 'workflow-contract.md'), [
     '<!-- REVIEW_RESULT_CONTRACT_V1:BEGIN -->',
@@ -164,6 +171,12 @@ const writeTokenRulesDir = tokens => {
     JSON.stringify({ impact: { categoryLabels: { 'data-loss': '데이터 손상·유실' } } }),
     '```',
     '<!-- REVIEW_RESULT_CONTRACT_V1:END -->',
+    '',
+    '<!-- REVIEW_VERDICT_CONTRACT_V1:BEGIN -->',
+    '```json',
+    JSON.stringify({ rebuttal }),
+    '```',
+    '<!-- REVIEW_VERDICT_CONTRACT_V1:END -->',
     '',
     '<!-- CROSS_VERIFICATION_RENDER_TOKENS:BEGIN -->',
     '```json',
@@ -178,6 +191,7 @@ const ALL_TOKENS = {
   upheld: '유지',
   'rejected-shadow': '반박됨 — 관찰 중',
   'rejected-other': '반박 시도 — 분류 밖',
+  'rejected-location-wrong': '위치 이견 — 결함 유지',
   'scope-open': '범위 미확정',
   'verification-unavailable': '검증 실패',
   'not-eligible': '대상 아님',
@@ -223,6 +237,41 @@ test('실제 review-rules에서는 두 어휘 맵이 모두 채워진다', () =>
   // 실제 계약에 있는 카테고리 하나를 골라 라벨이 한글인지 확인한다 — 객체가
   // 비어있지 않다는 것만으론 raw enum이 그대로 새어나오지 않는다는 걸 보장 못 한다.
   assert.equal(result.value.categoryLabels['data-loss'], '데이터 손상·유실')
+})
+
+// 반박이 지적을 지울 수 있는지는 판정 manifest의 deletionAllowingKinds가 정하고, 렌더러가
+// 그것을 읽는다(#45). 실제 계약에서 결함을 인정한 반박(location-wrong)과 위치 없는
+// 반박(other)은 그 목록 밖이어야 한다.
+test('실제 계약의 삭제 허용 kind에는 location-wrong과 other가 없다', () => {
+  const { value } = loadVocabulary(RULES)
+  assert.deepEqual(value.deletionAllowingKinds, DELETION_ALLOWING_KINDS)
+  assert.equal(value.crossVerification['rejected-location-wrong'], '위치 이견 — 결함 유지')
+})
+
+test('판정 manifest를 읽지 못하면 loadVocabulary가 거부한다 — 무엇을 지울지 기본값으로 정하지 않는다', () => {
+  const dir = writeBrokenRulesDir()
+  writeFileSync(join(dir, 'workflow-contract.md'), [
+    '<!-- REVIEW_RESULT_CONTRACT_V1:BEGIN -->', '```json', JSON.stringify({ impact: { categoryLabels: {} } }), '```', '<!-- REVIEW_RESULT_CONTRACT_V1:END -->',
+    '<!-- CROSS_VERIFICATION_RENDER_TOKENS:BEGIN -->', '```json', JSON.stringify({ label: '교차검증', tokens: ALL_TOKENS }), '```', '<!-- CROSS_VERIFICATION_RENDER_TOKENS:END -->',
+  ].join('\n'), 'utf8')
+  const result = loadVocabulary(dir)
+  rmSync(dir, { recursive: true, force: true })
+  assert.match(result.error ?? '', /REVIEW_VERDICT_CONTRACT_V1/)
+})
+
+test('deletionAllowingKinds가 없으면 loadVocabulary가 거부한다', () => {
+  const dir = writeTokenRulesDir(ALL_TOKENS, { kindEnum: REBUTTAL_KINDS })
+  const result = loadVocabulary(dir)
+  rmSync(dir, { recursive: true, force: true })
+  assert.match(result.error ?? '', /deletionAllowingKinds/)
+})
+
+test('삭제를 허용하지 않는 kind에 표기 토큰이 없으면 loadVocabulary가 거부한다', () => {
+  // unreachable을 삭제 목록에서 빼면 그 반박은 어느 phase에서도 남으므로 rejected-unreachable이 필요하다.
+  const dir = writeTokenRulesDir(ALL_TOKENS, { kindEnum: REBUTTAL_KINDS, deletionAllowingKinds: ['guard-exists'] })
+  const result = loadVocabulary(dir)
+  rmSync(dir, { recursive: true, force: true })
+  assert.match(result.error ?? '', /rejected-unreachable/)
 })
 
 // -------------------------------------------------------------- renderFinding
@@ -731,6 +780,30 @@ test('CLI가 active-deletion 삭제를 stderr에 낸다', () => {
   assert.match(out.stderr, /guard-exists/, 'stderr 알림에 rebuttal.kind가 없다')
 })
 
+// #45 — 판정 파일의 rebuttal.location이 CLI loader를 지나 렌더까지 살아 와야 한다. loader는
+// 판정 파일을 읽는 유일한 자리라, 거기서 버리면 "위치가 틀렸다"는 말만 남는다.
+test('CLI가 location-wrong 반박의 위치를 판정 파일에서 읽어 지적 아래에 그린다', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'render-'))
+  const input = join(dir, 'targets.json')
+  const verdictsPath = join(dir, 'verdicts.json')
+  writeFileSync(input, JSON.stringify({
+    candidates: [ok({ candidateId: '04-3#1', ruleId: '04-3', eligibility: 'VERIFY', route: 'isolated', content: { title: '위치만 틀린 결함', body: 'B' } })],
+  }), 'utf8')
+  writeFileSync(verdictsPath, JSON.stringify({
+    verdicts: [{
+      candidateId: '04-3#1', disposition: 'rejected', evidence: 'e', location: { kind: 'verified', path: 'src/a.ts', line: 1, quote: 'const a = 1' },
+      rebuttal: { kind: 'location-wrong', location: { kind: 'verified', path: 'src/real.ts', line: 7, quote: 'real()' } },
+    }],
+  }), 'utf8')
+  const out = spawnSync(process.execPath, [
+    SCRIPT, '--input', input, '--rules', RULES, '--phase-high', 'rollout-shadow', '--phase-low', 'rollout-shadow',
+    '--workflow', 'full', '--verdicts', verdictsPath, '--verification-state', 'ran',
+  ], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+  rmSync(dir, { recursive: true, force: true })
+  assert.equal(out.status, 0, out.stderr)
+  assert.match(out.stdout, /#### 🔴 `04-3` 위치만 틀린 결함\n[^\n]*교차검증: `위치 이견 — 결함 유지`\n`src\/a\.ts:1` — `const a = 1`\n검증자가 짚은 위치\(대조하지 않음\): `src\/real\.ts:7` — `real\(\)`\n/)
+})
+
 // PR #85 리뷰 지적 2b/3 — CLI 전체 경로에서도 disabled가 검증 대상(VERIFY)
 // finding에 꺼짐 토큰을 찍는지 본다. --verdicts를 아예 안 줘도(검증을
 // 껐으므로 판정 파일 자체가 없는 것이 정상) 축이 사라지지 않고 꺼짐으로
@@ -813,12 +886,12 @@ test('판정이 없는 검증 대상은 검증 실패다', () => {
 // "rebuttal.kind = other" 절 참고). rebuttal이 없는 판정에서는 rebuttalKind를
 // 그냥 생략한다.
 test('반박된 finding은 active-deletion에서 사라진다', () => {
-  const verdicts = new Map([['04-3#1', { disposition: 'rejected' }]])
+  const verdicts = new Map([['04-3#1', { disposition: 'rejected', rebuttalKind: 'guard-exists' }]])
   assert.equal(labelFor(ok({ eligibility: 'VERIFY' }), verdicts, { high: 'active-deletion', low: 'active-deletion' }, VOCAB), null)
 })
 
 test('반박된 finding은 rollout-shadow에서 관찰 중으로 남는다', () => {
-  const verdicts = new Map([['04-3#1', { disposition: 'rejected' }]])
+  const verdicts = new Map([['04-3#1', { disposition: 'rejected', rebuttalKind: 'guard-exists' }]])
   const vocab = { ...VOCAB, crossVerification: { ...VOCAB.crossVerification, 'rejected-shadow': '반박됨 — 관찰 중' } }
   assert.equal(labelFor(ok({ eligibility: 'VERIFY' }), verdicts, { high: 'rollout-shadow', low: 'rollout-shadow' }, vocab), '반박됨 — 관찰 중')
 })
@@ -1002,6 +1075,131 @@ test('rebuttal.kind가 other면 rollout-shadow에서도 분류 밖으로 남는�
 test('rebuttal.kind가 other가 아니면 active-deletion에서 그대로 사라진다', () => {
   const verdicts = new Map([['04-3#1', { disposition: 'rejected', rebuttalKind: 'guard-exists' }]])
   assert.equal(labelFor(ok({ eligibility: 'VERIFY' }), verdicts, { high: 'active-deletion', low: 'active-deletion' }, VOCAB), null)
+})
+
+// ------------------------------------------------ rebuttal.kind = location-wrong (#45)
+//
+// `location-wrong`은 "결함은 성립하나 위치가 틀렸다"다 — 검증자가 결함을 인정한 반박이다.
+// 그런데 manifest의 deletionAllowingKinds에 들어 있었고, 렌더러는 그 목록을 읽지 않고
+// `other`만 살렸다. 그래서 active-deletion에서는 줄 번호가 틀렸다는 이유로 진짜 결함이
+// 지워졌다. 이제 삭제 여부는 manifest의 목록이 정하고, 목록 밖의 kind는 어느 phase에서도
+// 지적을 남긴다.
+
+const LOCATION_VOCAB = {
+  ...VOCAB,
+  crossVerification: {
+    ...VOCAB.crossVerification,
+    'rejected-shadow': '반박됨 — 관찰 중',
+    'rejected-other': '반박 시도 — 분류 밖',
+    'rejected-location-wrong': '위치 이견 — 결함 유지',
+  },
+}
+
+for (const phase of ['active-deletion', 'rollout-shadow']) {
+  test(`location-wrong 반박은 ${phase}에서도 지워지지 않고 제 이름으로 남는다`, () => {
+    const verdicts = new Map([['04-3#1', { disposition: 'rejected', rebuttalKind: 'location-wrong' }]])
+    assert.equal(labelFor(ok({ eligibility: 'VERIFY' }), verdicts, { high: phase, low: phase }, LOCATION_VOCAB), '위치 이견 — 결함 유지')
+  })
+}
+
+test('rejected인데 rebuttal.kind가 없거나 목록 밖이면 지우지도 남기지도 않고 던진다', () => {
+  for (const verdict of [{ disposition: 'rejected' }, { disposition: 'rejected', rebuttalKind: 'made-up' }]) {
+    const verdicts = new Map([['04-3#1', verdict]])
+    for (const phase of ['active-deletion', 'rollout-shadow']) {
+      assert.throws(() => labelFor(ok({ eligibility: 'VERIFY' }), verdicts, { high: phase, low: phase }, LOCATION_VOCAB), /rebuttal\.kind/)
+    }
+  }
+})
+
+test('삭제를 허용하는 kind 목록을 받지 못하면 기본값으로 지우지 않고 던진다', () => {
+  const verdicts = new Map([['04-3#1', { disposition: 'rejected', rebuttalKind: 'guard-exists' }]])
+  const { deletionAllowingKinds: _dropped, ...vocab } = LOCATION_VOCAB
+  assert.throws(() => labelFor(ok({ eligibility: 'VERIFY' }), verdicts, { high: 'active-deletion', low: 'active-deletion' }, vocab), /deletionAllowingKinds/)
+})
+
+test('phase가 두 값 밖이면 지우는 쪽으로 넘어가지 않고 던진다', () => {
+  const verdicts = new Map([['04-3#1', { disposition: 'rejected', rebuttalKind: 'guard-exists' }]])
+  assert.throws(() => labelFor(ok({ eligibility: 'VERIFY' }), verdicts, { low: 'active-deletion' }, LOCATION_VOCAB), /phase/)
+})
+
+const LOCATION_SECTIONS = [{ kind: 'module', id: '04', title: '상태와 Effect' }, { kind: 'module', id: '11', title: '스타일링' }]
+
+test('active-deletion에서 location-wrong 지적은 상세 지적에 원 등급으로 남고, guard-exists 지적만 지워진다', () => {
+  const candidates = [
+    ok({ candidateId: '04-3#1', ruleId: '04-3', impact: 'high', confidence: 'high', eligibility: 'VERIFY', route: 'isolated',
+         content: { title: '위치만 틀린 결함', body: 'B1' } }),
+    ok({ candidateId: '11-6#1', ruleId: '11-6', impact: 'high', confidence: 'high', eligibility: 'VERIFY', route: 'isolated',
+         location: { kind: 'verified', path: 'src/guarded.ts', line: 3, quote: 'guarded()' },
+         content: { title: '가드가 막는 지적', body: 'B2' } }),
+  ]
+  const verdicts = new Map([
+    ['04-3#1', { disposition: 'rejected', rebuttalKind: 'location-wrong', rebuttalLocation: { kind: 'verified', path: 'src/real.ts', line: 9, endLine: 11, quote: 'real()' } }],
+    ['11-6#1', { disposition: 'rejected', rebuttalKind: 'guard-exists', rebuttalLocation: { kind: 'verified', path: 'src/guard.ts', line: 1, quote: 'if (!x) return' } }],
+  ])
+  const { markdown, activeDeletionRemovals } = render(candidates, verdicts, { high: 'active-deletion', low: 'active-deletion' },
+    LOCATION_VOCAB, LOCATION_SECTIONS, 'ran')
+  // 등급은 두 축에서 나온 그대로(🔴)이고, 상태는 축 줄 한 곳에서 말한다.
+  assert.match(markdown, /#### 🔴 `04-3` 위치만 틀린 결함\n영향: 높음 \(데이터 손상·유실\) · 확신: 높음 · 교차검증: `위치 이견 — 결함 유지`\n`src\/a\.ts:1` — `const a = 1`\n검증자가 짚은 위치\(대조하지 않음\): `src\/real\.ts:9-11` — `real\(\)`\n본문: B1/)
+  assert.doesNotMatch(markdown, /가드가 막는 지적/, 'guard-exists 반박은 active-deletion에서 지워져야 한다 — 회귀 방지')
+  assert.deepEqual(activeDeletionRemovals, { high: [{ ruleId: '11-6', path: 'src/guarded.ts', rebuttalKind: 'guard-exists' }], lowCount: 0 })
+})
+
+test('rollout-shadow에서도 location-wrong 지적은 관찰 중이 아니라 위치 이견으로 남고 검증자의 자리를 함께 그린다', () => {
+  const candidates = [ok({ candidateId: '04-3#1', ruleId: '04-3', eligibility: 'VERIFY', content: { title: '위치만 틀린 결함', body: 'B1' } })]
+  const verdicts = new Map([['04-3#1', {
+    disposition: 'rejected', rebuttalKind: 'location-wrong',
+    rebuttalLocation: { kind: 'deleted', path: 'src/old.ts', lineBefore: 4, quote: 'old()' },
+  }]])
+  const { markdown, activeDeletionRemovals } = render(candidates, verdicts, { high: 'rollout-shadow', low: 'rollout-shadow' },
+    LOCATION_VOCAB, LOCATION_SECTIONS, 'ran')
+  assert.match(markdown, /교차검증: `위치 이견 — 결함 유지`/)
+  assert.doesNotMatch(markdown, /관찰 중/)
+  // deleted 위치는 producer 위치 줄과 같은 규칙으로 merge-base의 줄 번호(lineBefore)를 쓴다.
+  assert.match(markdown, /\n검증자가 짚은 위치\(대조하지 않음\): `src\/old\.ts:4` — `old\(\)`\n/)
+  assert.deepEqual(activeDeletionRemovals, { high: [], lowCount: 0 })
+})
+
+test('location-wrong 판정에 위치가 없으면 빈 칸 대신 그 사실을 적는다', () => {
+  const candidates = [ok({ candidateId: '04-3#1', ruleId: '04-3', eligibility: 'VERIFY' })]
+  const verdicts = new Map([['04-3#1', { disposition: 'rejected', rebuttalKind: 'location-wrong' }]])
+  const { markdown } = render(candidates, verdicts, { high: 'active-deletion', low: 'active-deletion' }, LOCATION_VOCAB, LOCATION_SECTIONS, 'ran')
+  assert.match(markdown, /\n검증자가 짚은 위치: 판정에 위치가 없다\n/)
+})
+
+test('검증자의 자리 줄은 location-wrong에만 붙는다 — 다른 반박의 위치는 막는 코드의 자리라 뜻이 다르다', () => {
+  const candidates = [ok({ candidateId: '04-3#1', ruleId: '04-3', eligibility: 'VERIFY' })]
+  const verdicts = new Map([['04-3#1', { disposition: 'rejected', rebuttalKind: 'guard-exists', rebuttalLocation: { kind: 'verified', path: 'src/guard.ts', line: 1, quote: 'g' } }]])
+  const { markdown } = render(candidates, verdicts, { high: 'rollout-shadow', low: 'rollout-shadow' }, LOCATION_VOCAB, LOCATION_SECTIONS, 'ran')
+  assert.doesNotMatch(markdown, /검증자가 짚은 위치/)
+})
+
+// 들어온 후보는 모두 정확히 한 곳으로 간다(#45). 손으로 재구성한 사본으로도 맞는 등식은
+// 근거가 되지 못하므로 렌더러가 직접 센다.
+test('cardinality — 그린 지적·이동·삭제의 합이 후보 수와 다르면 던진다', () => {
+  assert.doesNotThrow(() => checkCardinality(5, { drawn: 2, moved: 1, removedHigh: 1, removedLow: 1 }))
+  assert.throws(() => checkCardinality(5, { drawn: 2, moved: 1, removedHigh: 1, removedLow: 0 }), /후보 5건 중 4건/)
+})
+
+test('cardinality — render가 돌려주는 세 통의 합은 후보 수와 같다', () => {
+  const candidates = [
+    ok({ candidateId: '04-3#1', ruleId: '04-3', impact: 'high', eligibility: 'VERIFY' }),
+    ok({ candidateId: '04-3#2', ruleId: '04-3', impact: 'high', eligibility: 'VERIFY' }),
+    ok({ candidateId: '11-6#1', ruleId: '11-6', impact: 'low', category: undefined, eligibility: 'VERIFY' }),
+    ok({ candidateId: '11-6#2', ruleId: '11-6', impact: 'low', category: undefined, eligibility: 'VERIFY' }),
+    ok({ candidateId: '11-6#3', ruleId: '11-6', impact: 'low', category: undefined, eligibility: 'SKIP-VERIFY' }),
+  ]
+  const verdicts = new Map([
+    ['04-3#1', { disposition: 'rejected', rebuttalKind: 'guard-exists' }],
+    ['04-3#2', { disposition: 'rejected', rebuttalKind: 'location-wrong' }],
+    ['11-6#1', { disposition: 'rejected', rebuttalKind: 'unreachable' }],
+    ['11-6#2', { disposition: 'needs-context', reason: 'r' }],
+  ])
+  const vocab = { ...LOCATION_VOCAB, crossVerification: { ...LOCATION_VOCAB.crossVerification, 'scope-open': '범위 미확정' } }
+  const { markdown, movedToOpenQuestions, activeDeletionRemovals } = render(candidates, verdicts,
+    { high: 'active-deletion', low: 'active-deletion' }, vocab, LOCATION_SECTIONS, 'ran')
+  const drawn = (markdown.match(/^#### /gm) ?? []).length
+  assert.equal(drawn, 2, '위치 이견 하나와 대상 아님 하나가 그려진다')
+  assert.equal(drawn + movedToOpenQuestions.length + activeDeletionRemovals.high.length + activeDeletionRemovals.lowCount, candidates.length)
 })
 
 // -------------------------------------------------------------- loadModuleSections
@@ -1229,8 +1427,8 @@ test('phase는 impact별로 독립이다 — high는 관찰 중으로 남고 low
          content: { title: '반박된 low', body: 'B2' } }),
   ]
   const verdicts = new Map([
-    ['04-3#1', { disposition: 'rejected' }],
-    ['11-6#1', { disposition: 'rejected' }],
+    ['04-3#1', { disposition: 'rejected', rebuttalKind: 'guard-exists' }],
+    ['11-6#1', { disposition: 'rejected', rebuttalKind: 'guard-exists' }],
   ])
   const vocab = { ...VOCAB, crossVerification: { ...VOCAB.crossVerification, 'rejected-shadow': '반박됨 — 관찰 중' } }
   const { markdown: md } = render(candidates, verdicts, { high: 'rollout-shadow', low: 'active-deletion' }, vocab,
