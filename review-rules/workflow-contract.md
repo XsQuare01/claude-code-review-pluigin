@@ -93,6 +93,8 @@ MERGE_BASE=$(git merge-base $BASE_BRANCH HEAD)
 
 커밋 단위 리뷰처럼 범위 결정 방식이 다른 워크플로우는 자기 SKILL 문서에서 그 차이만 선언한다.
 
+**결정한 범위의 diff는 오케스트레이터가 한 번 수집해 producer 프롬프트에 담는다.** 일곱 워크플로우가 모두 같다 — `full`은 3a(3)에서, 나머지는 각자 Step 1·2에서 수집한다(`commit`은 `git show --format=medium` patch). producer는 git을 돌리지 않는다. producer를 셸 없이 띄울 수 있는(C-6) 전제가 이것이다. 삭제된 파일의 옛 내용도 그 diff의 `-` 줄에 들어 있어 따로 꺼낼 것이 없다.
+
 ## C-5. 제외 경로
 
 다음 경로는 일반 리뷰 대상에서 제외한다. diff 확인 시 존재 여부는 볼 수 있으나, sub-agent에 전달하는 변경 파일 목록과 지적 범위에서는 뺀다.
@@ -103,6 +105,8 @@ MERGE_BASE=$(git merge-base $BASE_BRANCH HEAD)
 - `*.mock.*`, `mockData/**`, 테스트/목 전용임이 명확한 fixture
 
 제외의 의미는 `00-rule.md` 00-3을 따른다. **테스트 파일을 지적 대상에서 빼는 것이지, 테스트 변경을 증거에서 빼는 것이 아니다.**
+
+**제외는 오케스트레이터가 적용한다.** producer 프롬프트에 담는 diff 본문(C-4)은 테스트·목 변경까지 그대로 두고, 변경 파일 목록과 지적 범위에서만 뺀다. producer가 받는 제외 경로 목록은 "지적하지 않을 경로"이지 "읽지 않을 경로"가 아니다 — diff에서 테스트 hunk를 지우면 producer는 영향 범위를 읽을 증거를 잃고, 그 사실을 알 길도 없다.
 
 ## C-6. 실행 안전
 
@@ -119,6 +123,16 @@ MERGE_BASE=$(git merge-base $BASE_BRANCH HEAD)
 - 런타임이 producer의 도구를 제한할 수 없으면, 그 실행은 **격리된 사본에서** 하거나
   producer를 띄우지 않고 오케스트레이터가 직접 읽어 리뷰한다. 제한할 수 없다는 사실을
   리포트에 적는다
+- **일곱 워크플로우의 producer를 모두 `rule-module-reviewer`(`Read`·`Grep`·`Glob`)로 띄운다.**
+  `full`만이 아니다 — `default`·`commit`·`fast`·`props`·`math`·`exception`도 각자의
+  `task(` 호출에서 이 에이전트를 지목한다(#70). 지목이 도구 제한이 되는 것은 호스트가 그
+  에이전트를 아는 경우뿐이다. 에이전트를 설치하지 않는 호스트(OpenCode는 스킬만 설치한다)는
+  도구를 제한할 수 없는 런타임이므로 위의 대체 경로를 따른다
+- 이 요구는 `validate-rules.mjs`가 **기본 거부**로 검사한다(`scripts/lib/producer-tools.mjs`).
+  스킬에 dispatch 정황(`task(`, `run_in_background`, `subagent_type`)이 있으면 `task(` 호출마다
+  prompt 앞에서 제한된 에이전트를 지목해야 하고, 지목을 읽지 못하면 통과가 아니라 실패다.
+  처음 검사는 `subagent_type=` 표기 하나만 알아서, `category`만 준 여섯 워크플로우에
+  `{"targets":[],"problems":[]}`로 초록불을 켰다(#69). 검사가 모르는 형식은 통과가 아니다
 - 자동 수정과 코드 수정은 사용자가 명시적으로 요청했을 때만
 - 사용자의 read-only / 파일 수정 금지 / 텍스트 응답 요청이 다른 모든 규칙보다 우선
 - 도구 실행 결과는 리뷰 지적과 분리해 별도 섹션으로 보고
@@ -166,6 +180,7 @@ SDK 드리프트로 원래부터 그만큼 실패하고 있었고, 그 브랜치
 - 직접 호출하는 correctness agent는 `CR-{n}` namespace와 `00-9`/`00-10`/`00-11` evidence discipline을 그대로 따르지만, **phase-1 structured-v1 owner는 아니다.** 그 에이전트의 산문 결과를 받는 validation/render consumer가 없으므로 direct-agent evidence-first 결과만 낸다.
 - **`full`의 정확성 패스는 그 에이전트를 쓰지 않는다(2.17.0).** `--correctness on`일 때 full SKILL이 structured-v1 producer 지시를 보유하고, 판정 문서 `correctness.md`를 쓰기 도구 없는 `rule-module-reviewer`에게 넘긴다. 결과는 다른 특수 패스와 같은 validation → aggregation → verification → rendering을 지난다. 판정 기준은 에이전트 문서와 `correctness.md`가 같고, `validate-rules.mjs`가 두 문서를 대조한다.
 - 아래 lifecycle은 **structured-v1 owner에만 적용**한다. legacy owner(`default`, `commit`, `fast`)는 기존 producer 계약을 유지한다.
+- legacy와 structured-v1은 **출력 계약**의 구분이다. producer를 어느 에이전트로 띄우고 diff를 누가 뜨는지는 구분 없이 C-4·C-6을 따른다 — legacy owner의 producer도 오케스트레이터가 넘긴 diff를 받는 `rule-module-reviewer`다.
 
 `REVIEW_RESULT_CONTRACT_V1`을 쓰는 owner에서는 결과가 **producer → validation → aggregation → Markdown rendering** 순서로 흐른다. 공통 원칙은 다음과 같다.
 

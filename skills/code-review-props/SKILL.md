@@ -37,6 +37,8 @@ Props drilling, 과도한 props 전달, 함수 인자 과다를 **독립적으�
 
 변경 파일 중 컴포넌트, 훅, 함수 시그니처, 서비스/API 호출, 상태 전달 구조가 바뀐 파일만 리뷰 대상으로 좁힌다. 관련 변경이 없으면 "대상 없음"으로 종료한다.
 
+**diff는 여기서 오케스트레이터가 한 번만 수집한다.** `git diff $MERGE_BASE..HEAD` 출력 전체가 Step 3 producer 프롬프트의 `{DIFF}`가 된다. producer는 git을 돌리지 않는다 — 셸이 없는 에이전트로 띄우기 때문이다(Step 3, C-6). 좁히는 것은 `{CHANGED_PROP_FILES}`(지적 대상)이고 `{DIFF}`는 좁히기 전 전체다 — 대상 파일의 props가 어디서 와서 어디로 가는지는 대상이 아닌 파일의 변경에 드러날 수 있다. 테스트 파일 변경도 그대로 담는다. 테스트는 지적 대상에서 빠질 뿐 증거에서 빠지지 않는다(C-5).
+
 ### Step 2: Lint 확인 (read-only, 선택)
 
 `00-rule.md` 00-9 실행 안전 계약을 따른다. lint가 설정돼 있으면 **수정 옵션 없이** 실행하고, 자동 수정은 사용자가 명시적으로 요청했을 때만 한다. props/인자 구조 리뷰는 lint와 별도 축이므로 lint가 없어도 그대로 진행 가능하다.
@@ -45,9 +47,11 @@ Props drilling, 과도한 props 전달, 함수 인자 과다를 **독립적으�
 
 **단 하나의 sub-agent**만 dispatch한다. `run_in_background=false`로 즉시 실행.
 
+**producer는 `subagent_type="react-code-review-plugin:rule-module-reviewer"`로 띄운다(C-6).** 이 에이전트는 `Read`·`Grep`·`Glob`만 가진다 — 쓰기 도구도 셸도 없어서 실제로 고칠 수 없다. `/code-review-full`의 Props 패스와 같은 에이전트다. `general` 같은 만능 에이전트나 셸을 가진 `correctness-reviewer`로 띄우지 않는다. 런타임이 sub-agent의 도구를 제한하지 못하면(이 에이전트를 설치하지 않는 호스트 포함) C-6의 대체 경로 — 격리된 사본에서 실행하거나 producer 없이 오케스트레이터가 직접 리뷰 — 를 따르고, 그 사실을 리포트 `리뷰 기준`에 적는다.
+
 ```
 task(
-  category="unspecified-high",
+  subagent_type="react-code-review-plugin:rule-module-reviewer",
   load_skills=[],
   description="Props & Arguments Code Review",
   prompt="아래 지시에 따라 props drilling 및 인자 전달 구조 코드 리뷰를 수행하세요.
@@ -56,10 +60,14 @@ task(
 - 기준: {MERGE_BASE}
 - 대상: HEAD
 - 변경 파일 (props/인자 전달 구조 관련 파일만): {CHANGED_PROP_FILES}
+- 제외 파일(지적하지 않을 경로): `__test__/**`, `__tests__/**`, `*.test.*`, `*.spec.*`, `__mocks__/**`, `mock/**`, `mocks/**`, `*.mock.*`, 테스트/목 전용 fixture/mock data
+
+## Diff
+{DIFF — Step 1에서 오케스트레이터가 수집한 git diff {MERGE_BASE}..HEAD 본문 전체. 좁히기 전 전체이며 테스트 파일 변경 포함}
 
 ## 리뷰 수행 방법
-1. `git diff {MERGE_BASE}..HEAD` 로 전체 diff 확인
-2. 변경 파일을 직접 읽어서 컴포넌트 트리, props 전달 체인, 함수 호출 체인을 추적
+1. 위 `## Diff`가 입력의 전부입니다. git을 직접 실행하지 마세요 — diff는 오케스트레이터가 이미 수집했고, 삭제된 파일의 옛 내용도 그 diff의 `-` 줄에 있습니다. 지적은 위 변경 파일 목록에 한정하고, 나머지 diff는 전달 체인을 읽는 근거로 씁니다
+2. diff만으로 전달 체인이 닫히지 않을 때만 그 diff가 가리키는 파일을 Read로 더 읽어 컴포넌트 트리, props 전달 체인, 함수 호출 체인을 추적
 3. 아래 리뷰 규칙 전체를 적용해 위반 사항 탐지
 4. props 이름만 보고 추측하지 말고 실제로 어느 컴포넌트/함수를 거쳐 전달되는지 확인
 5. 단순 개수보다 책임 혼재, pass-through, 호출부 의미 불명확성을 우선 판단
@@ -119,5 +127,6 @@ sub-agent 응답을 받은 즉시 `workflow-contract.md` C-6A와 `REVIEW_RESULT_
 
 - 이 모드는 일반 코드 품질·아키텍처를 검사하지 않는다. 그쪽은 `/code-review` 또는 `/code-review-fast`로 별도 실행
 - 변경 파일에 props/인자 전달 구조 변경이 없으면 "대상 없음"으로 즉시 종료
+- diff 수집은 오케스트레이터가 하고, producer는 받은 diff를 읽기만 하는 `rule-module-reviewer`로 띄운다 (C-6)
 - `props.md`는 숫자 prefix가 없어 `/code-review`의 자동 모듈 스캔에서 제외됨
 - props drilling 해결책으로 context/store를 제안할 때도 과한 전역화인지 함께 검토한다
