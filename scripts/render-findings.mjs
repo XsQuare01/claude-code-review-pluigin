@@ -248,6 +248,7 @@ export function deletionBasis(rulesDir) {
   const rebuttal = manifest.value?.rebuttal
   if (!rebuttal || typeof rebuttal !== 'object') return { error: 'REVIEW_VERDICT_CONTRACT_V1에 rebuttal이 없다 — 삭제 승인의 기준을 만들 수 없다' }
   const manifestBlock = markedBlock(contract.value, 'REVIEW_VERDICT_CONTRACT_V1')
+  if (manifestBlock.error) return { error: manifestBlock.error }
   const template = markedBlock(prompt.value, 'VERIFIER_PROMPT')
   if (template.error) return { error: `verifier-prompt.md: ${template.error}` }
   const instructions = instructionsWithManifest(template.value, manifestBlock.value)
@@ -806,7 +807,13 @@ export function labelFor(candidate, verdictByCandidateId, phaseByImpact, vocabul
   const verdict = verdictByCandidateId.get(candidate.candidateId)
   const disposition = dispositionOf(candidate, verdict, 'ran')
   if (disposition === 'rejected') {
-    if (!rebuttalDeletes(candidate, verdict, vocabulary)) return tokens[`rejected-${verdict.rebuttalKind}`]
+    if (!rebuttalDeletes(candidate, verdict, vocabulary)) {
+      // loadVocabulary가 이 토큰의 존재를 이미 본다. 손으로 만든 어휘로 불려도 undefined 라벨로
+      // 축 줄이 통째로 빠지지 않게 여기서도 멈춘다.
+      const token = tokens[`rejected-${verdict.rebuttalKind}`]
+      if (typeof token !== 'string' || !token) throw new Error(`labelFor: 삭제를 허용하지 않는 반박 kind ${verdict.rebuttalKind}의 표기 토큰(rejected-${verdict.rebuttalKind})이 없다`)
+      return token
+    }
     // 이 finding의 impact가 속한 phase만 본다 — high/low를 하나의 phase로
     // 합쳐 읽으면 한쪽의 독립 승인이 다른 쪽 값에 가려진다.
     const phase = phaseByImpact[candidate.impact]
@@ -1165,17 +1172,19 @@ export function render(candidates, verdictByCandidateId, phaseByImpact, vocabula
   let drawn = 0
   const findingLines = candidate => {
     drawn += 1
-    const verdict = verificationState === 'ran' ? verdictByCandidateId.get(candidate.candidateId) : undefined
+    const verdict = verdictByCandidateId.get(candidate.candidateId)
+    const disposition = verificationState === 'ran' || verificationState === 'disabled'
+      ? dispositionOf(candidate, verdict, verificationState)
+      : undefined
     return renderFinding(candidate, {
       label: labelById.get(candidate.candidateId), vocabulary, related: relatedOf(candidate),
       evidence: evidenceLines(options.evidence?.get(candidate.candidateId)),
       // 이전 리뷰와의 관계(C-13)는 같은 결함인지 물은 판정과 이 지적의 최종 판정을 함께 본다.
       lineage: candidate.lineage ? finalizeCurrent(candidate.lineage, options.rechecks?.get(candidate.lineage.previousRef)) : undefined,
-      disposition: verificationState === 'ran' || verificationState === 'disabled'
-        ? dispositionOf(candidate, verdictByCandidateId.get(candidate.candidateId), verificationState)
-        : undefined,
-      // 결함은 인정하고 위치만 틀렸다는 반박 — 검증자가 본 자리를 함께 그린다.
-      verifierLocation: verdict?.disposition === 'rejected' && verdict.rebuttalKind === 'location-wrong'
+      disposition,
+      // 결함은 인정하고 위치만 틀렸다는 반박 — 검증자가 본 자리를 함께 그린다. 축 줄의 라벨과
+      // 같은 disposition에서 정한다(검증 대상이 아니었던 후보의 판정은 보지 않는다).
+      verifierLocation: disposition === 'rejected' && verdict.rebuttalKind === 'location-wrong'
         ? verdict.rebuttalLocation ?? null
         : undefined,
     })

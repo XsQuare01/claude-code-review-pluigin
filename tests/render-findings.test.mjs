@@ -1302,6 +1302,19 @@ test('삭제를 허용하는 kind 목록을 받지 못하면 기본값으로 지
   assert.throws(() => labelFor(ok({ eligibility: 'VERIFY' }), verdicts, { high: 'active-deletion', low: 'active-deletion' }, vocab), /deletionAllowingKinds/)
 })
 
+test('지우지 않는 반박의 표기 토큰이 없으면 축 줄을 조용히 빼지 않고 던진다', () => {
+  const verdicts = new Map([['04-3#1', { disposition: 'rejected', rebuttalKind: 'location-wrong' }]])
+  assert.throws(() => labelFor(ok({ eligibility: 'VERIFY' }), verdicts, { high: 'rollout-shadow', low: 'rollout-shadow' }, VOCAB), /rejected-location-wrong/)
+})
+
+test('검증 대상이 아니었던 후보는 판정이 있어도 검증자의 자리 줄을 그리지 않는다', () => {
+  const candidates = [ok({ candidateId: '04-3#1', ruleId: '04-3', eligibility: 'SKIP-VERIFY' })]
+  const verdicts = new Map([['04-3#1', { disposition: 'rejected', rebuttalKind: 'location-wrong', rebuttalLocation: { kind: 'verified', path: 'src/real.ts', line: 1, quote: 'r' } }]])
+  const { markdown } = render(candidates, verdicts, { high: 'rollout-shadow', low: 'rollout-shadow' }, LOCATION_VOCAB, [{ kind: 'module', id: '04', title: '상태와 Effect' }], 'ran')
+  assert.match(markdown, /교차검증: `대상 아님`/)
+  assert.doesNotMatch(markdown, /검증자가 짚은 위치/)
+})
+
 test('phase가 두 값 밖이면 지우는 쪽으로 넘어가지 않고 던진다', () => {
   const verdicts = new Map([['04-3#1', { disposition: 'rejected', rebuttalKind: 'guard-exists' }]])
   assert.throws(() => labelFor(ok({ eligibility: 'VERIFY' }), verdicts, { low: 'active-deletion' }, LOCATION_VOCAB), /phase/)
