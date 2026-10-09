@@ -933,6 +933,112 @@ These scenarios pin the behaviour that `review-rules/workflow-contract.md` promi
       ],
       "scenario": "With --correctness on, the PR says failures are not retried and the correctness producer reports a missing automatic retry",
       "expected": "The CR verifier prompt contains the PR description verbatim with its source and hash from review-intent.mjs, marked as untrusted data; rule-module verifier prompts do not"
+    },
+    {
+      "id": 118,
+      "clauses": [
+        "C-9"
+      ],
+      "scenario": "On Windows PowerShell 5.1 the orchestrator saves the routed output of prepare-verification.mjs",
+      "expected": "The script writes the file itself with --out (UTF-8, atomic) and prints only the path, sha256 and counts; the routed output is never captured with a shell redirect, so Korean text survives"
+    },
+    {
+      "id": 119,
+      "clauses": [
+        "C-10"
+      ],
+      "scenario": "The review started on a clean worktree; mid-run, someone stages and commits a fix in the same folder that adds role=\"status\" to a line a finding quotes",
+      "expected": "The orchestrator does not change the scope or record its own choice as the user's request; location checks read the HEAD the review started from and still match, routed output carries target.readFrom start-head, verifier prompts say code that exists only on disk now is not rebuttal evidence, and the report verdict mentions the drift"
+    },
+    {
+      "id": 120,
+      "clauses": [
+        "C-9"
+      ],
+      "scenario": "The timeline check finds a gap while the report is being written",
+      "expected": "The check runs with --before-end before run.end, the gap is written into the 실행 타임라인 section, and run.end stays the last line; nothing is appended after it. A crossverify.start superseded by a re-prepared round is reported as a note, not as a missing end"
+    },
+    {
+      "id": 121,
+      "clauses": [
+        "C-6B",
+        "C-7"
+      ],
+      "scenario": "A verifier rejects a high-impact finding with rebuttal.kind location-wrong and a rebuttal.location pointing at the real line, in a run whose high phase is active-deletion under a valid approval",
+      "expected": "The finding stays in 상세 지적 with its original 🔴 and still blocks; the axis reads 교차검증: `위치 이견 — 결함 유지`, the producer location line is kept, and the next line is 검증자가 짚은 위치(대조하지 않음) with the verifier's path:line and quote. It is not in the active-deletion stderr notice. Under rollout-shadow it renders the same way, not as 반박됨 — 관찰 중"
+    },
+    {
+      "id": 122,
+      "clauses": [
+        "C-6B"
+      ],
+      "scenario": "The orchestrator renders with --phase-low active-deletion but no --deletion-approval, or passes an approval file while both phases are rollout-shadow",
+      "expected": "render-findings.mjs exits 2 with nothing on stdout. The first message says deleting rebutted findings needs a human-measured approval file (C-6B) that the plugin does not ship; the second says the two signals contradict. The full SKILL template passes rollout-shadow for both"
+    },
+    {
+      "id": 123,
+      "clauses": [
+        "C-6B"
+      ],
+      "scenario": "An approval for impact low was measured before the rebuttal taxonomy or the VERIFIER_PROMPT block changed, so its basis no longer matches --print-deletion-basis",
+      "expected": "The renderer does not delete: impact low runs as rollout-shadow, stderr warns that the approval is void and names what changed (반박 kind 목록 / 검증자 지시문), and 상세 지적 opens with a 삭제 단계 line stating both effective phases and the invalidation. A change of verifier model is not detected — the contract says so and leaves withdrawing the approval to a human"
+    },
+    {
+      "id": 124,
+      "clauses": [
+        "C-6B"
+      ],
+      "scenario": "A valid approval for impact low measures only the isolated route, and two low findings are rejected with guard-exists — one routed isolated, one routed bundle",
+      "expected": "Only the isolated one is removed (counted in the low removal notice for 미해결 / 후속 확인); the bundle one stays as 반박됨 — 관찰 중. 상세 지적 opens with 삭제 단계: … 영향 낮음 `active-deletion` (승인 … · isolated 경로만). The removed finding is still in the result snapshot with disposition rejected and its rebuttalKind"
+    },
+    {
+      "id": 125,
+      "clauses": [
+        "C-13"
+      ],
+      "scenario": "On an incremental re-review, the recheck verifier answers rejected with rebuttal.kind location-wrong for an earlier finding",
+      "expected": "The earlier finding is recheck (recheck-location-wrong), not resolved — the verifier said the defect still exists elsewhere. A snapshot that marks it resolved with rebuttalKind location-wrong (or other) fails the snapshot contract check"
+    },
+    {
+      "id": 126,
+      "clauses": [
+        "C-6"
+      ],
+      "scenario": "/code-review runs on a host that cannot restrict a sub-agent's tools — for example OpenCode, which installs the skills but not agents/rule-module-reviewer.md",
+      "expected": "The orchestrator does not fall back to a general or category-only agent; it runs the review in an isolated copy or reviews directly without a producer, and 실행 계획 says the producer's tools could not be restricted and which path was taken"
+    },
+    {
+      "id": 127,
+      "clauses": [
+        "C-4",
+        "C-6"
+      ],
+      "scenario": "/code-review-commit HEAD~2, where the commit deletes a file and changes another that a later commit edited again",
+      "expected": "The orchestrator runs git show --format=medium HEAD~2 once and passes it as the commit patch; the producer, dispatched as rule-module-reviewer, never runs git — it cites the deleted file from the patch's - lines as (삭제 전) path:Ln, and for the changed file whose working-tree line no longer matches the patch's + line it writes 위치 미확인 instead of guessing a number"
+    },
+    {
+      "id": 128,
+      "clauses": [
+        "C-4"
+      ],
+      "scenario": "/code-review: the diff removes the onExpire prop from RenewButton, and src/widgets/header/ui/header.tsx, which the diff does not touch, still passes onExpire",
+      "expected": "A 20-3 finding is raised and cites header.tsx as the broken caller, found by a Grep for onExpire; the prompt's 'do not flag pre-existing code outside the diff' does not suppress it because the cause is the change in the diff, and nothing else in header.tsx or the rest of the repository is reviewed"
+    },
+    {
+      "id": 129,
+      "clauses": [
+        "C-5"
+      ],
+      "scenario": "/code-review-fast or /code-review-exception on a diff that changes src/api/client.ts and its client.test.ts",
+      "expected": "The orchestrator passes the whole diff, test hunks included, and leaves the test file out of the changed-file list; the producer flags nothing in client.test.ts but may use its changed assertions as evidence about client.ts"
+    },
+    {
+      "id": 130,
+      "clauses": [
+        "C-6"
+      ],
+      "scenario": "A skill dispatches its producer with task(category=\"unspecified-high\", ...) and no subagent_type, or names the agent in a form validate-rules cannot read",
+      "expected": "validate-rules fails and points at that task( line (default deny); zero extracted targets is never reported as a pass. A skill with no dispatch at all is not flagged, and prose such as subagent_type=react-code-review-plugin:rule-module-reviewer로 띄운다 still counts as a named agent"
     }
   ],
   "defaultWorkflowOnlyCases": [

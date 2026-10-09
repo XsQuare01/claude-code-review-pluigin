@@ -7,6 +7,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { parseSnapshot } from '../scripts/lib/review-snapshot.mjs'
+import { deletionBasis } from '../scripts/render-findings.mjs'
 
 // full의 정확성 패스(#88 PR 1)를 실제 스크립트 순서대로 끝까지 돌린다 —
 // preflight → 결과 파일·module.done → prepare-verification --collect → 검증자 판정 →
@@ -138,10 +139,24 @@ const answerVerifiers = routed => {
 }
 
 // 판정 파일은 tally-verdicts가 남겼을 때만 넘긴다. 검증 대상이 없는 실행에는 그 파일이 없다.
-const render = (run, routedPath, { phase = 'rollout-shadow', verdicts = true } = {}) => node(run.repo, 'render-findings.mjs', [
+// active-deletion은 승인 파일이 있어야 켜진다(C-6B, #47).
+const render = (run, routedPath, { phase = 'rollout-shadow', verdicts = true, approval } = {}) => node(run.repo, 'render-findings.mjs', [
   '--input', routedPath, ...(verdicts ? ['--verdicts', join(run.timing, `${RUN}.verdicts.json`)] : []),
   '--phase-high', phase, '--phase-low', phase, '--verification-state', 'ran', '--rules', RULES, '--workflow', 'full',
+  ...(approval ? ['--deletion-approval', approval] : []),
 ])
+
+/** 지금 규칙 디렉터리를 기준으로 잰 것처럼 쓴 승인 파일. 두 impact·두 경로를 모두 승인한다. */
+const writeApproval = run => {
+  const measured = { measured: 0.01, threshold: 0.05, samples: 80 }
+  const entry = {
+    approvedBy: '테스트', approvedAt: '2026-10-06', verifierModel: '고정 판정(모델 없음)',
+    falseSuppression: { isolated: measured, bundle: measured }, basis: deletionBasis(RULES).value,
+  }
+  const path = join(run.dir, 'deletion-approval.json')
+  writeFileSync(path, JSON.stringify({ schemaVersion: 1, approvals: { high: entry, low: entry } }))
+  return path
+}
 
 const snapshot = (run, extra = []) => node(run.repo, 'review-snapshot.mjs', ['--dir', run.dir, '--run', RUN, '--rules', RULES, '--repo', run.repo, ...extra])
 
@@ -214,12 +229,26 @@ test('active-deletion에서 반박된 CR 지적은 지워지고, 그 사실이 �
   const { routed, routedPath } = collect(run)
   answerVerifiers(routed)
   assert.equal(node(run.repo, 'tally-verdicts.mjs', ['--dir', run.dir, '--run', RUN, '--rules', RULES, '--collect', '--targets', routedPath]).status, 0)
-  const rendered = render(run, routedPath, { phase: 'active-deletion' })
+  const rendered = render(run, routedPath, { phase: 'active-deletion', approval: writeApproval(run) })
   assert.equal(rendered.status, 0, rendered.stderr)
   assert.doesNotMatch(rendered.stdout, /`CR-3`/)
   assert.match(rendered.stderr, /CR-3 \(src\/load\.ts\): guard-exists/)
   // 지워진 지적을 가리키던 관련 지적 줄은 그것이 상세 지적에 없다고 말한다
   assert.match(rendered.stdout, /관련 지적: `CR-3#1` \(상세 지적에 없음\)/)
+  // 상세 지적 맨 위가 삭제가 켜졌고 누가 승인했는지 말한다
+  assert.match(rendered.stdout, /^## 상세 지적\n\n삭제 단계: 영향 높음 `active-deletion` \(승인 테스트 · 2026-10-06 · isolated·bundle 경로\)/)
+
+  // 리포트에서 지워진 지적도 결과 스냅숏에는 판정과 함께 남는다 — 스냅숏이 삭제의 장부다(#47).
+  // 스냅숏은 phase를 모른다: 모든 후보를 disposition·rebuttalKind와 함께 싣는다.
+  const snap = snapshot(run, ['--verification-state', 'ran'])
+  assert.equal(snap.status, 0, snap.stderr)
+  const saved = parseSnapshot(readFileSync(join(run.timing, `${RUN}.snapshot.json`), 'utf8')).value
+  const removed = saved.findings.find(finding => finding.candidateId === 'CR-3#1')
+  assert.ok(removed, '리포트에서 지운 지적이 스냅숏에서도 사라졌다')
+  assert.equal(removed.disposition, 'rejected')
+  assert.equal(removed.rebuttalKind, 'guard-exists')
+  assert.equal(removed.impact, 'high')
+  assert.equal(saved.findings.length, routed.candidates.length, '스냅숏은 후보 전부를 싣는다')
 })
 
 for (const [failureClass, attempts] of [['inactivity-timeout', 2], ['malformed-output', 1]]) {

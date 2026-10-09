@@ -12,16 +12,20 @@
 //   node scripts/render-findings.mjs --input <prepare-verification 출력> \
 //        [--verdicts <경로> …] --phase-high <active-deletion|rollout-shadow> \
 //        --phase-low <active-deletion|rollout-shadow> \
+//        [--deletion-approval <승인 파일> — active-deletion을 줄 때만, 그때는 필수] \
 //        --verification-state <ran|disabled> --rules <RULES_DIR> --workflow <이름>
+//   node scripts/render-findings.mjs --print-deletion-basis --rules <RULES_DIR>
+//        — 승인 파일의 basis에 적을 지금의 기준(JSON)을 낸다
 
 import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
-import { markedJson, CROSS_VERIFICATION_TOKEN_KEYS } from './lib/contract-blocks.mjs'
+import { markedBlock, markedJson, CROSS_VERIFICATION_TOKEN_KEYS } from './lib/contract-blocks.mjs'
 import { assessEvidence, loadEvidence } from './lib/evidence.mjs'
 import { finalizeCurrent } from './lib/review-compare.mjs'
 import { collectVerdicts } from './lib/verdicts.mjs'
+import { instructionsWithManifest } from './lib/verifier-tasks.mjs'
 
 const IMPACTS = new Set(['high', 'low'])
 const CONFIDENCES = new Set(['high', 'low'])
@@ -140,12 +144,254 @@ export function loadVocabulary(rulesDir) {
   if (badTokens.length) {
     return { error: `CROSS_VERIFICATION_RENDER_TOKENS에 비어 있지 않은 문자열이 아닌 키가 있다: ${badTokens.join(', ')}` }
   }
+  const rebuttal = loadRebuttalTaxonomy(contract, crossVerification)
+  if (rebuttal.error) return { error: rebuttal.error }
   return {
     value: {
       categoryLabels,
       crossVerification,
+      ...rebuttal.value,
     },
   }
+}
+
+/**
+ * 반박이 지적을 지울 수 있는지는 판정 manifest의 `rebuttal.deletionAllowingKinds`가 정한다.
+ *
+ * 한때 렌더러는 `other`만 코드에 박아 두고 나머지 반박은 전부 지웠다. 그래서 manifest의
+ * 목록은 아무도 읽지 않는 선언이었고, 그 목록에 `location-wrong`("결함은 성립하나 위치가
+ * 틀렸다")이 들어 있어도 아무것도 걸리지 않았다 — 검증자가 결함을 **인정한** 지적이 줄
+ * 번호가 틀렸다는 이유로 active-deletion에서 사라질 수 있었다(#45). 목록을 여기서 읽고,
+ * 읽지 못하면 멈춘다. 기본값으로 지우는 길을 두면 같은 일이 다시 조용히 일어난다.
+ *
+ * 삭제를 허용하지 않는 kind마다 `rejected-<kind>` 토큰이 있어야 한다. 그 반박은 어느
+ * phase에서도 지적을 남기므로 제 이름의 표기가 필요한데, 토큰이 없으면 그리는 도중에야
+ * 알게 된다.
+ */
+function loadRebuttalTaxonomy(contract, crossVerification) {
+  const manifest = markedJson(contract, 'REVIEW_VERDICT_CONTRACT_V1')
+  if (manifest.error) return { error: manifest.error }
+  const kinds = manifest.value?.rebuttal?.kindEnum
+  const deleting = manifest.value?.rebuttal?.deletionAllowingKinds
+  const strings = value => Array.isArray(value) && value.every(item => typeof item === 'string' && item)
+  if (!strings(kinds) || !kinds.length) {
+    return { error: 'REVIEW_VERDICT_CONTRACT_V1의 rebuttal.kindEnum을 찾지 못했다 — 반박 kind를 가를 수 없다' }
+  }
+  if (!strings(deleting)) {
+    return { error: 'REVIEW_VERDICT_CONTRACT_V1의 rebuttal.deletionAllowingKinds를 찾지 못했다 — 어떤 반박이 지적을 지우는지 알 수 없어 멈춘다' }
+  }
+  const unknown = deleting.filter(kind => !kinds.includes(kind))
+  if (unknown.length) {
+    return { error: `rebuttal.deletionAllowingKinds에 kindEnum 밖의 값이 있다: ${unknown.join(', ')}` }
+  }
+  const unlabelled = kinds
+    .filter(kind => !deleting.includes(kind))
+    .filter(kind => typeof crossVerification[`rejected-${kind}`] !== 'string' || !crossVerification[`rejected-${kind}`])
+  if (unlabelled.length) {
+    return { error: `삭제를 허용하지 않는 반박 kind에 표기 토큰이 없다: ${unlabelled.map(kind => `rejected-${kind}`).join(', ')}` }
+  }
+  return { value: { rebuttalKinds: kinds, deletionAllowingKinds: deleting } }
+}
+
+// ------------------------------------------------------------ 삭제 승인 (C-6B, #47)
+//
+// 반박된 지적이 리포트에서 사라지는 것은 되돌릴 수 없고, 틀렸을 때 리포트가 더 깨끗해 보이는
+// 쪽으로 실패한다. 그런데 그것을 막는 것은 `rollout-shadow`가 "기본"이라는 계약 문장 하나였고,
+// `--phase-low active-deletion` 한 단어로 켜졌다 — SKILL의 명령 틀이 두 값을 나란히 보여주기까지
+// 했다. 그래서 active-deletion은 사람이 잰 승인 파일이 있을 때만 켠다.
+//
+// 승인은 그때의 검증자를 잰 것이지 파이프라인 일반에 대한 것이 아니다. 렌더러가 확인할 수 있는
+// 것(반박 kind 목록, 검증자 지시문)은 해시로 맞춰 보고, 달라졌으면 그 impact를 rollout-shadow로
+// 되돌린다. 확인할 수 없는 것(검증자 모델)은 승인 파일에 사람이 읽을 기록으로만 남는다 —
+// 렌더러가 그것을 검사한다고 말하지 않는다.
+
+const ROUTES = ['isolated', 'bundle']
+const BASIS_KEYS = ['rebuttalSha256', 'verifierPromptSha256']
+const BASIS_NAMES = { rebuttalSha256: '반박 kind 목록', verifierPromptSha256: '검증자 지시문' }
+
+const sha256 = text => createHash('sha256').update(text).digest('hex')
+
+/** 키 순서와 공백에 흔들리지 않는 직렬화 — 같은 manifest는 같은 해시가 된다. 배열 순서는 그대로 둔다. */
+const canonicalJson = value => JSON.stringify(value, (_key, inner) => (inner && typeof inner === 'object' && !Array.isArray(inner)
+  ? Object.fromEntries(Object.keys(inner).sort().map(name => [name, inner[name]]))
+  : inner))
+
+/**
+ * 승인이 잰 검증자를 가리키는 지금의 기준.
+ *
+ * - `rebuttalSha256`: 판정 manifest의 `rebuttal` 객체(kindEnum·kindLabels·deletionAllowingKinds…).
+ *   어떤 반박이 무엇을 지우는지가 여기서 정해진다
+ * - `verifierPromptSha256`: 검증자가 실제로 받는 지시문 — `verifier-prompt.md`의 `VERIFIER_PROMPT`
+ *   블록에 판정 manifest를 끼운 것. `prepare-verification.mjs`가 작업마다 이것 뒤에 후보를 붙인다.
+ *   후보·조항·의도처럼 작업마다 다른 부분은 들어가지 않는다
+ *
+ * 줄 끝은 LF로 맞춰 잰다. 같은 저장소도 체크아웃 설정에 따라 CRLF로 풀리는데, 그것 때문에 승인이
+ * 무효가 되면 승인을 쓴 기계에서만 삭제가 켜진다.
+ *
+ * 검증자 모델과 라우팅 규칙(`prepare-verification.mjs`의 코드)은 여기 없다. 렌더러가 읽을 수 있는
+ * 파일에 그 사실이 없기 때문이다.
+ */
+export function deletionBasis(rulesDir) {
+  const readRule = name => {
+    try {
+      return { value: readFileSync(join(rulesDir, name), 'utf8') }
+    } catch (error) {
+      return { error: `${name}를 읽지 못했다: ${error.message}` }
+    }
+  }
+  const contract = readRule('workflow-contract.md')
+  if (contract.error) return contract
+  const prompt = readRule('verifier-prompt.md')
+  if (prompt.error) return prompt
+  const manifest = markedJson(contract.value, 'REVIEW_VERDICT_CONTRACT_V1')
+  if (manifest.error) return { error: manifest.error }
+  const rebuttal = manifest.value?.rebuttal
+  if (!rebuttal || typeof rebuttal !== 'object') return { error: 'REVIEW_VERDICT_CONTRACT_V1에 rebuttal이 없다 — 삭제 승인의 기준을 만들 수 없다' }
+  const manifestBlock = markedBlock(contract.value, 'REVIEW_VERDICT_CONTRACT_V1')
+  if (manifestBlock.error) return { error: manifestBlock.error }
+  const template = markedBlock(prompt.value, 'VERIFIER_PROMPT')
+  if (template.error) return { error: `verifier-prompt.md: ${template.error}` }
+  const instructions = instructionsWithManifest(template.value, manifestBlock.value)
+  if (instructions.error) return { error: instructions.error }
+  return {
+    value: {
+      rebuttalSha256: sha256(canonicalJson(rebuttal)),
+      verifierPromptSha256: sha256(instructions.value.replace(/\r\n/g, '\n')),
+    },
+  }
+}
+
+const isObject = value => value !== null && typeof value === 'object' && !Array.isArray(value)
+const isRate = value => typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 1
+const isDate = value => {
+  const match = typeof value === 'string' && /^(\d{4})-(\d{2})-(\d{2})$/.exec(value)
+  if (!match) return false
+  const date = new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3])))
+  return date.toISOString().slice(0, 10) === value
+}
+
+/**
+ * 승인 파일을 계약(C-6B `삭제 rollout phase`)에 맞춰 본다. 문제가 없으면 빈 배열이다.
+ *
+ * 느슨하게 받지 않는다. 모르는 키를 넘기면 오타 난 `threshhold`가 조용히 무시되고 허용치 없는
+ * 승인이 통과한다. 잰 값이 허용치를 넘는 승인도 거부한다 — 그 측정은 삭제를 허락하지 않았다.
+ *
+ * 경로(`isolated`·`bundle`)마다 따로 잰다. bundle 검증자는 컨텍스트가 모자란 줄 모르고 반박할
+ * 수 있어, 둘을 합쳐 재면 bundle의 오판이 희석된다. 승인에 없는 경로의 반박은 지우지 않는다.
+ */
+export function validateDeletionApproval(approval) {
+  const problems = []
+  const exactKeys = (value, allowed, where) => {
+    for (const key of Object.keys(value)) if (!allowed.includes(key)) problems.push(`${where}에 모르는 키 ${key}가 있다`)
+    for (const key of allowed) if (!Object.hasOwn(value, key)) problems.push(`${where}에 ${key}가 없다`)
+  }
+  if (!isObject(approval)) return ['승인 파일이 JSON 객체가 아니다']
+  exactKeys(approval, ['schemaVersion', 'approvals'], '최상위')
+  if (approval.schemaVersion !== 1) problems.push(`schemaVersion은 1이다 (받은 값: ${JSON.stringify(approval.schemaVersion)})`)
+  if (!isObject(approval.approvals) || !Object.keys(approval.approvals).length) {
+    problems.push('approvals는 impact(high·low)별 승인을 담은 비어 있지 않은 객체다')
+    return problems
+  }
+  for (const [impact, entry] of Object.entries(approval.approvals)) {
+    const where = `approvals.${impact}`
+    if (!IMPACTS.has(impact)) { problems.push(`${where}: impact는 high·low뿐이다`); continue }
+    if (!isObject(entry)) { problems.push(`${where}가 객체가 아니다`); continue }
+    exactKeys(entry, ['approvedBy', 'approvedAt', 'verifierModel', 'falseSuppression', 'basis'], where)
+    for (const key of ['approvedBy', 'verifierModel']) {
+      if (typeof entry[key] !== 'string' || !entry[key].trim()) problems.push(`${where}.${key}는 비어 있지 않은 문자열이다`)
+    }
+    if (!isDate(entry.approvedAt)) problems.push(`${where}.approvedAt은 YYYY-MM-DD 날짜다 (받은 값: ${JSON.stringify(entry.approvedAt)})`)
+    if (!isObject(entry.falseSuppression) || !Object.keys(entry.falseSuppression).length) {
+      problems.push(`${where}.falseSuppression은 경로(${ROUTES.join('·')})별 측정을 담은 비어 있지 않은 객체다`)
+    } else {
+      for (const [route, measurement] of Object.entries(entry.falseSuppression)) {
+        const at = `${where}.falseSuppression.${route}`
+        if (!ROUTES.includes(route)) { problems.push(`${at}: 경로는 ${ROUTES.join('·')}뿐이다`); continue }
+        if (!isObject(measurement)) { problems.push(`${at}가 객체가 아니다`); continue }
+        exactKeys(measurement, ['measured', 'threshold', 'samples'], at)
+        if (!isRate(measurement.measured)) problems.push(`${at}.measured는 0 이상 1 이하의 수다`)
+        if (!isRate(measurement.threshold)) problems.push(`${at}.threshold는 0 이상 1 이하의 수다`)
+        if (!Number.isInteger(measurement.samples) || measurement.samples < 1) problems.push(`${at}.samples는 1 이상의 정수다`)
+        if (isRate(measurement.measured) && isRate(measurement.threshold) && measurement.measured > measurement.threshold) {
+          problems.push(`${at}: 잰 false-suppression ${measurement.measured}이 허용치 ${measurement.threshold}를 넘는다 — 이 측정은 삭제를 허락하지 않는다`)
+        }
+      }
+    }
+    if (!isObject(entry.basis)) {
+      problems.push(`${where}.basis가 객체가 아니다 — --print-deletion-basis의 출력을 적는다`)
+    } else {
+      exactKeys(entry.basis, BASIS_KEYS, `${where}.basis`)
+      for (const key of BASIS_KEYS) {
+        if (typeof entry.basis[key] !== 'string' || !/^[0-9a-f]{64}$/.test(entry.basis[key])) problems.push(`${where}.basis.${key}는 소문자 16진수 64자(sha256)다`)
+      }
+    }
+  }
+  return problems
+}
+
+/**
+ * 요청한 phase와 승인 파일로 이 실행의 실제 phase를 정한다.
+ *
+ * - active-deletion을 요청한 impact의 승인이 파일에 없으면 `{ error }` — high와 low는 따로 승인한다
+ * - 승인의 기준이 지금과 다르면 그 impact는 rollout-shadow로 돈다(`invalidated`에 무엇이 바뀌었는지)
+ * - 맞으면 active-deletion이고, 승인이 잰 경로(`routes`)의 반박만 지운다
+ *
+ * 승인은 이미 `validateDeletionApproval`을 통과한 것이어야 한다.
+ */
+export function gateDeletion(requested, approval, basis) {
+  const impacts = {}
+  const warnings = []
+  for (const impact of ['high', 'low']) {
+    if (requested[impact] !== 'active-deletion') {
+      impacts[impact] = { phase: requested[impact] }
+      continue
+    }
+    const entry = approval?.approvals?.[impact]
+    if (!entry) {
+      return { error: `--phase-${impact} active-deletion인데 승인 파일에 approvals.${impact}가 없다 — 영향 높음과 낮음은 따로 재고 따로 승인한다` }
+    }
+    const changed = BASIS_KEYS.filter(key => entry.basis[key] !== basis[key]).map(key => BASIS_NAMES[key])
+    if (changed.length) {
+      impacts[impact] = { phase: 'rollout-shadow', invalidated: changed, approval: entry }
+      warnings.push(`경고: 영향 ${IMPACT_WORD[impact]}의 active-deletion 승인(${entry.approvedBy}, ${entry.approvedAt})이 무효다 — 승인 뒤에 ${changed.join('·')}이 바뀌었다. 이 실행은 영향 ${IMPACT_WORD[impact]}을 rollout-shadow로 돈다. 다시 재서 승인하려면 --print-deletion-basis로 지금의 기준을 본다`)
+      continue
+    }
+    impacts[impact] = { phase: 'active-deletion', approval: entry, routes: ROUTES.filter(route => Object.hasOwn(entry.falseSuppression, route)) }
+  }
+  return { value: { phaseByImpact: { high: impacts.high.phase, low: impacts.low.phase }, impacts, warnings } }
+}
+
+/**
+ * `## 상세 지적` 맨 위에 둘 삭제 단계 줄. 지울 수 있는 phase가 없고 무효가 된 승인도 없으면 null이다 —
+ * 둘 다 rollout-shadow인 실행의 출력은 이 기능 전과 같다.
+ *
+ * 지운 지적의 흔적은 stderr로 나가 오케스트레이터가 `미해결 / 후속 확인`에 옮겨 적는다. 그 사실과
+ * 별개로, 이 절을 읽는 사람이 "여기 없는 반박 지적이 있을 수 있다"를 이 절 안에서 알아야 한다.
+ * 그렇지 않으면 삭제가 켜진 리포트와 켜지지 않은 리포트가 같은 모양이다. 승인 정보 없이 render를
+ * 직접 부른 경우에도 줄을 낸다 — 승인 기록이 없다고 적는다.
+ */
+export function deletionPhaseLine(phaseByImpact, gate) {
+  const impacts = ['high', 'low']
+  const active = impacts.filter(impact => phaseByImpact[impact] === 'active-deletion')
+  const invalidated = impacts.filter(impact => gate?.impacts?.[impact]?.invalidated?.length)
+  if (!active.length && !invalidated.length) return null
+  const part = impact => {
+    const phase = phaseByImpact[impact]
+    const info = gate?.impacts?.[impact]
+    let detail = ''
+    if (phase === 'active-deletion') {
+      detail = info?.approval
+        ? ` (승인 ${escapeProse(info.approval.approvedBy)} · ${info.approval.approvedAt} · ${info.routes.join('·')} 경로${info.routes.length < ROUTES.length ? '만' : ''})`
+        : ' (승인 기록 없음)'
+    } else if (info?.invalidated?.length) {
+      detail = ` (active-deletion 승인 무효 — 승인 뒤에 ${info.invalidated.join('·')}이 바뀌었다)`
+    }
+    return `영향 ${IMPACT_WORD[impact]} \`${phase}\`${detail}`
+  }
+  const tail = active.length
+    ? '반박돼 이 절에서 지운 지적의 흔적은 `미해결 / 후속 확인`에 있다'
+    : '반박된 지적은 지우지 않고 모두 이 절에 있다'
+  return `삭제 단계: ${impacts.map(part).join(' · ')} — ${tail}`
 }
 
 const flag = name => {
@@ -245,9 +491,7 @@ export function codeSpan(text) {
  * 것이 지금 말하는 사실인데, 같은 줄에 한 번 더 찍으면 읽는 사람이 그것을
  * 코드로 읽는다. 대신 실제로 그 자리에 있던 것(`observed`)을 찍는다.
  */
-const locationLine = candidate => {
-  const location = candidate.location
-  if (location.kind === 'unverified') return `위치 미확인 사유: ${escapeProse(location.reason)}`
+const anchorText = location => {
   const start = location.kind === 'deleted' ? location.lineBefore : location.line
   // endLine은 계약(REVIEW_RESULT_CONTRACT_V1의 location.variants)이 verified·
   // deleted 모두에 허용하는 선택 필드다. start만 쓰면 여러 줄짜리 인용의
@@ -257,7 +501,13 @@ const locationLine = candidate => {
   const line = typeof location.endLine === 'number' && location.endLine !== start
     ? `${start}-${location.endLine}`
     : `${start}`
-  const anchor = codeSpan(`${location.path}:${line}`)
+  return codeSpan(`${location.path}:${line}`)
+}
+
+const locationLine = candidate => {
+  const location = candidate.location
+  if (location.kind === 'unverified') return `위치 미확인 사유: ${escapeProse(location.reason)}`
+  const anchor = anchorText(location)
   if (candidate.locationCheck === 'location-unresolvable') {
     return `위치 확인 실패: ${anchor} — 리뷰 대상 트리에서 그 경로를 읽지 못했습니다`
   }
@@ -271,6 +521,26 @@ const locationLine = candidate => {
     return `위치 확인 실패: ${anchor} — 인용과 실제 내용이 다릅니다${observed}`
   }
   return `${anchor} — ${codeSpan(location.quote)}`
+}
+
+/**
+ * `location-wrong` 반박이 짚은 자리를 그린다.
+ *
+ * 그 반박은 "결함은 성립하나 위치가 틀렸다"이고 `rebuttal.location`이 검증자가 본 결함의
+ * 자리다. 지적은 남기고(어느 phase에서도 지우지 않는다) producer의 위치 줄도 그대로 둔다 —
+ * 둘 중 어느 쪽이 맞는지는 이 렌더러가 정하지 않는다. 읽는 사람이 두 자리를 함께 봐야 한다.
+ *
+ * 이 위치는 `prepare-verification.mjs`의 위치 대조를 거치지 않은 검증자의 주장이다. 확인된
+ * 위치와 같은 모양으로 찍으면 00-10이 막는 것 — 확인하지 않은 위치를 사실처럼 쓰는 것 —
+ * 이 되므로, 줄 머리에 대조하지 않았다고 적는다. 판정에 위치가 없으면(계약 위반) 빈 칸 대신
+ * 그 사실을 적는다.
+ */
+const verifierLocationLine = location => {
+  if (!location || (location.kind !== 'verified' && location.kind !== 'deleted')) {
+    return '검증자가 짚은 위치: 판정에 위치가 없다'
+  }
+  const quote = typeof location.quote === 'string' && location.quote ? ` — ${codeSpan(location.quote)}` : ''
+  return `검증자가 짚은 위치(대조하지 않음): ${anchorText(location)}${quote}`
 }
 
 /**
@@ -311,7 +581,7 @@ const SLOTS = [
  * 이어붙이는 방식이면 다음 사람이 실수로 다시 합칠 수 있지만, 배열 + `\n`
  * join은 슬롯을 합칠 방법 자체가 없다.
  */
-export function renderFinding(candidate, { label, vocabulary, related = [], evidence = [], lineage = candidate.lineage, disposition }) {
+export function renderFinding(candidate, { label, vocabulary, related = [], evidence = [], lineage = candidate.lineage, disposition, verifierLocation }) {
   const severity = severityOf(candidate.impact, candidate.confidence)
   // category는 계약상 impact가 high일 때만 존재한다(low는 category 자체를
   // 금지한다) — 그래도 candidate.category를 한 번 더 확인해 방어적으로 둔다.
@@ -343,6 +613,9 @@ export function renderFinding(candidate, { label, vocabulary, related = [], evid
     // 지적이 같은 결함인지는 이 렌더러가 정하지 않는다. 값은 호출자가 이미 code span으로 만든다.
     ...(related.length ? [`관련 지적: ${related.join(', ')}`] : []),
     locationLine(candidate),
+    // `location-wrong` 반박이 짚은 자리. `undefined`면 그 반박이 아니라 줄이 없고, `null`이면
+    // 그 반박인데 위치가 빠진 판정이다 — 그때는 없다는 사실을 적는다.
+    ...(verifierLocation !== undefined ? [verifierLocationLine(verifierLocation)] : []),
     ...slots,
     // 이 지적을 어떻게 확인했는가(C-11). 슬롯 뒤에 둔다 — 슬롯은 producer의 주장이고, 이 줄은
     // 오케스트레이터가 남긴 확인 기록이다. 등급·축·교차검증은 바꾸지 않는다.
@@ -498,34 +771,78 @@ export function withInstanceNumbers(candidates) {
  * 사라지면 안 되는 사실이라 그대로 표기한다.
  *
  * `verdictByCandidateId`의 값은 disposition 문자열 하나가 아니라
- * `{ disposition, rebuttalKind }`다. `rebuttal.kind`를 같이 실어야 하는
- * 이유는 계약(C-6B)이 `rebuttal.kind = other`를 세 번 못박기 때문이다 —
- * "`other`는 어떤 phase에서도 finding의 상태를 바꾸지 않는다", "삭제를
- * 유발하지 않는다", "차단 우회로가 되어서는 안 된다". disposition만 보고
- * `rejected`면 무조건 active-deletion에서 지우면, `other`로 반박된
- * high-impact finding까지 계약이 금지한 그 우회로로 사라진다. `kind`가
- * `other`인 반박은 그래서 `rejected`의 일반 경로(active-deletion에서
- * null, rollout-shadow에서 `rejected-shadow`)를 타지 않고 모든 phase에서
- * `rejected-other`로 남는다.
+ * `{ disposition, rebuttalKind, … }`다. 반박이 지적을 지울 수 있는지는 `rebuttal.kind`가
+ * 정하고, 그 목록은 판정 manifest의 `deletionAllowingKinds`다(`vocabulary`로 받는다).
+ * 목록 밖의 kind는 `rejected`의 일반 경로(active-deletion에서 null, rollout-shadow에서
+ * `rejected-shadow`)를 타지 않고 모든 phase에서 제 이름의 토큰(`rejected-<kind>`)으로
+ * 남는다 — 원 severity와 차단 여부도 그대로다.
+ *
+ * - `other`: 위치를 대지 못한 반박이다. 계약(C-6B)은 "어떤 phase에서도 finding의 상태를
+ *   바꾸지 않는다", "차단 우회로가 되어서는 안 된다"고 못박는다
+ * - `location-wrong`: 검증자가 결함을 **인정**하고 위치만 틀렸다고 한 반박이다. 이것으로
+ *   지우면 줄 번호가 틀렸다는 이유로 진짜 결함이 사라진다(#45)
+ *
+ * 한때 `other`만 여기 박아 두고 나머지 반박은 전부 지웠다. 그 동안 manifest의 목록은
+ * 아무도 읽지 않았고, 목록과 코드가 갈라져도 걸리는 데가 없었다.
+ *
+ * kind가 없거나 닫힌 목록 밖이면 던진다. 판정 계약은 `rejected`에 `rebuttal.kind`를
+ * 요구하고 `tally-verdicts.mjs`가 그것을 검사한다 — 여기까지 온 그런 판정은 지울지 말지
+ * 정할 근거가 없는 입력이고, 어느 쪽으로든 흘려보내면 리포트가 사실과 다르게 그려진다.
+ * phase도 같다: 두 값 밖이면 지우는 쪽으로 넘어가지 않고 던진다.
  *
  * `phaseByImpact`는 `{ high, low }` 객체다. phase는 전역이 아니라 `impact`별
  * 오케스트레이터 설정이다 — 문자열 하나였다면 "high는 아직 rollout-shadow인
  * 채로 두고 low만 active-deletion으로 옮긴다" 같은 독립 승인을 표현할 수
  * 없고, 둘을 하나로 묶어 active-deletion을 전역으로 주면 아직 관찰 중이어야
  * 할 high-impact 반박(차단 후보)까지 함께 사라진다.
+ *
+ * `deletionRoutes`는 `{ high?: [...], low?: [...] }` — 승인 파일이 false-suppression을 잰
+ * 검증 경로다(C-6B "route별로 나눠서 잰다"). active-deletion이어도 그 밖의 경로에서 나온
+ * 반박은 지우지 않고 `rejected-shadow`로 남긴다. 후보의 `route`는 처음 배정된 경로라 bundle에서
+ * isolated로 승격돼 판정된 후보도 bundle로 센다 — 틀리면 지우지 않는 쪽으로 틀린다. 값이 없으면
+ * (승인 정보 없이 render를 직접 부른 경우) 경로로 거르지 않는다.
  */
-export function labelFor(candidate, verdictByCandidateId, phaseByImpact, vocabulary) {
+export function labelFor(candidate, verdictByCandidateId, phaseByImpact, vocabulary, deletionRoutes = {}) {
   const tokens = vocabulary.crossVerification
   const verdict = verdictByCandidateId.get(candidate.candidateId)
   const disposition = dispositionOf(candidate, verdict, 'ran')
   if (disposition === 'rejected') {
-    if (verdict.rebuttalKind === 'other') return tokens['rejected-other']
+    if (!rebuttalDeletes(candidate, verdict, vocabulary)) {
+      // loadVocabulary가 이 토큰의 존재를 이미 본다. 손으로 만든 어휘로 불려도 undefined 라벨로
+      // 축 줄이 통째로 빠지지 않게 여기서도 멈춘다.
+      const token = tokens[`rejected-${verdict.rebuttalKind}`]
+      if (typeof token !== 'string' || !token) throw new Error(`labelFor: 삭제를 허용하지 않는 반박 kind ${verdict.rebuttalKind}의 표기 토큰(rejected-${verdict.rebuttalKind})이 없다`)
+      return token
+    }
     // 이 finding의 impact가 속한 phase만 본다 — high/low를 하나의 phase로
     // 합쳐 읽으면 한쪽의 독립 승인이 다른 쪽 값에 가려진다.
     const phase = phaseByImpact[candidate.impact]
-    return phase === 'rollout-shadow' ? tokens['rejected-shadow'] : null
+    if (phase === 'rollout-shadow') return tokens['rejected-shadow']
+    if (phase === 'active-deletion') {
+      const routes = deletionRoutes[candidate.impact]
+      return routes && !routes.includes(candidate.route) ? tokens['rejected-shadow'] : null
+    }
+    throw new Error(`labelFor: impact ${candidate.impact}의 phase가 ${[...PHASES].join('·')} 밖이다 (${JSON.stringify(phase)}) — 지울지 말지 정할 수 없다`)
   }
   return tokens[disposition]
+}
+
+/**
+ * 이 반박이 phase에 따라 지적을 지울 수 있는 kind인가 — manifest의 `deletionAllowingKinds`.
+ *
+ * 목록을 받지 못했으면 던진다. 비어 있는 목록을 "아무것도 지우지 않는다"로 읽는 것과 목록이
+ * 없는 것을 "전부 지운다"로 읽는 것은 둘 다 기본값이고, 이 결정은 기본값으로 정하지 않는다.
+ */
+export function rebuttalDeletes(candidate, verdict, vocabulary) {
+  const { rebuttalKinds, deletionAllowingKinds } = vocabulary
+  if (!Array.isArray(rebuttalKinds) || !Array.isArray(deletionAllowingKinds)) {
+    throw new Error('삭제를 허용하는 반박 kind 목록(REVIEW_VERDICT_CONTRACT_V1의 rebuttal.deletionAllowingKinds)을 받지 못했다 — 반박된 지적을 지울지 정할 수 없다')
+  }
+  const kind = verdict?.rebuttalKind
+  if (!rebuttalKinds.includes(kind)) {
+    throw new Error(`${candidate.candidateId}: rejected 판정의 rebuttal.kind가 닫힌 목록 밖이다 (${JSON.stringify(kind)}) — 지울지 말지 정할 수 없다`)
+  }
+  return deletionAllowingKinds.includes(kind)
 }
 
 /**
@@ -705,6 +1022,12 @@ export function loadSpecialistPasses(rulesDir, plannedPath) {
  * `needs-context`를 위해 만든 "조용히 사라지지 않는다" 장치(movedToOpenQuestions)를
  * active-deletion에서 지워지는 finding에는 두지 않았던 것이 그 자체로 회귀였다.
  *
+ * `phaseByImpact`는 이 실행이 **실제로** 도는 phase다. CLI는 승인 파일로 그것을 정해
+ * (`gateDeletion`) 넘기고, 그 결과 전체를 `options.deletionGate`로 함께 넘긴다 — 승인이 잰
+ * 검증 경로(그 밖의 반박은 지우지 않는다)와, `## 상세 지적` 맨 위의 삭제 단계 줄에 적을 승인자·
+ * 날짜·무효가 된 승인이 거기 있다. 지울 수 있는 phase가 없고 무효가 된 승인도 없으면 그 줄은
+ * 없다 — 둘 다 rollout-shadow인 실행의 출력은 이 장치가 생기기 전과 같다.
+ *
  * `verificationState`는 불리언이 아니라 세 값을 갖는다.
  *   - `'ran'`: 교차검증이 실제로 돌았다. candidate별로 `labelFor`가 판정을
  *     읽어 라벨을 매기고, `needs-context`는 위에서 이동시킨다.
@@ -733,6 +1056,11 @@ export function render(candidates, verdictByCandidateId, phaseByImpact, vocabula
   // impact=low는 건수만 — 계약이 그렇게 가른 이유는 high 쪽이 차단 후보라
   // 무엇이 지워졌는지가 더 크게 걸리기 때문이다.
   const activeDeletionRemovals = { high: [], lowCount: 0 }
+  // 승인이 잰 검증 경로(C-6B). CLI가 승인 파일로 정해 넘긴다.
+  const deletionRoutes = {
+    high: options.deletionGate?.impacts?.high?.routes,
+    low: options.deletionGate?.impacts?.low?.routes,
+  }
   for (const candidate of candidates) {
     // needs-context 이동은 실제로 판정이 있었던 'ran'에서만 의미가 있다.
     // 'disabled'에는 애초에 판정 데이터가 없고, 있어도 무시한다 — 이동은
@@ -762,7 +1090,7 @@ export function render(candidates, verdictByCandidateId, phaseByImpact, vocabula
       continue
     }
     const label = verificationState === 'ran'
-      ? labelFor(candidate, verdictByCandidateId, phaseByImpact, vocabulary)
+      ? labelFor(candidate, verdictByCandidateId, phaseByImpact, vocabulary, deletionRoutes)
       // disabled는 판정 데이터(누가 반박했는지)는 보지 않는다 — 이 실행
       // 전체가 검증을 끈 것이지, 판정 유무로 후보별로 갈릴 사정이 아니다.
       // 하지만 eligibility는 판정 데이터가 아니라 candidate 자체의 성질이다.
@@ -779,10 +1107,10 @@ export function render(candidates, verdictByCandidateId, phaseByImpact, vocabula
     // (리뷰 fix round 1, Important 1 — 순번을 먼저 매기고 나중에 거르면
     // 분모가 걸러지기 전 건수로 굳어 남는다.)
     if (label === null) {
-      // labelFor가 null을 내는 유일한 경로는 active-deletion phase에서
-      // rejected(kind!=='other')로 지워지는 경우다(labelFor 참고). 그 삭제를
-      // 조용히 흘려보내지 않고 두 번째 채널로 담아 돌려준다 — movedToOpenQuestions와
-      // 같은 이유다.
+      // labelFor가 null을 내는 유일한 경로는 active-deletion phase에서 삭제를
+      // 허용하는 kind(manifest의 deletionAllowingKinds)로 반박돼 지워지는 경우다
+      // (labelFor 참고). 그 삭제를 조용히 흘려보내지 않고 두 번째 채널로 담아
+      // 돌려준다 — movedToOpenQuestions와 같은 이유다.
       const verdict = verdictByCandidateId.get(candidate.candidateId)
       if (candidate.impact === 'high') {
         activeDeletionRemovals.high.push({
@@ -838,17 +1166,37 @@ export function render(candidates, verdictByCandidateId, phaseByImpact, vocabula
   const relatedOf = candidate => (candidate.relatedCandidateIds ?? []).map(id => (renderedName.has(id)
     ? codeSpan(renderedName.get(id))
     : `${codeSpan(id)} (상세 지적에 없음)`))
-  const findingLines = candidate => renderFinding(candidate, {
-    label: labelById.get(candidate.candidateId), vocabulary, related: relatedOf(candidate),
-    evidence: evidenceLines(options.evidence?.get(candidate.candidateId)),
-    // 이전 리뷰와의 관계(C-13)는 같은 결함인지 물은 판정과 이 지적의 최종 판정을 함께 본다.
-    lineage: candidate.lineage ? finalizeCurrent(candidate.lineage, options.rechecks?.get(candidate.lineage.previousRef)) : undefined,
-    disposition: verificationState === 'ran' || verificationState === 'disabled'
-      ? dispositionOf(candidate, verdictByCandidateId.get(candidate.candidateId), verificationState)
-      : undefined,
-  })
+  // 실제로 그린 지적 수. 아래 cardinality 검사가 "라벨을 받았다"가 아니라 "상세 지적이나
+  // 특수 패스에 실제로 찍혔다"를 센다 — 라벨을 받고도 어느 절에도 실리지 않는 길이 생기면
+  // 그것이 #45가 말하는 조용한 소멸이다.
+  let drawn = 0
+  const findingLines = candidate => {
+    drawn += 1
+    const verdict = verdictByCandidateId.get(candidate.candidateId)
+    const disposition = verificationState === 'ran' || verificationState === 'disabled'
+      ? dispositionOf(candidate, verdict, verificationState)
+      : undefined
+    return renderFinding(candidate, {
+      label: labelById.get(candidate.candidateId), vocabulary, related: relatedOf(candidate),
+      evidence: evidenceLines(options.evidence?.get(candidate.candidateId)),
+      // 이전 리뷰와의 관계(C-13)는 같은 결함인지 물은 판정과 이 지적의 최종 판정을 함께 본다.
+      lineage: candidate.lineage ? finalizeCurrent(candidate.lineage, options.rechecks?.get(candidate.lineage.previousRef)) : undefined,
+      disposition,
+      // 결함은 인정하고 위치만 틀렸다는 반박 — 검증자가 본 자리를 함께 그린다. 축 줄의 라벨과
+      // 같은 disposition에서 정한다(검증 대상이 아니었던 후보의 판정은 보지 않는다).
+      verifierLocation: disposition === 'rejected' && verdict.rebuttalKind === 'location-wrong'
+        ? verdict.rebuttalLocation ?? null
+        : undefined,
+    })
+  }
 
   const lines = ['## 상세 지적', '']
+  // 지울 수 있는 phase가 켜졌거나 승인이 무효가 됐으면 이 절 맨 위에 한 줄로 적는다(C-6B).
+  // 교차검증 축이 없는 워크플로우(세 번째 상태)에는 phase가 의미가 없으므로 내지 않는다.
+  const phaseLine = verificationState === 'ran' || verificationState === 'disabled'
+    ? deletionPhaseLine(phaseByImpact, options.deletionGate)
+    : null
+  if (phaseLine) lines.push(phaseLine, '')
   const titleById = new Map(moduleSections.map(section => [section.id, section.title]))
   const sectionById = new Map(moduleSections.map(section => [section.id, section]))
   // 섹션에 없는 모듈에서 지적이 오면 그 모듈도 낸다. 조용히 버리면 지적이
@@ -926,7 +1274,30 @@ export function render(candidates, verdictByCandidateId, phaseByImpact, vocabula
     }
   }
 
+  checkCardinality(candidates.length, {
+    drawn,
+    moved: movedToOpenQuestions.length,
+    removedHigh: activeDeletionRemovals.high.length,
+    removedLow: activeDeletionRemovals.lowCount,
+  })
   return { markdown: lines.join('\n'), movedToOpenQuestions, activeDeletionRemovals }
+}
+
+/**
+ * 들어온 후보는 모두 정확히 한 곳으로 간다 — 그린 지적, `미해결 / 후속 확인`으로 옮길 목록,
+ * active-deletion이 지운 목록(high는 건별, low는 건수).
+ *
+ * 2.5.7 실사용 리포트가 `후보 27 = 유지 12 + 반박됨 4 + 분류 밖 1 + 범위 미확정 4 + 대상 아님 6`을
+ * 맞췄지만, 그 등식은 모델이 손으로 재구성한 사본 위에서 맞은 것이었다(#45). 성실한 실행과
+ * 성실하지 않은 실행이 같은 출력을 내면 등식이 근거가 되지 못한다. 그래서 등식을 산문이
+ * 아니라 렌더러가 센다. 맞지 않으면 그리지 않고 던진다(CLI는 exit 2로 끝낸다) — 어느 절에도
+ * 없는 지적이 생긴 리포트는 깨끗해 보이는 쪽으로 틀린다.
+ */
+export function checkCardinality(total, { drawn, moved, removedHigh, removedLow }) {
+  const accounted = drawn + moved + removedHigh + removedLow
+  if (accounted !== total) {
+    throw new Error(`render: 후보 ${total}건 중 ${accounted}건만 행선지가 있다 — 그린 지적 ${drawn} + 범위 미확정 이동 ${moved} + active-deletion 삭제 high ${removedHigh}·low ${removedLow}. 어느 절에도 없이 사라진 지적이 있다`)
+  }
 }
 
 // 이 파일이 직접 실행될 때만 CLI로 동작한다. 테스트는 함수를 import한다.
@@ -936,6 +1307,15 @@ if (process.argv[1] && process.argv[1].endsWith('render-findings.mjs')) {
   const phaseHigh = flag('phase-high')
   const phaseLow = flag('phase-low')
   const workflow = flag('workflow')
+  // 승인 파일을 쓰는 사람이 basis에 적을 값을 손으로 계산하지 않게 한다. 렌더링과 섞지 않는다 —
+  // 이 모드는 리포트를 그리지 않는다.
+  if (process.argv.includes('--print-deletion-basis')) {
+    if (!rulesDir) die('--print-deletion-basis에는 --rules <RULES_DIR>가 필요하다 — 기준은 그 디렉터리의 계약과 검증자 지시문에서 나온다')
+    const basis = deletionBasis(rulesDir)
+    if (basis.error) die(basis.error)
+    process.stdout.write(`${JSON.stringify({ basis: basis.value }, null, 2)}\n`)
+    process.exit(0)
+  }
   if (!inputPath) die('--input <경로>가 필요하다')
   if (!rulesDir) die('--rules <RULES_DIR>가 필요하다')
   if (!workflow) die('--workflow <이름>이 필요하다 — 어느 모듈이 섹션이 되는지가 여기서 갈린다')
@@ -946,7 +1326,7 @@ if (process.argv[1] && process.argv[1].endsWith('render-findings.mjs')) {
   // 삭제로 전환" 같은 독립 승인을 표현할 수 없다.
   if (!PHASES.has(phaseHigh)) die(`--phase-high는 ${[...PHASES].join(' 또는 ')} 중 하나여야 한다`)
   if (!PHASES.has(phaseLow)) die(`--phase-low는 ${[...PHASES].join(' 또는 ')} 중 하나여야 한다`)
-  const phaseByImpact = { high: phaseHigh, low: phaseLow }
+  const requestedPhases = { high: phaseHigh, low: phaseLow }
 
   const verificationState = flag('verification-state')
   // 이 CLI는 code-review-full 전용이고, 그 워크플로우는 항상 C-6B 안에
@@ -966,6 +1346,41 @@ if (process.argv[1] && process.argv[1].endsWith('render-findings.mjs')) {
   if (verificationState === 'disabled' && flagAll('verdicts').length > 0) {
     die('--verification-state disabled와 --verdicts를 함께 줄 수 없다 — disabled는 판정이 없다는 선언이라 --verdicts가 모순된다')
   }
+
+  // active-deletion은 플래그 한 단어로 켜지지 않는다(C-6B 삭제 rollout phase, #47). 사람이 잰
+  // false-suppression 승인 파일이 있어야 하고, 플러그인은 그 승인을 싣고 오지 않는다. 승인을
+  // 줬는데 지울 phase가 없으면 두 신호가 모순된다 — `disabled`와 `--verdicts`처럼 거부한다.
+  const wantsDeletion = Object.values(requestedPhases).includes('active-deletion')
+  const approvalPath = flag('deletion-approval')
+  const approvalGiven = process.argv.includes('--deletion-approval')
+  if (wantsDeletion && !approvalPath) {
+    die('--phase-high/--phase-low에 active-deletion을 주려면 --deletion-approval <승인 파일>이 필요하다 — ' +
+      '반박된 지적을 지우는 것은 사람이 잰 false-suppression 승인(workflow-contract.md C-6B 삭제 rollout phase)이 있을 때만이고, ' +
+      '플러그인에는 그런 승인이 들어 있지 않다. 승인 없이 돌리려면 둘 다 rollout-shadow로 준다')
+  }
+  if (!wantsDeletion && approvalGiven) {
+    die('--deletion-approval을 줬는데 active-deletion인 phase가 없다 — 승인 파일은 지울 phase가 있을 때만 준다')
+  }
+  let deletionGate
+  if (wantsDeletion) {
+    let approval
+    try {
+      approval = JSON.parse(readFileSync(approvalPath, 'utf8'))
+    } catch (error) {
+      die(`--deletion-approval을 읽지 못했다: ${approvalPath} — ${error.message}`)
+    }
+    const approvalProblems = validateDeletionApproval(approval)
+    if (approvalProblems.length) {
+      die(`--deletion-approval이 계약(C-6B)에 맞지 않는다: ${approvalPath}\n  - ${approvalProblems.join('\n  - ')}`)
+    }
+    const basis = deletionBasis(rulesDir)
+    if (basis.error) die(basis.error)
+    const gate = gateDeletion(requestedPhases, approval, basis.value)
+    if (gate.error) die(gate.error)
+    deletionGate = gate.value
+    for (const warning of deletionGate.warnings) process.stderr.write(`${warning}\n`)
+  }
+  const phaseByImpact = deletionGate?.phaseByImpact ?? requestedPhases
 
   let payload
   let inputText
@@ -1008,11 +1423,15 @@ if (process.argv[1] && process.argv[1].endsWith('render-findings.mjs')) {
       die(`--verdicts를 읽지 못했다: ${path} — ${error.message}`)
     }
     // labelFor는 disposition만으로 rejected를 판단하지 않는다 —
-    // rebuttal.kind가 'other'인지도 봐야 그 반박을 계약(C-6B)대로 모든
-    // phase에서 살려둘 수 있다. 그래서 문자열 하나가 아니라
-    // { disposition, rebuttalKind } 객체를 싣는다. rebuttal이 없는
+    // rebuttal.kind가 삭제를 허용하는 kind인지도 봐야 `other`·`location-wrong`
+    // 같은 반박을 계약(C-6B)대로 모든 phase에서 살려둘 수 있다. 그래서 문자열
+    // 하나가 아니라 { disposition, rebuttalKind, … } 객체를 싣는다. rebuttal이 없는
     // disposition(upheld·needs-context)에서는 rebuttalKind가 그냥
     // undefined로 남고 labelFor는 그 값을 보지 않는다.
+    //
+    // `rebuttalLocation`은 `location-wrong` 반박이 짚은 결함의 자리다. 지적은 남고
+    // 렌더러가 그 자리를 함께 그린다 — 여기서 버리면 "위치가 틀렸다"는 말만 남고
+    // 어디가 맞는지는 리포트에서 사라진다.
     //
     // `reason`도 함께 싣는다. labelFor는 이 값을 쓰지 않지만, 계약이
     // `needs-context`에 필수로 요구하는 필드이고(disposition.requires)
@@ -1034,6 +1453,7 @@ if (process.argv[1] && process.argv[1].endsWith('render-findings.mjs')) {
       byCandidateId.set(verdict.candidateId, {
         disposition: verdict.disposition,
         rebuttalKind: verdict.rebuttal?.kind,
+        rebuttalLocation: verdict.rebuttal?.location,
         reason: verdict.reason,
       })
     }
@@ -1083,6 +1503,7 @@ if (process.argv[1] && process.argv[1].endsWith('render-findings.mjs')) {
         excludedNotRequested: new Set(payload.collected?.excludedNotRequested ?? []),
         evidence,
         rechecks,
+        deletionGate,
       })
   } catch (error) {
     die(error.message)

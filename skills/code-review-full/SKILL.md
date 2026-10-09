@@ -25,7 +25,7 @@ description: Use when the user invokes /code-review-full or asks for a full code
 | 모듈 집합 | 적용 대상 numbered non-00 + props + math + exception (+ correctness — `--correctness on`일 때만) |
 | 분할 방식 | 모듈별 sub-agent, **in-flight 최대 4개의 sliding window** (배리어 없음) |
 | 완료 판정 | 적용 대상 모듈 전부 수집 성공. 하나라도 실패하면 `FAILED orchestration` |
-| 교차검증 | 1차 수집 후 **선별 반박 패스**. 기본 `--verify selective`, 삭제는 `rollout-shadow`에서 시작 |
+| 교차검증 | 1차 수집 후 **선별 반박 패스**. 기본 `--verify selective`, 삭제는 `rollout-shadow`에서 시작 — `active-deletion`은 사람이 잰 승인 파일이 있어야 켜진다 |
 | 선택 패스 | `--correctness on`이면 정확성 패스(`correctness.md`, `CR-{n}`)를 더 띄운다. 기본은 꺼짐 |
 | 작업 대장 | 무엇을 띄울지와 결과를 받을지를 `review-tasks.mjs`가 정한다(C-12). 시간·호출 한도는 사용자가 줄 때만 |
 | 이전 리뷰와 비교 | `--previous <스냅숏>`이면 이번 지적을 이전 지적과 잇고, 이어지지 않은 이전 지적을 재확인한다(C-13) |
@@ -61,6 +61,13 @@ node "$RULES_DIR/../scripts/review-preflight.mjs" --dir "$REPORT_DIR" --run "$RE
 C-9의 `run.start`를 이 스크립트가 쓴다. 동시에 `리뷰 기준`과 `실행 계획`에 적을 값을 낸다 — 플러그인 버전, 해석된 규칙 경로, 브랜치, merge-base, 변경 파일 수, **후보 모듈 수와 목록**. 그 값을 손으로 세지 않는다. 후보에서 빠진 `00-rule.md`와 synthesis 전용 모듈도 이유와 함께 출력되므로, 아래 (2)와 (4)는 이 목록에서 출발한다.
 
 **무엇을 리뷰하는지도 여기서 정해진다(C-10).** 출력의 `HEAD`·`작업 트리`·`실행 ID`를 `리뷰 기준`에 옮긴다. 작업 트리에 커밋하지 않은 변경이 있으면 스크립트가 그렇다고 말한다 — 그 변경은 diff(3a(3))에는 없지만 파일을 읽는 단계는 그 내용을 보므로, `리뷰 기준`에 그 사실을 적는다. 리뷰가 끝날 때 `review-snapshot.mjs`가 이 값을 다시 재서 실행 도중 대상이 바뀌었는지 본다(아래 `결과 스냅숏`).
+
+**리뷰 도중 대상이 바뀌어도 범위를 바꾸지 않는다(C-10).** 리뷰하는 동안 같은 작업 폴더에서 커밋·stage·브랜치 전환이 일어나도, 이 실행이 리뷰하는 것은 preflight가 잰 대상이다. 바뀐 것을 사용자에게 알리되 범위를 다시 정하지 않고, 사용자의 답 없이 고른 것을 사용자의 결정처럼 적지 않는다 — 2026-10-06 실행은 stage된 파일 넷을 보고 사용자에게 물었다가, 답이 오기 전에 호스트의 자동 계속 지시를 받아 스스로 고르고 리포트에 "요청에 따라"라고 적었다. 그 대신 이렇게 된다.
+- `prepare-verification.mjs`가 그 사실을 알아채고, 시작 때 작업 트리가 깨끗했으면 위치 대조를 **시작한 HEAD**로 한다. 검증자 프롬프트에도 "지금 파일에만 있는 코드를 반박 근거로 쓰지 않는다"가 들어간다. 시작 때 작업 트리가 깨끗하지 않았으면 그때의 파일은 다시 읽을 수 없다 — 위치 불일치가 대상 변경 때문일 수 있다고 출력에 남는다
+- 스냅숏이 `검토 도중 대상이 바뀌었다`를 그리고, `판정`에 그 줄을 옮긴다(아래 `결과 스냅숏`)
+- 사용자가 멈추라고 하면 `review-tasks.mjs cancel --all --reason user`(아래 `작업 대장으로 띄우고 받는다`)로 멈춘다. 바뀐 코드는 끝난 뒤 새 `--run`으로 다시 리뷰한다
+
+리뷰하는 동안 같은 폴더에서 다른 작업을 할 거라면, 리뷰는 전용 worktree에서 돌린다.
 
 **정확성 패스를 켰는지도 여기서 정해진다.** 사용자가 `--correctness on`을 줬을 때만 preflight에 `--correctness on`을 넘긴다. 주지 않았으면 `off`다 — 이 패스는 검출 효과와 추가 비용을 확인하기 전까지 명시적으로 켜서 쓴다(#88). preflight가 그 값을 `run.start`에 남기고, 뒤의 스크립트(검증 준비·렌더러·스냅숏)는 그 기록을 읽는다. **나중에 켤 수 없다** — 시작한 타임라인에는 두 번째 시작을 얹지 못한다. 켜지 않은 실행에서 패스를 돌려도 그 결과는 모이지 않는다(`prepare-verification.mjs`가 그렇다고 알린다).
 
@@ -139,7 +146,7 @@ node "$RULES_DIR/../scripts/review-tasks.mjs" next --stage module --dir "$REPORT
 - **`expired`에 나온 시도는 끝 알림 없이 `staleAfterSec`를 넘겨 대장이 끝낸 것이다.** 그 시도의 응답이 나중에 와도 `done`이 받지 않는다. 재시도는 같은 응답의 `dispatch`에 이미 있다
 - **`cancelled`에 나온 시도는 시간 상한이 지나 취소된 것이다.** 호스트가 작업을 멈출 수 있으면(`host.cancel`) 그 작업을 멈춘다. `halted`가 나오면 더 띄우지 않는다 — 이미 받은 결과로 다음 단계로 가고, 띄우지 못한 모듈은 스냅숏이 미검토 범위로 그린다(`FAILED orchestration`)
 - **사용자가 멈추라고 하면** `review-tasks.mjs cancel --all --reason user`를 부르고, 같은 방식으로 받은 결과까지 리포트를 쓴다
-- **멈춘 실행(`halted`)도 리포트를 쓰고 `run.end`를 남긴다** — 부분 보고다. 사용자가 더 돌리라고 하면 `review-tasks.mjs resume`이 새 구간을 열고, `next`가 멈춰서 띄우지 못한 모듈을 낸다. 모듈 단계를 마치면 `prepare-verification.mjs … --collect --discard-verdicts`로 다시 모으고 검증을 새 라운드로 한 뒤 리포트를 다시 쓴다. 멈춘 적 없이 끝난 실행은 이어 가지 않는다
+- **멈춘 실행(`halted`)도 리포트를 쓰고 `run.end`를 남긴다** — 부분 보고다. 사용자가 더 돌리라고 하면 `review-tasks.mjs resume`이 새 구간을 열고, `next`가 멈춰서 띄우지 못한 모듈을 낸다. 모듈 단계를 마치면 `prepare-verification.mjs … --collect --discard-verdicts --out <같은 routed 자리>`로 다시 모으고 검증을 새 라운드로 한 뒤 리포트를 다시 쓴다. 멈춘 적 없이 끝난 실행은 이어 가지 않는다
 - **깨어날 때마다** — 작업 완료 알림, 사용자 메시지, 컨텍스트 압축 뒤, 같은 실행에서 스킬을 다시 불렀을 때 — 먼저 `review-tasks.mjs status`로 남은 일을 보고 `next`를 부른다. 같은 실행을 다른 세션에서 이어 가면 `review-tasks.mjs resume --repo <대상 저장소>`부터 부른다. 대상이 바뀌었다고 하면(종료 코드 3) 이 실행을 이어 가지 않고, 새 `--run` 이름으로 preflight를 `--continues <앞 실행 ID>`와 함께 다시 시작한다. 한도에 닿아 멈춘 실행을 사용자가 더 돌리라고 하면 `resume`에 새 한도를 준다
 - 작업 하나가 끝나도 깨우지 않는 호스트(`host.perTaskNotification: false`, oh-my-openagent)에서는 `dispatch`를 전부 한 번에 foreground 병렬로 부르고, 돌아온 응답마다 `done`을 부른 뒤 `next`를 다시 부른다(아래 교차검증 `디스패치`와 같은 이유)
 
@@ -295,10 +302,10 @@ instanceId 부여
 **입력을 새로 만들지 않는다.** 검증을 통과한 producer 결과를 그대로 넘긴다 — 수집 때 남긴 모듈별 파일(`$REPORT_BASENAME.<모듈>.json`, 위 `일반 모듈 실행` 참고)에서 **스크립트가 모은다.**
 
 ```bash
-node "$RULES_DIR/../scripts/prepare-verification.mjs" --merge-base "$MERGE_BASE" --dir "$REPORT_DIR" --run "$REPORT_BASENAME" --rules "$RULES_DIR" --collect > "$REPORT_DIR/.timing/$REPORT_BASENAME.routed.json"
+node "$RULES_DIR/../scripts/prepare-verification.mjs" --merge-base "$MERGE_BASE" --dir "$REPORT_DIR" --run "$REPORT_BASENAME" --rules "$RULES_DIR" --collect --out "$REPORT_DIR/.timing/$REPORT_BASENAME.routed.json"
 ```
 
-이 스크립트는 결과를 **stdout에만** 낸다. 리다이렉트를 빠뜨리면 이 출력을 담을 파일이 저장소 어디에도 없는데, 뒤의 `render-findings.mjs`는 `--input <경로>`만 받고 stdin 경로가 없다 — 그러면 다음 단계에서 붙일 경로를 운영자가 즉석에서 지어내야 한다. `.timing` 아래 다른 실행별 산출물과 같은 자리에 둔다.
+**routed 출력은 스크립트가 `--out` 자리에 직접 쓴다. 셸 리다이렉트(`>`)로 받지 않는다.** PowerShell 5.1은 node의 UTF-8 출력을 시스템 코드 페이지로 읽어 다시 쓴다 — 2026-10-06 실행의 routed 출력은 한글이 `議고쉶…`처럼 깨져 되돌릴 수 없었고, 검증 준비를 다시 돌려야 했다. `--out`을 주면 표준 출력에는 쓴 경로·sha256·수치만 나온다. 뒤의 `render-findings.mjs`·`review-tasks.mjs`·`tally-verdicts.mjs`가 이 자리(`.timing` 아래 다른 실행별 산출물과 같은 자리)에서 읽는다. 쓰지 못하면 스크립트가 멈추고(종료 코드 2) 교차검증도 시작하지 않는다.
 
 - **envelope를 손으로 조립하지 않는다.** `--collect`는 타임라인의 `module.done`을 기준으로 모으고, 모으는 것은 최종(가장 큰 시도의) `module.done`이 `ok`인 모듈뿐이다. 대장이 받은 내용(`resultSha256`)과 다른 결과 파일은 모으지 않는다
   - `ok`인데 결과 파일이 없으면 거부하며 빠진 경로를 말한다. 그때는 그 모듈의 결과를 파일로 쓰고 다시 돌린다
@@ -374,6 +381,8 @@ isolated 11)을 동시에 background dispatch한 결과, 1건만 2분 25초에 �
 상태별 active/synthesis/차단 처리는 `workflow-contract.md` C-6B 상태표가 정본이다. 이 문서에서 다시 정의하지 않는다.
 
 **`rollout-shadow`에서 반박된 finding은 지워지지 않을 뿐 아니라 등급도 그대로다.** rollout-shadow에서 반박된 finding도 원 severity를 유지하며 판정에서 차단 후보로 계산한다. 반박됐다는 이유로 `판정` 근거에서 빼면, 그것이 유일한 차단 후보였을 때 관찰 기간이 곧 무방비 기간이 된다 — 삭제를 켜지 않은 의미가 사라진다.
+
+**삭제를 허용하지 않는 반박은 어느 phase에서도 지적을 지우지 않는다.** 어떤 `rebuttal.kind`가 지울 수 있는지는 판정 manifest의 `deletionAllowingKinds`가 정하고 렌더러가 그것을 읽는다(C-6B `반박 kind별 결말`). `other`(`반박 시도 — 분류 밖`)와 `location-wrong`(`위치 이견 — 결함 유지`)은 그 목록 밖이라 원 severity로 남고 판정에서 차단 후보로 센다. 특히 `location-wrong`은 검증자가 결함을 **인정하고** 위치만 틀렸다고 한 것이다 — 렌더러가 그 아래에 `검증자가 짚은 위치(대조하지 않음): …`를 그린다. 반박됐다고 읽고 판정 근거에서 빼지 않는다.
 
 **candidate ID를 리포트에 쓰면 finding과의 매핑을 같은 리포트 안에 싣는다.** ID 형식은 자유지만, 매핑 없이 `HR-2` 같은 식별자만 적으면 독자가 그것이 어느 지적인지 문서를 뒤져 추측해야 한다. 규칙 ID와 위치로만 지칭하고 candidate ID를 아예 쓰지 않아도 된다.
 
@@ -455,7 +464,7 @@ node "$RULES_DIR/../scripts/tally-verdicts.mjs" --dir "$REPORT_DIR" --run "$REPO
   **중간에 뽑은 표를 그대로 두지 않는다.** 한 리포트가 교차검증 직후에 뽑은 4줄짜리 표를 실었는데 사이드카에는 13줄이 있었고, 빠진 9줄 안에 **전체 두 번째로 긴 442초 구간**이 들어 있었다. 그 리포트는 표 밑에 "렌더 시점 요약이므로 `run.end`는 포함되지 않습니다"라고 적었지만 실제로 빠진 것은 `run.end` 하나가 아니었다. `render.start`를 남긴 뒤에 뽑으면 그 문장이 참이 된다.
 
   **한 행도 손으로 쓰지 않는다.** 다른 리포트는 71행 중 66행이 사이드카와 바이트 단위로 같았는데 **네 행만 달랐다.** 그 네 행에는 계약에 없는 필드 이름이 들어 있었고 — 스크립트가 걸러 `note`로 접은 값들이다 — 그중 하나는 `clusters:8` 자리에 `findings:38`이 적혀 **단위가 다른 값**이 그럴듯하게 들어앉았다. 같은 리포트가 바로 위에서 "출력을 그대로 사용함"이라고 적고 있었다. 출력 끝의 출처 줄(경로·이벤트 수)까지 함께 옮기면 읽는 쪽이 대조할 수 있다.
-- 리포트를 저장하고 `run.end`를 남긴 뒤 `review-timeline.mjs --check`를 돌린다. 종료 코드 1은 리뷰 실패가 아니지만, 지적된 빈 곳은 `실행 타임라인` 섹션에 함께 적는다 (C-9).
+- **리포트를 저장하기 직전에 `review-timeline.mjs --check --before-end`를 돌린다.** 종료 코드 1은 리뷰 실패가 아니지만, 지적된 빈 곳은 `실행 타임라인` 섹션에 함께 적는다 (C-9). 리포트를 저장하면 `render.wrote`를, 이어서 `run.end`를 남긴다 — **`run.end`가 마지막 줄이다.** 그 뒤에는 기록에 아무것도 덧붙이지 않는다. 빠진 줄을 사후에 채우지 않고(`dispatch.end` 등), 리포트를 고쳐도 `render.*`를 다시 남기지 않는다. 2026-10-06 실행은 `run.end` 뒤에 검사해 찾은 빈 곳을 채우려고 `dispatch.end`·`run.end`·렌더 줄을 덧붙였고, 기록의 끝이 셋이 됐다
 - 개별 패스의 구조화 결과는 출력 전에 임의 축약하거나 버리지 않는다. aggregation은 parsed field를 유지한 채 병합·정렬만 하고, 최종 헤딩/섹션/표현은 renderer가 새로 만든다.
 - 같은 규칙 ID로 finding이 둘 이상이면 C-7에 따라 `17-3 (1/2)` 형태로 순번을 붙인다.
 - 패스에 적용 범위가 없으면 패스 이름, 사유, 그리고 `SKIPPED`가 비차단임을 명시해 `SKIPPED`로 출력한다. **특수 패스(Props·수학·예외)의 SKIPPED는 실행 계획 파일(`--planned`)의 `skipped`에 그 패스 이름으로 적는다** — `{"module":"math","reasonCode":"…","reason":"…"}`. 렌더러가 그 사유를 `특수 패스` 절의 그 자리에 옮기고, 지적이 0건인 패스에는 "지적 없음."을 찍는다. **건너뛴 패스의 결과 파일을 만들지 않는다** — 2026-09-30 실행은 SKIPPED인 수학 패스에 빈 `math.json`을 써 두었고, 리포트에는 Props(실행·0건)와 수학(SKIPPED)이 모두 빠졌다. 특수 패스가 하나라도 건너뛰어졌으면 `--planned`를 반드시 준다. **렌더러는 `--collect`가 남긴 `collected.sources`와 대조한다** — 지적이 없는데 결과 파일도 수집되지 않은 모듈·패스는 "지적 없음."이 아니라 "결과 없음"으로 찍힌다. 그 표시는 실행이 실패했거나 결과가 빠졌다는 뜻이므로, `실행 계획`에 그 모듈의 실패를 적는다(`FAILED orchestration`).
@@ -475,8 +484,8 @@ node "$RULES_DIR/../scripts/tally-verdicts.mjs" --dir "$REPORT_DIR" --run "$REPO
 node "$RULES_DIR/../scripts/render-findings.mjs" \
      --input "$REPORT_DIR/.timing/$REPORT_BASENAME.routed.json" \
      [--verdicts "$REPORT_DIR/.timing/$REPORT_BASENAME.verdicts.json"] \
-     --phase-high <active-deletion|rollout-shadow> \
-     --phase-low <active-deletion|rollout-shadow> \
+     --phase-high rollout-shadow \
+     --phase-low rollout-shadow \
      --verification-state <ran|disabled> \
      --rules "$RULES_DIR" \
      --workflow full \
@@ -489,6 +498,8 @@ node "$RULES_DIR/../scripts/render-findings.mjs" \
 
 출력을 두 섹션 자리에 그대로 붙인다. 같은 명령이 실행마다 다른 모양의 지적을 냈고, 규칙은 이미 계약에 다 있었는데도 그랬다 — 문서가 부탁하는 동안에는 지켜지지 않는다. **`--phase-high`와 `--phase-low`는 별개 값이다.** phase는 전역이 아니라 `impact`별 설정이므로(`workflow-contract.md`의 `deletionPhase`), high가 아직 `rollout-shadow`인 동안 low만 `active-deletion`으로 옮기는 것이 정상 구성이다. 둘 다 기본값이 없다 — 반박된 finding의 처리가 갈리고 그 값이 차단 판정에 걸리므로, 조용히 틀린 쪽으로 도는 것보다 멈추는 편이 낫다.
 
+**명령 틀은 둘 다 `rollout-shadow`다. `active-deletion`은 승인 파일 없이는 켜지지 않는다.** 렌더러는 `--phase-high`·`--phase-low` 중 하나라도 `active-deletion`이면 `--deletion-approval <승인 파일>`을 요구하고 없으면 멈춘다(exit 2). 승인 파일은 사람이 impact·검증 경로별로 잰 false-suppression 기록이고(`workflow-contract.md` C-6B `승인 파일`), **플러그인은 그런 승인을 싣고 오지 않는다.** 사용자가 승인 파일을 주며 명시적으로 요청할 때만 그 impact를 `active-deletion`으로 바꾸고 `--deletion-approval`을 붙인다 — 스스로 고르지 않는다. 승인을 쓴 뒤에 반박 kind 목록이나 검증자 지시문이 바뀌었으면 렌더러가 그 impact를 `rollout-shadow`로 되돌리고 stderr로 경고하며, 그 사실을 `## 상세 지적` 맨 위 줄에도 적는다. 승인 파일에 적을 기준은 `--print-deletion-basis --rules "$RULES_DIR"`이 낸다.
+
 **`--verification-state`도 기본값이 없다.** `ran`은 교차검증이 실제로 돌았다는 뜻이고, `disabled`는 이번 실행에서 교차검증을 껐다는 뜻이다 — 계약(C-6B)이 "검증을 끈 실행"과 "검증이 깨진 실행"을 가르는 것과 같은 이유로, 이 값을 `--verdicts` 유무로 추측하지 않는다. `ran`이면 후보별 판정에 따라 `대상 아님`·`유지`·`반박됨 — 관찰 중` 등으로 갈리고, `disabled`면 판정 데이터(누가 반박했는지)는 보지 않는다 — 하지만 **eligibility까지 무시하지는 않는다.** disposition 표(C-6B)는 `verification-disabled`를 "검증을 끈 실행의 **검증 대상**"에만 준다: SKIP-VERIFY였던 후보는 검증을 껐든 켰든 애초에 대상이 아니었으므로 `대상 아님`을 그대로 유지하고, VERIFY 대상이었던 후보에만 `꺼짐`을 찍는다. `--verdicts`는 `ran`일 때만 주고, `disabled`에서는 애초에 판정 파일이 없으므로 생략한다 — `tally-verdicts.mjs --collect`가 정본 순서로 모아 남긴 `verdicts.json`을 준다. 판정 파일을 직접 넘길 때는 `tally-verdicts.mjs`에 넘긴 순서(bundle 다음 isolated)와 같게 둔다. 두 스크립트는 같은 로더(`scripts/lib/verdicts.mjs`)로 판정 파일을 읽으므로 tally가 받은 모양은 렌더러도 받고, 판정 목록을 찾지 못하는 파일은 둘 다 거부한다 — 2.14.0까지 렌더러는 `{"tasks":[…]}`를 판정 0건으로 읽어 검증 대상 전부를 `검증 실패`로 찍을 수 있었다. `disabled`에서 `--verdicts`를 함께 주면 렌더러가 거부한다(모순된 두 신호). `--planned`는 `실행 계획`에서 건너뛴/미확인 모듈이 있을 때만 주고, 없으면 생략한다.
 
 **`ran`일 때 `needs-context`로 판정된 finding은 상세 지적에서 빠지고 stderr 알림으로 나온다.** 렌더러는 `미해결 / 후속 확인` 섹션을 쓰지 않으므로, 그 알림에 실린 내용을 실제로 그 섹션에 옮겨 적는다 — 옮겨 적지 않으면 그 finding은 리포트 어디에도 없는 채로 사라진다.
@@ -497,7 +508,7 @@ node "$RULES_DIR/../scripts/render-findings.mjs" \
 
 **위치 확인에 실패한 finding의 위치 줄은 렌더러가 다르게 그린다.** `prepare-verification.mjs`가 후보마다 붙인 `locationCheck`를 렌더러가 읽어, 주장된 경로를 읽지 못했거나 인용이 실제 내용과 다르면 `위치 확인 실패: …` 줄을 낸다 (C-7 **확인에 실패한 위치**). **그 문장을 직접 쓰지 않는다** — 한 실행이 손으로 `위치 미확인 사유`를 적었고, 그것은 계약이 `location.kind = "unverified"`에만 주는 다른 줄이다. `locationCheck`가 없는 입력은 렌더러가 거부하므로, `--input`에는 항상 `prepare-verification.mjs`의 출력을 그대로 넘긴다.
 
-**`active-deletion` phase가 지운 `rejected` finding도 같은 방식으로 stderr에 나온다.** C-6B "오판 가시성"은 이 삭제의 흔적을 audit이 아니라 리포트 본문(`미해결 / 후속 확인`)에 남기라고 명시한다 — 검증자의 오판이 진짜 결함의 소멸이 될 수 있고, audit는 아무도 읽지 않기 때문이다. stderr 알림에는 `impact = high`였던 것은 건별로(규칙 ID·anchor path·`rebuttal.kind`), `impact = low`였던 것은 건수만 실린다 — 그 알림 내용을 그대로 `미해결 / 후속 확인`에 옮겨 적는다. 옮겨 적지 않으면 그 삭제는 리포트 어디에도 없는 채로 사라진다.
+**`active-deletion` phase가 지운 `rejected` finding도 같은 방식으로 stderr에 나온다.** C-6B "오판 가시성"은 이 삭제의 흔적을 audit이 아니라 리포트 본문(`미해결 / 후속 확인`)에 남기라고 명시한다 — 검증자의 오판이 진짜 결함의 소멸이 될 수 있고, audit는 아무도 읽지 않기 때문이다. stderr 알림에는 `impact = high`였던 것은 건별로(규칙 ID·anchor path·`rebuttal.kind`), `impact = low`였던 것은 건수만 실린다 — 그 알림 내용을 그대로 `미해결 / 후속 확인`에 옮겨 적는다. 옮겨 적지 않으면 그 삭제는 리포트 어디에도 없는 채로 사라진다. 그 경우 렌더러 출력의 `## 상세 지적` 맨 위에는 `삭제 단계: …` 줄(impact별 phase·승인자·날짜·경로)이 있다 — 출력의 일부이므로 지우거나 고쳐 쓰지 않는다.
 
 ### 결과 스냅숏
 
@@ -510,7 +521,7 @@ node "$RULES_DIR/../scripts/review-snapshot.mjs" --dir "$REPORT_DIR" --run "$REP
 - **출력을 `실행 계획` 섹션 맨 앞에 그대로 붙인다.** 그 블록은 방금 저장한 스냅숏 파일을 다시 읽어 그린 것이다. 손으로 고치면 리포트와 JSON이 다른 것을 말한다. 리포트를 다시 쓸 때는 `--show <스냅숏 경로>`로 같은 블록을 다시 낸다
 - `--verification-state`는 렌더러에 준 값과 같다. routed 출력과 판정은 위 명령들이 남긴 자리(`$REPORT_BASENAME.routed.json`·`.verdicts.json`)에서 읽는다
 - **`검토 상태`가 `완료`가 아니면 `판정`을 통과로 쓰지 않는다.** `부분 완료`와 `실패`는 `FAILED orchestration`이다(C-8). 표에 나온 모듈(`FAILED`·결과 없음·`SKIPPED`·`UNKNOWN`)이 이 실행이 검토하지 않은 범위다
-- `검토 도중 대상이 바뀌었다`가 찍히면 `판정`에도 한 줄 적는다 — 그 실행의 결과는 한 시점의 코드에 대한 것이 아니다
+- `검토 도중 대상이 바뀌었다`가 찍히면 `판정`에도 한 줄 적는다 — 그 실행의 결과는 한 시점의 코드에 대한 것이 아니다. 위치 대조를 무엇으로 했는지는 routed 출력의 `target`에 있다(`start-head`면 시작한 HEAD). 사용자가 정하지 않았으면 사용자의 요청으로 적지 않는다
 - **이전 리뷰와 비교했으면(C-13) 블록에 `이전 리뷰와 비교`가 나온다.** `요약`에는 그 수를 옮기되 **해결 확인만 해결이라고 쓴다.** 재확인 필요는 해결도 미해결도 아니다 — 그 표의 항목을 `미해결 / 후속 확인`에 옮긴다. 이번에 나오지 않았다는 이유로 이전 지적을 해결됐다고 쓰지 않는다. 지적마다의 `이전 리뷰:` 줄은 렌더러가 그린다 — 직접 쓰지 않는다
 - 스크립트가 멈추면(종료 코드 2) 이유를 고치고 다시 돌린다. 검증 대상이 있는데 검증자가 하나도 판정을 내지 못했으면 `--no-verdicts`를 준다. 고칠 수 없으면 `실행 계획`에 스냅숏을 남기지 못했다고 적는다 — **블록을 손으로 만들지 않는다**
 
