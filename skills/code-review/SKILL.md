@@ -37,7 +37,9 @@ git diff --stat $MERGE_BASE..HEAD
 git diff $MERGE_BASE..HEAD
 ```
 
-제외 경로는 C-5를 따른다.
+**diff는 여기서 오케스트레이터가 한 번만 수집한다.** 두 번째 명령의 출력 전체가 Step 4 producer 프롬프트의 `{DIFF}`가 된다. producer는 git을 돌리지 않는다 — 셸이 없는 에이전트로 띄우기 때문이다(Step 4, C-6). 삭제된 파일의 옛 내용도 이 diff의 `-` 줄에 들어 있어 따로 꺼낼 것이 없다. `/code-review-full`의 3a(3)과 같은 방식이다.
+
+제외 경로는 C-5를 따른다. **범위와 제외는 오케스트레이터가 정한다.** 제외 경로는 `{CHANGED_FILES}`와 지적 범위에서만 빼고, `{DIFF}`에는 테스트 파일 변경까지 그대로 담는다 — 테스트는 지적 대상에서 빠질 뿐 영향 범위를 읽는 증거에서 빠지지 않는다(C-5, `00-rule.md` 00-3).
 
 ### Step 2: Lint 확인 (read-only)
 
@@ -95,9 +97,11 @@ ls "$RULES_DIR"/[0-9]*.md
 
 상세하고 exhaustive한 모듈별 multi-pass coverage가 필요하면 기본 `/code-review`를 확장하지 말고 `/code-review-full`을 사용한다.
 
+**producer는 `subagent_type="react-code-review-plugin:rule-module-reviewer"`로 띄운다(C-6).** 이 에이전트는 `Read`·`Grep`·`Glob`만 가진다 — 쓰기 도구도 셸도 없어서, 프롬프트에 읽기 전용이라고 적는 것과 달리 **실제로 고칠 수 없다.** `general` 같은 만능 에이전트나 셸을 가진 `correctness-reviewer`로 띄우지 않는다. 런타임이 sub-agent의 도구를 제한하지 못하면(이 에이전트를 설치하지 않는 호스트 포함) C-6의 대체 경로 — 격리된 사본에서 실행하거나 producer 없이 오케스트레이터가 직접 리뷰 — 를 따르고, 그 사실을 리포트 `실행 계획`에 적는다.
+
 ```
 task(
-  category="unspecified-high",
+  subagent_type="react-code-review-plugin:rule-module-reviewer",
   load_skills=[],
   run_in_background=false,
   description="Code Review (bounded consolidated pass)",
@@ -107,17 +111,21 @@ task(
 - 기준: {MERGE_BASE}
 - 대상: HEAD
 - 변경 파일: {CHANGED_FILES}
-- 제외 파일: `__test__/**`, `__tests__/**`, `*.test.*`, `*.spec.*`, `__mocks__/**`, `mock/**`, `mocks/**`, `*.mock.*`, 테스트/목 전용 fixture/mock data
+- 제외 파일(지적하지 않을 경로): `__test__/**`, `__tests__/**`, `*.test.*`, `*.spec.*`, `__mocks__/**`, `mock/**`, `mocks/**`, `*.mock.*`, 테스트/목 전용 fixture/mock data
+
+## Diff
+{DIFF — Step 1에서 오케스트레이터가 수집한 git diff {MERGE_BASE}..HEAD 본문 전체. 테스트 파일 변경 포함}
 
 ## 리뷰 수행 방법
-1. `git diff {MERGE_BASE}..HEAD` 로 전체 diff를 확인하세요
-2. 변경된 파일들을 직접 읽어서 컨텍스트를 파악하세요
+1. 위 `## Diff`가 리뷰 대상의 전부입니다. git을 직접 실행하지 마세요 — diff는 오케스트레이터가 이미 수집했고, 삭제된 파일의 옛 내용도 그 diff의 `-` 줄에 있습니다
+2. diff만으로 판단이 서지 않을 때만 그 diff가 가리키는 파일을 Read로 더 읽으세요. 변경 파일 전체를 습관적으로 다시 읽지 마세요
 3. `00-rule.md` 공통 규칙을 모든 모듈보다 우선 적용하세요
 4. 아래 numbered non-00 리뷰 모듈들을 모듈 순서대로 검토하세요
 5. 아래 리뷰 규칙에 따라 위반 사항을 찾으세요
 6. 위반이 없는 규칙은 출력하지 마세요
 7. 동작 여부만 보지 말고, 문제 정의·의도·선택 근거·장기 변경 비용까지 함께 검토하세요
-8. 파일 전체를 읽더라도 **지적은 diff에 포함된 변경 라인** 또는 그 변경 때문에 직접 깨진 **인접 라인/구조**로 제한하세요
+8. 파일 전체를 읽더라도 **지적은 diff에 포함된 변경 라인** 또는 그 변경 때문에 직접 깨진 **인접 라인/구조**로 제한하세요. diff가 삭제하거나 바꾼 export·함수·타입·상수·prop을 diff 밖 코드가 아직 참조하면, 그 참조는 이 변경 때문에 깨진 구조입니다(20-3, 아래 금지 사항의 예외)
+9. 제외 파일의 diff는 지적하지 말고, production 변경의 영향 범위를 읽는 증거로만 쓰세요
 
 ## 공통 리뷰 규칙
 {COMMON_RULES_CONTENT — 00-rule.md 전체 내용}
@@ -159,6 +167,8 @@ task(
 
 ## 금지 사항
 - diff에 포함되지 않은 기존 코드를 지적하지 마세요
+  - **예외 — 삭제·변경된 심볼의 남은 참조(00-3, 20-3)**: diff가 export·함수·타입·상수·prop을 삭제하거나 이름·시그니처를 바꿨는데 diff 밖 코드가 아직 그것을 참조하면, 그 참조 위치를 지적의 근거나 위치로 인용할 수 있습니다. 결함의 원인은 diff 안의 변경이고, diff 밖 코드의 다른 문제를 지적하는 것이 아닙니다
+  - 이 확인은 targeted reference check로 한정합니다 — 삭제·변경된 심볼 이름을 Grep으로 찾고, 찾은 호출부만 읽습니다. 저장소 전체를 리뷰하지 않고, 무엇을 어디까지 찾았는지 지적에 적습니다(00-11)
 - 파일 전체를 읽었다는 이유로 리뷰 범위를 파일 전체로 넓히지 마세요
 - 제외 파일(`__test__`, `__tests__`, test/spec 파일, mock/mocks/fixture 전용 파일)은 리뷰 이슈로 지적하지 마세요
 - 추측으로 지적하지 마세요 — 실제 코드를 읽고 확인하세요
@@ -213,7 +223,7 @@ echo '{"locations": <REVIEW_LOCATIONS 블록 내용>}'   | node "$RULES_DIR/../s
 
 ## 실행 계획
 
-선택된 모듈, `SKIPPED`/`UNKNOWN` 사유, bounded pass 성공/실패 상태를 적는다. 위치 대조 결과도 한 줄로 적는다.
+선택된 모듈, `SKIPPED`/`UNKNOWN` 사유, bounded pass 성공/실패 상태를 적는다. producer의 도구를 제한하지 못해 C-6 대체 경로로 돌았으면 그 사실과 택한 경로를 적는다. 위치 대조 결과도 한 줄로 적는다.
 
 ```
 위치 대조: 12건 — 확인 10, 불일치 1, 경로 확인 불가 0, 대조 대상 아님 1 · counts 출처: `prepare-verification.mjs`
@@ -268,6 +278,7 @@ echo '{"locations": <REVIEW_LOCATIONS 블록 내용>}'   | node "$RULES_DIR/../s
 
 - 기본 `/code-review`는 safe default로 bounded 단일 통합 리뷰를 사용한다
 - 상세/exhaustive 모듈별 multi-pass coverage가 필요하면 `/code-review-full`을 사용한다
-- diff에 포함되지 않은 기존 코드는 리뷰 대상이 아니다
+- diff에 포함되지 않은 기존 코드는 리뷰 대상이 아니다. 단 diff가 삭제·변경한 심볼을 아직 참조하는 호출부는 그 변경의 결함 근거로 인용할 수 있다(20-3, targeted reference check)
+- producer는 diff를 받아 읽기만 한다. diff 수집과 lint는 오케스트레이터가 하고, producer는 쓰기 도구와 셸이 없는 `rule-module-reviewer`로 띄운다(C-6)
 - 리뷰 규칙 파일 추가/삭제만으로 리뷰 범위를 조절할 수 있다
 - 나머지 실행 규칙(제외 경로, 빈 diff, read-only, 리포트 저장)은 `workflow-contract.md`를 따른다
