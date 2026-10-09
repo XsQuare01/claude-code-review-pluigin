@@ -957,6 +957,47 @@ These scenarios pin the behaviour that `review-rules/workflow-contract.md` promi
       ],
       "scenario": "The timeline check finds a gap while the report is being written",
       "expected": "The check runs with --before-end before run.end, the gap is written into the 실행 타임라인 section, and run.end stays the last line; nothing is appended after it. A crossverify.start superseded by a re-prepared round is reported as a note, not as a missing end"
+    },
+    {
+      "id": 126,
+      "clauses": [
+        "C-6"
+      ],
+      "scenario": "/code-review runs on a host that cannot restrict a sub-agent's tools — for example OpenCode, which installs the skills but not agents/rule-module-reviewer.md",
+      "expected": "The orchestrator does not fall back to a general or category-only agent; it runs the review in an isolated copy or reviews directly without a producer, and 실행 계획 says the producer's tools could not be restricted and which path was taken"
+    },
+    {
+      "id": 127,
+      "clauses": [
+        "C-4",
+        "C-6"
+      ],
+      "scenario": "/code-review-commit HEAD~2, where the commit deletes a file and changes another that a later commit edited again",
+      "expected": "The orchestrator runs git show --format=medium HEAD~2 once and passes it as the commit patch; the producer, dispatched as rule-module-reviewer, never runs git — it cites the deleted file from the patch's - lines as (삭제 전) path:Ln, and for the changed file whose working-tree line no longer matches the patch's + line it writes 위치 미확인 instead of guessing a number"
+    },
+    {
+      "id": 128,
+      "clauses": [
+        "C-4"
+      ],
+      "scenario": "/code-review: the diff removes the onExpire prop from RenewButton, and src/widgets/header/ui/header.tsx, which the diff does not touch, still passes onExpire",
+      "expected": "A 20-3 finding is raised and cites header.tsx as the broken caller, found by a Grep for onExpire; the prompt's 'do not flag pre-existing code outside the diff' does not suppress it because the cause is the change in the diff, and nothing else in header.tsx or the rest of the repository is reviewed"
+    },
+    {
+      "id": 129,
+      "clauses": [
+        "C-5"
+      ],
+      "scenario": "/code-review-fast or /code-review-exception on a diff that changes src/api/client.ts and its client.test.ts",
+      "expected": "The orchestrator passes the whole diff, test hunks included, and leaves the test file out of the changed-file list; the producer flags nothing in client.test.ts but may use its changed assertions as evidence about client.ts"
+    },
+    {
+      "id": 130,
+      "clauses": [
+        "C-6"
+      ],
+      "scenario": "A skill dispatches its producer with task(category=\"unspecified-high\", ...) and no subagent_type, or names the agent in a form validate-rules cannot read",
+      "expected": "validate-rules fails and points at that task( line (default deny); zero extracted targets is never reported as a pass. A skill with no dispatch at all is not flagged, and prose such as subagent_type=react-code-review-plugin:rule-module-reviewer로 띄운다 still counts as a named agent"
     }
   ],
   "defaultWorkflowOnlyCases": [
