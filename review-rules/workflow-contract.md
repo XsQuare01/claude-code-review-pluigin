@@ -301,6 +301,28 @@ verifier가 반환하는 값과 오케스트레이터가 부여하는 값을 구
 
 `other`가 하는 일은 아무것도 바꾸지 않고 기록하는 것뿐이다. `other`가 충분히 쌓였을 때만 새 `kind` 승격을 검토한다.
 
+### `rebuttal.kind = location-wrong`
+
+"결함은 성립하나 위치가 틀렸다"는 **검증자가 결함을 인정한** 반박이다. 겨누는 것은 주장이 아니라 줄 번호다.
+
+**`location-wrong`도 어떤 phase에서도 finding을 지우지 않는다.** active로 유지하고 원 severity와 차단 여부를 보존한다. 한때 이 kind가 `deletionAllowingKinds`에 들어 있었고, 렌더러가 그 목록을 읽지 않고 `other`만 살렸으므로 active-deletion에서는 위치가 틀렸다는 이유로 진짜 결함이 사라질 수 있었다(#45). 위치가 틀린 지적은 지울 것이 아니라 바로잡아 보여줄 것이다.
+
+- 표기는 `위치 이견 — 결함 유지`다(C-7). producer가 주장한 위치 줄은 그대로 두고, 바로 아래에 `검증자가 짚은 위치(대조하지 않음): …` 줄로 `rebuttal.location`을 함께 그린다. 둘 중 어느 쪽이 맞는지는 렌더러가 정하지 않는다
+- 그 위치는 `prepare-verification.mjs`의 위치 대조를 거치지 않은 검증자의 주장이라 `(대조하지 않음)`을 붙인다 — 확인된 위치와 같은 모양으로 찍으면 00-10이 막는 것이 된다
+- 그래서 이 kind의 `rebuttal.location`은 **결함이 실제로 있는 자리**다. 검증자 지시문(`VERIFIER_PROMPT`)이 그렇게 요구한다
+
+### 반박 kind별 결말
+
+어떤 반박이 finding을 지울 수 있는지는 판정 manifest의 `rebuttal.deletionAllowingKinds`가 정본이다. `render-findings.mjs`가 그 목록을 읽고, 읽지 못하면 기본값으로 지우지 않고 멈춘다. 지우지 않는 kind(`kindEnum`에서 그 목록을 뺀 것)는 증분 재리뷰가 해결 확인으로 읽지 않는 kind(`review-compare.mjs`의 `NON_RESOLVING_KINDS`)와 같아야 하고, 각자 `rejected-<kind>` 표기 토큰을 가져야 한다 — `validate-rules.mjs`가 둘 다 본다.
+
+| `rebuttal.kind` | `rollout-shadow` | `active-deletion` | 표기 | 재확인(C-13)에서 |
+|---|---|---|---|---|
+| `deletionAllowingKinds`에 든 것 | 남는다 · 원 severity·차단 | 승인이 잰 경로면 지운다 — 흔적은 `미해결 / 후속 확인` | `반박됨 — 관찰 중` | `resolved` |
+| `other` | 남는다 · 원 severity·차단 | 남는다 · 원 severity·차단 | `반박 시도 — 분류 밖` | `recheck`(`recheck-unlocated`) |
+| `location-wrong` | 남는다 · 원 severity·차단 | 남는다 · 원 severity·차단 | `위치 이견 — 결함 유지` + 검증자가 짚은 위치 | `recheck`(`recheck-location-wrong`) |
+
+`rejected`인데 `rebuttal.kind`가 없거나 `kindEnum` 밖이면 렌더러가 멈춘다. 판정 계약이 요구하는 값이 빠진 판정은 지울지 말지 정할 근거가 없고, 어느 쪽으로 흘려보내도 리포트가 사실과 다르게 그려진다.
+
 ### 삭제 rollout phase
 
 `rejected`의 active 제외는 되돌릴 수 없고, **틀렸을 때 조용히 실패한다** — 잘못 반박하면 리포트가 오히려 깨끗해 보인다. 다른 실패는 비용이 늘거나 지표가 튀어 관측되지만 이것만 실패가 성공처럼 보인다. 따라서 처음부터 켜지 않는다.
@@ -308,9 +330,11 @@ verifier가 반환하는 값과 오케스트레이터가 부여하는 값을 구
 | phase | `rejected`의 active 처리 | `impact = high`의 차단 |
 |-------|--------------------------|------------------------|
 | `rollout-shadow` (기본) | `반박됨 — 관찰 중`으로 유지 | **차단한다** |
-| `active-deletion` | 제외 | 차단하지 않음 (active에 없으므로) |
+| `active-deletion` | 제외 — 삭제를 허용하는 kind로, 승인이 잰 경로에서 반박된 것만 (`반박 kind별 결말`·`승인 파일`) | 차단하지 않음 (active에 없으므로) |
 
 **`rollout-shadow`에서도 high-impact가 차단한다는 것이 이 phase의 핵심이다.** 관찰 기간을 무방비 기간으로 만들지 않는다. 삭제했다면 어떤 차단이 풀렸을지의 가상 결과는 audit에만 기록한다.
+
+**`active-deletion`은 플래그 하나로 켜지지 않는다.** 한때 이 phase를 막는 것은 "기본은 `rollout-shadow`"라는 이 절의 문장뿐이었고, 렌더러는 `--phase-low active-deletion` 한 단어를 그대로 받았다(#47). 지금은 `render-findings.mjs`가 `--phase-high`·`--phase-low` 중 하나라도 `active-deletion`이면 `--deletion-approval <승인 파일>`을 요구하고, 없으면 멈춘다(exit 2). **플러그인은 승인 파일을 싣고 오지 않는다** — 전환은 아래 조건을 사람이 잰 기록으로만 한다(`승인 파일`). 두 플래그에는 여전히 기본값이 없고, full SKILL의 명령 틀은 둘 다 `rollout-shadow`로 적는다.
 
 
 #### 오케스트레이터가 다시 적어야 하는 규칙
@@ -379,8 +403,8 @@ phase는 전역이 아니라 **`impact`별 오케스트레이터 설정**이다.
 
 ```
 deletionPhase:
-  high: rollout-shadow | active-deletion     # 기본 rollout-shadow
-  low:  rollout-shadow | active-deletion     # 기본 rollout-shadow
+  high: rollout-shadow | active-deletion     # 기본 rollout-shadow — active-deletion은 승인 파일이 있어야 한다
+  low:  rollout-shadow | active-deletion     # 기본 rollout-shadow — active-deletion은 승인 파일이 있어야 한다
 ```
 
 **전환은 경과가 아니라 증거로 한다.** "N회 실행했다"는 반박 정확도를 증명하지 못한다. 아래를 모두 충족한 뒤 명시적으로 전환한다.
@@ -398,6 +422,36 @@ deletionPhase:
 
 **route별로 나눠서 잰다.** bundle verifier는 컨텍스트 부족을 인식하지 못한 채 `rejected`를 낼 수 있고 isolated는 그 실패 모드가 없다. 합산하면 bundle의 오판이 희석된다. bundle route에는 별도 전환 기준을 두고, bundle의 false-suppression이 임계를 넘으면 **그 route의 결과에 삭제 권한을 주지 않는다.** 라우팅 근사의 실패가 삭제 권한과 분리돼야, 근사를 조일수록 suppression이 조용히 늘는 일이 없다.
 
+#### 승인 파일
+
+위 전환 조건을 충족했다는 기록이다. `render-findings.mjs --deletion-approval`이 읽어 검사하고, 맞지 않으면 멈춘다(exit 2).
+
+```json
+{
+  "schemaVersion": 1,
+  "approvals": {
+    "low": {
+      "approvedBy": "승인한 사람",
+      "approvedAt": "YYYY-MM-DD",
+      "verifierModel": "잰 검증자의 모델 — 사람이 읽을 기록",
+      "falseSuppression": {
+        "isolated": { "measured": 0.02, "threshold": 0.05, "samples": 120 }
+      },
+      "basis": { "rebuttalSha256": "<sha256>", "verifierPromptSha256": "<sha256>" }
+    }
+  }
+}
+```
+
+- **impact별로 따로 승인한다.** `approvals`에는 `high`·`low` 중 승인한 것만 둔다. active-deletion을 준 impact의 승인이 없으면 멈춘다. 승인을 줬는데 active-deletion인 phase가 없어도 모순이라 멈춘다
+- **경로별로 따로 잰다.** `falseSuppression`의 키는 `isolated`·`bundle`이고, 승인에 있는 경로에서 나온 반박만 지운다 — 그 밖의 경로의 반박은 active-deletion에서도 `반박됨 — 관찰 중`으로 남는다. 후보의 `route`는 처음 배정된 경로라 bundle에서 isolated로 승격돼 판정된 후보도 bundle로 센다. 틀리면 지우지 않는 쪽으로 틀린다
+- `measured`·`threshold`는 0 이상 1 이하, `measured ≤ threshold`, `samples`는 1 이상의 정수다. 모르는 키·빠진 키·날짜가 아닌 `approvedAt`은 거부한다 — 오타 난 키를 무시하면 허용치 없는 승인이 통과한다. `threshold`를 결과를 보고 정했는지는 파일이 증명하지 못한다. 사전에 정한 값을 적는다
+- **`basis`는 승인이 잰 검증자다.** `node <RULES_DIR>/../scripts/render-findings.mjs --print-deletion-basis --rules <RULES_DIR>`이 지금의 값을 JSON으로 낸다
+  - `rebuttalSha256` — 판정 manifest의 `rebuttal` 객체(키를 정렬한 JSON). 반박 kind 목록·라벨·`deletionAllowingKinds`가 여기 있다
+  - `verifierPromptSha256` — 검증자가 실제로 받는 지시문. `verifier-prompt.md`의 `VERIFIER_PROMPT` 블록에 판정 manifest 블록을 끼운 것이고(`prepare-verification.mjs`와 같은 함수), 줄 끝을 LF로 맞춰 잰다 — 체크아웃 설정 때문에 승인이 무효가 되지 않게. 작업마다 붙는 후보·조항·의도는 들어가지 않는다
+- **승인 무효화의 일부를 렌더러가 한다.** 승인의 `basis`가 지금과 다르면 그 impact는 이 실행에서 `rollout-shadow`로 돌고, 무엇이 바뀌었는지 stderr에 경고하며 `## 상세 지적` 맨 위 줄에도 적는다
+- **렌더러가 확인하지 못하는 것이 있다.** 검증자 **모델**은 판정 파일에도 규칙 디렉터리에도 없어 비교할 수 없다 — `verifierModel`은 사람이 읽을 기록일 뿐이다. **라우팅 정책**(`prepare-verification.mjs`의 코드)도 `basis`에 들지 않는다. 이 둘이 바뀌었을 때 승인을 거두는 것은 여전히 사람의 일이다. 렌더러가 검사한다고 말하지 않는다
+
 ### 오판 가시성
 
 `rejected`를 active에서 빼면 검증자의 오판이 진짜 결함의 소멸이 된다. audit는 보존하지만 audit를 읽는 사람은 없다.
@@ -408,6 +462,10 @@ deletionPhase:
 - `impact = low`였던 것: 건수만
 
 본문과 `rebuttal.location`·`note`는 audit에 둔다. **보존의 정본은 audit이 아니라 리포트 본문이며, audit이 없어도 이 설계는 성립해야 한다.**
+
+- **`## 상세 지적` 맨 위에 삭제 단계 줄을 둔다.** 지울 수 있는 phase가 있거나 승인이 무효가 돼 되돌아갔으면 렌더러가 그 절 맨 위에 impact별 phase와 승인자·날짜·경로(또는 무효 사유)를 한 줄로 적는다. 그 절만 읽는 사람도 여기 없는 반박 지적이 있을 수 있다는 것을 안다. 둘 다 `rollout-shadow`면 줄이 없다
+- **지운 지적도 결과 스냅숏(C-10)에 남는다.** 스냅숏은 phase를 모르고 후보 전부를 `disposition`·`rebuttalKind`와 함께 싣는다 — 삭제의 장부다
+- **렌더러가 후보의 행선지를 센다.** 그린 지적 + `미해결 / 후속 확인`으로 옮길 범위 미확정 + active-deletion이 지운 것(high 건별·low 건수)이 들어온 후보 수와 다르면 멈춘다. 2.5.7 실사용 리포트의 같은 등식은 모델이 손으로 재구성한 사본 위에서 맞았다 — 손으로 맞출 수 있는 등식은 근거가 되지 못한다(#45)
 
 ### audit — 실행 중 자료와 영속 projection은 다른 인터페이스다
 
@@ -682,6 +740,7 @@ deletionPhase:
 - **반환된 `candidateId` 집합은 요청한 집합과 정확히 일치해야 한다.** 누락도 추가도 허용하지 않는다. bundle이나 cluster 단위로 한꺼번에 판정하는 것을 막는 기계적 장치다
 - `rebuttal.location`은 **`REVIEW_RESULT_CONTRACT_V1`의 location variant를 그대로 쓰되 `unverified`를 허용하지 않는다.** 위치를 확인하지 못한 반박으로 지적을 지울 수 없다
 - `rebuttal.kind = other`는 목록 밖 사유를 억지로 끼워 넣지 않게 하는 escape hatch다. **`other`는 어떤 phase에서도 삭제를 유발하지 않으므로** `location`을 요구하지 않고 `note`를 요구한다
+- `rebuttal.kind = location-wrong`은 결함을 인정한 반박이다. **어떤 phase에서도 삭제를 유발하지 않으며**(`deletionAllowingKinds` 밖), `location`에는 결함이 실제로 있는 자리를 쓴다 — 렌더러가 그 자리를 지적과 함께 그린다(C-6B)
 
 <!-- REVIEW_VERDICT_CONTRACT_V1:BEGIN -->
 ```json
@@ -896,6 +955,8 @@ finding 헤딩 **바로 다음 줄**에 영향도와 확신도를 적는다. `00
 
 **같은 자리에 다른 namespace의 지적이 있으면 `관련 지적:` 줄을 `출처 패스:` 줄 다음에 둔다.** 정확성 패스의 `CR-*`와 규칙 모듈의 지적이 같은 정규화 위치를 가리킬 때다. 이 리포트에 그려진 지적은 순번까지 붙은 규칙 ID로, 그려지지 않은 지적은 candidate ID와 `(상세 지적에 없음)`으로 적는다. 두 지적을 합치지 않는다(C-6B `조항이 없는 지적`).
 
+**`location-wrong`으로 반박된 지적은 위치 줄 바로 다음에 `검증자가 짚은 위치(대조하지 않음): …` 줄을 둔다(C-6B).** producer의 위치 줄은 그대로 두고, 검증자가 본 결함의 자리를 같은 모양(`` `path:line` — `인용` ``)으로 덧붙인다. 판정에 위치가 없으면 `검증자가 짚은 위치: 판정에 위치가 없다`를 적는다. 렌더러가 그린다 — 직접 쓰지 않는다.
+
 **재현 근거가 있으면 근거 줄을 슬롯 뒤에 둔다(C-11).** `재현 근거:`로 시작하는 줄에 확인 방법과 결과를, 다음 줄에 조건·절차·기대·관찰을, 실행했으면 그다음 줄에 로그 경로를 적는다. 렌더러가 그린다 — 직접 쓰지 않는다. 근거는 등급·두 축·교차검증 표기를 바꾸지 않는다.
 
 **두 축 줄은 헤딩 바로 다음 줄이다 — 사이에 빈 줄을 두지 않는다.** 위 예시가 그 모양이지만, 예시로만 두었더니 한 실행이 48개 지적 전부에 빈 줄을 넣어 렌더한 뒤 **리포트 전체를 다시 썼다.** 보여주는 것과 말하는 것은 다른 일이고, 산문이 빠뜨리면 산문이 이긴다.
@@ -932,6 +993,7 @@ finding 헤딩 **바로 다음 줄**에 영향도와 확신도를 적는다. `00
 - 삭제를 허용하는 kind(`deletionAllowingKinds`)로 반박된 `rejected`는 `active-deletion` phase에서 active 리포트에 나타나지 않으므로 표기 대상이 아니다. `rollout-shadow`에서만 `반박됨 — 관찰 중`으로 나타난다 (C-6B)
 - 삭제를 허용하지 않는 kind로 반박된 `rejected`는 **모든 phase에서** 제 이름의 토큰 `rejected-<kind>`로 나타난다 — `other`는 `반박 시도 — 분류 밖`, `location-wrong`은 `위치 이견 — 결함 유지`. 원 severity와 차단 여부는 그대로다 (C-6B)
 - **검증 대상이 아니었던 finding에도 `대상 아님`을 적는다.** 축을 비워두면 "검증했는데 결과가 없음"과 "검증 대상이 아님"이 구분되지 않는다
+- 지울 수 있는 phase가 켜졌거나 active-deletion 승인이 무효가 돼 되돌아갔으면 `## 상세 지적` 맨 위에 `삭제 단계: …` 줄이 온다(C-6B `오판 가시성`). 렌더러가 그린다. 둘 다 `rollout-shadow`면 없다
 - 반박 사실을 heading에 접미사로 덧붙이지 않는다. 상태는 축 줄 한 곳에서만 표현한다
 - **위 여덟 키는 전부 있어야 하고, 각 값은 비어 있지 않은 문자열이어야 한다.** 하나가 빠져도 블록은 여전히 유효한 JSON이고 렌더는 **성공한다** — 그 상태의 라벨이 `undefined`가 되면서 교차검증 축이 "이 워크플로우에는 축이 없다"와 **같은 방식으로 통째로 빠지기** 때문이다. 그러면 검증을 끈 실행이 검증 축 자체가 없는 워크플로우처럼 보이고, 리포트만 보고는 그 차이를 알 수 없다. 맵이 비어 있지 않은지만 보는 검사로는 이 경우를 잡지 못하므로 키 하나하나를 본다
 
@@ -951,6 +1013,7 @@ finding 헤딩 **바로 다음 줄**에 영향도와 확신도를 적는다. `00
 - **확인에 실패하면 인용을 다시 찍지 않는다.** 그 인용이 그 자리에 없다는 것이 지금 말하고 있는 사실인데, 같은 줄에 한 번 더 찍으면 읽는 사람이 그것을 코드로 읽는다. 대신 실제로 그 자리에 있던 것을 찍는다. 읽은 내용 자체가 없었으면(줄 범위가 파일 밖) `· 실제 …` 칸을 통째로 뺀다 — 빈 code span은 무엇을 봤다는 뜻으로 읽힌다
 - **`locationCheck`가 없는 입력은 그리지 않고 거부한다.** 없는 것은 "확인하지 않았다"가 아니라 **"확인했는지 알 수 없다"**이고, 그 상태에서 기본값으로 흘려보내면 00-10이 🔴로 막는 것 — 틀린 위치를 가리키는 지적 — 이 그대로 나온다. `not-applicable`이 `verified`·`deleted`에 붙은 조합도 같은 이유로 거부한다
 - **이것은 finding을 지우거나 등급을 내리는 규칙이 아니다.** 위치 확인 실패는 C-6B의 disposition이 아니며, 그 후보의 거취는 검증 결과가 정한다(`prepare-verification.mjs`는 확인에 실패한 후보를 `isolated` 검증 대상으로 보낸다). 여기서 정하는 것은 **살아남은 finding의 위치 줄을 어떻게 적는가** 하나뿐이다
+- **검증자가 위치가 틀렸다고 해도 마찬가지다.** `location-wrong` 반박은 결함을 인정한 것이라 어떤 phase에서도 지적을 지우지 않는다(C-6B). producer의 위치 줄은 위 표대로 그리고, 검증자가 짚은 자리는 그 아래 줄에 `검증자가 짚은 위치(대조하지 않음):`를 붙여 따로 그린다 — 그 위치는 위치 대조를 거치지 않았으므로 이 표의 확인된 위치 모양과 섞지 않는다
 
 **왜.** 2026-09-28 실행이 후보 5건 중 **4건**을 이 상태로 냈다 — 3건은 주장된 경로가 HEAD에도 merge-base에도 없었고, 1건은 인용이 실제 내용과 달랐다. 그 사실은 `routed.json`에 이미 기록돼 렌더러의 입력으로 들어가고 있었는데 렌더러가 읽지 않았다. 그 실행의 리포트는 사람이 손으로 "위치 미확인 사유"를 적어 넘어갔지만, 렌더러가 그리면 **없는 파일의 줄 번호가 확인된 위치와 구분되지 않는다.**
 
@@ -1996,8 +2059,9 @@ preflight가 스냅숏을 읽어 계약에 맞는지(C-10의 `parseSnapshot`), �
 | 재확인 판정 | 이전 지적의 상태 |
 |-------------|------------------|
 | `upheld` | `persisting`(미해결) |
-| `rejected` + 막는 코드의 위치를 댄 `rebuttal.kind`(`other` 밖) | `resolved`(해결 확인) |
+| `rejected` + 막는 코드의 위치를 댄 `rebuttal.kind`(`other`·`location-wrong` 밖) | `resolved`(해결 확인) |
 | `rejected` + `other` | `recheck`(`recheck-unlocated`) — 위치를 대지 못한 반박은 해결이 아니다(C-6B의 `other`와 같은 이유) |
+| `rejected` + `location-wrong` | `recheck`(`recheck-location-wrong`) — 결함이 남아 있다는 판정이다. 자리가 옮겨 갔다는 말이지 고쳐졌다는 말이 아니다. 어느 자리의 어느 지적과 같은지는 말하지 않으므로 미해결로 단정하지도 않는다 |
 | `needs-context` | `recheck`(`recheck-needs-context`) |
 | 없음(띄우지 못함·실패·계약 위반·한도) | `recheck`(`no-recheck-verdict`) |
 
@@ -2028,7 +2092,7 @@ preflight가 스냅숏을 읽어 계약에 맞는지(C-10의 `parseSnapshot`), �
 - routed 출력: 후보마다 `lineage`, 그리고 `previous`(이전 스냅숏·잇기 결과·재확인과 같은 결함 판정 작업 이름·이어받은 수)
 - 스냅숏(C-10): 지적마다 `lineageId`와 `lineage`, `comparison`(이전 스냅숏, `reused`, 이번 지적의 상태별
   수, 이전 지적의 상태·이유·처음 이유·반박 종류와 다음 비교가 이어받을 값 — 후보 ID·위치·`locatedAt`·`claimSource`), `run.ruleDocs`, inputs의 `previous`·`rechecks`.
-  해결 확인인데 반박 종류가 없거나 `other`이면 계약 밖이다
+  해결 확인인데 반박 종류가 없거나 `other`·`location-wrong`이면 계약 밖이다
 - 리포트: 지적마다 `이전 리뷰:` 줄(렌더러가 그린다 — 같은 결함 판정은 `--rechecks <run>.rechecks.json`으로 받고, 이어진 지적이 반박됐으면 그렇다고 적는다), `실행 계획`의 스냅숏 블록에 **이전 리뷰와 비교**
   (상태별 수, 재사용 0과 그 뜻, 해결 확인·재확인 필요·재확인으로 남은 미해결의 표)
 
