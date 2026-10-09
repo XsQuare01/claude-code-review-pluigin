@@ -2056,3 +2056,54 @@ test('--check는 멈추지 않은 구간의 run.end 뒤에 이어 간 기록을 
   plant(dir, resumedRun(false))
   assert.match(check(dir).stdout, /`run\.end`\(seq 47\) 뒤에 줄이 더 있다 — 이어 갈 수 있는 끝은/)
 })
+
+// ── 2.16.0 실행(2026-10-06) 후속 ─────────────────────────────────────────
+//
+// 그 실행은 routed 출력이 깨져 검증 준비를 다시 돌렸고, 첫 준비가 남긴 `crossverify.start`(seq 54)가
+// 끝 없이 남았다. 검증을 다시 준비하는 것은 정상 절차이므로(C-12의 새 라운드) 대체된 라운드는 문제가 아니다.
+// 또 SKILL이 `run.end` 뒤에 검사하라고 해서, 찾은 빈 곳을 채우려 `run.end` 뒤에 줄을 덧붙였다.
+
+const checkWith = (dir, ...flags) => spawnSync(process.execPath, [
+  SCRIPT, '--dir', dir, '--run', RUN, '--check', ...flags,
+], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+
+test('--check는 검증을 다시 준비해 대체된 교차검증 시작을 문제로 세지 않고 알리기만 한다', t => {
+  const dir = freshDir(t)
+  plant(dir, verified([cvStart(3, 2), cvStart(4, 3), cvEnd(5, 20), renderStart(6, 30)]))
+  const out = check(dir)
+  assert.equal(out.status, 0, out.stdout)
+  assert.doesNotMatch(out.stdout, /끝을 남기지 않은 교차검증/)
+  assert.match(out.stdout, /검증을 다시 준비해 대체된 교차검증: seq 3 → 4/)
+})
+
+test('--check는 마지막 라운드가 끝나지 않았으면 여전히 짚는다', t => {
+  const dir = freshDir(t)
+  plant(dir, verified([cvStart(3, 2), cvEnd(4, 20), cvStart(5, 30)]))
+  const out = check(dir)
+  assert.equal(out.status, 1)
+  assert.match(out.stdout, /끝을 남기지 않은 교차검증: seq 5/)
+})
+
+test('--check --before-end는 run.end를 남기기 전에 돌린다 — 끝이 없는 것을 문제로 세지 않는다', t => {
+  const dir = freshDir(t)
+  plant(dir, verified([cvStart(3, 2), cvEnd(4, 20), renderStart(5, 30)]).slice(0, -1))
+  assert.match(check(dir).stdout, /`run\.end`가 없다/)
+  const out = checkWith(dir, '--before-end')
+  assert.equal(out.status, 0, out.stdout)
+})
+
+test('--check --before-end는 이미 끝난 기록이면 끝낸 뒤에 덧붙이지 말라고 짚는다', t => {
+  const dir = freshDir(t)
+  plant(dir, verified([cvStart(3, 2), cvEnd(4, 20), renderStart(5, 30)]))
+  const out = checkWith(dir, '--before-end')
+  assert.equal(out.status, 1)
+  assert.match(out.stdout, /`--before-end`는 `run\.end`를 남기기 전에 돌린다 — 이 기록은 seq 90에서 이미 끝났다/)
+})
+
+test('--before-end는 --check 없이 받지 않는다', t => {
+  const dir = freshDir(t)
+  plant(dir, verified([]))
+  const out = spawnSync(process.execPath, [SCRIPT, '--dir', dir, '--run', RUN, '--summary', '--before-end'], { encoding: 'utf8' })
+  assert.equal(out.status, 2)
+  assert.match(out.stderr, /--before-end는 --check와 함께 쓴다/)
+})
