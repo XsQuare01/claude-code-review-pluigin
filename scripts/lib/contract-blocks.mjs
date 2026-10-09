@@ -21,11 +21,16 @@
  * `verification-disabled`만 사라지면 라벨이 undefined가 되고, 교차검증 축은
  * "이 워크플로우에 축이 없다"와 구분되지 않아 줄 자체가 빠진다. 검증을 끈
  * 실행이 검증 축이 없는 워크플로우처럼 보이는데, 리포트만 보고는 알 수 없다.
+ *
+ * `rejected-<kind>` 꼴의 키는 삭제를 허용하지 않는 반박 kind(manifest의 `kindEnum`에서
+ * `deletionAllowingKinds`를 뺀 것)마다 하나씩이다. 그 반박은 어느 phase에서도 지적을
+ * 지우지 않으므로 `반박됨 — 관찰 중`이 아니라 제 이름으로 남는다.
  */
 export const CROSS_VERIFICATION_TOKEN_KEYS = [
   'upheld',
   'rejected-shadow',
   'rejected-other',
+  'rejected-location-wrong',
   'scope-open',
   'verification-unavailable',
   'not-eligible',

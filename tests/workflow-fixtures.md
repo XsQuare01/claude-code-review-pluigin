@@ -957,6 +957,47 @@ These scenarios pin the behaviour that `review-rules/workflow-contract.md` promi
       ],
       "scenario": "The timeline check finds a gap while the report is being written",
       "expected": "The check runs with --before-end before run.end, the gap is written into the 실행 타임라인 section, and run.end stays the last line; nothing is appended after it. A crossverify.start superseded by a re-prepared round is reported as a note, not as a missing end"
+    },
+    {
+      "id": 121,
+      "clauses": [
+        "C-6B",
+        "C-7"
+      ],
+      "scenario": "A verifier rejects a high-impact finding with rebuttal.kind location-wrong and a rebuttal.location pointing at the real line, in a run whose high phase is active-deletion under a valid approval",
+      "expected": "The finding stays in 상세 지적 with its original 🔴 and still blocks; the axis reads 교차검증: `위치 이견 — 결함 유지`, the producer location line is kept, and the next line is 검증자가 짚은 위치(대조하지 않음) with the verifier's path:line and quote. It is not in the active-deletion stderr notice. Under rollout-shadow it renders the same way, not as 반박됨 — 관찰 중"
+    },
+    {
+      "id": 122,
+      "clauses": [
+        "C-6B"
+      ],
+      "scenario": "The orchestrator renders with --phase-low active-deletion but no --deletion-approval, or passes an approval file while both phases are rollout-shadow",
+      "expected": "render-findings.mjs exits 2 with nothing on stdout. The first message says deleting rebutted findings needs a human-measured approval file (C-6B) that the plugin does not ship; the second says the two signals contradict. The full SKILL template passes rollout-shadow for both"
+    },
+    {
+      "id": 123,
+      "clauses": [
+        "C-6B"
+      ],
+      "scenario": "An approval for impact low was measured before the rebuttal taxonomy or the VERIFIER_PROMPT block changed, so its basis no longer matches --print-deletion-basis",
+      "expected": "The renderer does not delete: impact low runs as rollout-shadow, stderr warns that the approval is void and names what changed (반박 kind 목록 / 검증자 지시문), and 상세 지적 opens with a 삭제 단계 line stating both effective phases and the invalidation. A change of verifier model is not detected — the contract says so and leaves withdrawing the approval to a human"
+    },
+    {
+      "id": 124,
+      "clauses": [
+        "C-6B"
+      ],
+      "scenario": "A valid approval for impact low measures only the isolated route, and two low findings are rejected with guard-exists — one routed isolated, one routed bundle",
+      "expected": "Only the isolated one is removed (counted in the low removal notice for 미해결 / 후속 확인); the bundle one stays as 반박됨 — 관찰 중. 상세 지적 opens with 삭제 단계: … 영향 낮음 `active-deletion` (승인 … · isolated 경로만). The removed finding is still in the result snapshot with disposition rejected and its rebuttalKind"
+    },
+    {
+      "id": 125,
+      "clauses": [
+        "C-13"
+      ],
+      "scenario": "On an incremental re-review, the recheck verifier answers rejected with rebuttal.kind location-wrong for an earlier finding",
+      "expected": "The earlier finding is recheck (recheck-location-wrong), not resolved — the verifier said the defect still exists elsewhere. A snapshot that marks it resolved with rebuttalKind location-wrong (or other) fails the snapshot contract check"
     }
   ],
   "defaultWorkflowOnlyCases": [
