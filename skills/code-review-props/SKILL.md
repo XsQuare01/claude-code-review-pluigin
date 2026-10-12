@@ -114,7 +114,7 @@ sub-agent 응답을 받은 즉시 `workflow-contract.md` C-6A와 `REVIEW_RESULT_
 
 ### Step 5: 문서 저장
 
-리포트 저장은 `workflow-contract.md` C-7을 따른다 (`workflow-name`은 `props`). 문서 내용은 **이번 브랜치 diff 안에서 props/인자 전달 구조가 바뀐 파일과 그 구조적 이슈** 중심으로 쓴다.
+리포트 저장은 `workflow-contract.md` C-7을 따른다 (`workflow-name`은 `props`). 저장 자리는 사용자가 이번 요청에서 정한 곳 → 사용자·프로젝트 지시 파일(전역 포함 `CLAUDE.md`·`AGENTS.md`)에 적힌 문서 저장 위치 → `./review-reports/` 순서로 정하고, 대상 저장소의 루트에는 두지 않는다. 문서 내용은 **이번 브랜치 diff 안에서 props/인자 전달 구조가 바뀐 파일과 그 구조적 이슈** 중심으로 쓴다.
 
 ## 사용법
 

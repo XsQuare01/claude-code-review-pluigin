@@ -411,6 +411,16 @@ Review fixes in 2.25.1:
 - **A tool timeout stops everything the tool started.** `review-tool.mjs` used to stop only the process it launched; a test runner under `--shell` kept running. It now kills the process tree (`taskkill /T` on Windows, the process group elsewhere) and passes its own termination signals on to the tool.
 - **Every tool call keeps its own log.** Logs were named after the tool, so a baseline `lint` and a current `lint` wrote the same file. Each call now gets a `callId`, used in the log name and on `tool.start` and `tool.done`, and the timeline pairs start and end by it.
 
+## Report location and run records (2.26.0)
+
+Three runs on 2026-10-12 wrote their reports inside the repository under review (twice at its root) although the user's global instructions named a documents folder. The precedence lived only in the shared contract, which runs read after they had already chosen a directory.
+
+- **Report location is decided first, in this order:** the location named in the request, then a documents folder named in user or project instruction files (including a global `CLAUDE.md` or `AGENTS.md`), then `./review-reports/`. Every skill states the order where it saves; `/code-review-full` states it before preflight. The report and its `.timing/` stay together.
+- **Preflight refuses the repository root** and writes nothing.
+- **`/code-review-full` assembles its report in the orchestrator**, not in a sub-agent, and every sub-agent it starts gets `load_skills=[]`. One run's report-writing sub-agent hung for 2 h 21 min after the file was written; another lost the `load_skills` rule after context compaction.
+- **`run.end` without `verdict` is refused**, since nothing may follow `run.end` to correct it. **`modules.planned.applied` counts numbered modules only** and is refused above `candidates`.
+- Flagging findings whose claimed tool failure contradicts the recorded tool result is tracked in #103.
+
 ## Applicability metadata
 
 `review-rules/catalog.json` records **when** a module applies — required profile (FSD, Tailwind, RSC, Electron, TanStack Query, server code, contract provider), minimum React version, which workflows load it, and which individual rules carry a narrower gate than their module. The Markdown modules stay canonical for **what** a rule says; the catalog never generates documentation and never restates rule text.

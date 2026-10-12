@@ -1116,6 +1116,39 @@ These scenarios pin the behaviour that `review-rules/workflow-contract.md` promi
       ],
       "scenario": "The orchestrator runs lint on the baseline worktree and on the current tree with the same --name, at the same time",
       "expected": "Each call keeps its own log under its callId; tool.start and tool.done carry that callId so the timeline pairs each end with its own start, and the report can compare baseline and current failures"
+    },
+    {
+      "id": 140,
+      "clauses": [
+        "C-7"
+      ],
+      "scenario": "The user's global CLAUDE.md names a documents folder for saved documents, and the review request names no location",
+      "expected": "The documents folder is the report directory from preflight on; the report and its .timing are written there, not inside the repository"
+    },
+    {
+      "id": 141,
+      "clauses": [
+        "C-7"
+      ],
+      "scenario": "The orchestrator starts /code-review-full with --dir set to the root of the repository under review",
+      "expected": "Preflight refuses before writing anything and lists the order for choosing the report location"
+    },
+    {
+      "id": 142,
+      "clauses": [
+        "C-6",
+        "C-7"
+      ],
+      "scenario": "After context compaction, /code-review-full reaches the final report on OpenCode",
+      "expected": "The orchestrator assembles the report itself from renderer, snapshot and timeline output; any sub-agent it starts gets load_skills=[]"
+    },
+    {
+      "id": 143,
+      "clauses": [
+        "C-9"
+      ],
+      "scenario": "The orchestrator records run.end without verdict, or modules.planned with applied counting Props, math and exception passes",
+      "expected": "The timeline script refuses both lines without writing them; the orchestrator calls again with verdict, or with applied counting numbered modules only"
     }
   ],
   "defaultWorkflowOnlyCases": [
