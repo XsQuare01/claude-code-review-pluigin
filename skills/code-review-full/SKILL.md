@@ -32,7 +32,7 @@ description: Use when the user invokes /code-review-full or asks for a full code
 
 ## 오케스트레이션
 1. 변경 집합만 기준으로 리뷰 범위를 결정한다.
-    - 범위 결정은 `workflow-contract.md` C-4를 따른다. **사용자가 범위를 지정했으면 그것이 최우선**이고, 지정이 없을 때만 `main` → `master` → `origin/HEAD` 순으로 base를 찾는다. 후보가 모두 없으면 사용자에게 묻고 임의로 정하지 않는다.
+    - 범위 결정은 `workflow-contract.md` C-4를 따른다. **사용자가 범위를 지정했으면 그것이 최우선**이고, 지정이 없으면 preflight가 **지금 브랜치의 열린 PR의 base**를 기준으로 잡는다(다른 PR 위에 쌓은 PR이면 아래 PR의 브랜치). PR이 없을 때만 `main` → `master` → `origin/HEAD`다. 기준을 셸로 따로 고르지 않는다 — 아래 (0).
     - 그 기준 이후 변경된 파일만 리뷰한다.
     - lint는 C-6(`00-rule.md` 00-9)을 따른다: **수정 옵션 없이 실행**하고 자동 수정은 사용자가 명시적으로 요청했을 때만 한다. 자동 수정 가능한 항목은 실행하지 않고 개수와 성격만 `도구 실행 결과` 섹션에 기록한다.
 2. 패스 순서는 일반 → Props → 수학 → 예외 → (정확성) → 요약/리포팅이다. 정확성은 `--correctness on`일 때만 돈다.
@@ -51,12 +51,14 @@ description: Use when the user invokes /code-review-full or asks for a full code
 **(0) preflight — 리뷰의 첫 명령**
 
 ```bash
-node "$RULES_DIR/../scripts/review-preflight.mjs" --dir "$REPORT_DIR" --run "$REPORT_BASENAME" --rules "$RULES_DIR" --workflow full --base "$BASE" --host <harness 이름> --correctness <on|off> \
+node "$RULES_DIR/../scripts/review-preflight.mjs" --dir "$REPORT_DIR" --run "$REPORT_BASENAME" --rules "$RULES_DIR" --workflow full [--base <사용자가 정한 base>] --host <harness 이름> --correctness <on|off> \
      [--max-duration <30m>] [--max-tasks <N>] [--stale-after <20m>] [--continues <앞 실행 ID>] \
      [--previous <이전 리뷰의 스냅숏>]
 ```
 
 **`$REPORT_DIR`와 `$REPORT_BASENAME`은 리포트를 실제로 저장할 곳과 그 파일 이름이다.** 여기서 정한 값이 사이드카의 자리를 결정하므로, 나중에 리포트를 다른 디렉터리나 다른 이름으로 쓰면 기록과 리포트가 서로를 못 찾는다. 실제로 한 실행이 리포트를 `Docs/`에 쓰고 사이드카는 워크트리에 남겨 **이름도 디렉터리도 달랐다.** `--check`가 `render.wrote`의 경로와 대조해 그 어긋남을 짚는다. **`$REPORT_BASENAME`에는 확장자를 붙이지 않는다** — `.md`로 끝나면 preflight와 기록 스크립트가 거부한다. 2026-09-30의 한 실행은 리포트 파일 이름을 그대로 넘겨 기록이 전부 `….md.jsonl`로 남았다.
+
+**리뷰 범위의 기준도 여기서 정해진다(C-4).** `--base`는 사용자가 범위를 정했을 때만 준다 — 주지 않으면 preflight가 지금 브랜치의 열린 PR을 `gh pr view`로 읽어 그 base를 기준으로 잡는다. 다른 PR 위에 쌓은 PR이면 아래 PR의 브랜치(`origin/<그 브랜치>`)이고, 그 위에 더한 변경만 리뷰한다. main을 기준으로 잡으면 아래 PR의 변경까지 리뷰하게 된다. 출력의 `base` 줄(기준과 이유)을 `리뷰 기준`에 옮긴다. PR의 base를 이 저장소에서 찾을 수 없으면 preflight가 멈춘다 — `git fetch origin <base>` 뒤 다시 돌리거나 사용자에게 범위를 묻는다. gh를 쓸 수 없는 호스트는 `gh pr view --json number,baseRefName,headRefName,state,url`의 출력을 파일로 담아 `--pr-json`으로 준다.
 
 C-9의 `run.start`를 이 스크립트가 쓴다. 동시에 `리뷰 기준`과 `실행 계획`에 적을 값을 낸다 — 플러그인 버전, 해석된 규칙 경로, 브랜치, merge-base, 변경 파일 수, **후보 모듈 수와 목록**. 그 값을 손으로 세지 않는다. 후보에서 빠진 `00-rule.md`와 synthesis 전용 모듈도 이유와 함께 출력되므로, 아래 (2)와 (4)는 이 목록에서 출발한다.
 

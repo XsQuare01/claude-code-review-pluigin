@@ -388,6 +388,14 @@ Two kinds of silent failure: a cross-verification result could delete a real def
 - **The validator fails closed on dispatch (#69).** It used to recognise one notation (`subagent_type`) and passed the six workflows above with zero dispatch targets found. Now every `task(` call must name an agent before `prompt=`, and a skill that shows dispatch signals without a readable agent fails.
 - **A deleted symbol's remaining callers can be cited (#98).** The producer prompts said "do not flag code outside the diff", which contradicted rule 20-3. `00-rule.md` 00-3 and the prompts now say that a caller outside the diff that still references a symbol the diff deleted or changed is part of what the change broke; the check stays a targeted search for that symbol.
 
+## Stacked PRs are reviewed against their own base (2.24.0)
+
+When no range is given, the review base is now the base of the current branch's open PR instead of always `main`. A PR stacked on another PR is reviewed against the lower PR's branch, so the lower PR's changes are no longer reviewed again as part of the upper one.
+
+- `scripts/review-base.mjs` picks the base for every workflow: the range the user gave, else the open PR's base (read with `gh pr view`, or from `--pr-json`), else `main` → `master` → `origin/HEAD`. `/code-review-full` gets the same answer from `review-preflight.mjs`, which records `baseSource`, `prNumber` and `prBase` in `run.start`.
+- The PR's base is looked up as `origin/<base>` first. A local branch of the same name can be behind — a 2026-10-06 run used an unpulled local `main` and reviewed 34 files from another PR already in `main`.
+- If the PR's base branch is not in the repository, the review stops and asks for `git fetch origin <base>` or an explicit range rather than falling back to `main`.
+
 ## Applicability metadata
 
 `review-rules/catalog.json` records **when** a module applies — required profile (FSD, Tailwind, RSC, Electron, TanStack Query, server code, contract provider), minimum React version, which workflows load it, and which individual rules carry a narrower gate than their module. The Markdown modules stay canonical for **what** a rule says; the catalog never generates documentation and never restates rule text.

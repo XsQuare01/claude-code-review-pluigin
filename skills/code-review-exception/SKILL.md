@@ -32,7 +32,7 @@ description: Use when the user invokes /code-review-exception or wants a standal
 
 ### Step 1: Diff 범위 결정
 
-범위 결정은 `workflow-contract.md` C-4를 따른다. 결정된 범위로 `git diff --stat $MERGE_BASE..HEAD`와 `git diff $MERGE_BASE..HEAD`를 확인한다. 제외 경로는 C-5를 따른다.
+범위 결정은 `workflow-contract.md` C-4를 따른다. 기준은 스크립트로 정한다 — `node "$RULES_DIR/../scripts/review-base.mjs" --repo .`(사용자가 범위를 정했으면 `--base <그 base>`)가 낸 `mergeBase`를 `$MERGE_BASE`로, `line`을 리포트의 기준 줄로 쓴다. 지금 브랜치에 열린 PR이 있으면 그 PR의 base가 기준이다 — 다른 PR 위에 쌓은 PR이면 아래 PR의 브랜치이고, 그 위에 더한 변경만 리뷰한다. 종료 코드 2면(PR의 base를 이 저장소에서 찾을 수 없다) main으로 물러서지 않고 `git fetch origin <base>` 뒤 다시 돌리거나 사용자에게 범위를 묻는다. 결정된 범위로 `git diff --stat $MERGE_BASE..HEAD`와 `git diff $MERGE_BASE..HEAD`를 확인한다. 제외 경로는 C-5를 따른다.
 
 변경 파일 중 예외 처리, 에러 전파, fallback, 복구, 검증 로직이 바뀐 파일만 리뷰 대상으로 좁힌다. 관련 변경이 없으면 `SKIPPED`로 종료한다. repo-wide fallback 스캔은 하지 않는다.
 
