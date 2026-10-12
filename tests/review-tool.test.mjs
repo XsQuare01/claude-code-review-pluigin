@@ -76,15 +76,19 @@ const plantSpawner = ctx => {
   ].join('\n'))
 }
 
-// 테스트가 실패해도 프로세스를 남기지 않는다. `t.after`가 아니라 테스트 안의 finally에서 부른다 — setup의
+// 테스트가 실패했을 때 남은 프로세스를 끈다. `t.after`가 아니라 테스트 안의 finally에서 부른다 — setup의
 // `t.after`가 먼저 돌아 저장소를 지우면 pid 파일이 없어 끄지 못한다(실제로 둘이 남았다).
-const killPlanted = ctx => {
+// **통과한 테스트는 아무것도 끄지 않고, 지금 살아 있는 번호만 끈다.** 끝난 pid는 다른 프로세스가 곧 다시 받을 수
+// 있다(Windows는 특히 빠르다) — 끝난 것을 확인한 번호에 신호를 보내면 남의 프로세스를 끌 수 있다.
+const killSurvivors = ctx => {
   for (const file of PROCESS_FILES) {
     if (!existsSync(join(ctx.repo, file))) continue
+    const pid = Number(readFileSync(join(ctx.repo, file), 'utf8'))
+    if (!stillRunning(pid)) continue
     try {
-      process.kill(Number(readFileSync(join(ctx.repo, file), 'utf8')))
+      process.kill(pid)
     } catch {
-      // 이미 끝났다
+      // 그 사이 끝났다
     }
   }
 }
@@ -106,6 +110,7 @@ for (const shell of [false, true]) {
     // 보는 것은 "돌아온 뒤 도구가 띄운 프로세스가 남아 있지 않다"이고, 둘 다 끝없이 사므로 끊지 않으면 남는다.
     const ctx = setup(t)
     plantSpawner(ctx)
+    let passed = false
     try {
       const command = shell ? ['--shell', '--', `"${process.execPath}" spawner.mjs`] : ['--', process.execPath, 'spawner.mjs']
       const out = tool(ctx, '--name', 'test', '--timeout', '3', ...command)
@@ -117,8 +122,9 @@ for (const shell of [false, true]) {
       // 끊긴 프로세스가 사라지는 데 걸리는 짧은 시간만 기다린다.
       for (const until = Date.now() + 1000; pids.some(stillRunning) && Date.now() < until;) await new Promise(resolve => setTimeout(resolve, 50))
       assert.deepEqual(pids.filter(stillRunning), [], '돌아온 뒤에도 도구가 띄운 프로세스가 살아 있다')
+      passed = true
     } finally {
-      killPlanted(ctx)
+      if (!passed) killSurvivors(ctx)
     }
   })
 }
