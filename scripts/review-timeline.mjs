@@ -60,7 +60,7 @@ const flagAll = name => process.argv
  * 도구에서 가장 나쁜 실패 방식이라, 인용을 잊었으면 시끄럽게 실패시킨다.
  */
 const VALUE_FLAGS = new Set(['dir', 'run', 'phase', 'data', 'data-file', 'set'])
-const BOOL_FLAGS = new Set(['summary', 'check'])
+const BOOL_FLAGS = new Set(['summary', 'check', 'before-end'])
 {
   const argv = process.argv.slice(2)
   for (let at = 0; at < argv.length; at += 1) {
@@ -76,6 +76,8 @@ const BOOL_FLAGS = new Set(['summary', 'check'])
     at += 1
   }
 }
+
+if (has('before-end') && !has('check')) die('--before-end는 --check와 함께 쓴다 — run.end를 남기기 전에 기록을 검사하는 모드다')
 
 const dir = flag('dir', 'review-reports')
 const run = flag('run')
@@ -428,8 +430,18 @@ if (has('check')) {
   const first = events[0]
   if (first.phase !== 'run.start') problems.push(`첫 줄이 \`run.start\`가 아니라 \`${first.phase}\`다. 어느 버전·어느 규칙으로 돌았는지가 기록에 없다`)
 
+  // `--before-end`: 리포트를 저장하기 전, `run.end`를 남기기 전에 돌리는 검사다(C-9). 빈 곳을 리포트에
+  // 적은 뒤에 끝을 남겨야 끝이 마지막 줄로 남는다 — 끝낸 뒤에 검사하면 찾은 빈 곳을 채우려고 끝 뒤에
+  // 줄을 덧붙이게 된다. 2026-10-06 실행이 `run.end` 뒤에 `dispatch.end`·`run.end`·렌더 줄을 덧붙였다.
+  const beforeEnd = has('before-end')
   const finalPhase = events[events.length - 1].phase
-  if (finalPhase !== 'run.end') {
+  if (beforeEnd) {
+    const phases = events.map(event => event.phase)
+    const lastEnd = phases.lastIndexOf('run.end')
+    if (lastEnd !== -1 && phases.lastIndexOf('run.resume') < lastEnd) {
+      problems.push(`\`--before-end\`는 \`run.end\`를 남기기 전에 돌린다 — 이 기록은 seq ${events[lastEnd].seq}에서 이미 끝났다. 끝낸 뒤에 찾은 빈 곳은 기록에 덧붙이지 않고 리포트에만 적는다`)
+    }
+  } else if (finalPhase !== 'run.end') {
     // 이어 간 구간이 아직 끝나지 않은 것은 끝이 없는 것이다 — 앞 구간의 끝 "뒤에 줄이 더 있다"가 아니다.
     const phases = events.map(event => event.phase)
     const lastEnd = phases.lastIndexOf('run.end')
@@ -733,14 +745,20 @@ if (has('check')) {
   // **정정 줄은 짝의 예외다.** append 전용 기록에서 잘못 센 끝은 고치는 대신 바로
   // 다음 줄에 `note`를 달아 다시 쓴다(위 ALWAYS_ALLOWED). 앞 끝 바로 뒤에 `note`와
   // 함께 온 끝은 새 교차검증이 아니라 그 정정이다.
+  //
+  // **검증을 다시 준비해 대체된 라운드도 짝의 예외다.** 검증 준비는 다시 돌릴 수 있고(`--discard-verdicts`,
+  // 부분 보고 뒤 재개 — C-12), 그때마다 새 `crossverify.start`가 새 라운드를 연다. 앞 라운드는 끝나지
+  // 않고 버려진 것이라 끝이 없는 것이 맞다 — 이것을 "끝을 남기지 않은 교차검증"으로 세면 정상 절차가 문제로
+  // 보인다(2026-10-06 실행의 seq 54). 대체된 라운드는 참고로 알리고, 마지막 라운드만 끝을 요구한다.
   {
     let open = null
     let previous = null
     const unclosed = []
     const unmatched = []
+    const superseded = []
     for (const event of events) {
       if (event.phase === 'crossverify.start') {
-        if (open) unclosed.push(open.seq)
+        if (open) superseded.push(`${open.seq} → ${event.seq}`)
         open = event
       } else if (event.phase === 'crossverify.end') {
         if (open) open = null
@@ -757,6 +775,7 @@ if (has('check')) {
     if (unclosed.length) {
       problems.push(`끝을 남기지 않은 교차검증: seq ${unclosed.join(', ')}. 판정을 세지 않았으면 리포트의 교차검증 수치는 기록에서 온 것이 아니다`)
     }
+    if (superseded.length) notes.push(`검증을 다시 준비해 대체된 교차검증: seq ${superseded.join(', ')} — 앞 라운드의 판정은 쓰지 않는다`)
 
     // 판정을 입력으로 쓰는 단계는 synthesis와 렌더다. 둘 중 먼저 시작한 쪽 뒤에
     // 교차검증 기록이 있으면, 그 단계는 바뀌기 전의 판정으로 돈 것이다 —

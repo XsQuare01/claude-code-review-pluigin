@@ -4,11 +4,12 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
+import { writeTextAtomic } from './lib/atomic-write.mjs'
 import { markedBlock } from './lib/contract-blocks.mjs'
 import { intentBlock, intentProblems } from './lib/intent.mjs'
 import { CURRENT_STATUSES, countBy, enclosingSymbol, identityPending, linkFindings, pathChanges, recheckable } from './lib/review-compare.mjs'
 import { parseSnapshot } from './lib/review-snapshot.mjs'
-import { ruleDocDigests, rulesDigest } from './lib/run-identity.mjs'
+import { currentTarget, ruleDocDigests, rulesDigest } from './lib/run-identity.mjs'
 import { logPhase, moduleOutcomes, readEvents, requireStartedTimeline } from './lib/run-record.mjs'
 import {
   buildIdentityPrompt, buildRecheckPrompt, buildTaskPrompt, claimOf, docPathForRule, extractClause, instructionsWithManifest, planVerifierTasks,
@@ -424,13 +425,21 @@ function repoRoot() {
   return REPO_ROOT_CACHE
 }
 
-function gitReaders(mergeBase) {
+function gitReaders(mergeBase, { pinnedHead = null } = {}) {
   const show = ref => {
     try {
       // A missing path is an expected outcome, not a problem to report on stderr.
       return execFileSync('git', ['show', ref], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'] })
     } catch {
       return undefined
+    }
+  }
+  // 리뷰 도중 대상이 바뀌었으면(C-10) 지금 트리가 아니라 리뷰를 시작한 HEAD를 읽는다 — `targetDriftOf`.
+  if (pinnedHead) {
+    return {
+      working: path => show(`${pinnedHead}:${path}`),
+      head: path => show(`${pinnedHead}:${path}`),
+      base: path => show(`${mergeBase}:${path}`),
     }
   }
   return {
@@ -562,6 +571,31 @@ export function namespaceProblems(results, namespaces) {
   return problems
 }
 
+/**
+ * 리뷰를 시작한 뒤 대상이 바뀌었는가(C-10), 바뀌었으면 위치 대조가 무엇을 읽는가.
+ *
+ * 2026-10-06 실행은 리뷰 도중 같은 작업 폴더에서 파일 넷이 stage되고 커밋됐다. 위치 대조가 지금 트리를 읽어,
+ * 리뷰 대상에는 없던 줄(나중에 넣은 `role="status"`) 때문에 위치 불일치 넷을 냈다. 대상은 시작 때의 코드다.
+ * - 시작 때 작업 트리가 깨끗했으면 대상은 그 HEAD 하나다 — 그 커밋을 읽는다(`start-head`)
+ * - 시작 때 작업 트리가 깨끗하지 않았거나 그 HEAD를 찾을 수 없으면 그때의 파일은 어디에도 없다 — 지금
+ *   트리를 읽되(`working-tree`), 위치 불일치가 대상 변경 때문일 수 있다고 남긴다
+ *
+ * 바뀌지 않았거나, 시작 기록에 HEAD·작업 트리가 없거나(2.16.0 이전 preflight), 지금 대상을 재지 못했으면 null이다.
+ */
+export function targetDriftOf({ start, now, commitExists }) {
+  if (typeof start?.head !== 'string' || typeof start?.worktree !== 'string' || !now) return null
+  const drift = ['head', 'worktree'].filter(field => now[field] !== start[field])
+  if (!drift.length) return null
+  const base = {
+    drift,
+    start: { head: start.head, worktree: start.worktree },
+    now: { head: now.head, worktree: now.worktree },
+  }
+  if (start.worktree !== 'clean') return { ...base, readFrom: 'working-tree', reason: 'start-worktree-dirty' }
+  if (!commitExists(start.head)) return { ...base, readFrom: 'working-tree', reason: 'start-head-missing' }
+  return { ...base, readFrom: 'start-head' }
+}
+
 /** 이 워크플로우에서 켰을 때만 도는 패스(catalog의 `optIn`). */
 export function optInPasses(catalog, workflow) {
   if (!workflow) return []
@@ -590,6 +624,15 @@ async function main() {
   const collect = argv.includes('--collect')
   if (collect && inputPath !== undefined) {
     process.stderr.write('--collect와 --input을 함께 줄 수 없다. 모듈별 결과 파일을 모으거나 입력 파일 하나를 넘긴다\n')
+    process.exit(2)
+  }
+  // 출력은 `--out`으로 받은 자리에 스크립트가 직접 UTF-8로 쓴다. 셸 리다이렉트(`>`)로 받으면 PowerShell 5.1이
+  // node의 UTF-8 출력을 시스템 코드 페이지로 읽어 한글을 되돌릴 수 없게 깨뜨린다 — 2026-10-06 실행은 그래서
+  // 검증 준비를 다시 돌렸고, 끝이 없는 교차검증 시작이 기록에 남았다.
+  const outIndex = argv.indexOf('--out')
+  const outPath = outIndex === -1 ? undefined : argv[outIndex + 1]
+  if (outIndex !== -1 && (outPath === undefined || outPath.startsWith('--'))) {
+    process.stderr.write('--out에는 routed 출력을 쓸 파일 경로를 준다(보통 <리포트 디렉터리>/.timing/<실행 이름>.routed.json)\n')
     process.exit(2)
   }
   const verifyIndex = argv.indexOf('--verify')
@@ -685,17 +728,40 @@ async function main() {
       : payload.results
         ? candidatesFromResults(payload.results)
         : (payload.candidates ?? [])
-  const result = prepareVerification(candidates, collectBlobs(candidates, gitReaders(mergeBase)), {
+  // 리뷰 도중 대상이 바뀌었으면 위치 대조와 감싼 선언은 리뷰를 시작한 대상을 읽는다(C-10).
+  let now = null
+  try {
+    now = typeof start.head === 'string' && typeof start.worktree === 'string' ? currentTarget(process.cwd(), { exclude: [resolve(dir)] }) : null
+  } catch (error) {
+    process.stderr.write(`경고: 지금 리뷰 대상을 재지 못했다 — 도중에 바뀌었는지 모른다: ${error.message}\n`)
+  }
+  const commitExists = sha => {
+    try {
+      execFileSync('git', ['cat-file', '-e', `${sha}^{commit}`], { stdio: 'ignore' })
+      return true
+    } catch {
+      return false
+    }
+  }
+  const target = targetDriftOf({ start, now, commitExists })
+  if (target) {
+    process.stderr.write(target.readFrom === 'start-head'
+      ? `경고: 리뷰 도중 대상이 바뀌었다(${target.drift.join('·')}) — 위치 대조는 리뷰를 시작한 HEAD ${target.start.head}를 읽는다. 검증자 프롬프트에 그 사실을 적었다\n`
+      : `경고: 리뷰 도중 대상이 바뀌었다(${target.drift.join('·')}) — ${target.reason === 'start-worktree-dirty' ? '시작 때 작업 트리가 깨끗하지 않아' : `시작 때의 HEAD ${target.start.head}를 찾을 수 없어`} 그때의 파일을 다시 읽을 수 없다. 위치 대조는 지금 트리를 읽고, 위치 불일치는 대상 변경 때문일 수 있다\n`)
+  }
+  const readers = gitReaders(mergeBase, { pinnedHead: target?.readFrom === 'start-head' ? target.start.head : null })
+  const result = prepareVerification(candidates, collectBlobs(candidates, readers), {
     locationsOnly, exhaustive: verifyMode === 'exhaustive', linkPrefixes: [...namespaces.values()].flat(),
   })
   if (collected) result.collected = collected
+  if (target) result.target = target
 
   // 이전 리뷰와 비교한다(C-13). preflight가 `--previous`로 받은 스냅숏을 run.start에 남겼을 때만이다.
   let rechecks = []
   let identities = []
   if (start.previousSnapshot !== undefined) {
     if (!collect) fail('이전 리뷰와 비교하는 실행(run.start에 previousSnapshot이 있다)은 --collect로 모은다 — 어느 모듈을 검토했는지가 비교에 필요하다')
-    const compared = compareWithPrevious({ start, result, catalog, namespaces, rulesDir, mergeBase, fail })
+    const compared = compareWithPrevious({ start, result, catalog, namespaces, rulesDir, readers, fail })
     result.previous = compared.previous
     rechecks = verifyMode === 'off' || locationsOnly ? [] : compared.rechecks
     identities = verifyMode === 'off' || locationsOnly ? [] : compared.identities
@@ -747,7 +813,7 @@ async function main() {
       if (claimed.length && !argv.includes('--discard-verdicts')) {
         fail(`이번 교차검증에서 검증 작업 ${claimed.length}개를 이미 띄웠다(verify.start) — 같은 실행을 이어 가는 중이면 이 스크립트를 다시 돌리지 않고 review-tasks.mjs status로 남은 작업을 본다. 검증을 처음부터 다시 하려면 --discard-verdicts를 준다`)
       }
-      written = writeVerifierTasks({ result, rulesDir, mergeBase, outDir: outDir.path, discardVerdicts: argv.includes('--discard-verdicts'), fail, rechecks, identities, intent })
+      written = writeVerifierTasks({ result, rulesDir, mergeBase, outDir: outDir.path, discardVerdicts: argv.includes('--discard-verdicts'), fail, rechecks, identities, intent, target })
       if (result.previous) {
         for (const task of written.tasks) {
           if (task.route !== 'recheck' && task.route !== 'identity') continue
@@ -760,6 +826,29 @@ async function main() {
     result.promotions = written.promotions
   }
 
+  // `--out`이면 기록보다 먼저 쓴다 — 쓰지 못했으면 이 준비는 끝나지 않은 것이고, 교차검증도 시작하지 않은 것이다.
+  const text = `${JSON.stringify(result, null, 2)}\n`
+  let outFile = null
+  if (outPath !== undefined) {
+    const path = resolve(outPath)
+    try {
+      mkdirSync(dirname(path), { recursive: true })
+      writeTextAtomic(path, text, {
+        verify: back => {
+          try {
+            JSON.parse(back)
+            return null
+          } catch (error) {
+            return `JSON으로 읽히지 않는다(${error.message})`
+          }
+        },
+      })
+    } catch (error) {
+      fail(`--out에 routed 출력을 쓰지 못했다: ${path} — ${error.message}`)
+    }
+    outFile = { path, sha256: createHash('sha256').update(text).digest('hex') }
+  }
+
   logPhase(dir, run, 'script.done', { ran: true, counts: result.counts })
   // 교차검증의 시작은 **검증자를 띄울 준비가 끝난 이 자리**에서 남긴다. 오케스트레이터가
   // 남기게 두었더니 2026-09-30 실행이 검증자 19개가 다 끝난 뒤에야 찍었고, 80분
@@ -767,7 +856,14 @@ async function main() {
   // 라운드마다 이름을 붙인다. 작업 대장이 claim과 응답 자리에 넣어, 검증을 다시 준비했을 때 앞 라운드의
   // 늦은 응답이 새 라운드의 결과가 되지 않게 한다(C-12).
   if (written.tasks.length) logPhase(dir, run, 'crossverify.start', { targets: result.counts.verify, round: randomBytes(4).toString('hex') })
-  process.stdout.write(`${JSON.stringify(result, null, 2)}\n`)
+  // `--out`이면 표준 출력에는 무엇을 어디에 썼는지만 낸다 — 같은 JSON을 다시 내면 리다이렉트로 받는 길이 남는다.
+  process.stdout.write(outFile === null ? text : `${JSON.stringify({
+    out: outFile.path,
+    sha256: outFile.sha256,
+    counts: result.counts,
+    verifierTasks: (result.verifierTasks ?? []).length,
+    ...(result.target ? { target: result.target } : {}),
+  }, null, 2)}\n`)
 }
 
 /**
@@ -877,7 +973,7 @@ export function verifyDirOf(dir, run) {
  * 검증자가 받는 규칙이 같아야 한다. 디렉터리는 실행마다 새로 만든다. 앞 실행의
  * 파일이 남으면 이번 목록에 없는 작업이 디렉터리에는 있게 된다.
  */
-function writeVerifierTasks({ result, rulesDir, mergeBase, outDir, discardVerdicts, fail, rechecks = [], identities = [], intent = null }) {
+function writeVerifierTasks({ result, rulesDir, mergeBase, outDir, discardVerdicts, fail, rechecks = [], identities = [], intent = null, target = null }) {
   const planned = planVerifierTasks(result)
   if (!planned.tasks.length && !rechecks.length && !identities.length) return { tasks: [], promotions: {} }
 
@@ -926,7 +1022,7 @@ function writeVerifierTasks({ result, rulesDir, mergeBase, outDir, discardVerdic
   // 검증자가 돌려준 JSON을 남길 자리(`verdict`)도 여기서 정한다. 오케스트레이터가
   // 이름을 지으면 실행마다 달라지고, `tally-verdicts.mjs --collect`가 찾지 못한다.
   const write = task => {
-    const { prompt, missingClauses } = buildTaskPrompt({ instructions: instructions.value, task, candidatesById, clauses, mergeBase, intent })
+    const { prompt, missingClauses } = buildTaskPrompt({ instructions: instructions.value, task, candidatesById, clauses, mergeBase, intent, target })
     const path = join(outDir, `${task.taskId}.md`)
     writeFileSync(path, prompt, 'utf8')
     return { prompt: path, verdict: join(outDir, `${task.taskId}.verdict.json`), missingClauses }
@@ -1009,7 +1105,7 @@ function writeVerifierTasks({ result, rulesDir, mergeBase, outDir, discardVerdic
  * - 이번 후보마다 `lineage`(신규·이어짐·재확인 필요)를, 이전 지적마다 상태와 이유를 남긴다. 재확인할
  *   지적은 재확인 작업으로 돌려준다
  */
-function compareWithPrevious({ start, result, catalog, namespaces, rulesDir, mergeBase, fail }) {
+function compareWithPrevious({ start, result, catalog, namespaces, rulesDir, readers, fail }) {
   const snapshotPath = start.previousSnapshot
   let text
   try {
@@ -1079,7 +1175,6 @@ function compareWithPrevious({ start, result, catalog, namespaces, rulesDir, mer
       return null
     }
   }
-  const readers = gitReaders(mergeBase)
   const symbolAt = (location, read) => {
     if (location?.kind === 'verified') return enclosingSymbol(read('head', location.path), location.line)
     if (location?.kind === 'deleted') return enclosingSymbol(read('base', location.path), location.lineBefore)

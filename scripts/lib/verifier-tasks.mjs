@@ -135,9 +135,10 @@ const KIND_TEXT = {
  * 검증자가 없는 조항을 찾거나 상상하면, 의도와 경로로 판정해야 할 주장을 규칙 문장으로
  * 판정한다.
  */
-export function buildTaskPrompt({ instructions, task, candidatesById, clauses, mergeBase, intent }) {
+export function buildTaskPrompt({ instructions, task, candidatesById, clauses, mergeBase, intent, target = null }) {
   const members = task.candidateIds.map(id => candidatesById.get(id)).filter(Boolean)
   const ids = task.candidateIds.map(id => `\`${id}\``).join(', ')
+  const verifiedBasis = target?.readFrom === 'start-head' ? `리뷰를 시작한 HEAD \`${target.start.head}\`` : '작업 트리(HEAD)'
   const lines = [
     instructions.trim(),
     '',
@@ -146,7 +147,7 @@ export function buildTaskPrompt({ instructions, task, candidatesById, clauses, m
     `- 작업: \`${task.taskId}\` · ${KIND_TEXT[task.kind]}`,
     `- 판정할 \`candidateId\`: ${ids} — 이 집합과 정확히 같은 verdict를 돌려준다`,
     ...(task.anchorPath ? [`- anchor 파일: \`${task.anchorPath}\``] : []),
-    `- 경로는 저장소 루트 기준이다. \`verified\` 위치는 작업 트리(HEAD), \`deleted\` 위치는 merge-base \`${mergeBase}\` 기준이다`,
+    `- 경로는 저장소 루트 기준이다. \`verified\` 위치는 ${verifiedBasis}, \`deleted\` 위치는 merge-base \`${mergeBase}\` 기준이다`,
     '',
     '### 후보',
     '',
@@ -169,6 +170,7 @@ export function buildTaskPrompt({ instructions, task, candidatesById, clauses, m
   }
 
   if (lines.at(-1) !== '') lines.push('')
+  if (target) lines.push(targetDriftNotice(target), '')
   const missing = clauseLines(lines, members.map(candidate => candidate.ruleId), clauses)
   // 조항 없는 지적(CR)은 "변경의 의도와 구현이 어긋난다"는 주장이다. 검증자가 그 주장을 의도의 원문과
   // 대조할 수 있게, producer가 받은 원문을 그대로 붙인다(PR #90 리뷰). 규칙 지적에는 붙이지 않는다.
@@ -209,6 +211,27 @@ const RECHECK_REASON_TEXT = {
   'rule-changed': '이 지적의 규칙 문서가 이전 실행 뒤에 바뀌었다 — 아래 조항은 지금의 것이다',
   'file-deleted': '이 지적의 파일이 이전 HEAD 뒤에 지워졌다',
   'location-unverified': '이전 리뷰가 이 지적의 위치를 확인하지 못했다',
+}
+
+/**
+ * 리뷰 도중 대상이 바뀐 실행(C-10)에서 검증자에게 붙이는 안내.
+ *
+ * 검증자는 디스크의 파일을 읽는다. 대상 뒤에 들어온 수정을 보고 "이미 막혀 있다"고 반박하면, 리뷰한 코드에
+ * 있던 결함이 지워진다 — 2026-10-06 실행은 리뷰 도중 `role="status"`를 넣은 커밋이 들어왔다. 그래서 지금
+ * 파일이 대상과 다를 수 있다는 것과, 무엇을 근거로 쓰지 않을지를 적는다.
+ */
+export function targetDriftNotice(target) {
+  const changed = (target.drift ?? []).map(field => `\`${field}\``).join('·')
+  const lines = ['### 리뷰 도중 대상이 바뀌었다', '']
+  lines.push(target.readFrom === 'start-head'
+    ? `이 리뷰의 대상은 리뷰를 시작한 HEAD \`${target.start.head}\`다(그때 작업 트리는 깨끗했다). 그 뒤 ${changed}가 바뀌어 지금 디스크의 파일은 대상과 다를 수 있다. 위의 위치 대조는 대상 HEAD로 했다.`
+    : `이 리뷰의 대상은 리뷰를 시작한 때의 작업 트리다. 그 뒤 ${changed}가 바뀌었는데 그때의 파일은 다시 읽을 수 없다 — 위의 위치 대조도 지금 파일로 했으므로, 위치 불일치는 대상이 바뀐 탓일 수 있다.`)
+  lines.push(
+    '',
+    '- **지금 파일에만 있는 코드(대상 뒤에 들어온 수정)를 반박 근거로 쓰지 않는다.** 그 코드는 이번 리뷰의 대상이 아니다',
+    '- 판정에 필요한 줄이 대상과 지금 파일에서 다르면 `needs-context`로 돌리고, 그 차이를 `reason`에 적는다',
+  )
+  return lines.join('\n')
 }
 
 /**

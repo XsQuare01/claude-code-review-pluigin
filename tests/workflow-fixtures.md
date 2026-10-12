@@ -933,6 +933,30 @@ These scenarios pin the behaviour that `review-rules/workflow-contract.md` promi
       ],
       "scenario": "With --correctness on, the PR says failures are not retried and the correctness producer reports a missing automatic retry",
       "expected": "The CR verifier prompt contains the PR description verbatim with its source and hash from review-intent.mjs, marked as untrusted data; rule-module verifier prompts do not"
+    },
+    {
+      "id": 118,
+      "clauses": [
+        "C-9"
+      ],
+      "scenario": "On Windows PowerShell 5.1 the orchestrator saves the routed output of prepare-verification.mjs",
+      "expected": "The script writes the file itself with --out (UTF-8, atomic) and prints only the path, sha256 and counts; the routed output is never captured with a shell redirect, so Korean text survives"
+    },
+    {
+      "id": 119,
+      "clauses": [
+        "C-10"
+      ],
+      "scenario": "The review started on a clean worktree; mid-run, someone stages and commits a fix in the same folder that adds role=\"status\" to a line a finding quotes",
+      "expected": "The orchestrator does not change the scope or record its own choice as the user's request; location checks read the HEAD the review started from and still match, routed output carries target.readFrom start-head, verifier prompts say code that exists only on disk now is not rebuttal evidence, and the report verdict mentions the drift"
+    },
+    {
+      "id": 120,
+      "clauses": [
+        "C-9"
+      ],
+      "scenario": "The timeline check finds a gap while the report is being written",
+      "expected": "The check runs with --before-end before run.end, the gap is written into the 실행 타임라인 section, and run.end stays the last line; nothing is appended after it. A crossverify.start superseded by a re-prepared round is reported as a note, not as a missing end"
     }
   ],
   "defaultWorkflowOnlyCases": [
