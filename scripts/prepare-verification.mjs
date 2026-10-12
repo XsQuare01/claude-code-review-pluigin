@@ -9,7 +9,7 @@ import { markedBlock } from './lib/contract-blocks.mjs'
 import { intentBlock, intentProblems } from './lib/intent.mjs'
 import { CURRENT_STATUSES, countBy, enclosingSymbol, identityPending, linkFindings, pathChanges, recheckable } from './lib/review-compare.mjs'
 import { parseSnapshot } from './lib/review-snapshot.mjs'
-import { currentTarget, ruleDocDigests, rulesDigest } from './lib/run-identity.mjs'
+import { currentTarget, ruleDocDigests, rulesDigest, runOutputs } from './lib/run-identity.mjs'
 import { logPhase, moduleOutcomes, readEvents, requireStartedTimeline } from './lib/run-record.mjs'
 import {
   buildIdentityPrompt, buildRecheckPrompt, buildTaskPrompt, claimOf, docPathForRule, extractClause, instructionsWithManifest, planVerifierTasks,
@@ -684,9 +684,15 @@ async function main() {
   let collected
   if (collect) {
     source = '--collect'
+    // 검증 뒤에 한 번 도는 synthesis 모듈(`post-verification-synthesis`)은 producer가 아니다 — 모으지 않는다.
+    // 모을 이름에 넣어 두면, synthesis 결과를 모듈 결과와 같은 이름(`<run>.10-principles.json`)으로 저장한
+    // 실행은 검증 준비를 다시 돌릴 때마다 "module.done 없이 결과 파일만 있다"로 멈췄다(2026-10-12 실행).
+    const synthesisOnly = new Set((catalog.modules ?? [])
+      .filter(module => module.phaseByWorkflow?.[start.workflow] === 'post-verification-synthesis')
+      .map(module => String(module.path ?? '').replace(/\.md$/, '')))
     const gathered = collectResultFiles({
       events,
-      sourceNames: sourceNames.value,
+      sourceNames: new Set([...sourceNames.value].filter(name => !synthesisOnly.has(name))),
       notRequested,
       pathOf: name => join(dir, '.timing', `${run}.${name}.json`),
       read: path => (existsSync(path) ? readFileSync(path, 'utf8') : undefined),
@@ -731,7 +737,7 @@ async function main() {
   // 리뷰 도중 대상이 바뀌었으면 위치 대조와 감싼 선언은 리뷰를 시작한 대상을 읽는다(C-10).
   let now = null
   try {
-    now = typeof start.head === 'string' && typeof start.worktree === 'string' ? currentTarget(process.cwd(), { exclude: [resolve(dir)] }) : null
+    now = typeof start.head === 'string' && typeof start.worktree === 'string' ? currentTarget(process.cwd(), { exclude: runOutputs(resolve(dir), run) }) : null
   } catch (error) {
     process.stderr.write(`경고: 지금 리뷰 대상을 재지 못했다 — 도중에 바뀌었는지 모른다: ${error.message}\n`)
   }

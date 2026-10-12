@@ -33,7 +33,7 @@ import { writeTextAtomic } from './lib/atomic-write.mjs'
 import { durationLimitScope, hostCapabilities } from './lib/hosts.mjs'
 import { moduleScope, plannedModules } from './lib/review-snapshot.mjs'
 import { readEvents, recordPhase, requireStartedTimeline } from './lib/run-record.mjs'
-import { currentTarget } from './lib/run-identity.mjs'
+import { currentTarget, runOutputs } from './lib/run-identity.mjs'
 import {
   CANCEL_REASONS, DEFAULT_INFLIGHT, MAX_ATTEMPTS, STAGES, attemptsOf, budgetOf, claimOf, decideNext, decisionRecords,
   foldAttempts, haltOf, isTerminal, parseDuration, planStates, segmentOf, settleDecision, settleRecord, verifyPlan,
@@ -632,7 +632,7 @@ const resume = () => {
     }
     let current
     try {
-      current = currentTarget(repo, { exclude: [resolve(dir)] })
+      current = currentTarget(repo, { exclude: runOutputs(resolve(dir), run) })
     } catch (error) {
       throw new LedgerError(`리뷰 대상의 지금 상태를 읽지 못했다(--repo ${repo}): ${String(error.stderr || error.message).trim()}`)
     }

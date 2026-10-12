@@ -396,6 +396,15 @@ When no range is given, the review base is now the base of the current branch's 
 - The PR's base is looked up as `origin/<base>` first. A local branch of the same name can be behind — a 2026-10-06 run used an unpulled local `main` and reviewed 34 files from another PR already in `main`.
 - If the PR's base branch is not in the repository, the review stops and asks for `git fetch origin <base>` or an explicit range rather than falling back to `main`.
 
+## Follow-ups from a 2.21.0 run (2.25.0)
+
+An OpenCode run on a stacked PR (2026-10-12) turned up four more problems. The stacked-PR scope itself was already fixed in 2.24.0 — that run reviewed 787 files where the PR changed 73.
+
+- **No false drift when the report sits at the repository root.** The report directory is excluded from the worktree fingerprint, but the repository root cannot be excluded, so nothing was. The run's own `.timing/` files and report made the snapshot say the target changed mid-review, and the report used that as a blocking reason. The run's `.timing/` and `<run>.md` are now excluded on their own.
+- **Producers and verifiers are dispatched with `load_skills=[]`.** `/code-review-full` was the one skill without it; the orchestrator passed its own skill name and OpenCode rejected the whole first wave.
+- **Synthesis output no longer blocks re-collection.** `prepare-verification.mjs --collect` skips modules that run after verification, and the skill puts synthesis output in `<run>.synthesis.json`.
+- **Name, scope and tool timings are recorded by scripts.** Preflight rejects a run name that does not start with `code-review-<workflow>-`, warns when the report lands inside the repository without being ignored, and writes `scope.done` plus `.timing/<run>.scope.json` from the C-5 name rules. `review-tool.mjs` runs lint, typecheck and test and records each tool's own start and end.
+
 ## Applicability metadata
 
 `review-rules/catalog.json` records **when** a module applies — required profile (FSD, Tailwind, RSC, Electron, TanStack Query, server code, contract provider), minimum React version, which workflows load it, and which individual rules carry a narrower gate than their module. The Markdown modules stay canonical for **what** a rule says; the catalog never generates documentation and never restates rule text.

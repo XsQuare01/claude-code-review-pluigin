@@ -56,7 +56,7 @@ node "$RULES_DIR/../scripts/review-preflight.mjs" --dir "$REPORT_DIR" --run "$RE
      [--previous <이전 리뷰의 스냅숏>]
 ```
 
-**`$REPORT_DIR`와 `$REPORT_BASENAME`은 리포트를 실제로 저장할 곳과 그 파일 이름이다.** 여기서 정한 값이 사이드카의 자리를 결정하므로, 나중에 리포트를 다른 디렉터리나 다른 이름으로 쓰면 기록과 리포트가 서로를 못 찾는다. 실제로 한 실행이 리포트를 `Docs/`에 쓰고 사이드카는 워크트리에 남겨 **이름도 디렉터리도 달랐다.** `--check`가 `render.wrote`의 경로와 대조해 그 어긋남을 짚는다. **`$REPORT_BASENAME`에는 확장자를 붙이지 않는다** — `.md`로 끝나면 preflight와 기록 스크립트가 거부한다. 2026-09-30의 한 실행은 리포트 파일 이름을 그대로 넘겨 기록이 전부 `….md.jsonl`로 남았다.
+**`$REPORT_DIR`와 `$REPORT_BASENAME`은 리포트를 실제로 저장할 곳과 그 파일 이름이다.** 여기서 정한 값이 사이드카의 자리를 결정하므로, 나중에 리포트를 다른 디렉터리나 다른 이름으로 쓰면 기록과 리포트가 서로를 못 찾는다. 실제로 한 실행이 리포트를 `Docs/`에 쓰고 사이드카는 워크트리에 남겨 **이름도 디렉터리도 달랐다.** `--check`가 `render.wrote`의 경로와 대조해 그 어긋남을 짚는다. **`$REPORT_BASENAME`에는 확장자를 붙이지 않는다** — `.md`로 끝나면 preflight와 기록 스크립트가 거부한다. 2026-09-30의 한 실행은 리포트 파일 이름을 그대로 넘겨 기록이 전부 `….md.jsonl`로 남았다. **이름은 C-7의 `code-review-full-{브랜치}-{날짜}`다** — `code-review-full-`로 시작하지 않으면 preflight가 거부하고 예를 보인다(2026-10-12 실행은 `full-code-review-2026-10-12`로 지어 브랜치가 빠졌다). **리포트를 대상 저장소 루트에 두지 않는다** — C-7의 기본 자리(`review-reports/`)나 사용자가 정한 문서 폴더에 둔다. 대상 저장소 안이고 무시 목록에 없으면 preflight가 `리포트 위치` 줄로 알린다. 리포트와 `.timing`이 미추적 파일로 남아 함께 커밋될 수 있다.
 
 **리뷰 범위의 기준도 여기서 정해진다(C-4).** `--base`는 사용자가 범위를 정했을 때만 준다 — 주지 않으면 preflight가 지금 브랜치의 열린 PR을 `gh pr view`로 읽어 그 base를 기준으로 잡는다. 다른 PR 위에 쌓은 PR이면 아래 PR의 브랜치(`origin/<그 브랜치>`)이고, 그 위에 더한 변경만 리뷰한다. main을 기준으로 잡으면 아래 PR의 변경까지 리뷰하게 된다. 출력의 `base` 줄(기준과 이유)을 `리뷰 기준`에 옮긴다. PR의 base를 이 저장소에서 찾을 수 없으면 preflight가 멈춘다 — `git fetch origin <base>` 뒤 다시 돌리거나 사용자에게 범위를 묻는다. gh를 쓸 수 없는 호스트는 `gh pr view --json number,baseRefName,headRefName,state,url`의 출력을 파일로 담아 `--pr-json`으로 준다.
 
@@ -109,6 +109,8 @@ Trigger 섹션이 있는 모듈(`12`, `14`, `16`, `17`, `18`, `21`)은 diff에 �
 
 오케스트레이터가 `git diff {MERGE_BASE}..HEAD`와 변경 파일 목록을 한 번 읽어 **prompt에 담아 전달**한다. 각 sub-agent가 개별적으로 `git diff`를 다시 돌리지 않는다. 에이전트는 diff만으로 판단이 안 되는 경우에 한해 해당 파일을 추가로 읽는다.
 
+**변경 파일 목록은 preflight가 남긴 `.timing/$REPORT_BASENAME.scope.json`의 `files`다** — C-5의 이름 규칙(테스트·mock)으로 뺀 파일은 `excluded`에 있다. 다시 세지 않고, **`scope.done`도 preflight가 이미 남겼으므로 다시 남기지 않는다.** 2026-10-12 실행은 손으로 세어 249개를 빼고도 `excluded: 0`을 적었다. 이름으로 드러나지 않는 fixture를 더 뺐으면 그 목록을 `리뷰 기준`에 적는다.
+
 **(4) 실행 계획 기록**
 
 후보 N개 중 적용 대상 M개, `SKIPPED` 목록과 사유를 리포트에 남긴다. **N은 (0)이 낸 값을 그대로 쓴다** — 한 리포트가 여기서 synthesis 전용 모듈을 후보로 세어 20개를 21개로 적었다. **M이 N보다 작다는 사실이 리포트에서 보여야 한다.** 보이지 않으면 전부 검토된 것으로 읽힌다.
@@ -150,7 +152,7 @@ node "$RULES_DIR/../scripts/review-tasks.mjs" next --stage module --dir "$REPORT
 - **사용자가 멈추라고 하면** `review-tasks.mjs cancel --all --reason user`를 부르고, 같은 방식으로 받은 결과까지 리포트를 쓴다
 - **멈춘 실행(`halted`)도 리포트를 쓰고 `run.end`를 남긴다** — 부분 보고다. 사용자가 더 돌리라고 하면 `review-tasks.mjs resume`이 새 구간을 열고, `next`가 멈춰서 띄우지 못한 모듈을 낸다. 모듈 단계를 마치면 `prepare-verification.mjs … --collect --discard-verdicts --out <같은 routed 자리>`로 다시 모으고 검증을 새 라운드로 한 뒤 리포트를 다시 쓴다. 멈춘 적 없이 끝난 실행은 이어 가지 않는다
 - **깨어날 때마다** — 작업 완료 알림, 사용자 메시지, 컨텍스트 압축 뒤, 같은 실행에서 스킬을 다시 불렀을 때 — 먼저 `review-tasks.mjs status`로 남은 일을 보고 `next`를 부른다. 같은 실행을 다른 세션에서 이어 가면 `review-tasks.mjs resume --repo <대상 저장소>`부터 부른다. 대상이 바뀌었다고 하면(종료 코드 3) 이 실행을 이어 가지 않고, 새 `--run` 이름으로 preflight를 `--continues <앞 실행 ID>`와 함께 다시 시작한다. 한도에 닿아 멈춘 실행을 사용자가 더 돌리라고 하면 `resume`에 새 한도를 준다
-- 작업 하나가 끝나도 깨우지 않는 호스트(`host.perTaskNotification: false`, oh-my-openagent)에서는 `dispatch`를 전부 한 번에 foreground 병렬로 부르고, 돌아온 응답마다 `done`을 부른 뒤 `next`를 다시 부른다(아래 교차검증 `디스패치`와 같은 이유)
+- 작업 하나가 끝나도 깨우지 않는 호스트(`host.perTaskNotification: false`, oh-my-openagent)에서는 `dispatch`를 전부 한 번에 foreground 병렬로 부르고, 돌아온 응답마다 `done`을 부른 뒤 `next`를 다시 부른다(아래 교차검증 `디스패치`와 같은 이유). **첫 웨이브와 오래 걸리는 도구(lint·typecheck·test)를 같은 묶음으로 부르지 않는다** — 묶음 전체가 끝나야 응답을 받으므로, 첫 웨이브가 즉시 실패해도 도구가 끝날 때까지 알 수 없다. 2026-10-12 실행은 그렇게 7분을 잃었다. 도구는 두 번째 웨이브와 함께 부른다
 
 **각 모듈 sub-agent prompt에 담을 것** — 3a에서 이미 확보했으므로 에이전트가 다시 조사하지 않는다.
 
@@ -180,6 +182,18 @@ node "$RULES_DIR/../scripts/review-tasks.mjs" next --stage module --dir "$REPORT
 위 지시는 이 skill이 structured-v1 owner로서 보유한다. numbered rule modules와 specialist rule docs는 workflow-neutral domain judgment docs일 뿐이며, producer schema나 lifecycle을 직접 소유하지 않는다. shared manifest와 retry/fail-closed 정책의 정본은 `workflow-contract.md` C-6A와 `REVIEW_RESULT_CONTRACT_V1`이다.
 
 **아래 producer는 전부 `subagent_type=react-code-review-plugin:rule-module-reviewer`로 띄운다.** 지적을 만드는 자리는 모두 쓰기 도구 없이 돈다(C-6). numbered module이든 특수 패스든 하는 일이 같다 — 규칙 문서 하나를 받아 diff를 판정하고 구조화된 결과를 돌려준다.
+
+**스킬은 싣지 않는다(`load_skills=[]`).** 호스트의 작업 도구가 스킬 목록을 받더라도(OpenCode의 `task`) 이 스킬(`code-review-full`)이나 다른 스킬을 넣지 않는다 — producer의 지시는 프롬프트와 에이전트 정의에 있고, 이 스킬은 오케스트레이터의 지시다. 2026-10-12 실행은 `load_skills=['react-code-review-plugin:code-review-full']`로 띄워 첫 웨이브 넷이 `Skills not found`로 즉시 실패했다(`skill-injection-invalid`).
+
+```
+task(
+  subagent_type="react-code-review-plugin:rule-module-reviewer",
+  load_skills=[],
+  run_in_background=<호스트에 맞게 — 아래 `작업 대장으로 띄우고 받는다`>,
+  description="<모듈>#<시도> review",
+  prompt="<이 모듈의 프롬프트>"
+)
+```
 
 **diff는 어느 producer도 스스로 뜨지 않는다.** 3a(3)에서 오케스트레이터가 한 번 수집한 것을 프롬프트에 담아 넘긴다. 아래 각 템플릿의 `diff/context`가 그것이고, 삭제된 파일의 옛 내용도 그 diff의 `-` 줄에 들어 있어 별도 조회가 필요 없다.
 
@@ -367,7 +381,7 @@ isolated 11)을 동시에 background dispatch한 결과, 1건만 2분 25초에 �
 2026-09-30 실행의 오케스트레이터는 이 지시를 자기 형식으로 다시 썼다. manifest도 조항도 빠진 프롬프트를 받은 검증자들은 디스크 전체에서 routed payload를 찾았고, 한 검증자는 거기서 자기 후보의 `impact`·`confidence`를 읽었다 — "확신: 높음"을 보면 검증자가 그쪽으로 기운다. 그래서 1차의 `impact`·`confidence`·`category`·`recommendation`·모듈 라벨은 스크립트가 뺀다.
 
 - **파일 내용을 그대로 프롬프트로 넘긴다.** 요약하거나 자기 형식으로 감싸 다시 쓰지 않는다. 런타임이 서브에이전트의 파일 읽기를 허용하면 "이 파일을 Read로 읽고 그 지시를 그대로 따르라"는 한 줄과 경로만 넘겨도 된다 — 어느 쪽이든 내용을 고치지 않는다
-- **둘 다 `subagent_type=react-code-review-plugin:rule-module-reviewer`로 띄운다.** verifier는 지적을 추가하지 않지만 지적의 생사를 판정하므로, 코드를 고칠 동기가 생기는 것은 producer와 같다. 이름이 검증처럼 들리는 다른 에이전트(`correctness-reviewer` 등)로 띄우지 않는다 — 그 에이전트는 셸을 가진다. 2026-09-30 실행은 검증자 19개를 `correctness-reviewer`로 띄웠고, 한 검증자는 셸로 다른 에이전트의 세션 기록에서 자기 후보 ID를 검색했다
+- **둘 다 `subagent_type=react-code-review-plugin:rule-module-reviewer`, `load_skills=[]`로 띄운다.** verifier는 지적을 추가하지 않지만 지적의 생사를 판정하므로, 코드를 고칠 동기가 생기는 것은 producer와 같다. 이름이 검증처럼 들리는 다른 에이전트(`correctness-reviewer` 등)로 띄우지 않는다 — 그 에이전트는 셸을 가진다. 2026-09-30 실행은 검증자 19개를 `correctness-reviewer`로 띄웠고, 한 검증자는 셸로 다른 에이전트의 세션 기록에서 자기 후보 ID를 검색했다
 - 셸이 필요 없다. **merge-base 기준 `deleted` 인용도 스크립트가 base blob에서 읽어 위치 대조 결과에 담는다** — verifier가 직접 조회할 일이 없다. anchor file 밖을 봐야 하는 경우(`usedCrossFileContext`)는 `Read`로 충분하다
 - **판정은 받는 즉시 파일로 남긴다.** 검증자가 돌려준 JSON을 한 글자도 고치지 않고 `next`가 준 `resultPath`에 쓰고 `review-tasks.mjs done`을 부른다. 대장이 계약을 검사해 맞으면 그 작업의 `verdict` 경로(`<taskId>.verdict.json`)에 쓴다 — 그 경로에 직접 쓰지 않는다. 모으고 순서를 정하는 일은 `tally-verdicts.mjs --collect`가 한다(아래 `검증 결과 집계`)
 - bundle이 `needs-context`로 돌린 후보의 승격 작업은 `next`가 `kind: promotion`으로 낸다. 그 항목의 `prompt`로 isolated verifier를 띄운다. 승격 프롬프트를 새로 쓰지 않는다
@@ -400,6 +414,7 @@ isolated 11)을 동시에 background dispatch한 결과, 1건만 2분 25초에 �
 - 클러스터는 자체 severity를 갖지 않고 기존 finding을 참조만 한다. 존재하지 않는 candidate ID를 만들지 않는다
 - 이 단계 실패는 `FAILED orchestration`이 아니다. 클러스터 없이 렌더링하고 `미해결 / 후속 확인`에 명시한다
 - 리포트에서는 일반 패스 모듈 목록이 아니라 **synthesis 결과로 따로 표시**한다
+- **결과는 `.timing/$REPORT_BASENAME.synthesis.json`에 둔다.** 모듈 결과 자리(`$REPORT_BASENAME.<모듈>.json`, 예: `….10-principles.json`)에 두지 않는다 — 그 자리는 producer의 결과다. 2026-10-12 실행이 그렇게 두어, 검증 준비를 다시 돌리면 "module.done 없이 결과 파일만 있다"로 멈췄다(지금은 검증 준비가 synthesis 모듈을 모으지 않는다)
 
 ### 실패 처리
 
@@ -459,7 +474,14 @@ node "$RULES_DIR/../scripts/tally-verdicts.mjs" --dir "$REPORT_DIR" --run "$REPO
 - 일반 패스 리포트는 `RULES_DIR`의 `[0-9]*.md`에서 발견한 numbered non-00 모듈명을 나열하고, 모듈별 sub-agent 결과를 각각 표시한다. `00-rule.md`는 공통 규칙이므로, `post-verification-synthesis` 모듈은 일반 패스 소속이 아니므로 이 목록에 넣지 않는다. 후자는 synthesis 단계 결과로 따로 표시한다.
 - numbered non-00 모듈 중 실행 또는 수집이 누락된 항목이 있으면 `FAILED orchestration`으로 표시하고, 완료된 리뷰처럼 요약하지 않는다.
 - lint/typecheck/test를 실행했으면 `도구 실행 결과` 섹션으로 분리해 보고하고, 리뷰 지적과 섞지 않는다 (`00-rule.md` 00-9).
-- **도구마다 돌리기 직전에 `tool.start`를, 끝난 직후에 `tool.done`을 남긴다** (C-9). 끝만 모아 찍으면 네 번의 실행이 이름 없는 구간 하나가 된다 — 한 실행이 442초를 그렇게 남겼고, 그것이 어느 도구의 몫인지 끝내 알 수 없었다.
+- **도구는 `review-tool.mjs`로 돌린다 — 시작(`tool.start`)과 끝(`tool.done`)을 스크립트가 돌리기 직전과 끝난 직후에 남긴다** (C-9). 손으로 남기면 그 시각은 도구가 돈 시각이 아니라 오케스트레이터가 깨어난 시각이다 — 2026-10-12 실행은 세 도구의 시작과 끝을 같은 초에 남겨 셋 다 416초로 기록됐다. 끝만 모아 찍던 실행은 442초를 이름 없는 구간 하나로 남겼다.
+
+  ```bash
+  node "$RULES_DIR/../scripts/review-tool.mjs" --dir "$REPORT_DIR" --run "$REPORT_BASENAME" --name typecheck -- npx tsc --noEmit
+  node "$RULES_DIR/../scripts/review-tool.mjs" --dir "$REPORT_DIR" --run "$REPORT_BASENAME" --name test --shell -- "npm test"   # 셸이 필요한 명령은 문자열 하나
+  ```
+
+  출력(JSON)의 `exit`·`durationSec`·`tail`과 로그(`.timing/$REPORT_BASENAME.tool.<이름>.log`)로 `도구 실행 결과`를 쓴다. 명령은 수정 옵션 없이 준다(C-6). 호스트의 셸 시간 제한이 도구보다 짧으면 그 제한을 늘려 부른다 — 끊기면 끝을 남기지 못한다
 - **lint/typecheck/test는 모듈이 도는 동안 함께 돌린다.** 이 도구들은 sub-agent 결과에 의존하지 않으므로 디스패치가 끝나기를 기다릴 이유가 없다. 09-17 실행은 2번째 wave가 도는 중에 넷을 끝내 벽시계에 거의 아무것도 더하지 않았고, 09-18 실행은 교차검증까지 끝난 뒤에 돌려 **442초를 통째로 직렬로 썼다.** 같은 일에 같은 시간이 들었지만 한쪽만 값을 치렀다.
 - `실행 타임라인` 섹션에는 `review-timeline.mjs --summary` 출력을 **마지막으로 한 번 더 돌려** 그대로 붙인다. 표를 직접 만들지 않고, 사이드카를 남기지 못했으면 그 사실을 그 섹션에 적는다 (C-9).
 

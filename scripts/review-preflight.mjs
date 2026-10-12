@@ -38,14 +38,16 @@
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
-import { dirname, join, resolve } from 'node:path'
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { durationLimitScope, hostCapabilities } from './lib/hosts.mjs'
 import { baseLine, reviewBaseOf } from './lib/review-base.mjs'
 import { parseSnapshot } from './lib/review-snapshot.mjs'
-import { currentTarget, newRunId, repoIdentity, rulesDigest } from './lib/run-identity.mjs'
+import { currentTarget, newRunId, repoIdentity, rulesDigest, runOutputs } from './lib/run-identity.mjs'
 import { runNameProblem } from './lib/run-name.mjs'
+import { writeTextAtomic } from './lib/atomic-write.mjs'
+import { scopeOf } from './lib/review-scope.mjs'
 import { DEFAULT_STALE_AFTER_SEC, parseDuration } from './lib/task-ledger.mjs'
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)))
@@ -209,10 +211,41 @@ if (chosenBase.error) die(chosenBase.error)
 const base = chosenBase.ref
 const mergeBase = chosenBase.mergeBase
 
+// 실행 이름은 C-7의 리포트 이름을 따른다 — `code-review-{workflow}-{브랜치}-{날짜}`. 2026-10-12 실행은
+// `full-code-review-2026-10-12`로 시작해 워크플로우 접두와 브랜치가 빠졌다. 같은 날 다른 브랜치의 리뷰와
+// 이름이 겹치고, 리포트만 가진 사람은 어느 브랜치의 리뷰인지 이름으로 알 수 없다.
+{
+  const prefix = `code-review-${workflow}-`
+  if (!run.startsWith(prefix)) {
+    const now = new Date()
+    const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
+    const slug = branch.replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '')
+    die(`--run은 C-7의 리포트 이름(code-review-{workflow}-{브랜치}-{날짜})을 따른다 — ${JSON.stringify(run)}는 ${JSON.stringify(prefix)}로 시작하지 않는다. 예: ${prefix}${slug}-${today}`)
+  }
+}
+
 const changed = (() => {
   const out = git(['diff', '--name-only', `${mergeBase}...HEAD`])
   if (typeof out !== 'string') die(`변경 파일 목록을 읽지 못했다: ${out.error}`)
   return out ? out.split('\n').filter(Boolean) : []
+})()
+
+// 지적 대상으로 삼는 파일(C-5). 이름 규칙으로 빼는 테스트·mock 파일은 여기서 센다 — `scope.done`의 수다.
+const scope = scopeOf(changed)
+
+// 리포트를 어디에 쓰는가(C-7). 대상 저장소 안이고 무시 목록에 없으면 리포트와 `.timing`이 미추적 파일로
+// 남는다 — 2026-10-12 실행은 저장소 루트에 써서 그 파일들이 작업 트리 변경으로 세졌고(지금은 뺀다),
+// 함께 커밋될 위험도 남았다. 막지는 않는다 — 프로젝트가 그 자리를 정했을 수 있다.
+const placement = (() => {
+  const top = git(['rev-parse', '--show-toplevel'])
+  if (typeof top !== 'string') return null
+  const rel = relative(resolve(top), resolve(dir))
+  if (rel.startsWith('..') || isAbsolute(rel)) return null
+  const ignored = typeof git(['check-ignore', '-q', join(resolve(dir), '.timing', `${run}.jsonl`)]) === 'string'
+  if (ignored) return null
+  return rel === ''
+    ? '리포트를 대상 저장소의 루트에 쓴다 — 리포트와 .timing이 미추적 파일로 남아 함께 커밋될 수 있다. C-7의 기본 자리는 review-reports/이고, 사용자가 문서 폴더를 정했으면 그쪽이다'
+    : `리포트 디렉터리(${rel})가 대상 저장소 안에 있고 무시 목록에 없다 — 리포트와 .timing이 미추적 파일로 남는다. 커밋하지 않게 주의한다`
 })()
 
 // 무엇을 리뷰하는지를 값으로 남긴다(#88 PR 0). 브랜치와 merge-base만으로는 두 실행이
@@ -223,7 +256,7 @@ const identity = (() => {
   try {
     // 리포트 디렉터리는 뺀다. 기본 저장 위치는 대상 저장소 안이고, 이 실행이 거기 쓰는
     // 기록이 대상을 바꾼 것으로 보이면 안 된다.
-    const target = currentTarget(repo, { exclude: [dir] })
+    const target = currentTarget(repo, { exclude: runOutputs(dir, run) })
     const { remote, root } = repoIdentity(repo)
     return { runId: newRunId(), ...target, remote, root, rulesDigest: rulesDigest(rules) }
   } catch (error) {
@@ -279,10 +312,20 @@ const logged = (() => {
   const args = [TIMELINE, '--dir', dir, '--run', run, '--phase', 'run.start', '--data', JSON.stringify(data)]
   try {
     execFileSync(process.execPath, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
-    return { ok: true, skipped: false }
   } catch (error) {
     return { ok: false, error: String(error.stderr || error.message).trim() }
   }
+  // 범위도 여기서 남긴다(C-5·C-9). 목록은 producer 프롬프트에 그대로 쓰도록 파일로 둔다.
+  try {
+    writeTextAtomic(join(dir, '.timing', `${run}.scope.json`), `${JSON.stringify({
+      schemaVersion: 1, runId: identity.runId, mergeBase, head: identity.head, files: scope.files, excluded: scope.excluded,
+    }, null, 2)}\n`)
+    execFileSync(process.execPath, [TIMELINE, '--dir', dir, '--run', run, '--phase', 'scope.done', '--data',
+      JSON.stringify({ files: scope.files.length, excluded: scope.excluded.length })], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+  } catch (error) {
+    return { ok: false, error: `run.start는 남겼지만 범위를 남기지 못했다 — ${String(error.stderr || error.message).trim()}` }
+  }
+  return { ok: true, skipped: false }
 })()
 
 const out = [
@@ -296,6 +339,7 @@ const out = [
   `작업 트리     ${identity.worktree === 'clean' ? 'clean' : `커밋하지 않은 변경 ${identity.dirtyFiles}개 (${identity.worktree})`}`,
   `실행 ID       ${identity.runId}`,
   `변경 파일     ${changed.length}개`,
+  `리뷰 파일     ${scope.files.length}개 (제외 ${scope.excluded.length}개 — 테스트·mock, C-5)${logged.ok && !logged.skipped ? ` · 목록 .timing/${run}.scope.json` : ''}`,
   '',
   `후보 모듈     ${candidates.length}개  ${candidates.map(module => module.id).join(' ')}`,
 ]
@@ -325,6 +369,10 @@ for (const module of optional) {
     out.push(`이전 리뷰     ${before.run.runId} (HEAD ${before.target.head.slice(0, 12)} · ${before.createdAt}) — 지적 ${before.findings.length}개와 이번 결과를 비교한다`)
     if (before.status !== 'complete') out.push(`              이전 리뷰는 ${before.status === 'partial' ? '부분 완료' : '실패'}였다 — 그때 검토하지 않은 모듈의 지적은 비교에서 신규로 쓰지 않는다`)
   }
+}
+if (placement) {
+  out.push('')
+  out.push(`리포트 위치   ${placement}`)
 }
 if (identity.worktree !== 'clean') {
   out.push('')

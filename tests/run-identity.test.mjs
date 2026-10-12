@@ -7,7 +7,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import {
-  currentTarget, normalizeRemote, repoIdentity, rulesDigest, newRunId,
+  currentTarget, normalizeRemote, repoIdentity, rulesDigest, newRunId, runOutputs,
 } from '../scripts/lib/run-identity.mjs'
 
 // 실행이 **무엇을** 리뷰했는지를 기록에서 가려내는 계산을 고정한다(#88 PR 0).
@@ -110,6 +110,27 @@ test('리포트 디렉터리는 빼고 센다 — 실행이 스스로 쓰는 기
   writeFileSync(join(reports, 'old-report.md'), '# old\n')
   assert.equal(currentTarget(repo, { exclude: [reports] }).worktree, 'clean')
   assert.notEqual(currentTarget(repo).worktree, 'clean')
+})
+
+test('리포트를 저장소 루트에 써도 실행이 쓴 .timing과 리포트 파일은 대상의 변경이 아니다', t => {
+  // 2026-10-12 실행은 리포트를 대상 저장소 루트에 썼다. 루트는 통째로 뺄 수 없어 아무것도 빠지지 않았고,
+  // 실행이 쓴 `.timing/` 파일 100개와 리포트 파일 때문에 "검토 도중 대상이 바뀌었다"가 났다.
+  const repo = freshRepo(t)
+  writeFileSync(join(repo, 'notes.md'), '# 리뷰 전부터 있던 미추적 파일\n')
+  const run = 'code-review-full-feat-x-2026-10-12'
+  const before = currentTarget(repo, { exclude: runOutputs(repo, run) })
+  assert.equal(before.dirtyFiles, 1)
+  mkdirSync(join(repo, '.timing'), { recursive: true })
+  writeFileSync(join(repo, '.timing', `${run}.jsonl`), '{}\n')
+  writeFileSync(join(repo, `${run}.md`), '# 리포트\n')
+  assert.deepEqual(currentTarget(repo, { exclude: runOutputs(repo, run) }), before)
+  // 루트를 통째로 빼지는 않는다 — 리뷰 대상 파일이 바뀌면 여전히 바뀐 것이다
+  writeFileSync(join(repo, 'notes.md'), '# 리뷰 도중 바뀐 파일\n')
+  assert.notEqual(currentTarget(repo, { exclude: runOutputs(repo, run) }).worktree, before.worktree)
+  // 다른 실행의 리포트는 빼지 않는다 — 이 실행이 쓴 것만 뺀다
+  writeFileSync(join(repo, 'notes.md'), '# 리뷰 전부터 있던 미추적 파일\n')
+  writeFileSync(join(repo, 'code-review-full-other-2026-10-12.md'), '# 다른 리포트\n')
+  assert.equal(currentTarget(repo, { exclude: runOutputs(repo, run) }).dirtyFiles, 2)
 })
 
 test('하위 디렉터리에서 불러도 같은 값이다', t => {
