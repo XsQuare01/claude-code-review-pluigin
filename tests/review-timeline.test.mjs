@@ -234,9 +234,9 @@ test('run.end가 두 번이면 나중 것을 총량으로 쓴다', t => {
   // 계약은 기록이 밀렸을 때 run.end를 다시 적도록 허용한다. 앞의 것을 집으면
   // 오래된 값이 전체 총량으로 나간다.
   const dir = freshDir(t)
-  log(dir, 'run.end', { tokensIn: 10, tokensOut: 1 })
+  log(dir, 'run.end', { verdict: 'WARN', tokensIn: 10, tokensOut: 1 })
   log(dir, 'render.wrote', {})
-  log(dir, 'run.end', { tokensIn: 20, tokensOut: 2 })
+  log(dir, 'run.end', { verdict: 'WARN', tokensIn: 20, tokensOut: 2 })
 
   const out = summary(dir).stdout
   assert.match(out, /입력 20/)
@@ -245,7 +245,7 @@ test('run.end가 두 번이면 나중 것을 총량으로 쓴다', t => {
 
 test('run.end가 마지막이 아니면 총량을 최종으로 내세우지 않는다', t => {
   const dir = freshDir(t)
-  log(dir, 'run.end', { tokensIn: 10, tokensOut: 1 })
+  log(dir, 'run.end', { verdict: 'WARN', tokensIn: 10, tokensOut: 1 })
   log(dir, 'render.wrote', {})
 
   assert.match(summary(dir).stdout, /이 총량은 최종이 아닐 수 있다/)
@@ -254,7 +254,7 @@ test('run.end가 마지막이 아니면 총량을 최종으로 내세우지 않�
 test('측정된 0을 미측정과 구분한다', t => {
   // truthy로 거르면 실제로 0을 쓴 실행이 재지 못한 실행과 같은 모습이 된다.
   const dir = freshDir(t)
-  log(dir, 'run.end', { tokensIn: 0, tokensOut: 0, usageSource: 'envelope' })
+  log(dir, 'run.end', { verdict: 'WARN', tokensIn: 0, tokensOut: 0, usageSource: 'envelope' })
 
   const out = summary(dir).stdout
   assert.match(out, /입력 0 · 출력 0/)
@@ -263,7 +263,7 @@ test('측정된 0을 미측정과 구분한다', t => {
 
 test('한쪽만 측정된 값을 0으로 채우지 않는다', t => {
   const dir = freshDir(t)
-  log(dir, 'run.end', { tokensIn: 500 })
+  log(dir, 'run.end', { verdict: 'WARN', tokensIn: 500 })
 
   assert.match(summary(dir).stdout, /입력 500 · 출력 미측정/)
 })
@@ -271,7 +271,7 @@ test('한쪽만 측정된 값을 0으로 채우지 않는다', t => {
 test('음수나 소수 토큰은 값으로 보지 않는다', t => {
   const dir = freshDir(t)
   log(dir, 'module.done', { tokensIn: -5, tokensOut: 1.5 })
-  log(dir, 'run.end', {})
+  log(dir, 'run.end', { verdict: 'WARN' })
 
   assert.doesNotMatch(summary(dir).stdout, /토큰/)
 })
@@ -283,7 +283,7 @@ test('일부 단계만 보고하면 부분 합계라고 부른다', t => {
   const dir = freshDir(t)
   log(dir, 'module.done', { module: '03-react-rules', tokensIn: 100, tokensOut: 10 })
   log(dir, 'module.done', { module: '20-deletion-regression' })
-  log(dir, 'run.end', {})
+  log(dir, 'run.end', { verdict: 'WARN' })
 
   const out = summary(dir).stdout
   assert.match(out, /토큰\(부분 합계\)/)
@@ -297,7 +297,7 @@ test('모듈 밖의 단계도 사용량을 낸다', t => {
   const dir = freshDir(t)
   log(dir, 'crossverify.end', { upheld: 1, tokensIn: 700, tokensOut: 40 })
   log(dir, 'synthesis.end', { clusters: 1, tokensIn: 200, tokensOut: 20 })
-  log(dir, 'run.end', {})
+  log(dir, 'run.end', { verdict: 'WARN' })
 
   assert.match(summary(dir).stdout, /토큰\(부분 합계\)\*\* 입력 900 · 출력 60/)
 })
@@ -306,7 +306,7 @@ test('총량이 있으면 단계 합계와 귀속되지 않은 몫을 함께 낸
   // 차이가 크면 단계별 값만 보고 판단하면 안 된다는 뜻이다.
   const dir = freshDir(t)
   log(dir, 'crossverify.end', { tokensIn: 700, tokensOut: 40 })
-  log(dir, 'run.end', { tokensIn: 1000, tokensOut: 60, usageSource: 'envelope' })
+  log(dir, 'run.end', { verdict: 'WARN', tokensIn: 1000, tokensOut: 60, usageSource: 'envelope' })
 
   const out = summary(dir).stdout
   assert.match(out, /입력 1,000/)
@@ -321,7 +321,7 @@ test('끝난 타임라인에 새 실행을 이어붙이지 않는다', t => {
   // 두 실행이 한 파일에 섞인다. 반복 측정이 필요한 용도에서 가장 먼저 깨진다.
   const dir = freshDir(t)
   log(dir, 'run.start')
-  log(dir, 'run.end')
+  log(dir, 'run.end', { verdict: 'WARN' })
 
   const again = log(dir, 'run.start')
   assert.equal(again.status, 2)
@@ -347,7 +347,7 @@ test('같은 필드가 줄마다 다른 타입이면 짚는다', t => {
   const dir = freshDir(t)
   log(dir, 'module.start', { module: '01' })
   log(dir, 'module.start', { module: 11 })
-  log(dir, 'run.end', {})
+  log(dir, 'run.end', { verdict: 'WARN' })
 
   const out = summary(dir).stdout
   assert.match(out, /타입이 섞인 필드가 있다/)
@@ -358,7 +358,7 @@ test('타입이 일관되면 짚지 않는다', t => {
   const dir = freshDir(t)
   log(dir, 'module.start', { module: '01-fsd' })
   log(dir, 'module.start', { module: '11-styling' })
-  log(dir, 'run.end', {})
+  log(dir, 'run.end', { verdict: 'WARN' })
 
   assert.doesNotMatch(summary(dir).stdout, /타입이 섞인/)
 })
@@ -369,7 +369,7 @@ test('null은 타입 판정에서 빼고 센다', t => {
   const dir = freshDir(t)
   log(dir, 'module.done', { findings: 3 })
   log(dir, 'module.done', { findings: null })
-  log(dir, 'run.end', {})
+  log(dir, 'run.end', { verdict: 'WARN' })
 
   assert.doesNotMatch(summary(dir).stdout, /타입이 섞인/)
 })
@@ -378,7 +378,7 @@ test('섞인 필드를 여러 개면 여러 개 다 짚는다', t => {
   const dir = freshDir(t)
   log(dir, 'synthesis.start', { module: '01', clusters: 'pending' })
   log(dir, 'synthesis.end', { module: 11, clusters: 1 })
-  log(dir, 'run.end', {})
+  log(dir, 'run.end', { verdict: 'WARN' })
 
   const out = summary(dir).stdout
   assert.match(out, /\`module\`/)
@@ -394,7 +394,7 @@ test('섞인 필드를 여러 개면 여러 개 다 짚는다', t => {
 test('run.end의 총량을 표 아래 한 줄로 낸다', t => {
   const dir = freshDir(t)
   log(dir, 'run.start')
-  log(dir, 'run.end', { tokensIn: 1840000, tokensOut: 96000, tokensCacheRead: 1520000, usageSource: 'envelope' })
+  log(dir, 'run.end', { verdict: 'WARN', tokensIn: 1840000, tokensOut: 96000, tokensCacheRead: 1520000, usageSource: 'envelope' })
 
   const out = summary(dir).stdout
   assert.match(out, /\*\*토큰\*\* 입력 1,840,000/)
@@ -407,7 +407,7 @@ test('총량이 없으면 모듈별 값을 합산한다', t => {
   const dir = freshDir(t)
   log(dir, 'module.done', { tokensIn: 100, tokensOut: 10 })
   log(dir, 'module.done', { tokensIn: 250, tokensOut: 30 })
-  log(dir, 'run.end', {})
+  log(dir, 'run.end', { verdict: 'WARN' })
 
   const out = summary(dir).stdout
   assert.match(out, /입력 350/)
@@ -417,7 +417,7 @@ test('총량이 없으면 모듈별 값을 합산한다', t => {
 test('재지 못한 것과 0을 구분한다', t => {
   // 필드를 통째로 빼면 "0이었다"와 "재지 못했다"가 같은 모습이 된다.
   const dir = freshDir(t)
-  log(dir, 'run.end', { usageSource: 'unavailable' })
+  log(dir, 'run.end', { verdict: 'WARN', usageSource: 'unavailable' })
 
   const out = summary(dir).stdout
   assert.match(out, /사용량을 재지 못했다/)
@@ -437,7 +437,7 @@ test('사용량이 없으면 토큰 줄을 만들지 않는다', t => {
 test('금액은 정가 환산이라고 적는다', t => {
   // 구독 실행에서 이 값은 청구액이 아니다. "비용"으로 읽히면 안 된다.
   const dir = freshDir(t)
-  log(dir, 'run.end', { tokensIn: 100, tokensOut: 10, costUsd: 12.4, usageSource: 'envelope' })
+  log(dir, 'run.end', { verdict: 'WARN', tokensIn: 100, tokensOut: 10, costUsd: 12.4, usageSource: 'envelope' })
 
   assert.match(summary(dir).stdout, /정가 환산 \$12\.4/)
 })
@@ -552,12 +552,25 @@ test('run.end 뒤에 줄이 더 있으면 정상 종료로 보지 않는다', t 
   // 기록 실패로 순서가 밀리면 실제로 이런 타임라인이 만들어진다.
   const dir = freshDir(t)
   log(dir, 'run.start')
-  log(dir, 'run.end')
+  log(dir, 'run.end', { verdict: 'WARN' })
   log(dir, 'module.done')
 
   const out = summary(dir)
   assert.match(out.stdout, /\`run\.end\` 뒤에 줄이 더 있다/)
   assert.match(out.stdout, /마지막 줄은 \`module\.done\`/)
+})
+
+test('run.end에 verdict가 없으면 남기지 않는다 — 그 뒤에는 고칠 줄을 덧붙일 수 없다', t => {
+  // 2026-10-12 실행은 verdict 없이 남긴 뒤 두 번째 run.end로 정정해 기록의 끝이 둘이 됐다.
+  const dir = freshDir(t)
+  log(dir, 'run.start')
+  const refused = log(dir, 'run.end', { status: 'blocked' })
+  assert.equal(refused.status, 2)
+  assert.match(refused.stderr, /verdict가 없다 — 남기지 않았다/)
+  assert.deepEqual(linesOf(dir).map(line => line.phase), ['run.start'])
+  const ended = log(dir, 'run.end', { verdict: 'MERGE_BLOCKED' })
+  assert.equal(ended.status, 0, ended.stderr)
+  assert.equal(linesOf(dir).at(-1).verdict, 'MERGE_BLOCKED')
 })
 
 // ── 인자 검증 ──────────────────────────────────────────────────────────────

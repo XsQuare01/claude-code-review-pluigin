@@ -1231,6 +1231,12 @@ const data = (() => {
   const absent = spec.required
     .filter(key => !(phase === 'dispatch.end' && DISPATCH_COUNT_KEYS.includes(key)))
     .filter(key => data[key] === undefined)
+  // `run.end`는 예외다. 그 뒤에는 아무것도 덧붙이지 않으므로(C-9) 빠진 판정을 다음 줄로 고칠 길이 없다 —
+  // 2026-10-12 실행은 verdict 없이 남긴 뒤 두 번째 `run.end`로 정정해 기록의 끝이 둘이 됐다. 거부해도 단계는
+  // 사라지지 않는다 — 같은 명령을 verdict와 함께 다시 부르면 된다.
+  if (phase === 'run.end' && absent.includes('verdict')) {
+    die('`run.end`에 verdict가 없다 — 남기지 않았다. run.end 뒤에는 아무것도 덧붙이지 않으므로 빠진 판정을 고칠 수 없다. `--set verdict=<리포트의 판정>`을 붙여 다시 부른다')
+  }
   if (absent.length) {
     process.stderr.write(`경고: \`${phase}\`에 ${absent.join(', ')}가 없다 (C-9 표가 요구한다)\n`)
   }
