@@ -806,3 +806,30 @@ test('대상이 그대로면 출력도 프롬프트도 바뀌지 않는다', t =
   assert.doesNotMatch(promptOf(result), /리뷰 도중 대상이 바뀌었다/)
   assert.match(promptOf(result), /`verified` 위치는 작업 트리\(HEAD\)/)
 })
+
+// ── 2.21.0 실행(2026-10-12) 후속 ─────────────────────────────────────────
+//
+// synthesis 결과를 모듈 결과와 같은 이름(`<run>.10-principles.json`)으로 저장한 실행은, 검증 준비를 다시 돌릴
+// 때마다 "module.done 없이 결과 파일만 있다"로 멈췄다 — 부분 보고 뒤 재개처럼 다시 모으는 흐름이 막힌다.
+
+test('--collect는 검증 뒤에 도는 synthesis 모듈의 파일을 producer 결과로 모으지 않는다', t => {
+  const dir = startedFull(t, 'off', [done('01-fsd', 'ok')])
+  resultFile(dir, '01-fsd', RESULT)
+  resultFile(dir, '10-principles', { schemaVersion: 1, clusters: [] })
+  const out = collect(dir)
+  assert.equal(out.status, 0, out.stderr)
+  assert.deepEqual(JSON.parse(out.stdout).collected.sources, ['01-fsd'])
+})
+
+test('synthesis를 producer로 쓰는 워크플로우에서는 10-principles도 그대로 모은다', t => {
+  // default·commit에서 10-principles는 일반 모듈과 함께 도는 consolidated 모듈이다 — 빼지 않는다.
+  const dir = started(t)
+  const lines = readFileSync(join(dir, '.timing', `${RUN}.jsonl`), 'utf8').trim().split('\n').map(line => JSON.parse(line))
+  lines[0].workflow = 'default'
+  lines.push({ at: '2026-10-06T00:01:00.000Z', seq: 2, ...done('10-principles', 'ok') })
+  writeFileSync(join(dir, '.timing', `${RUN}.jsonl`), `${lines.map(line => JSON.stringify(line)).join('\n')}\n`, 'utf8')
+  resultFile(dir, '10-principles', RESULT)
+  const out = collect(dir)
+  assert.equal(out.status, 0, out.stderr)
+  assert.deepEqual(JSON.parse(out.stdout).collected.sources, ['10-principles'])
+})
