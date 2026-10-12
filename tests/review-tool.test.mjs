@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { execFileSync, spawnSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -57,6 +57,71 @@ test('시간 상한을 넘기면 끊고, 끝도 남긴다 — 시작만 남은 �
   assert.deepEqual([result.timedOut, result.exit], [true, null])
   assert.deepEqual(linesOf(ctx).map(line => line.phase), ['run.start', 'tool.start', 'tool.done'])
 })
+
+// 도구가 띄우는 프로세스 둘(spawner와 그 자식 writer). 둘 다 pid를 남기고 끝없이 산다 — 끊지 않으면 남는다.
+const PROCESS_FILES = ['spawner.pid', 'writer.pid']
+
+const plantSpawner = ctx => {
+  writeFileSync(join(ctx.repo, 'writer.mjs'), [
+    "import { writeFileSync } from 'node:fs'",
+    "writeFileSync('writer.pid', String(process.pid))",
+    'setInterval(() => {}, 1000)',
+  ].join('\n'))
+  writeFileSync(join(ctx.repo, 'spawner.mjs'), [
+    "import { spawn } from 'node:child_process'",
+    "import { writeFileSync } from 'node:fs'",
+    "writeFileSync('spawner.pid', String(process.pid))",
+    "spawn(process.execPath, ['writer.mjs'], { stdio: 'inherit' })",
+    'setInterval(() => {}, 1000)',
+  ].join('\n'))
+}
+
+// 테스트가 실패해도 프로세스를 남기지 않는다. `t.after`가 아니라 테스트 안의 finally에서 부른다 — setup의
+// `t.after`가 먼저 돌아 저장소를 지우면 pid 파일이 없어 끄지 못한다(실제로 둘이 남았다).
+const killPlanted = ctx => {
+  for (const file of PROCESS_FILES) {
+    if (!existsSync(join(ctx.repo, file))) continue
+    try {
+      process.kill(Number(readFileSync(join(ctx.repo, file), 'utf8')))
+    } catch {
+      // 이미 끝났다
+    }
+  }
+}
+
+const stillRunning = pid => {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch {
+    return false
+  }
+}
+
+for (const shell of [false, true]) {
+  test(`시간 상한을 넘기면 도구가 띄운 프로세스까지 끊고 나서 돌아온다${shell ? ' — --shell' : ''}`, async t => {
+    // 직접 띄운 프로세스만 끊으면 `npm test`의 셸이나 러너만 죽고 그 아래 실제 도구는 계속 돈다 — Windows에서
+    // `--shell --timeout 1`로 띄운 자식이 4초 뒤에도 파일을 만들었다. 끊었다고 기록한 도구가 재시도와 겹쳐 돈다.
+    // 시각으로 재지 않는다 — 부하가 크면 끊는 데 몇 초가 걸린다(24개를 함께 돌리면 돌아오기까지 6.5초).
+    // 보는 것은 "돌아온 뒤 도구가 띄운 프로세스가 남아 있지 않다"이고, 둘 다 끝없이 사므로 끊지 않으면 남는다.
+    const ctx = setup(t)
+    plantSpawner(ctx)
+    try {
+      const command = shell ? ['--shell', '--', `"${process.execPath}" spawner.mjs`] : ['--', process.execPath, 'spawner.mjs']
+      const out = tool(ctx, '--name', 'test', '--timeout', '3', ...command)
+      assert.equal(out.status, 0, out.stderr)
+      assert.deepEqual([JSON.parse(out.stdout).timedOut, JSON.parse(out.stdout).exit], [true, null])
+      // 상한(3초) 안에 둘 다 떠 있었어야 끊은 것을 본 셈이다.
+      for (const file of PROCESS_FILES) assert.ok(existsSync(join(ctx.repo, file)), `${file}이 없다 — 끊기 전에 뜨지 못했다`)
+      const pids = PROCESS_FILES.map(file => Number(readFileSync(join(ctx.repo, file), 'utf8')))
+      // 끊긴 프로세스가 사라지는 데 걸리는 짧은 시간만 기다린다.
+      for (const until = Date.now() + 1000; pids.some(stillRunning) && Date.now() < until;) await new Promise(resolve => setTimeout(resolve, 50))
+      assert.deepEqual(pids.filter(stillRunning), [], '돌아온 뒤에도 도구가 띄운 프로세스가 살아 있다')
+    } finally {
+      killPlanted(ctx)
+    }
+  })
+}
 
 test('--shell은 셸 명령 문자열 하나만 받고, 다시 돌린 시도는 attempt를 남긴다', t => {
   const ctx = setup(t)
