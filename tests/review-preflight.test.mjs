@@ -404,7 +404,9 @@ test('PR의 base를 찾을 수 없으면 시작하지 않는다 — 기록도 �
 // 그 실행은 이름을 `full-code-review-2026-10-12`로 지어 C-7의 형식을 벗어났고, 리포트를 대상 저장소 루트에
 // 썼으며, `scope.done`에 테스트·mock 249개를 빼고도 `excluded: 0`을 적었다.
 
-const scopeRepo = t => {
+const SCOPE_PATHS = ['src/app.ts', 'src/app.test.ts', 'src/__tests__/b.ts', 'src/__mocks__/api.ts', 'src/ui/Button.spec.tsx', 'src/mockData/x.json', 'src/mockery.ts']
+
+const scopeRepo = (t, paths = SCOPE_PATHS) => {
   const dir = mkdtempSync(join(tmpdir(), 'preflight-scope-'))
   t.after(() => rmSync(dir, { recursive: true, force: true }))
   const git = (...args) => execFileSync('git', [
@@ -415,7 +417,7 @@ const scopeRepo = t => {
   git('add', '-A')
   git('commit', '-qm', 'base')
   const base = git('rev-parse', 'HEAD')
-  for (const path of ['src/app.ts', 'src/app.test.ts', 'src/__tests__/b.ts', 'src/__mocks__/api.ts', 'src/ui/Button.spec.tsx', 'src/mockData/x.json', 'src/mockery.ts']) {
+  for (const path of paths) {
     mkdirSync(join(dir, dirname(path)), { recursive: true })
     writeFileSync(join(dir, path), `${path}\n`)
   }
@@ -450,6 +452,20 @@ test('preflight가 C-5의 이름 규칙으로 범위를 세어 scope.done과 목
   assert.deepEqual(list.files.sort(), ['src/app.ts', 'src/mockery.ts'])
   assert.equal(list.excluded.length, 5)
   assert.equal(list.runId, start.runId)
+})
+
+test('git이 인용해 내는 이름(한글·공백)도 실제 경로로 남기고 이름 규칙을 그 경로에 적용한다', t => {
+  // `git diff --name-only`는 ASCII 밖의 이름을 `"src/\355\225\234…"`처럼 따옴표와 8진수로 인용해 낸다
+  // (core.quotePath). 그 문자열을 그대로 쓰면 목록의 경로를 열 수 없고, 첫 디렉터리가 `"__tests__`가 되어
+  // 테스트 파일이 빠지지 않았다 — producer가 받는 범위가 틀린다.
+  const repo = scopeRepo(t, ['src/한글.ts', '__tests__/한글.ts', 'src/그림 목록.tsx'])
+  const dir = freshDir(t)
+  const out = preflightAt(repo, dir, RUN)
+  assert.equal(out.status, 0, out.stderr)
+  const list = JSON.parse(readFileSync(join(dir, '.timing', `${RUN}.scope.json`), 'utf8'))
+  assert.deepEqual(list.files.sort(), ['src/그림 목록.tsx', 'src/한글.ts'])
+  assert.deepEqual(list.excluded, ['__tests__/한글.ts'])
+  for (const path of [...list.files, ...list.excluded]) assert.ok(existsSync(join(repo.dir, path)), path)
 })
 
 test('리포트를 대상 저장소 루트에 쓰면 알리고, 그래도 대상은 깨끗한 채로 시작한다', t => {

@@ -115,6 +115,21 @@ export function reviewBaseOf(repo, { requested, prJson, noPr = false } = {}) {
   return { ...chosen, mergeBase }
 }
 
+/**
+ * merge-base부터 HEAD까지 바뀐 파일을 **저장소 기준 실제 경로**로 읽는다. preflight와 `review-base.mjs`가 같은 목록을 쓴다.
+ *
+ * `-z`로 받아 NUL로 가른다. 기본 출력은 ASCII 밖의 이름과 따옴표·탭·줄바꿈이 든 이름을 C 문자열처럼 인용한다
+ * (`"src/\355\225\234\352\270\200.ts"`, core.quotePath) — 그 문자열을 경로로 쓰면 파일을 열 수 없고, 첫 디렉터리가
+ * `"__tests__`가 되어 이름 규칙(C-5)도 빗나간다. `core.quotePath=false`로는 부족하다(따옴표·탭·줄바꿈은 여전히
+ * 인용된다). 읽지 못하면 던진다.
+ */
+export function changedFilesSince(repo, mergeBase) {
+  const out = execFileSync('git', ['diff', '--name-only', '-z', `${mergeBase}...HEAD`], {
+    cwd: repo, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 64 * 1024 * 1024,
+  })
+  return out.split('\0').filter(Boolean)
+}
+
 /** 사람이 읽는 한 줄. preflight와 `review-base.mjs`가 같은 문장을 쓴다. */
 export function baseLine(chosen) {
   if (chosen.source === 'user') return `${chosen.ref} (사용자가 정한 범위)`

@@ -15,9 +15,7 @@
 // 출력(stdout): JSON 하나 — `base`(쓴 ref), `baseSource`(user·pr·default), `mergeBase`, `changedFiles`,
 // (PR이면) `pr`·`stacked`, `notes`, `line`(리포트 `리뷰 기준`에 옮길 한 줄). 정하지 못하면 종료 코드 2다.
 
-import { execFileSync } from 'node:child_process'
-
-import { baseLine, reviewBaseOf } from './lib/review-base.mjs'
+import { baseLine, changedFilesSince, reviewBaseOf } from './lib/review-base.mjs'
 
 const die = message => {
   process.stderr.write(`${message}\n`)
@@ -54,8 +52,7 @@ if (chosen.error) die(chosen.error)
 
 let changedFiles
 try {
-  const out = execFileSync('git', ['diff', '--name-only', `${chosen.mergeBase}...HEAD`], { cwd: repo, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim()
-  changedFiles = out ? out.split('\n').length : 0
+  changedFiles = changedFilesSince(repo, chosen.mergeBase).length
 } catch (error) {
   die(`변경 파일 목록을 읽지 못했다: ${String(error.stderr || error.message).trim()}`)
 }

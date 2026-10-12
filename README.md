@@ -405,6 +405,12 @@ An OpenCode run on a stacked PR (2026-10-12) turned up four more problems. The s
 - **Synthesis output no longer blocks re-collection.** `prepare-verification.mjs --collect` skips modules that run after verification, and the skill puts synthesis output in `<run>.synthesis.json`.
 - **Name, scope and tool timings are recorded by scripts.** Preflight rejects a run name that does not start with `code-review-<workflow>-`, warns when the report lands inside the repository without being ignored, and writes `scope.done` plus `.timing/<run>.scope.json` from the C-5 name rules. `review-tool.mjs` runs lint, typecheck and test and records each tool's own start and end.
 
+Review fixes in 2.25.1:
+
+- **Changed files are read as real paths.** Preflight and `review-base.mjs` list changed files with `git diff --name-only -z`. The default output quotes non-ASCII names (`"src/\355\225\234…"`), so `scope.json` held strings that are not paths and `__tests__/한글.ts` was not excluded.
+- **A tool timeout stops everything the tool started.** `review-tool.mjs` used to stop only the process it launched; a test runner under `--shell` kept running. It now kills the process tree (`taskkill /T` on Windows, the process group elsewhere) and passes its own termination signals on to the tool.
+- **Every tool call keeps its own log.** Logs were named after the tool, so a baseline `lint` and a current `lint` wrote the same file. Each call now gets a `callId`, used in the log name and on `tool.start` and `tool.done`, and the timeline pairs start and end by it.
+
 ## Applicability metadata
 
 `review-rules/catalog.json` records **when** a module applies — required profile (FSD, Tailwind, RSC, Electron, TanStack Query, server code, contract provider), minimum React version, which workflows load it, and which individual rules carry a narrower gate than their module. The Markdown modules stay canonical for **what** a rule says; the catalog never generates documentation and never restates rule text.

@@ -1090,6 +1090,32 @@ These scenarios pin the behaviour that `review-rules/workflow-contract.md` promi
       ],
       "scenario": "The orchestrator starts with --run full-code-review-2026-10-12, then runs lint, typecheck and test together",
       "expected": "Preflight refuses the name and suggests code-review-full-<branch>-<date>; with a valid name it records scope.done and scope.json from the C-5 name rules; each tool runs through review-tool.mjs so its tool.start and tool.done carry that tool's own times"
+    },
+    {
+      "id": 137,
+      "clauses": [
+        "C-5"
+      ],
+      "scenario": "The branch adds src/한글.ts and __tests__/한글.ts, and git quotes non-ASCII paths by default",
+      "expected": "scope.json lists the real paths, src/한글.ts is reviewed and __tests__/한글.ts is excluded by the C-5 name rules"
+    },
+    {
+      "id": 138,
+      "clauses": [
+        "C-6",
+        "C-9"
+      ],
+      "scenario": "review-tool.mjs runs npm test with --shell and the test runner outlives --timeout",
+      "expected": "The whole process tree is stopped, not just the shell; tool.done records exit null and the result says timedOut, so a retry does not overlap the old run"
+    },
+    {
+      "id": 139,
+      "clauses": [
+        "C-6",
+        "C-9"
+      ],
+      "scenario": "The orchestrator runs lint on the baseline worktree and on the current tree with the same --name, at the same time",
+      "expected": "Each call keeps its own log under its callId; tool.start and tool.done carry that callId so the timeline pairs each end with its own start, and the report can compare baseline and current failures"
     }
   ],
   "defaultWorkflowOnlyCases": [

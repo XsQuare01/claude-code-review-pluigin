@@ -481,7 +481,7 @@ node "$RULES_DIR/../scripts/tally-verdicts.mjs" --dir "$REPORT_DIR" --run "$REPO
   node "$RULES_DIR/../scripts/review-tool.mjs" --dir "$REPORT_DIR" --run "$REPORT_BASENAME" --name test --shell -- "npm test"   # 셸이 필요한 명령은 문자열 하나
   ```
 
-  출력(JSON)의 `exit`·`durationSec`·`tail`과 로그(`.timing/$REPORT_BASENAME.tool.<이름>.log`)로 `도구 실행 결과`를 쓴다. 명령은 수정 옵션 없이 준다(C-6). 호스트의 셸 시간 제한이 도구보다 짧으면 그 제한을 늘려 부른다 — 끊기면 끝을 남기지 못한다
+  출력(JSON)의 `exit`·`durationSec`·`tail`과 `log`(호출마다 따로 남는 `.timing/$REPORT_BASENAME.tool.<이름>.<callId>.log`)로 `도구 실행 결과`를 쓴다. **baseline은 그 트리(merge-base를 꺼낸 worktree 등)를 `--repo`로 주고 같은 `--name`으로 돌린다** — 두 호출의 로그가 따로 남고 `treeSha`로 갈린다(C-6). 명령은 수정 옵션 없이 준다(C-6). `--timeout`(기본 1800초)을 넘기면 도구가 띄운 프로세스까지 끊는다. 호스트의 셸 시간 제한이 도구보다 짧으면 그 제한을 늘려 부른다 — 끊기면 끝을 남기지 못한다
 - **lint/typecheck/test는 모듈이 도는 동안 함께 돌린다.** 이 도구들은 sub-agent 결과에 의존하지 않으므로 디스패치가 끝나기를 기다릴 이유가 없다. 09-17 실행은 2번째 wave가 도는 중에 넷을 끝내 벽시계에 거의 아무것도 더하지 않았고, 09-18 실행은 교차검증까지 끝난 뒤에 돌려 **442초를 통째로 직렬로 썼다.** 같은 일에 같은 시간이 들었지만 한쪽만 값을 치렀다.
 - `실행 타임라인` 섹션에는 `review-timeline.mjs --summary` 출력을 **마지막으로 한 번 더 돌려** 그대로 붙인다. 표를 직접 만들지 않고, 사이드카를 남기지 못했으면 그 사실을 그 섹션에 적는다 (C-9).
 

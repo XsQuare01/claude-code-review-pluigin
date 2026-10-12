@@ -10,13 +10,17 @@
 //   review-tool.mjs --dir D --run R --name <lint|typecheck|test|…> [--repo .] [--timeout 1800] [--attempt N] -- <명령> [인자…]
 //   review-tool.mjs … --shell -- "<셸 명령 문자열 하나>"     (Windows의 npm처럼 셸이 필요한 명령)
 //
-// 명령은 수정 옵션 없이 준다(C-6, 00-9) — 이 스크립트는 명령을 고치지 않는다. 출력은
-// `.timing/<run>.tool.<name>.log`에 남기고, 표준 출력에는 종료 코드·걸린 시간·로그 경로·끝부분 줄을 JSON으로
-// 낸다. 실패 수와 baseline 대비는 그 로그로 리포트의 `도구 실행 결과`에 적는다. 도구가 실패해도 이 스크립트는
-// 0으로 끝난다 — 실패는 기록할 결과이지 이 스크립트의 실패가 아니다.
+// 명령은 수정 옵션 없이 준다(C-6, 00-9) — 이 스크립트는 명령을 고치지 않는다. 출력은 호출마다
+// `.timing/<run>.tool.<name>.<callId>.log`에 남기고, 표준 출력에는 callId·종료 코드·걸린 시간·로그 경로·끝부분
+// 줄을 JSON으로 낸다. baseline은 그 트리를 `--repo`로 주고 같은 `--name`으로 돌린다 — 로그가 따로 남고
+// `treeSha`로 갈린다. 실패 수와 baseline 대비는 그 로그로 리포트의 `도구 실행 결과`에 적는다. 시간 상한을
+// 넘기면 도구가 띄운 프로세스까지 끊는다. 도구가 실패해도 이 스크립트는 0으로 끝난다 — 실패는 기록할
+// 결과이지 이 스크립트의 실패가 아니다.
 
-import { execFileSync, spawnSync } from 'node:child_process'
-import { writeFileSync } from 'node:fs'
+import { execFileSync, spawn, spawnSync } from 'node:child_process'
+import { randomBytes } from 'node:crypto'
+import { closeSync, openSync, writeFileSync } from 'node:fs'
+import { constants } from 'node:os'
 import { join } from 'node:path'
 
 import { logPhase, requireStartedTimeline } from './lib/run-record.mjs'
@@ -62,6 +66,8 @@ if (shell && command.length !== 1) {
 }
 const timeoutSec = Number(values.get('timeout') ?? 1800)
 if (!Number.isFinite(timeoutSec) || timeoutSec <= 0) die('--timeout은 양수(초)다')
+// 타이머의 상한(2^31-1ms)을 넘기면 Node는 1ms로 바꿔 버린다 — 도구가 시작하자마자 끊긴다.
+if (timeoutSec * 1000 > 2 ** 31 - 1) die('--timeout은 2147483초(약 24일)보다 짧아야 한다')
 const attempt = values.has('attempt') ? Number(values.get('attempt')) : 1
 if (!Number.isInteger(attempt) || attempt < 1) die('--attempt는 1 이상의 정수다')
 const repo = values.get('repo') ?? process.cwd()
@@ -74,21 +80,107 @@ try {
   die(`도구를 돌릴 트리를 읽지 못했다(--repo ${repo}): ${String(error.stderr || error.message).trim()}`)
 }
 
-const extra = attempt > 1 ? { attempt } : {}
-logPhase(dir, run, 'tool.start', { name, ...extra })
-const startedAt = Date.now()
-const result = shell
-  ? spawnSync(command[0], { cwd: repo, shell: true, timeout: timeoutSec * 1000, maxBuffer: 256 * 1024 * 1024 })
-  : spawnSync(command[0], command.slice(1), { cwd: repo, timeout: timeoutSec * 1000, maxBuffer: 256 * 1024 * 1024 })
-const durationSec = Math.round((Date.now() - startedAt) / 100) / 10
-const timedOut = result.error?.code === 'ETIMEDOUT'
-const spawnError = result.error && !timedOut ? `${result.error.code ?? ''} ${result.error.message}`.trim() : null
-const exit = typeof result.status === 'number' ? result.status : null
-logPhase(dir, run, 'tool.done', { name, exit, treeSha, ...extra })
+// 시간 상한을 넘기면 **도구가 띄운 프로세스까지** 끊는다. 직접 띄운 프로세스만 끊으면(`spawnSync`의 timeout이
+// 그렇다) `npm test`의 셸이나 러너만 죽고 그 아래 실제 도구는 계속 돈다 — Windows에서 `--shell --timeout 1`로
+// 띄운 도구가 4초 뒤에도 파일을 만들었다. 끊었다고 기록한 도구가 다음 시도와 겹쳐 돌면 두 시도의 출력과
+// 자원이 섞인다.
+// - Windows: `taskkill /T /F`로 그 프로세스와 그 아래를 함께 끊는다
+// - 그 밖: 도구를 제 프로세스 그룹으로 띄우고 그룹 전체에 신호를 보낸다(SIGTERM, 그래도 남으면 SIGKILL).
+//   그룹을 따로 두면 호스트가 이 스크립트의 그룹에 보낸 종료 신호가 도구에 닿지 않으므로, 이 스크립트가 받은
+//   종료 신호를 도구의 그룹에 넘긴다. 그때는 `tool.done`을 남기지 않는다 — 시작만 남은 도구가 "돌렸고 끝내지
+//   못했다"는 기록이다(C-9)
+// 신호를 무시한 프로세스가 출력 파이프를 붙잡고 있으면 끝(close)이 오지 않는다 — 기다림에도 상한을 둔다.
+const WINDOWS = process.platform === 'win32'
+const KILL_GRACE_MS = 5000
+const FORWARDED = ['SIGINT', 'SIGTERM', 'SIGHUP']
 
-const stdout = result.stdout ?? Buffer.alloc(0)
-const stderr = result.stderr ?? Buffer.alloc(0)
-const logPath = join(dir, '.timing', `${run}.tool.${name}${attempt > 1 ? `.a${attempt}` : ''}.log`)
+const runTool = () => new Promise(resolve => {
+  const options = { cwd: repo, windowsHide: true, detached: !WINDOWS, stdio: ['ignore', 'pipe', 'pipe'] }
+  const child = shell ? spawn(command[0], { ...options, shell: true }) : spawn(command[0], command.slice(1), options)
+  const stdout = []
+  const stderr = []
+  child.stdout.on('data', chunk => stdout.push(chunk))
+  child.stderr.on('data', chunk => stderr.push(chunk))
+  let timedOut = false
+  let spawnError = null
+  let settled = false
+  const timers = []
+  const later = (fn, ms) => timers.push(setTimeout(fn, ms))
+  const killTree = signal => {
+    if (child.pid === undefined) return
+    if (WINDOWS) {
+      // 이미 끝난 pid에는 다시 보내지 않는다 — 그 번호를 다른 프로세스가 받았을 수 있다.
+      if (child.exitCode === null && child.signalCode === null) {
+        spawnSync('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true })
+      }
+      return
+    }
+    try {
+      process.kill(-child.pid, signal)
+    } catch {
+      // 그룹이 이미 비었다
+    }
+  }
+  const onSignal = signal => {
+    killTree(signal)
+    process.exit(128 + (constants.signals[signal] ?? 0))
+  }
+  const finish = (code, signal) => {
+    if (settled) return
+    settled = true
+    timers.forEach(clearTimeout)
+    for (const signal of FORWARDED) process.off(signal, onSignal)
+    resolve({ code, signal, timedOut, spawnError, stdout: Buffer.concat(stdout), stderr: Buffer.concat(stderr) })
+  }
+  for (const signal of FORWARDED) process.on(signal, onSignal)
+  child.on('error', error => {
+    spawnError = `${error.code ?? ''} ${error.message}`.trim()
+    if (child.pid === undefined) finish(null, null) // 띄우지도 못했다
+  })
+  child.on('close', (code, signal) => finish(code, signal))
+  later(() => {
+    timedOut = true
+    killTree('SIGTERM')
+    later(() => {
+      killTree('SIGKILL')
+      later(() => {
+        child.stdout.destroy()
+        child.stderr.destroy()
+        child.unref()
+        finish(child.exitCode, child.signalCode)
+      }, KILL_GRACE_MS)
+    }, KILL_GRACE_MS)
+  }, timeoutSec * 1000)
+})
+
+// 로그는 **호출마다** 따로 둔다. 도구 이름과 시도 번호로만 지었더니 baseline 트리와 현재 트리에서 같은 `lint`를
+// 돌린 두 호출이 같은 파일을 써, 나중 호출이 baseline 로그를 지웠다 — C-6의 "기존 실패 대비 신규 실패"를 다시 볼
+// 근거가 없어진다. 돌리기 전에 파일을 배타적으로 만들어 이름을 잡아 두므로 함께 돈 호출끼리도 겹치지 않는다.
+// 그 이름의 `callId`를 `tool.start`·`tool.done`에도 적어, 기록의 한 쌍과 로그 하나가 이어진다.
+const { callId, logPath } = (() => {
+  for (;;) {
+    const id = randomBytes(4).toString('hex')
+    const path = join(dir, '.timing', `${run}.tool.${name}.${id}.log`)
+    try {
+      closeSync(openSync(path, 'wx'))
+      return { callId: id, logPath: path }
+    } catch (error) {
+      if (error.code !== 'EEXIST') die(`도구 로그를 만들지 못했다(${path}): ${error.message}`)
+    }
+  }
+})()
+
+const extra = attempt > 1 ? { attempt } : {}
+logPhase(dir, run, 'tool.start', { name, callId, ...extra })
+const startedAt = Date.now()
+const result = await runTool()
+const durationSec = Math.round((Date.now() - startedAt) / 100) / 10
+const { timedOut, spawnError } = result
+// 끊은 도구에는 제 종료 코드가 없다 — Windows에서 끊긴 프로세스가 내는 1은 taskkill의 것이다.
+const exit = !timedOut && typeof result.code === 'number' ? result.code : null
+logPhase(dir, run, 'tool.done', { name, exit, treeSha, callId, ...extra })
+
+const { stdout, stderr } = result
 const header = [
   shell ? `$ ${command[0]}` : `$ ${JSON.stringify(command)}`,
   `# cwd ${repo} · HEAD ${treeSha}`,
@@ -100,5 +192,5 @@ writeFileSync(logPath, Buffer.concat([Buffer.from(header, 'utf8'), stdout, Buffe
 
 const tail = `${stdout.toString('utf8')}\n${stderr.toString('utf8')}`.split(/\r?\n/).filter(line => line.trim() !== '').slice(-30)
 process.stdout.write(`${JSON.stringify({
-  name, exit, timedOut, signal: result.signal ?? null, ...(spawnError ? { spawnError } : {}), durationSec, treeSha, log: logPath, tail,
+  name, callId, exit, timedOut, signal: result.signal ?? null, ...(spawnError ? { spawnError } : {}), durationSec, treeSha, log: logPath, tail,
 }, null, 2)}\n`)
