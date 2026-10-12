@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { execFileSync, spawnSync } from 'node:child_process'
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -134,18 +134,18 @@ test('리포트 디렉터리가 저장소 안이어도 작업 트리를 바꾼 �
     SCRIPT, '--dir', dir, '--run', name, '--rules', RULES, '--workflow', 'full',
     '--repo', repoDir, '--base', 'HEAD', '--host', 'test',
   ], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
-  assert.equal(run(reports, 'first').status, 0)
-  const second = run(reports, 'second')
+  assert.equal(run(reports, 'code-review-full-first-2026-10-12').status, 0)
+  const second = run(reports, 'code-review-full-second-2026-10-12')
   assert.equal(second.status, 0, second.stderr)
   const read = name => JSON.parse(readFileSync(join(reports, '.timing', `${name}.jsonl`), 'utf8').split('\n')[0])
-  assert.equal(read('second').worktree, 'clean')
+  assert.equal(read('code-review-full-second-2026-10-12').worktree, 'clean')
 
   // 커밋하지 않은 변경은 대상이다. diff에는 없지만 파일을 읽는 단계는 그 내용을 본다.
   writeFileSync(join(repoDir, 'a.txt'), 'edited\n')
-  const dirty = run(reports, 'third')
+  const dirty = run(reports, 'code-review-full-third-2026-10-12')
   assert.equal(dirty.status, 0, dirty.stderr)
-  assert.match(read('third').worktree, /^sha256:/)
-  assert.equal(read('third').dirtyFiles, 1)
+  assert.match(read('code-review-full-third-2026-10-12').worktree, /^sha256:/)
+  assert.equal(read('code-review-full-third-2026-10-12').dirtyFiles, 1)
   assert.match(dirty.stdout, /커밋하지 않은 변경 1개/)
 })
 
@@ -284,7 +284,8 @@ test('이미 시작된 타임라인에 두 번째 시작을 얹지 않는다', t
   const again = preflight(dir)
   assert.equal(again.status, 2)
   assert.match(again.stderr, /이미 시작된 타임라인이다/)
-  assert.equal(linesOf(dir).length, 1)
+  // 첫 실행이 남긴 시작과 범위만 있다 — 두 번째 시작은 없다
+  assert.deepEqual(linesOf(dir).map(line => line.phase), ['run.start', 'scope.done'])
 })
 
 test('없는 규칙 경로는 거부한다', t => {
@@ -396,4 +397,73 @@ test('PR의 base를 찾을 수 없으면 시작하지 않는다 — 기록도 �
   assert.equal(out.status, 2)
   assert.match(out.stderr, /git fetch origin gone/)
   assert.equal(existsSync(join(dir, '.timing', `${RUN}.jsonl`)), false)
+})
+
+// ── 2.21.0 실행(2026-10-12) 후속 ─────────────────────────────────────────
+//
+// 그 실행은 이름을 `full-code-review-2026-10-12`로 지어 C-7의 형식을 벗어났고, 리포트를 대상 저장소 루트에
+// 썼으며, `scope.done`에 테스트·mock 249개를 빼고도 `excluded: 0`을 적었다.
+
+const scopeRepo = t => {
+  const dir = mkdtempSync(join(tmpdir(), 'preflight-scope-'))
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const git = (...args) => execFileSync('git', [
+    '-c', 'user.name=t', '-c', 'user.email=t@example.com', '-c', 'commit.gpgsign=false', '-c', 'init.defaultBranch=main', ...args,
+  ], { cwd: dir, encoding: 'utf8' }).trim()
+  git('init', '-q')
+  writeFileSync(join(dir, 'a.txt'), 'a\n')
+  git('add', '-A')
+  git('commit', '-qm', 'base')
+  const base = git('rev-parse', 'HEAD')
+  for (const path of ['src/app.ts', 'src/app.test.ts', 'src/__tests__/b.ts', 'src/__mocks__/api.ts', 'src/ui/Button.spec.tsx', 'src/mockData/x.json', 'src/mockery.ts']) {
+    mkdirSync(join(dir, dirname(path)), { recursive: true })
+    writeFileSync(join(dir, path), `${path}\n`)
+  }
+  git('add', '-A')
+  git('commit', '-qm', 'change')
+  return { dir, base }
+}
+
+const preflightAt = (repo, dir, run, extra = []) => spawnSync(process.execPath, [
+  SCRIPT, '--dir', dir, '--run', run, '--rules', RULES, '--workflow', 'full', '--repo', repo.dir, '--base', repo.base, '--host', 'test', ...extra,
+], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+
+test('실행 이름이 C-7의 code-review-{workflow}- 형식이 아니면 시작하지 않고 예를 보인다', t => {
+  const repo = scopeRepo(t)
+  const dir = freshDir(t)
+  const out = preflightAt(repo, dir, 'full-code-review-2026-10-12')
+  assert.equal(out.status, 2)
+  assert.match(out.stderr, /"code-review-full-"로 시작하지 않는다\. 예: code-review-full-main-\d{4}-\d{2}-\d{2}/)
+  assert.equal(existsSync(join(dir, '.timing', 'full-code-review-2026-10-12.jsonl')), false)
+})
+
+test('preflight가 C-5의 이름 규칙으로 범위를 세어 scope.done과 목록 파일로 남긴다', t => {
+  const repo = scopeRepo(t)
+  const dir = freshDir(t)
+  const out = preflightAt(repo, dir, RUN)
+  assert.equal(out.status, 0, out.stderr)
+  assert.match(out.stdout, /리뷰 파일 {5}2개 \(제외 5개 — 테스트·mock, C-5\)/)
+  const [start, scope] = linesOf(dir)
+  assert.deepEqual([start.phase, start.changedFiles], ['run.start', 7])
+  assert.deepEqual([scope.phase, scope.files, scope.excluded], ['scope.done', 2, 5])
+  const list = JSON.parse(readFileSync(join(dir, '.timing', `${RUN}.scope.json`), 'utf8'))
+  assert.deepEqual(list.files.sort(), ['src/app.ts', 'src/mockery.ts'])
+  assert.equal(list.excluded.length, 5)
+  assert.equal(list.runId, start.runId)
+})
+
+test('리포트를 대상 저장소 루트에 쓰면 알리고, 그래도 대상은 깨끗한 채로 시작한다', t => {
+  const repo = scopeRepo(t)
+  const out = preflightAt(repo, repo.dir, RUN)
+  assert.equal(out.status, 0, out.stderr)
+  assert.match(out.stdout, /리포트 위치 {3}리포트를 대상 저장소의 루트에 쓴다/)
+  assert.equal(JSON.parse(readFileSync(join(repo.dir, '.timing', `${RUN}.jsonl`), 'utf8').split('\n')[0]).worktree, 'clean')
+})
+
+test('리포트 디렉터리가 무시 목록에 있으면 위치를 알리지 않는다', t => {
+  const repo = scopeRepo(t)
+  writeFileSync(join(repo.dir, '.gitignore'), 'review-reports/\n')
+  const out = preflightAt(repo, join(repo.dir, 'review-reports'), RUN)
+  assert.equal(out.status, 0, out.stderr)
+  assert.doesNotMatch(out.stdout, /리포트 위치/)
 })
