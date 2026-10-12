@@ -201,7 +201,7 @@ bounded 단일 통합 pass 완료 후:
 추가 확인이 필요한 absence claim, 범위 제한, unresolved follow-up을 적는다.
 ```
 
-리포트 저장은 `workflow-contract.md` C-7을 따른다 (`workflow-name`은 `commit`). 문서 내용은 **해당 커밋 patch 안에서 실제로 바뀐 내용** 중심으로 쓰고, 다른 커밋/브랜치의 일반론은 넣지 않는다.
+리포트 저장은 `workflow-contract.md` C-7을 따른다 (`workflow-name`은 `commit`). 저장 자리는 사용자가 이번 요청에서 정한 곳 → 사용자·프로젝트 지시 파일(전역 포함 `CLAUDE.md`·`AGENTS.md`)에 적힌 문서 저장 위치 → `./review-reports/` 순서로 정하고, 대상 저장소의 루트에는 두지 않는다. 문서 내용은 **해당 커밋 patch 안에서 실제로 바뀐 내용** 중심으로 쓰고, 다른 커밋/브랜치의 일반론은 넣지 않는다.
 
 ## 사용법
 

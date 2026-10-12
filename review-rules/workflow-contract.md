@@ -875,8 +875,9 @@ deletionPhase:
 ## C-7. 리포트 저장
 
 - 파일명: `code-review-{workflow-name}-{branch-name}-{date}.md`. 실행 이름(`--run`)은 이 파일명에서 `.md`를 뺀 것이고, **preflight가 `code-review-{workflow-name}-`로 시작하지 않는 이름을 거부한다** — 2026-10-12 실행은 `full-code-review-2026-10-12`로 지어 브랜치가 빠졌다
-- 기본 저장 위치는 `./review-reports/`. **대상 저장소의 루트에 두지 않는다** — 리포트와 `.timing`이 미추적 파일로 남아 함께 커밋될 수 있다. 리포트 디렉터리가 대상 저장소 안이고 무시 목록에 없으면 preflight가 `리포트 위치`로 알린다(막지는 않는다)
-- **프로젝트나 사용자 설정이 문서 저장 위치를 따로 지정하고 있으면 그쪽이 우선한다** (`CLAUDE.md`, `AGENTS.md` 등). 사용자 지시가 이 계약보다 우선하며, 그렇게 저장한 것은 위반이 아니다. 어디에 저장했든 **경로를 사용자에게 보고**한다
+- **저장 자리는 이 순서로 정한다.** ① 사용자가 이번 요청에서 정한 곳 ② 사용자·프로젝트 지시 파일(전역 포함 `CLAUDE.md`, `AGENTS.md` 등)에 적힌 문서 저장 위치 ③ 둘 다 없으면 `./review-reports/`. 사용자 지시가 이 계약보다 우선하며, 그렇게 저장한 것은 위반이 아니다. 어디에 저장했든 **경로를 사용자에게 보고**한다
+- **자리는 리뷰를 시작하기 전에 정한다.** 기록(`.timing/`)은 리포트 디렉터리 아래에 생기므로, 리포트만 나중에 다른 곳에 쓰거나 옮기면 기록과 리포트가 서로를 못 찾는다. 각 스킬은 이 순서를 계약을 읽기 전에 보이는 자리(`/code-review-full`은 preflight 앞, 다른 워크플로우는 리포트 저장 줄)에 직접 적는다 — 2026-10-12에 세 실행이 모두 저장소 안에 썼다. 사용자는 전역 지시로 문서 폴더를 정해 두었는데 이 순서가 계약에만 있어 시작할 때 읽히지 않았고, 한 실행은 "리포트를 다른 폴더에 쓰고 기록은 워크트리에 남긴" 옛 사례를 그 폴더를 피하라는 뜻으로 읽었다
+- **대상 저장소의 루트에는 두지 않는다** — 리포트와 `.timing`이 미추적 파일로 남아 함께 커밋될 수 있다. `/code-review-full`은 preflight가 루트를 거부한다(아무것도 쓰지 않는다). 루트가 아닌 저장소 안이고 무시 목록에 없으면 `리포트 위치`로 알린다(막지는 않는다)
 - `workflow-name`은 아래 등록된 값만 사용하고 생략하지 않는다
 
 | workflow-name | 명령 |
@@ -1229,7 +1230,7 @@ UTF-16 파일도 읽는다 — PowerShell 5.1의 `Set-Content -Encoding UTF8`은
 | `run.start` | 가장 먼저 | `host`, `rules`(해석된 RULES_DIR), `version`, `branch`, `changedFiles` · 무엇을 리뷰하는지(C-10): `runId`, `base`, `head`, `worktree`, `dirtyFiles`, `repo`, `repoRoot`, `rulesDigest` · 선택 패스를 켰는지: `correctness`(`on`/`off`, 선택 패스가 있는 워크플로우만) · 한도(C-12): `maxTasks`, `maxDurationSec`(준 것만), `staleAfterSec` · (새 실행으로 이어 받았으면) `continues` · (이전 리뷰와 비교하면, C-13) `previousSnapshot`, `previousRunId`, `previousSha256` — preflight가 쓴다 |
 | `run.resume` | 멈춘 실행을 이어 갈 때 (`review-tasks.mjs resume`이 쓴다) | 새 구간의 `maxTasks`·`maxDurationSec`·`staleAfterSec`, 다시 잰 `head`·`worktree` |
 | `scope.done` | 범위 확정(C-4) — `/code-review-full`은 **preflight가 남긴다**(C-5의 이름 규칙으로 센 수) | `files`, `excluded` |
-| `modules.planned` | 적용 모듈 확정(C-3) | `candidates`, `applied` · `skipped`, `unknown`(중첩, `--data-file`) |
+| `modules.planned` | 적용 모듈 확정(C-3) | `candidates`, `applied`(적용한 **번호 모듈** 수 — Props·수학·예외·정확성 패스는 세지 않는다. 후보 수를 넘으면 스크립트가 거부한다. 스냅숏의 `적용 N개`는 패스 전부를 센 수라 다르다) · `skipped`, `unknown`(중첩, `--data-file`) |
 | `dispatch.start` | **첫 sub-agent를 실제로 띄운 직후** (full은 작업 대장이 첫 시도를 내줄 때 쓴다) | `modules`, `inflight` |
 | `module.start` | **모듈 하나를 띄운 직후** (full은 작업 대장이 띄우기 **전에** 쓴다 — C-12) | `module`, `attempt`, `taskId`, (재시도면) `retryOf` · 대장이 쓰면 `claim` |
 | `module.done` | **모듈 하나가 끝날 때마다** (full은 작업 대장이 결과 파일을 쓴 뒤) | `module`, `attempt`, `status`(**`ok`/`failed`만** — SKILL의 상태 이름 `COMPLETED`가 아니다), `findings`, `failureClass`, `taskId`, (있으면) `tokensIn`·`tokensOut` · 대장이 받으면 `resultSha256` · 취소면 `cancelReason`(`max-duration`/`user`) |
@@ -1245,7 +1246,7 @@ UTF-16 파일도 읽는다 — PowerShell 5.1의 `Set-Content -Encoding UTF8`은
 | `synthesis.start` / `.end` | synthesis 패스 | `findings` / `clusters`, (있으면) `tokensIn`·`tokensOut` |
 | `render.start` | **문서를 쓰기 직전** | `findings`(중복 제거 후) |
 | `render.wrote` | 파일을 쓴 직후 | `path`, `lines`, (있으면) `tokensIn`·`tokensOut` |
-| `run.end` | 마지막 | `verdict`, `usageSource`, (있으면) `tokensIn`·`tokensOut`·`tokensCacheRead`·`costUsd` |
+| `run.end` | 마지막 | `verdict`(없으면 스크립트가 거부한다 — 그 뒤에 고칠 줄을 덧붙일 수 없다), `usageSource`, (있으면) `tokensIn`·`tokensOut`·`tokensCacheRead`·`costUsd` |
 
 **교차검증은 시작과 끝이 짝을 이루고, 판정을 입력으로 쓰는 단계(`synthesis.start`·`render.start` 중 먼저 온 것)보다 앞에서 끝난다.** `--check`는 시작 없이 남은 끝, 끝나지 않은 시작, 그 단계 뒤의 교차검증 기록을 문제로 짚는다. **검증 준비를 다시 돌려 다음 `crossverify.start`가 대체한 라운드는 예외다** — 버려진 라운드라 끝이 없는 것이 맞고, `--check`는 참고로만 알린다(2026-10-06 실행의 seq 54). 끝을 요구하는 것은 마지막 라운드다. 같은 날 다른 실행은 `synthesis.start` 뒤에 판정 하나를 다시 받아 유지를 반박으로 바꿨다. 2026-09-30 실행이 시작 하나에 끝 둘을 남겼고, 두 번째 끝은 리포트를 조립하다 판정 하나를 다시 받아 집계를 바꾼 것이었다. 잘못 센 끝을 바로잡는 줄은 예외다 — 앞 끝 바로 뒤에 `note`를 달아 다시 쓴다(append 전용 기록의 정정).
 
@@ -1439,7 +1440,7 @@ task였는지도, 어느 모듈이 영향을 받았는지도 복원할 수 없�
 ```json
 {
   "candidates": 20,
-  "applied": 19,
+  "applied": 18,
   "skipped": [
     { "module": "21-rsc.md", "status": "skipped", "reasonCode": "profile-mismatch", "evidence": "프로파일 판정에서 RSC 신호 없음" },
     { "module": "18-dangerous-change", "status": "skipped", "reasonCode": "trigger-absent", "evidence": "diff에 위험 변경 트리거 없음" }

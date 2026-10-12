@@ -50,13 +50,15 @@ description: Use when the user invokes /code-review-full or asks for a full code
 
 **(0) preflight — 리뷰의 첫 명령**
 
+**명령을 부르기 전에 리포트 자리(`$REPORT_DIR`)부터 정한다(C-7).** 순서는 사용자가 이번 요청에서 정한 곳 → 사용자·프로젝트 지시 파일(전역 포함 `CLAUDE.md`·`AGENTS.md`)에 적힌 문서 저장 위치 → `./review-reports/`다. 사용자가 문서 폴더를 정해 두었으면 처음부터 그 폴더가 `$REPORT_DIR`이고, 기록(`.timing/`)도 그 아래에 생긴다. **대상 저장소의 루트는 안 된다** — preflight가 아무것도 쓰지 않고 멈춘다. 2026-10-12에 세 실행이 모두 저장소 안(루트 둘, `review-reports/` 하나)에 썼다. 사용자는 전역 지시로 문서 폴더를 정해 두었는데, 이 순서가 계약에만 있어 시작할 때 읽히지 않았다.
+
 ```bash
 node "$RULES_DIR/../scripts/review-preflight.mjs" --dir "$REPORT_DIR" --run "$REPORT_BASENAME" --rules "$RULES_DIR" --workflow full [--base <사용자가 정한 base>] --host <harness 이름> --correctness <on|off> \
      [--max-duration <30m>] [--max-tasks <N>] [--stale-after <20m>] [--continues <앞 실행 ID>] \
      [--previous <이전 리뷰의 스냅숏>]
 ```
 
-**`$REPORT_DIR`와 `$REPORT_BASENAME`은 리포트를 실제로 저장할 곳과 그 파일 이름이다.** 여기서 정한 값이 사이드카의 자리를 결정하므로, 나중에 리포트를 다른 디렉터리나 다른 이름으로 쓰면 기록과 리포트가 서로를 못 찾는다. 실제로 한 실행이 리포트를 `Docs/`에 쓰고 사이드카는 워크트리에 남겨 **이름도 디렉터리도 달랐다.** `--check`가 `render.wrote`의 경로와 대조해 그 어긋남을 짚는다. **`$REPORT_BASENAME`에는 확장자를 붙이지 않는다** — `.md`로 끝나면 preflight와 기록 스크립트가 거부한다. 2026-09-30의 한 실행은 리포트 파일 이름을 그대로 넘겨 기록이 전부 `….md.jsonl`로 남았다. **이름은 C-7의 `code-review-full-{브랜치}-{날짜}`다** — `code-review-full-`로 시작하지 않으면 preflight가 거부하고 예를 보인다(2026-10-12 실행은 `full-code-review-2026-10-12`로 지어 브랜치가 빠졌다). **리포트를 대상 저장소 루트에 두지 않는다** — C-7의 기본 자리(`review-reports/`)나 사용자가 정한 문서 폴더에 둔다. 대상 저장소 안이고 무시 목록에 없으면 preflight가 `리포트 위치` 줄로 알린다. 리포트와 `.timing`이 미추적 파일로 남아 함께 커밋될 수 있다.
+**`$REPORT_DIR`와 `$REPORT_BASENAME`은 리포트를 실제로 저장할 곳과 그 파일 이름이다.** 여기서 정한 값이 사이드카의 자리를 결정하므로, 나중에 리포트를 다른 디렉터리나 다른 이름으로 쓰면 기록과 리포트가 서로를 못 찾는다. 실제로 한 실행이 리포트만 다른 폴더에 쓰고 사이드카는 워크트리에 남겨 **이름도 디렉터리도 달랐다** — 문제는 그 폴더가 아니라 둘을 갈라놓은 것이다. 사용자가 정한 문서 폴더가 있으면 그 폴더를 처음부터 `$REPORT_DIR`로 쓴다(2026-10-12의 한 실행은 이 사례를 그 폴더를 피하라는 뜻으로 읽고 저장소 루트에 썼다). `--check`가 `render.wrote`의 경로와 대조해 그 어긋남을 짚는다. **`$REPORT_BASENAME`에는 확장자를 붙이지 않는다** — `.md`로 끝나면 preflight와 기록 스크립트가 거부한다. 2026-09-30의 한 실행은 리포트 파일 이름을 그대로 넘겨 기록이 전부 `….md.jsonl`로 남았다. **이름은 C-7의 `code-review-full-{브랜치}-{날짜}`다** — `code-review-full-`로 시작하지 않으면 preflight가 거부하고 예를 보인다(2026-10-12 실행은 `full-code-review-2026-10-12`로 지어 브랜치가 빠졌다). **대상 저장소의 루트는 preflight가 거부한다** — 아무것도 쓰지 않고 멈추므로, 위 순서로 자리를 다시 정해 부른다. 루트가 아닌 저장소 안이고 무시 목록에 없으면 `리포트 위치` 줄로 알린다. 리포트와 `.timing`이 미추적 파일로 남아 함께 커밋될 수 있다.
 
 **리뷰 범위의 기준도 여기서 정해진다(C-4).** `--base`는 사용자가 범위를 정했을 때만 준다 — 주지 않으면 preflight가 지금 브랜치의 열린 PR을 `gh pr view`로 읽어 그 base를 기준으로 잡는다. 다른 PR 위에 쌓은 PR이면 아래 PR의 브랜치(`origin/<그 브랜치>`)이고, 그 위에 더한 변경만 리뷰한다. main을 기준으로 잡으면 아래 PR의 변경까지 리뷰하게 된다. 출력의 `base` 줄(기준과 이유)을 `리뷰 기준`에 옮긴다. PR의 base를 이 저장소에서 찾을 수 없으면 preflight가 멈춘다 — `git fetch origin <base>` 뒤 다시 돌리거나 사용자에게 범위를 묻는다. gh를 쓸 수 없는 호스트는 `gh pr view --json number,baseRefName,headRefName,state,url`의 출력을 파일로 담아 `--pr-json`으로 준다.
 
@@ -114,6 +116,8 @@ Trigger 섹션이 있는 모듈(`12`, `14`, `16`, `17`, `18`, `21`)은 diff에 �
 **(4) 실행 계획 기록**
 
 후보 N개 중 적용 대상 M개, `SKIPPED` 목록과 사유를 리포트에 남긴다. **N은 (0)이 낸 값을 그대로 쓴다** — 한 리포트가 여기서 synthesis 전용 모듈을 후보로 세어 20개를 21개로 적었다. **M이 N보다 작다는 사실이 리포트에서 보여야 한다.** 보이지 않으면 전부 검토된 것으로 읽힌다.
+
+**`modules.planned`의 `applied`는 번호 모듈만 센다** — Props·수학·예외·정확성 패스는 넣지 않는다. 그래서 후보 수(N)를 넘을 수 없고, 넘으면 기록 스크립트가 남기지 않고 거부한다. 2026-10-12 실행은 특수 패스까지 22로 적어(후보 20) `--check`가 "22인데 19개"라는 거짓 경고를 냈다. 스냅숏의 `적용 N개`는 패스 전부를 센 수라 이 값과 다르다.
 
 ### 3b. 실행
 
@@ -183,7 +187,7 @@ node "$RULES_DIR/../scripts/review-tasks.mjs" next --stage module --dir "$REPORT
 
 **아래 producer는 전부 `subagent_type=react-code-review-plugin:rule-module-reviewer`로 띄운다.** 지적을 만드는 자리는 모두 쓰기 도구 없이 돈다(C-6). numbered module이든 특수 패스든 하는 일이 같다 — 규칙 문서 하나를 받아 diff를 판정하고 구조화된 결과를 돌려준다.
 
-**스킬은 싣지 않는다(`load_skills=[]`).** 호스트의 작업 도구가 스킬 목록을 받더라도(OpenCode의 `task`) 이 스킬(`code-review-full`)이나 다른 스킬을 넣지 않는다 — producer의 지시는 프롬프트와 에이전트 정의에 있고, 이 스킬은 오케스트레이터의 지시다. 2026-10-12 실행은 `load_skills=['react-code-review-plugin:code-review-full']`로 띄워 첫 웨이브 넷이 `Skills not found`로 즉시 실패했다(`skill-injection-invalid`).
+**스킬은 싣지 않는다(`load_skills=[]`).** producer만이 아니라 **이 스킬이 띄우는 sub-agent 전부**(검증자·synthesis 포함)가 그렇다. 호스트의 작업 도구가 스킬 목록을 받더라도(OpenCode의 `task`) 이 스킬(`code-review-full`)이나 다른 스킬을 넣지 않는다 — sub-agent의 지시는 프롬프트와 에이전트 정의에 있고, 이 스킬은 오케스트레이터의 지시다. 2026-10-12 실행은 `load_skills=['react-code-review-plugin:code-review-full']`로 띄워 첫 웨이브 넷이 `Skills not found`로 즉시 실패했다(`skill-injection-invalid`). 같은 날 다른 실행은 context 압축 뒤 리포트 조립을 맡긴 작업에 이 스킬을 실어 같은 오류로 실패했다 — 압축 뒤에도 이 규칙은 그대로다.
 
 ```
 task(
@@ -493,8 +497,9 @@ node "$RULES_DIR/../scripts/tally-verdicts.mjs" --dir "$REPORT_DIR" --run "$REPO
 - 같은 규칙 ID로 finding이 둘 이상이면 C-7에 따라 `17-3 (1/2)` 형태로 순번을 붙인다.
 - 패스에 적용 범위가 없으면 패스 이름, 사유, 그리고 `SKIPPED`가 비차단임을 명시해 `SKIPPED`로 출력한다. **특수 패스(Props·수학·예외)의 SKIPPED는 실행 계획 파일(`--planned`)의 `skipped`에 그 패스 이름으로 적는다** — `{"module":"math","reasonCode":"…","reason":"…"}`. 렌더러가 그 사유를 `특수 패스` 절의 그 자리에 옮기고, 지적이 0건인 패스에는 "지적 없음."을 찍는다. **건너뛴 패스의 결과 파일을 만들지 않는다** — 2026-09-30 실행은 SKIPPED인 수학 패스에 빈 `math.json`을 써 두었고, 리포트에는 Props(실행·0건)와 수학(SKIPPED)이 모두 빠졌다. 특수 패스가 하나라도 건너뛰어졌으면 `--planned`를 반드시 준다. **렌더러는 `--collect`가 남긴 `collected.sources`와 대조한다** — 지적이 없는데 결과 파일도 수집되지 않은 모듈·패스는 "지적 없음."이 아니라 "결과 없음"으로 찍힌다. 그 표시는 실행이 실패했거나 결과가 빠졌다는 뜻이므로, `실행 계획`에 그 모듈의 실패를 적는다(`FAILED orchestration`).
 - 모든 패스가 끝난 뒤에는 사용자가 다른 언어를 명시하지 않은 한 한국어로 전체 요약 리포트를 출력한다.
+- **리포트는 오케스트레이터가 직접 조립해 저장한다 — sub-agent에 맡기지 않는다.** 상세 지적·특수 패스(렌더러), 실행 계획(스냅숏), 실행 타임라인(`--summary`)은 이미 완성된 Markdown이고, 오케스트레이터가 새로 쓰는 것은 판정·요약·도구 실행 결과·미해결뿐이다. 2026-10-12 실행 둘이 조립을 writing sub-agent에 맡겼다. 한 실행은 파일을 다 쓴 sub-agent의 마지막 모델 호출이 응답 없이 2시간 21분 멈췄고, 작업 도구가 그 sub-agent가 끝나야 돌아오는데 시간 상한이 없어 사용자가 끊을 때까지 `run.end`가 남지 않았다. 다른 실행은 context 압축 뒤 그 작업에 이 스킬을 실어 즉시 실패했고, 다시 맡긴 조립에 12분이 걸렸다.
 - 요약 저장은 `workflow-contract.md` C-7을 따른다 (`workflow-name`은 `full`).
-- 프로젝트가 이미 다른 문서 저장 관례를 따르고 있으면 절대 경로를 강제하지 않는다.
+- 저장 자리는 (0)에서 정한 `$REPORT_DIR`이다 — 사용자가 이번 요청에서 정한 곳 → 사용자·프로젝트 지시 파일(전역 포함 `CLAUDE.md`·`AGENTS.md`)에 적힌 문서 저장 위치 → `./review-reports/` 순서로 정한 곳이다. 끝난 뒤 사용자가 리포트를 옮기라고 하면 `.timing/`도 함께 옮기고, 기록의 `render.wrote` 경로는 옛 자리를 가리킨다고 알린다. 리포트만 옮기면 기록과 리포트가 서로를 못 찾는다.
 - 일반/Props/수학/예외 producer 결과는 수집 직후 `workflow-contract.md` C-6A validation 규칙으로 검사한다. JSON 파싱 실패, 필수 필드 누락, 금지 필드 `severity`, 허용되지 않은 enum/location 값은 `malformed-output`이다.
 - `malformed-output`이면 **같은 producer에 교정 재시도는 한 번만** 한다. `done --status failed --failure-class malformed-output`을 남기면(JSON으로 읽히지 않는 응답은 `done`이 스스로 그렇게 남긴다) 다음 `next`가 그 모듈의 교정 시도를 `correction: true`로 낸다. 재시도 prompt에는 잘못된 점만 짧게 적고 다시 `REVIEW_RESULT_CONTRACT_V1` raw JSON 하나만 요구한다.
 - 두 번째도 `malformed-output`이면 그 패스는 `FAILED malformed-output`으로 기록하고, 부분 보정이나 Markdown 해석으로 통과시키지 않는다. dispatch/result handling과 실패 기록은 이 skill이 책임진다.
