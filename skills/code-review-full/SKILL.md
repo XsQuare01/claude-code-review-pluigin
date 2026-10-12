@@ -25,7 +25,7 @@ description: Use when the user invokes /code-review-full or asks for a full code
 | 모듈 집합 | 적용 대상 numbered non-00 + props + math + exception (+ correctness — `--correctness on`일 때만) |
 | 분할 방식 | 모듈별 sub-agent, **in-flight 최대 4개의 sliding window** (배리어 없음) |
 | 완료 판정 | 적용 대상 모듈 전부 수집 성공. 하나라도 실패하면 `FAILED orchestration` |
-| 교차검증 | 1차 수집 후 **선별 반박 패스**. 기본 `--verify selective`, 삭제는 `rollout-shadow`에서 시작 |
+| 교차검증 | 1차 수집 후 **선별 반박 패스**. 기본 `--verify selective`, 삭제는 `rollout-shadow`에서 시작 — `active-deletion`은 사람이 잰 승인 파일이 있어야 켜진다 |
 | 선택 패스 | `--correctness on`이면 정확성 패스(`correctness.md`, `CR-{n}`)를 더 띄운다. 기본은 꺼짐 |
 | 작업 대장 | 무엇을 띄울지와 결과를 받을지를 `review-tasks.mjs`가 정한다(C-12). 시간·호출 한도는 사용자가 줄 때만 |
 | 이전 리뷰와 비교 | `--previous <스냅숏>`이면 이번 지적을 이전 지적과 잇고, 이어지지 않은 이전 지적을 재확인한다(C-13) |
@@ -382,6 +382,8 @@ isolated 11)을 동시에 background dispatch한 결과, 1건만 2분 25초에 �
 
 **`rollout-shadow`에서 반박된 finding은 지워지지 않을 뿐 아니라 등급도 그대로다.** rollout-shadow에서 반박된 finding도 원 severity를 유지하며 판정에서 차단 후보로 계산한다. 반박됐다는 이유로 `판정` 근거에서 빼면, 그것이 유일한 차단 후보였을 때 관찰 기간이 곧 무방비 기간이 된다 — 삭제를 켜지 않은 의미가 사라진다.
 
+**삭제를 허용하지 않는 반박은 어느 phase에서도 지적을 지우지 않는다.** 어떤 `rebuttal.kind`가 지울 수 있는지는 판정 manifest의 `deletionAllowingKinds`가 정하고 렌더러가 그것을 읽는다(C-6B `반박 kind별 결말`). `other`(`반박 시도 — 분류 밖`)와 `location-wrong`(`위치 이견 — 결함 유지`)은 그 목록 밖이라 원 severity로 남고 판정에서 차단 후보로 센다. 특히 `location-wrong`은 검증자가 결함을 **인정하고** 위치만 틀렸다고 한 것이다 — 렌더러가 그 아래에 `검증자가 짚은 위치(대조하지 않음): …`를 그린다. 반박됐다고 읽고 판정 근거에서 빼지 않는다.
+
 **candidate ID를 리포트에 쓰면 finding과의 매핑을 같은 리포트 안에 싣는다.** ID 형식은 자유지만, 매핑 없이 `HR-2` 같은 식별자만 적으면 독자가 그것이 어느 지적인지 문서를 뒤져 추측해야 한다. 규칙 ID와 위치로만 지칭하고 candidate ID를 아예 쓰지 않아도 된다.
 
 **공개 리포트의 `교차검증:` 표기 값은 C-7의 `CROSS_VERIFICATION_RENDER_TOKENS`가 정본이다.** `upheld`·`rejected` 같은 producer enum을 리포트에 그대로 쓰지 않고, 검증 대상이 아니었던 finding에도 `대상 아님`을 적는다. 반박 사실을 heading 접미사로 덧붙이지 않는다 — 상태는 축 줄 한 곳에서만 표현한다.
@@ -482,8 +484,8 @@ node "$RULES_DIR/../scripts/tally-verdicts.mjs" --dir "$REPORT_DIR" --run "$REPO
 node "$RULES_DIR/../scripts/render-findings.mjs" \
      --input "$REPORT_DIR/.timing/$REPORT_BASENAME.routed.json" \
      [--verdicts "$REPORT_DIR/.timing/$REPORT_BASENAME.verdicts.json"] \
-     --phase-high <active-deletion|rollout-shadow> \
-     --phase-low <active-deletion|rollout-shadow> \
+     --phase-high rollout-shadow \
+     --phase-low rollout-shadow \
      --verification-state <ran|disabled> \
      --rules "$RULES_DIR" \
      --workflow full \
@@ -496,6 +498,8 @@ node "$RULES_DIR/../scripts/render-findings.mjs" \
 
 출력을 두 섹션 자리에 그대로 붙인다. 같은 명령이 실행마다 다른 모양의 지적을 냈고, 규칙은 이미 계약에 다 있었는데도 그랬다 — 문서가 부탁하는 동안에는 지켜지지 않는다. **`--phase-high`와 `--phase-low`는 별개 값이다.** phase는 전역이 아니라 `impact`별 설정이므로(`workflow-contract.md`의 `deletionPhase`), high가 아직 `rollout-shadow`인 동안 low만 `active-deletion`으로 옮기는 것이 정상 구성이다. 둘 다 기본값이 없다 — 반박된 finding의 처리가 갈리고 그 값이 차단 판정에 걸리므로, 조용히 틀린 쪽으로 도는 것보다 멈추는 편이 낫다.
 
+**명령 틀은 둘 다 `rollout-shadow`다. `active-deletion`은 승인 파일 없이는 켜지지 않는다.** 렌더러는 `--phase-high`·`--phase-low` 중 하나라도 `active-deletion`이면 `--deletion-approval <승인 파일>`을 요구하고 없으면 멈춘다(exit 2). 승인 파일은 사람이 impact·검증 경로별로 잰 false-suppression 기록이고(`workflow-contract.md` C-6B `승인 파일`), **플러그인은 그런 승인을 싣고 오지 않는다.** 사용자가 승인 파일을 주며 명시적으로 요청할 때만 그 impact를 `active-deletion`으로 바꾸고 `--deletion-approval`을 붙인다 — 스스로 고르지 않는다. 승인을 쓴 뒤에 반박 kind 목록이나 검증자 지시문이 바뀌었으면 렌더러가 그 impact를 `rollout-shadow`로 되돌리고 stderr로 경고하며, 그 사실을 `## 상세 지적` 맨 위 줄에도 적는다. 승인 파일에 적을 기준은 `--print-deletion-basis --rules "$RULES_DIR"`이 낸다.
+
 **`--verification-state`도 기본값이 없다.** `ran`은 교차검증이 실제로 돌았다는 뜻이고, `disabled`는 이번 실행에서 교차검증을 껐다는 뜻이다 — 계약(C-6B)이 "검증을 끈 실행"과 "검증이 깨진 실행"을 가르는 것과 같은 이유로, 이 값을 `--verdicts` 유무로 추측하지 않는다. `ran`이면 후보별 판정에 따라 `대상 아님`·`유지`·`반박됨 — 관찰 중` 등으로 갈리고, `disabled`면 판정 데이터(누가 반박했는지)는 보지 않는다 — 하지만 **eligibility까지 무시하지는 않는다.** disposition 표(C-6B)는 `verification-disabled`를 "검증을 끈 실행의 **검증 대상**"에만 준다: SKIP-VERIFY였던 후보는 검증을 껐든 켰든 애초에 대상이 아니었으므로 `대상 아님`을 그대로 유지하고, VERIFY 대상이었던 후보에만 `꺼짐`을 찍는다. `--verdicts`는 `ran`일 때만 주고, `disabled`에서는 애초에 판정 파일이 없으므로 생략한다 — `tally-verdicts.mjs --collect`가 정본 순서로 모아 남긴 `verdicts.json`을 준다. 판정 파일을 직접 넘길 때는 `tally-verdicts.mjs`에 넘긴 순서(bundle 다음 isolated)와 같게 둔다. 두 스크립트는 같은 로더(`scripts/lib/verdicts.mjs`)로 판정 파일을 읽으므로 tally가 받은 모양은 렌더러도 받고, 판정 목록을 찾지 못하는 파일은 둘 다 거부한다 — 2.14.0까지 렌더러는 `{"tasks":[…]}`를 판정 0건으로 읽어 검증 대상 전부를 `검증 실패`로 찍을 수 있었다. `disabled`에서 `--verdicts`를 함께 주면 렌더러가 거부한다(모순된 두 신호). `--planned`는 `실행 계획`에서 건너뛴/미확인 모듈이 있을 때만 주고, 없으면 생략한다.
 
 **`ran`일 때 `needs-context`로 판정된 finding은 상세 지적에서 빠지고 stderr 알림으로 나온다.** 렌더러는 `미해결 / 후속 확인` 섹션을 쓰지 않으므로, 그 알림에 실린 내용을 실제로 그 섹션에 옮겨 적는다 — 옮겨 적지 않으면 그 finding은 리포트 어디에도 없는 채로 사라진다.
@@ -504,7 +508,7 @@ node "$RULES_DIR/../scripts/render-findings.mjs" \
 
 **위치 확인에 실패한 finding의 위치 줄은 렌더러가 다르게 그린다.** `prepare-verification.mjs`가 후보마다 붙인 `locationCheck`를 렌더러가 읽어, 주장된 경로를 읽지 못했거나 인용이 실제 내용과 다르면 `위치 확인 실패: …` 줄을 낸다 (C-7 **확인에 실패한 위치**). **그 문장을 직접 쓰지 않는다** — 한 실행이 손으로 `위치 미확인 사유`를 적었고, 그것은 계약이 `location.kind = "unverified"`에만 주는 다른 줄이다. `locationCheck`가 없는 입력은 렌더러가 거부하므로, `--input`에는 항상 `prepare-verification.mjs`의 출력을 그대로 넘긴다.
 
-**`active-deletion` phase가 지운 `rejected` finding도 같은 방식으로 stderr에 나온다.** C-6B "오판 가시성"은 이 삭제의 흔적을 audit이 아니라 리포트 본문(`미해결 / 후속 확인`)에 남기라고 명시한다 — 검증자의 오판이 진짜 결함의 소멸이 될 수 있고, audit는 아무도 읽지 않기 때문이다. stderr 알림에는 `impact = high`였던 것은 건별로(규칙 ID·anchor path·`rebuttal.kind`), `impact = low`였던 것은 건수만 실린다 — 그 알림 내용을 그대로 `미해결 / 후속 확인`에 옮겨 적는다. 옮겨 적지 않으면 그 삭제는 리포트 어디에도 없는 채로 사라진다.
+**`active-deletion` phase가 지운 `rejected` finding도 같은 방식으로 stderr에 나온다.** C-6B "오판 가시성"은 이 삭제의 흔적을 audit이 아니라 리포트 본문(`미해결 / 후속 확인`)에 남기라고 명시한다 — 검증자의 오판이 진짜 결함의 소멸이 될 수 있고, audit는 아무도 읽지 않기 때문이다. stderr 알림에는 `impact = high`였던 것은 건별로(규칙 ID·anchor path·`rebuttal.kind`), `impact = low`였던 것은 건수만 실린다 — 그 알림 내용을 그대로 `미해결 / 후속 확인`에 옮겨 적는다. 옮겨 적지 않으면 그 삭제는 리포트 어디에도 없는 채로 사라진다. 그 경우 렌더러 출력의 `## 상세 지적` 맨 위에는 `삭제 단계: …` 줄(impact별 phase·승인자·날짜·경로)이 있다 — 출력의 일부이므로 지우거나 고쳐 쓰지 않는다.
 
 ### 결과 스냅숏
 

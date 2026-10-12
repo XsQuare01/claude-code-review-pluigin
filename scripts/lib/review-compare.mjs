@@ -27,9 +27,22 @@ export const PREVIOUS_STATUSES = ['persisting', 'resolved', 'recheck']
 export const RECHECK_REASONS = [
   'ambiguous', 'location-unverified', 'not-reviewed', 'rule-changed', 'file-deleted', 'absent',
   'previous-not-reviewed', 'claim-unavailable', 'verification-off', 'no-recheck-verdict',
-  'recheck-needs-context', 'recheck-unlocated',
+  'recheck-needs-context', 'recheck-unlocated', 'recheck-location-wrong',
   'identity-unconfirmed', 'identity-different', 'current-rejected', 'current-scope-open', 'current-unverified',
 ]
+
+/**
+ * 해결 확인을 주지 않는 반박 kind — 막는 코드의 위치를 댄 반박이 아니다.
+ *
+ * - `other`: 위치를 대지 못한 반박이다
+ * - `location-wrong`: 결함은 성립한다고 인정하고 위치만 틀렸다고 한 반박이다. 결함이 남아
+ *   있다는 말을 해결로 읽으면 고치지 않은 결함이 해결 확인으로 보고된다
+ *
+ * 교차검증에서 이 둘은 어떤 phase에서도 지적을 지우지 않는다(C-6B). 판정 manifest의
+ * `kindEnum`에서 `deletionAllowingKinds`를 뺀 것과 같아야 하고, `validate-rules.mjs`가 그것을
+ * 본다 — 이 파일은 계약 파일을 읽지 않는 순수 계산이라 목록을 여기 둔다.
+ */
+export const NON_RESOLVING_KINDS = ['other', 'location-wrong']
 
 /** 공백을 하나로 접고 양끝을 자른다. 들여쓰기만 바뀐 줄은 같은 줄이다. */
 export const normalizeQuote = quote => String(quote ?? '').replace(/\s+/g, ' ').trim()
@@ -257,6 +270,10 @@ export function recheckOutcome(verdict) {
     const kind = verdict.rebuttal?.kind
     // `other`는 위치를 대지 못한 반박이다(C-6B — 어떤 phase에서도 삭제를 유발하지 않는다).
     if (!kind || kind === 'other') return { status: 'recheck', reason: 'recheck-unlocated' }
+    // `location-wrong`은 결함이 남아 있다는 판정이다. 자리가 옮겨 갔다는 뜻이지 고쳐졌다는
+    // 뜻이 아니다 — 그래도 어느 자리의 어느 지적과 같은지는 이 판정이 말하지 않으므로
+    // 미해결로 단정하지 않고 재확인 필요로 둔다.
+    if (kind === 'location-wrong') return { status: 'recheck', reason: 'recheck-location-wrong' }
     return { status: 'resolved', rebuttalKind: kind }
   }
   return { status: 'recheck', reason: 'no-recheck-verdict' }

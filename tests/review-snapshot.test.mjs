@@ -484,6 +484,11 @@ test('위치를 댄 반박 없이 해결 확인인 스냅숏은 계약 밖이다
   const snapshot = buildSnapshot(fixture({ routed }))
   const forged = { ...snapshot, comparison: { ...snapshot.comparison, entries: [{ ref: 'run-before/06-1#1', lineageId: 'l', ruleId: '06-1', status: 'resolved' }], counts: { persisting: 0, resolved: 1, recheck: 0 } } }
   assert.ok(snapshotProblems(forged).some(problem => /위치를 댄 반박 없이 해결 확인이다/.test(problem)))
+  // 결함을 인정한 반박(location-wrong)도 해결의 근거가 아니다(#45)
+  for (const rebuttalKind of ['other', 'location-wrong']) {
+    const kindForged = { ...forged, comparison: { ...forged.comparison, entries: [{ ...forged.comparison.entries[0], rebuttalKind }] } }
+    assert.ok(snapshotProblems(kindForged).some(problem => /위치를 댄 반박 없이 해결 확인이다/.test(problem)), rebuttalKind)
+  }
 })
 
 test('비교하지 않은 실행의 지적도 실행 간 이름을 갖는다 — 처음 이름은 그 실행의 ref다', () => {

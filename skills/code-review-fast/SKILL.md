@@ -37,6 +37,8 @@ description: Use when the user wants a faster, shorter code review that highligh
 
 범위 결정은 `workflow-contract.md` C-4를 따른다. 결정된 범위로 `git diff --stat $MERGE_BASE..HEAD`와 `git diff $MERGE_BASE..HEAD`를 확인한다. 제외 경로는 C-5를 따른다.
 
+**diff는 여기서 오케스트레이터가 한 번만 수집한다.** `git diff $MERGE_BASE..HEAD` 출력 전체가 Step 3 producer 프롬프트의 `{DIFF}`가 된다. producer는 git을 돌리지 않는다 — 셸이 없는 에이전트로 띄우기 때문이다(Step 3, C-6). 삭제된 파일의 옛 내용도 이 diff의 `-` 줄에 들어 있다. 제외 경로는 `{CHANGED_FILES}`와 지적 범위에서만 빼고, `{DIFF}`에는 테스트 파일 변경까지 그대로 담는다 — 테스트는 지적 대상에서 빠질 뿐 증거에서 빠지지 않는다(C-5).
+
 ### Step 2: Lint 확인 (read-only)
 
 `00-rule.md` 00-9 실행 안전 계약을 따른다. **자동 수정은 실행하지 않는다.**
@@ -50,9 +52,11 @@ description: Use when the user wants a faster, shorter code review that highligh
 
 **단 하나의 sub-agent**만 dispatch한다. `run_in_background=false`로 즉시 실행.
 
+**producer는 `subagent_type="react-code-review-plugin:rule-module-reviewer"`로 띄운다(C-6).** 이 에이전트는 `Read`·`Grep`·`Glob`만 가진다 — 쓰기 도구도 셸도 없어서 실제로 고칠 수 없다. lint는 Step 2에서 오케스트레이터가 이미 돌렸으므로 producer에게 셸이 필요 없다. `general` 같은 만능 에이전트나 셸을 가진 `correctness-reviewer`로 띄우지 않는다. 런타임이 sub-agent의 도구를 제한하지 못하면(이 에이전트를 설치하지 않는 호스트 포함) C-6의 대체 경로 — 격리된 사본에서 실행하거나 producer 없이 오케스트레이터가 직접 리뷰 — 를 따르고, 그 사실을 리포트에 적는다.
+
 ```
 task(
-  category="unspecified-high",
+  subagent_type="react-code-review-plugin:rule-module-reviewer",
   load_skills=[],
   description="Fast Code Review (single pass)",
   prompt="아래 지시에 따라 빠른 코드 리뷰를 수행하세요.
@@ -61,13 +65,17 @@ task(
 - 기준: {MERGE_BASE}
 - 대상: HEAD
 - 변경 파일: {CHANGED_FILES}
+- 제외 파일(지적하지 않을 경로): `__test__/**`, `__tests__/**`, `*.test.*`, `*.spec.*`, `__mocks__/**`, `mock/**`, `mocks/**`, `*.mock.*`, 테스트/목 전용 fixture/mock data
+
+## Diff
+{DIFF — Step 1에서 오케스트레이터가 수집한 git diff {MERGE_BASE}..HEAD 본문 전체. 테스트 파일 변경 포함}
 
 ## 리뷰 수행 방법
-1. `git diff {MERGE_BASE}..HEAD` 로 전체 diff 확인
-2. 변경된 파일들을 직접 읽어서 컨텍스트 파악
+1. 위 `## Diff`가 리뷰 대상의 전부입니다. git을 직접 실행하지 마세요 — diff는 오케스트레이터가 이미 수집했고, 삭제된 파일의 옛 내용도 그 diff의 `-` 줄에 있습니다
+2. diff만으로 판단이 서지 않을 때만 그 diff가 가리키는 파일을 Read로 더 읽으세요. 변경 파일 전체를 습관적으로 다시 읽지 마세요
 3. 아래 리뷰 규칙 전체를 적용해 위반 사항 탐지
 4. 출력은 파일별 가장 중요한 이슈 1개만
-5. 파일 전체를 읽더라도 **지적은 diff에 포함된 변경 라인** 또는 그 변경 때문에 직접 깨진 **인접 라인/구조**로 제한
+5. 파일 전체를 읽더라도 **지적은 diff에 포함된 변경 라인** 또는 그 변경 때문에 직접 깨진 **인접 라인/구조**로 제한. diff가 삭제하거나 바꾼 export·함수·타입·상수·prop을 diff 밖 코드가 아직 참조하면, 그 참조는 이 변경 때문에 깨진 구조다(`fast.md` 20. 삭제 회귀 — 아래 출력 원칙의 예외)
 
 ## 리뷰 규칙
 아래 파일을 먼저 Read 한 뒤 그 규칙을 기반으로 리뷰하세요:
@@ -83,6 +91,8 @@ task(
 - 단순 스타일, 반복 지적, 영향이 작은 코멘트는 생략
 - 이슈가 없는 파일은 출력에서 제외
 - diff에 포함되지 않은 기존 코드는 지적 금지
+  - 예외: diff가 삭제·변경한 export·함수·타입·상수·prop을 diff 밖 코드가 아직 참조하면, 그 참조 위치를 삭제 회귀 지적의 근거나 위치로 인용할 수 있다. 원인은 diff 안의 변경이다. 확인은 삭제·변경된 심볼 이름을 Grep으로 찾는 targeted reference check로 한정하고, 무엇을 어디까지 찾았는지 적는다
+- 제외 파일은 지적하지 않는다 — 영향 범위를 읽는 증거로만 쓴다
 - 파일 전체를 읽었다는 이유로 리뷰 범위를 파일 전체로 넓히지 말 것
 - 추측 금지 — 실제 코드를 읽고 확인
 - 가능하면 각 이슈는 **문제 → 현재 선택 → 왜 부족한지**가 드러나게 쓴다
@@ -113,7 +123,7 @@ task(
 
 ### Step 4: 결과 전달
 
-sub-agent의 출력을 그대로 사용자에게 전달한다. 추가 편집/재정렬은 하지 않는다 (fast 취지). 다만 명백한 형식 오류가 있으면 짧게 보정한다.
+sub-agent의 출력을 그대로 사용자에게 전달한다. 추가 편집/재정렬은 하지 않는다 (fast 취지). 다만 명백한 형식 오류가 있으면 짧게 보정한다. producer의 도구를 제한하지 못해 C-6 대체 경로로 돌았으면 그 사실 한 줄만 리포트 상단에 덧붙인다 — 그것은 지적의 편집이 아니라 이 실행이 어떤 조건에서 돌았는지에 대한 사실이다.
 
 ### Step 5: 문서 저장
 
@@ -136,3 +146,4 @@ sub-agent의 출력을 그대로 사용자에게 전달한다. 추가 편집/재
 - fast 룰 문서(`fast.md`)는 숫자 prefix 상세 모듈 전체의 압축본이며, 모듈이 추가·삭제·재배치되면 fast.md의 해당 섹션도 함께 갱신해야 한다. 압축하면서 원본의 예외 조항을 빠뜨리면 오탐이 생긴다
 - 빈 diff면 리뷰를 수행하지 않는다
 - lint는 수정 옵션 없이 실행하고, 자동 수정은 사용자가 요청했을 때만 한다 (`00-rule.md` 00-9)
+- diff 수집과 lint는 오케스트레이터가 하고, producer는 받은 diff를 읽기만 하는 `rule-module-reviewer`로 띄운다 (C-6)

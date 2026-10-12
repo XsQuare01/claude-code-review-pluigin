@@ -42,13 +42,18 @@ git show --stat $TARGET_COMMIT
 
 merge commit 은 기본적으로 리뷰 대상에서 제외한다. `git show <merge-sha>` 의 combined diff 는 일반 커밋 patch 와 의미가 다르므로, merge commit 이 들어오면 "지원하지 않는 대상"으로 종료하고 일반 `/code-review` 또는 수동 범위 리뷰를 안내한다.
 
-### Step 2: 변경 파일 목록 확인
+### Step 2: 변경 파일 목록과 patch 수집
 
 ```bash
 git show --name-only --format=oneline $TARGET_COMMIT
+git show --format=medium $TARGET_COMMIT
 ```
 
 빈 변경이거나 patch를 얻을 수 없으면 리뷰를 수행하지 않는다.
+
+**patch는 여기서 오케스트레이터가 한 번만 수집한다.** 두 번째 명령의 출력 전체(커밋 메타데이터 + patch)가 Step 5 producer 프롬프트의 `{COMMIT_PATCH}`가 된다. producer는 git을 돌리지 않는다 — 셸이 없는 에이전트로 띄우기 때문이다(Step 5, C-6). root commit도 같은 명령으로 같은 형식의 patch가 나오고, 삭제된 파일의 옛 내용도 patch의 `-` 줄에 들어 있다.
+
+제외 경로는 `workflow-contract.md` C-5를 따른다. **범위와 제외는 오케스트레이터가 정한다.** 제외 경로는 `{CHANGED_FILES}`와 지적 범위에서만 빼고, `{COMMIT_PATCH}`에는 테스트 파일 변경까지 그대로 담는다 — 테스트는 지적 대상에서 빠질 뿐 영향 범위를 읽는 증거에서 빠지지 않는다(C-5, `00-rule.md` 00-3).
 
 ### Step 3: Lint 확인 (read-only)
 
@@ -79,9 +84,11 @@ ls "$RULES_DIR"/[0-9]*.md
 
 상세하고 exhaustive한 모듈별 multi-pass coverage가 필요하면 이 single-commit workflow를 확장하지 말고, 커밋 patch 범위를 명시한 별도 수동 리뷰로 분리한다.
 
+**producer는 `subagent_type="react-code-review-plugin:rule-module-reviewer"`로 띄운다(C-6).** 이 에이전트는 `Read`·`Grep`·`Glob`만 가진다 — 쓰기 도구도 셸도 없어서, 프롬프트에 읽기 전용이라고 적는 것과 달리 **실제로 고칠 수 없다.** `general` 같은 만능 에이전트나 셸을 가진 `correctness-reviewer`로 띄우지 않는다. 런타임이 sub-agent의 도구를 제한하지 못하면(이 에이전트를 설치하지 않는 호스트 포함) C-6의 대체 경로 — 격리된 사본에서 실행하거나 producer 없이 오케스트레이터가 직접 리뷰 — 를 따르고, 그 사실을 리포트 `실행 계획`에 적는다.
+
 ```
 task(
-  category="unspecified-high",
+  subagent_type="react-code-review-plugin:rule-module-reviewer",
   load_skills=[],
   run_in_background=false,
   description="Commit Review (bounded consolidated pass)",
@@ -89,18 +96,24 @@ task(
 
 ## 리뷰 대상
 - 커밋: {TARGET_COMMIT}
+- HEAD 여부: {TARGET_IS_HEAD — 예/아니오}
 - 변경 파일: {CHANGED_FILES}
+- 제외 파일(지적하지 않을 경로): `__test__/**`, `__tests__/**`, `*.test.*`, `*.spec.*`, `__mocks__/**`, `mock/**`, `mocks/**`, `*.mock.*`, 테스트/목 전용 fixture/mock data
+
+## 커밋 patch
+{COMMIT_PATCH — Step 2에서 오케스트레이터가 수집한 git show --format=medium {TARGET_COMMIT} 출력 전체. 테스트 파일 변경 포함}
 
 ## 리뷰 수행 방법
-1. `git show --format=medium {TARGET_COMMIT}` 로 커밋 patch 전체를 확인하세요
-2. 변경된 파일들을 직접 읽어서 컨텍스트를 파악하세요
+1. 위 `## 커밋 patch`가 리뷰 대상의 전부입니다. git을 직접 실행하지 마세요 — patch는 오케스트레이터가 이미 수집했고, root commit도 같은 형식이며, 삭제된 파일의 옛 내용도 patch의 `-` 줄에 있습니다
+2. patch만으로 판단이 서지 않을 때만 그 patch가 가리키는 파일을 Read로 더 읽으세요. 변경 파일 전체를 습관적으로 다시 읽지 마세요
 3. `00-rule.md` 공통 규칙을 모든 모듈보다 우선 적용하세요
 4. 아래 numbered non-00 리뷰 모듈들을 모듈 순서대로 검토하세요
 5. 아래 리뷰 규칙에 따라 위반 사항을 찾으세요
 6. 위반이 없는 규칙은 출력하지 마세요
-7. 반드시 **이 커밋 patch 안의 변경 라인만** 지적하세요
-8. root commit 도 동일하게 `git show {TARGET_COMMIT}` 기준으로 해석하세요
+7. 지적은 **이 커밋 patch 안의 변경 라인** 또는 그 변경 때문에 직접 깨진 **인접 라인/구조**로 제한하세요. 이 커밋이 삭제하거나 바꾼 export·함수·타입·상수·prop을 patch 밖 코드가 아직 참조하면, 그 참조는 이 변경 때문에 깨진 구조입니다(20-3, 아래 금지 사항의 예외)
+8. HEAD 여부가 `아니오`이면 워킹 트리는 이 커밋 뒤의 상태입니다. Read와 Grep이 보는 것은 지금 파일이지 이 커밋의 파일이 아닙니다 — 읽은 줄이 patch의 `+` 줄과 다르면 번호를 추측하지 말고 `위치 미확인`으로 적고, 참조 확인 결과에는 지금 워킹 트리에서 찾았다고 적으세요(00-10, 00-11)
 9. 동작 여부만 보지 말고, 문제 정의·의도·선택 근거·장기 변경 비용까지 함께 검토하세요
+10. 제외 파일의 변경은 지적하지 말고, production 변경의 영향 범위를 읽는 증거로만 쓰세요
 
 ## 공통 리뷰 규칙
 {COMMON_RULES_CONTENT — 00-rule.md 전체 내용}
@@ -127,6 +140,9 @@ task(
 
 ## 금지 사항
 - 이 커밋 diff에 포함되지 않은 기존 코드를 지적하지 마세요
+  - **예외 — 삭제·변경된 심볼의 남은 참조(00-3, 20-3)**: 이 커밋이 export·함수·타입·상수·prop을 삭제하거나 이름·시그니처를 바꿨는데 patch 밖 코드가 아직 그것을 참조하면, 그 참조 위치를 지적의 근거나 위치로 인용할 수 있습니다. 결함의 원인은 이 커밋의 변경이고, patch 밖 코드의 다른 문제를 지적하는 것이 아닙니다
+  - 이 확인은 targeted reference check로 한정합니다 — 삭제·변경된 심볼 이름을 Grep으로 찾고, 찾은 호출부만 읽습니다. 저장소 전체를 리뷰하지 않고, 무엇을 어디까지 찾았는지 지적에 적습니다(00-11)
+- 제외 파일(`__test__`, `__tests__`, test/spec 파일, mock/mocks/fixture 전용 파일)은 리뷰 이슈로 지적하지 마세요
 - 부모 커밋이나 이후 커밋의 변경을 섞지 마세요
 - 추측으로 지적하지 마세요 — 실제 코드를 읽고 확인하세요
 - 위반이 아닌 것을 억지로 찾지 마세요"
@@ -160,7 +176,7 @@ bounded 단일 통합 pass 완료 후:
 
 ## 실행 계획
 
-커밋 patch 기준, bounded pass 성공/실패 상태, `SKIPPED`/`UNKNOWN` 사유를 적는다.
+커밋 patch 기준, bounded pass 성공/실패 상태, `SKIPPED`/`UNKNOWN` 사유를 적는다. producer의 도구를 제한하지 못해 C-6 대체 경로로 돌았으면 그 사실과 택한 경로를 적는다.
 
 ## 상세 지적
 
@@ -202,6 +218,7 @@ bounded 단일 통합 pass 완료 후:
 - bounded 단일 통합 pass 안에서 `00-rule.md`와 numbered non-00 모듈 전체를 함께 검토한다
 - merge commit 은 기본적으로 지원하지 않는다. 그런 경우 일반 `/code-review` 또는 명시적 범위 리뷰로 전환한다
 - 이 skill은 commit patch 기준이므로, 이후 커밋에서 수정된 문제까지 미리 반영해서 판단하지 않는다
-- diff에 포함되지 않은 기존 코드는 리뷰 대상이 아니다
+- diff에 포함되지 않은 기존 코드는 리뷰 대상이 아니다. 단 이 커밋이 삭제·변경한 심볼을 아직 참조하는 호출부는 그 변경의 결함 근거로 인용할 수 있다(20-3, targeted reference check)
+- producer는 patch를 받아 읽기만 한다. patch 수집과 lint는 오케스트레이터가 하고, producer는 쓰기 도구와 셸이 없는 `rule-module-reviewer`로 띄운다(C-6). 과거 커밋이면 producer가 읽는 파일은 지금 워킹 트리라는 점을 프롬프트로 알린다
 - fixup/squash 전 개별 커밋 품질을 점검할 때 특히 유용하다
 - `HEAD` 리뷰일 때만 lint를 수정 옵션 없이 확인한다. 자동 수정은 사용자가 요청했을 때만 한다 (`00-rule.md` 00-9)

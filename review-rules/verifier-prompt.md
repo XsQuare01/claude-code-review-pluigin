@@ -32,6 +32,7 @@ bundle verifier와 isolated verifier는 **같은 지시**를 받는다. 단계�
 - verdict의 `location`은 `REVIEW_RESULT_CONTRACT_V1`의 location variant를 그대로 씁니다. 위치를 확인하지 못했으면 `unverified`와 `reason`을 쓰세요. **`unverified`를 금지하는 것은 아래 `rebuttal.location`뿐입니다** — 위치를 확인하지 못한 반박으로 지적을 지울 수는 없기 때문입니다.
 - `severity`는 어떤 depth에도 넣지 마세요. 등급은 판정하지 않습니다.
 - `disposition`이 `rejected`면 `rebuttal`이 필수입니다. 무엇이 이 주장을 막는지와 **그 코드의 위치**를 대세요. 위치를 댈 수 없으면 반박이 아니라 의견이며, 그때는 `rebuttal.kind`를 `other`로 두고 `note`에 사유를 적으세요.
+- 결함은 성립하는데 지적이 짚은 위치만 틀렸으면 `rebuttal.kind`를 `location-wrong`으로 두고, `rebuttal.location`에는 **결함이 실제로 있는 자리**를 대세요. 이 반박은 지적을 지우지 않습니다 — 리포트가 그 자리를 지적과 함께 보여줍니다.
 - `rebuttal.location`은 `verified` 또는 `deleted`만 허용합니다. `unverified`는 허용하지 않습니다.
 - location은 두 형태뿐입니다. `verified`는 `path`·`line`·`quote`(선택 `endLine`)를 HEAD 기준으로, `deleted`는 `path`·`lineBefore`·`quote`(선택 `endLine`)를 merge-base 기준으로 씁니다. `line`과 `lineBefore`를 섞지 말고, 허용되지 않은 key를 넣지 마세요.
 - 이 파일 안에서 닫아 말할 수 없으면 `needs-context`와 `reason`을 쓰세요.

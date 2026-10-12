@@ -214,6 +214,10 @@ test('재확인 판정은 막는 코드의 위치를 댄 반박만 해결 확인
   assert.deepEqual(recheckOutcome({ disposition: 'upheld' }), { status: 'persisting', basis: 'recheck' })
   assert.deepEqual(recheckOutcome({ disposition: 'rejected', rebuttal: { kind: 'guard-exists' } }), { status: 'resolved', rebuttalKind: 'guard-exists' })
   assert.deepEqual(recheckOutcome({ disposition: 'rejected', rebuttal: { kind: 'other', note: 'n' } }), { status: 'recheck', reason: 'recheck-unlocated' })
+  // 결함은 남아 있고 위치만 다르다는 반박은 해결이 아니다(#45) — 교차검증에서 지적을 지우지
+  // 않는 kind는 재확인에서도 해결로 읽지 않는다.
+  assert.deepEqual(recheckOutcome({ disposition: 'rejected', rebuttal: { kind: 'location-wrong', location: { kind: 'verified', path: 'a', line: 1, quote: 'q' } } }),
+    { status: 'recheck', reason: 'recheck-location-wrong' })
   assert.deepEqual(recheckOutcome({ disposition: 'needs-context', reason: 'r' }), { status: 'recheck', reason: 'recheck-needs-context' })
   assert.deepEqual(recheckOutcome(undefined), { status: 'recheck', reason: 'no-recheck-verdict' })
 })

@@ -4,7 +4,7 @@ import { writeTextAtomic } from './atomic-write.mjs'
 
 import { codeSpan, dispositionOf, escapeProse } from '../render-findings.mjs'
 import { COMPARISONS, METHODS, OUTCOMES } from './evidence.mjs'
-import { CURRENT_STATUSES, PREVIOUS_STATUSES, RECHECK_REASONS, countBy, finalizeCurrent, finalizePrevious } from './review-compare.mjs'
+import { CURRENT_STATUSES, NON_RESOLVING_KINDS, PREVIOUS_STATUSES, RECHECK_REASONS, countBy, finalizeCurrent, finalizePrevious } from './review-compare.mjs'
 import { moduleOutcomes } from './run-record.mjs'
 import { HALT_REASONS, haltOf } from './task-ledger.mjs'
 
@@ -477,7 +477,7 @@ export function snapshotProblems(snapshot) {
       for (const entry of comparison.entries) {
         if (!isObject(entry) || !nonEmpty(entry.ref) || !PREVIOUS_STATUSES.includes(entry.status)) problems.push(`comparison.entries의 ${JSON.stringify(entry?.ref)} 상태가 ${PREVIOUS_STATUSES.join('/')} 밖이다`)
         else if (entry.status === 'recheck' && !RECHECK_REASONS.includes(entry.reason)) problems.push(`comparison.entries의 ${entry.ref}에 재확인 이유가 없다`)
-        else if (entry.status === 'resolved' && (!nonEmpty(entry.rebuttalKind) || entry.rebuttalKind === 'other')) problems.push(`comparison.entries의 ${entry.ref}는 위치를 댄 반박 없이 해결 확인이다`)
+        else if (entry.status === 'resolved' && (!nonEmpty(entry.rebuttalKind) || NON_RESOLVING_KINDS.includes(entry.rebuttalKind))) problems.push(`comparison.entries의 ${entry.ref}는 막는 코드의 위치를 댄 반박 없이 해결 확인이다`)
       }
       const recount = countBy(comparison.entries, PREVIOUS_STATUSES)
       for (const key of PREVIOUS_STATUSES) {
@@ -619,6 +619,7 @@ const RECHECK_REASON_TEXT = {
   'no-recheck-verdict': '재확인 판정을 받지 못했다',
   'recheck-needs-context': '재확인 검증자가 파일 밖을 봐야 한다고 했다',
   'recheck-unlocated': '재확인 검증자가 해결을 막는 코드의 위치를 대지 못했다',
+  'recheck-location-wrong': '재확인 검증자가 결함은 남아 있고 위치만 다르다고 했다 — 해결이 아니다',
   'identity-unconfirmed': '같은 자리의 이번 지적과 같은 결함인지 확인하지 못했다',
   'identity-different': '같은 자리의 이번 지적은 다른 결함이다 — 이 지적은 따로 재확인해야 한다',
   'current-rejected': '이어진 이번 지적을 교차검증이 반박했다 — 해결인지는 따로 재확인해야 한다',
