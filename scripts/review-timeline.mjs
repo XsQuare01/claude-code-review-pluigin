@@ -155,8 +155,9 @@ const PHASES = new Map([
   ['dispatch.end', { required: ['terminalOk', 'terminalFailed', 'attemptsTotal', 'attemptsFailed'], structured: ['attemptFailureClasses'], allowed: [] }],
   ['script.start', { required: [], structured: [], allowed: ['script'] }],
   ['script.done', { required: ['ran'], structured: ['counts'], allowed: [] }],
-  ['tool.start', { required: ['name'], structured: [], allowed: ['attempt', 'candidateId', 'evidenceId'] }],
-  ['tool.done', { required: ['name', 'exit', 'treeSha'], structured: ['failing'], allowed: ['failedNow', 'failedBaseline', 'attempt', 'candidateId', 'evidenceId'] }],
+  // `callId`는 `review-tool.mjs`가 호출마다 시작·끝 양쪽에 적는다 — 그 호출의 로그 이름이고, 짝을 맞추는 값이다.
+  ['tool.start', { required: ['name'], structured: [], allowed: ['attempt', 'callId', 'candidateId', 'evidenceId'] }],
+  ['tool.done', { required: ['name', 'exit', 'treeSha'], structured: ['failing'], allowed: ['failedNow', 'failedBaseline', 'attempt', 'callId', 'candidateId', 'evidenceId'] }],
   ['crossverify.start', { required: ['targets'], structured: [], allowed: ['round'] }],
   ['crossverify.end', { required: ['upheld', 'rejected'], structured: [], allowed: ['needsContext', 'noVerdict', 'malformedTasksCorrected', 'countsFrom'] }],
   ['synthesis.start', { required: [], structured: [], allowed: ['findings'] }],
@@ -353,6 +354,11 @@ const attemptSpans = events => {
  * 기록됐다. 도구는 하나씩 돌리므로 열린 시작이 둘이면 앞의 것은 끝나지 못한
  * 시도이고, 끝은 마지막 시도의 것이다. `attempt`를 양쪽에 적으면 추측할 것이
  * 없어지므로, 있으면 그것을 먼저 쓴다.
+ *
+ * **`callId`가 있으면 그것이 가장 먼저다.** baseline과 현재의 `lint`를 함께 돌리면 열린
+ * 시작 둘이 모두 살아 있는 호출이라, 가장 최근 것부터 닫으면 먼저 끝난 baseline의 끝이
+ * 현재 쪽 시작에 붙어 시간과 종료 코드가 서로 바뀐다. `review-tool.mjs`는 호출마다
+ * `callId`를 시작과 끝 양쪽에 적는다.
  */
 const toolRuns = events => {
   const open = new Map()
@@ -364,14 +370,13 @@ const toolRuns = events => {
     const name = String(event.name)
     if (event.phase === 'tool.start') {
       if (!open.has(name)) open.set(name, [])
-      open.get(name).push({ at, attempt: event.attempt })
+      open.get(name).push({ at, attempt: event.attempt, callId: event.callId })
       continue
     }
     const queue = open.get(name) ?? []
-    const exact = event.attempt === undefined
-      ? -1
-      : queue.findIndex(start => start.attempt === event.attempt)
-    const at_ = exact >= 0 ? exact : queue.length - 1
+    const byCall = event.callId === undefined ? -1 : queue.findIndex(start => start.callId === event.callId)
+    const byAttempt = event.attempt === undefined ? -1 : queue.findIndex(start => start.attempt === event.attempt)
+    const at_ = byCall >= 0 ? byCall : byAttempt >= 0 ? byAttempt : queue.length - 1
     if (queue.length) {
       const [start] = queue.splice(at_, 1)
       runs.push({ name, from: start.at, to: at, exit: event.exit, open: false })

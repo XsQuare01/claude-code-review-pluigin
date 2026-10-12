@@ -1558,6 +1558,32 @@ test('--summary는 attempt가 있으면 그것으로 도구의 짝을 맞춘다'
   assert.match(out.stdout, /`test` 1500s\(exit 0\)/)
 })
 
+test('--summary는 callId가 있으면 그것으로 도구의 짝을 맞춘다 — baseline과 현재를 함께 돌린 경우', t => {
+  // 가장 최근에 열린 시작부터 닫으면, 함께 돈 두 `lint` 중 먼저 끝난 baseline의 끝이 현재 쪽 시작에 붙어
+  // 시간과 종료 코드가 서로 바뀐다. `review-tool.mjs`는 호출마다 callId를 시작과 끝 양쪽에 적는다.
+  const dir = freshDir(t)
+  plant(dir, [
+    { at: '2026-10-12T00:00:00.000Z', seq: 1, phase: 'run.start', host: 'opencode', rules: 'r', version: '2.25.1', branch: 'b', changedFiles: 9 },
+    { at: '2026-10-12T00:01:00.000Z', seq: 2, phase: 'tool.start', name: 'lint', callId: 'aaaa0001' },
+    { at: '2026-10-12T00:01:10.000Z', seq: 3, phase: 'tool.start', name: 'lint', callId: 'bbbb0002' },
+    { at: '2026-10-12T00:01:30.000Z', seq: 4, phase: 'tool.done', name: 'lint', callId: 'aaaa0001', exit: 0, treeSha: 'base' },
+    { at: '2026-10-12T00:03:00.000Z', seq: 5, phase: 'tool.done', name: 'lint', callId: 'bbbb0002', exit: 1, treeSha: 'head' },
+    { at: '2026-10-12T00:03:01.000Z', seq: 6, phase: 'run.end', verdict: 'WARN' },
+  ])
+  assert.match(summary(dir).stdout, /`lint` 30s\(exit 0\) · `lint` 110s\(exit 1\)/)
+  const out = check(dir)
+  assert.equal(out.status, 0, out.stdout)
+})
+
+test('도구의 callId는 닫힌 목록에 있다', t => {
+  const dir = freshDir(t)
+  for (const [phase, data] of [['tool.start', { name: 'lint', callId: 'aaaa0001' }], ['tool.done', { name: 'lint', exit: 0, treeSha: 't', callId: 'aaaa0001' }]]) {
+    const out = log(dir, phase, data)
+    assert.equal(out.status, 0, out.stderr)
+    assert.doesNotMatch(out.stderr, /닫힌 목록에 없다/)
+  }
+})
+
 test('도구의 attempt는 닫힌 목록에 있다', t => {
   const dir = freshDir(t)
   const out = log(dir, 'tool.start', { name: 'test', attempt: 2 })

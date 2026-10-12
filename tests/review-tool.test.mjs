@@ -132,7 +132,37 @@ test('--shell은 셸 명령 문자열 하나만 받고, 다시 돌린 시도는 
   assert.equal(out.status, 0, out.stderr)
   const [, start, done] = linesOf(ctx)
   assert.deepEqual([start.attempt, done.attempt, done.exit], [2, 2, 0])
-  assert.match(JSON.parse(out.stdout).log, /\.tool\.lint\.a2\.log$/)
+})
+
+test('같은 이름으로 baseline과 현재 트리를 돌려도 호출마다 로그가 따로 남고, 기록의 callId로 이어진다', t => {
+  // 로그 이름을 도구 이름과 시도 번호로만 지었더니 baseline과 현재의 `lint`가 같은 파일을 써, 나중 호출이
+  // baseline 로그를 지웠다 — C-6이 요구하는 "기존 실패 대비 신규 실패"를 다시 볼 근거가 없어진다.
+  const ctx = setup(t)
+  const git = (...args) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.com', '-c', 'commit.gpgsign=false', ...args], { cwd: ctx.repo, encoding: 'utf8' }).trim()
+  writeFileSync(join(ctx.repo, 'b.txt'), 'b\n')
+  git('add', 'b.txt')
+  git('commit', '-qm', 'change')
+  const baseline = join(mkdtempSync(join(tmpdir(), 'review-tool-base-')), 'tree')
+  t.after(() => rmSync(dirname(baseline), { recursive: true, force: true }))
+  git('worktree', 'add', '-q', '--detach', baseline, 'HEAD~1')
+  const call = (repo, text) => {
+    const out = tool({ ...ctx, repo }, '--name', 'lint', '--', process.execPath, '-e', `console.log(${JSON.stringify(text)})`)
+    assert.equal(out.status, 0, out.stderr)
+    return JSON.parse(out.stdout)
+  }
+  const before = call(baseline, 'baseline: 3 problems')
+  const now = call(ctx.repo, 'current: 5 problems')
+  assert.notEqual(before.treeSha, now.treeSha)
+  assert.match(String(before.callId), /^[0-9a-f]{8}$/)
+  assert.notEqual(before.callId, now.callId)
+  assert.notEqual(before.log, now.log)
+  assert.match(readFileSync(before.log, 'utf8'), /baseline: 3 problems/)
+  assert.match(readFileSync(now.log, 'utf8'), /current: 5 problems/)
+  const tools = linesOf(ctx).filter(line => line.phase.startsWith('tool.'))
+  assert.deepEqual(tools.map(line => [line.phase, line.callId]), [
+    ['tool.start', before.callId], ['tool.done', before.callId], ['tool.start', now.callId], ['tool.done', now.callId],
+  ])
+  for (const result of [before, now]) assert.ok(result.log.endsWith(`.tool.lint.${result.callId}.log`), result.log)
 })
 
 test('시작된 타임라인 없이는 돌리지 않는다', t => {
