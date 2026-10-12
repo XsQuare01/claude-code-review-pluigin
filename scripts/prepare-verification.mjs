@@ -9,7 +9,7 @@ import { markedBlock } from './lib/contract-blocks.mjs'
 import { intentBlock, intentProblems } from './lib/intent.mjs'
 import { CURRENT_STATUSES, countBy, enclosingSymbol, identityPending, linkFindings, pathChanges, recheckable } from './lib/review-compare.mjs'
 import { parseSnapshot } from './lib/review-snapshot.mjs'
-import { currentTarget, ruleDocDigests, rulesDigest } from './lib/run-identity.mjs'
+import { currentTarget, ruleDocDigests, rulesDigest, runOutputs } from './lib/run-identity.mjs'
 import { logPhase, moduleOutcomes, readEvents, requireStartedTimeline } from './lib/run-record.mjs'
 import {
   buildIdentityPrompt, buildRecheckPrompt, buildTaskPrompt, claimOf, docPathForRule, extractClause, instructionsWithManifest, planVerifierTasks,
@@ -731,7 +731,7 @@ async function main() {
   // 리뷰 도중 대상이 바뀌었으면 위치 대조와 감싼 선언은 리뷰를 시작한 대상을 읽는다(C-10).
   let now = null
   try {
-    now = typeof start.head === 'string' && typeof start.worktree === 'string' ? currentTarget(process.cwd(), { exclude: [resolve(dir)] }) : null
+    now = typeof start.head === 'string' && typeof start.worktree === 'string' ? currentTarget(process.cwd(), { exclude: runOutputs(resolve(dir), run) }) : null
   } catch (error) {
     process.stderr.write(`경고: 지금 리뷰 대상을 재지 못했다 — 도중에 바뀌었는지 모른다: ${error.message}\n`)
   }

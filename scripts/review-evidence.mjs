@@ -38,7 +38,7 @@ import {
   assessEntry, classifyOutcome, entryProblems, EVIDENCE_SCHEMA_VERSION, executionProblems, executionUsability,
   executionsDirOf, loadExecutions, parseEvidenceDoc, planDigestOf, reproductionPlan, sha256, writeEvidenceDoc,
 } from './lib/evidence.mjs'
-import { currentTarget } from './lib/run-identity.mjs'
+import { currentTarget, runOutputs } from './lib/run-identity.mjs'
 import { logPhase, readEvents, requireStartedTimeline } from './lib/run-record.mjs'
 
 const die = message => {
@@ -149,7 +149,7 @@ if (subcommand === 'exec') {
 
   let before
   try {
-    before = currentTarget(repo, { exclude: [dir] })
+    before = currentTarget(repo, { exclude: runOutputs(dir, run) })
   } catch (error) {
     die(`재현할 트리를 읽지 못했다(--repo ${repo}): ${String(error.stderr || error.message).trim()}`)
   }
@@ -191,7 +191,7 @@ if (subcommand === 'exec') {
 
   let after
   try {
-    after = currentTarget(repo, { exclude: [dir] })
+    after = currentTarget(repo, { exclude: runOutputs(dir, run) })
   } catch {
     after = null
   }

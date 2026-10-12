@@ -44,7 +44,7 @@ import { fileURLToPath } from 'node:url'
 import { durationLimitScope, hostCapabilities } from './lib/hosts.mjs'
 import { baseLine, reviewBaseOf } from './lib/review-base.mjs'
 import { parseSnapshot } from './lib/review-snapshot.mjs'
-import { currentTarget, newRunId, repoIdentity, rulesDigest } from './lib/run-identity.mjs'
+import { currentTarget, newRunId, repoIdentity, rulesDigest, runOutputs } from './lib/run-identity.mjs'
 import { runNameProblem } from './lib/run-name.mjs'
 import { DEFAULT_STALE_AFTER_SEC, parseDuration } from './lib/task-ledger.mjs'
 
@@ -223,7 +223,7 @@ const identity = (() => {
   try {
     // 리포트 디렉터리는 뺀다. 기본 저장 위치는 대상 저장소 안이고, 이 실행이 거기 쓰는
     // 기록이 대상을 바꾼 것으로 보이면 안 된다.
-    const target = currentTarget(repo, { exclude: [dir] })
+    const target = currentTarget(repo, { exclude: runOutputs(dir, run) })
     const { remote, root } = repoIdentity(repo)
     return { runId: newRunId(), ...target, remote, root, rulesDigest: rulesDigest(rules) }
   } catch (error) {

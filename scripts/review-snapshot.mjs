@@ -26,7 +26,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { join, relative } from 'node:path'
 
 import { requireStartedTimeline, readEvents } from './lib/run-record.mjs'
-import { currentTarget, ruleDocDigests, rulesDigest } from './lib/run-identity.mjs'
+import { currentTarget, ruleDocDigests, rulesDigest, runOutputs } from './lib/run-identity.mjs'
 import { buildSnapshot, parseSnapshot, renderSnapshotMarkdown, writeSnapshotAtomic } from './lib/review-snapshot.mjs'
 import { assessEvidence, executionsDirOf, loadEvidence } from './lib/evidence.mjs'
 import { collectVerdicts } from './lib/verdicts.mjs'
@@ -205,7 +205,7 @@ if (routed.value.previous) {
 // 지금의 대상. 시작할 때 기록한 값과 다르면 실행 도중 대상이 바뀐 것이다.
 let current
 try {
-  current = { ...currentTarget(repo, { exclude: [dir] }), rulesDigest: rulesDigest(rules) }
+  current = { ...currentTarget(repo, { exclude: runOutputs(dir, run) }), rulesDigest: rulesDigest(rules) }
 } catch (error) {
   die(`리뷰 대상의 지금 상태를 읽지 못했다(--repo ${repo}): ${String(error.stderr || error.message).trim()}`)
 }

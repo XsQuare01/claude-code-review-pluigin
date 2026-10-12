@@ -151,10 +151,24 @@ function stagedModeOf(path, fileMode) {
 }
 
 /** `exclude`의 경로를 저장소 루트 기준 상대 경로(`/` 구분)로 바꾼다. 저장소 밖이면 버린다. */
-const excludedPrefixes = (top, exclude) => exclude
+/**
+ * 뺄 자리를 저장소 안의 상대 경로로 바꾼다. 파일이든 디렉터리든 같은 방식으로 뺀다(그 경로와 그 아래).
+ * 저장소 루트 자체는 뺄 수 없다 — 빼면 저장소 전체가 빠진다. 그래서 루트는 버리고 나머지만 남긴다.
+ */
+const excludedPaths = (top, exclude) => exclude
   .map(path => relative(resolve(top), resolve(path)))
   .filter(rel => rel && !rel.startsWith('..') && !isAbsolute(rel))
-  .map(rel => `${rel.split('\\').join('/').replace(/\/+$/, '')}/`)
+  .map(rel => rel.split('\\').join('/').replace(/\/+$/, ''))
+
+/**
+ * 한 실행이 스스로 쓰는 자리 — 대상의 변경으로 세지 않는다. 리포트 디렉터리, 그 아래 `.timing/`, 리포트 파일이다.
+ *
+ * 리포트 디렉터리를 통째로 빼는 것만으로는 모자라다. **리포트를 대상 저장소의 루트에 쓰면** 루트는 뺄 수
+ * 없으므로(`excludedPaths`) 아무것도 빠지지 않았다. 2026-10-12 실행이 그랬다 — 실행이 쓴 `.timing/` 파일
+ * 100개와 리포트 파일이 작업 트리 변경으로 세져 "검토 도중 대상이 바뀌었다"가 나왔고, 리포트는 그것을 차단
+ * 사유로 적었다. 그래서 `.timing/`과 리포트 파일은 따로 뺀다.
+ */
+export const runOutputs = (dir, run) => [dir, join(dir, '.timing'), ...(run ? [join(dir, `${run}.md`)] : [])]
 
 /**
  * 리뷰 대상의 현재 상태 — HEAD와, HEAD에 대한 작업 트리 변경의 fingerprint.
@@ -181,8 +195,8 @@ const excludedPrefixes = (top, exclude) => exclude
 export function currentTarget(repo, { exclude = [] } = {}) {
   const top = git(repo, ['rev-parse', '--show-toplevel']).trim()
   const head = git(top, ['rev-parse', 'HEAD']).trim()
-  const skip = excludedPrefixes(top, exclude)
-  const keep = path => !skip.some(prefix => path.startsWith(prefix))
+  const skip = excludedPaths(top, exclude)
+  const keep = path => !skip.some(rel => path === rel || path.startsWith(`${rel}/`))
 
   const entries = new Map()
   const toHash = []
