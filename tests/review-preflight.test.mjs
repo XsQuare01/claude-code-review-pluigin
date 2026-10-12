@@ -330,3 +330,70 @@ test('같은 플래그가 두 번 오면 거부한다', t => {
   assert.equal(out.status, 2)
   assert.match(out.stderr, /두 번 왔다/)
 })
+
+// ── 쌓인 PR의 기준(C-4) ────────────────────────────────────────────────────
+//
+// 다른 PR 위에 쌓은 PR은 base가 아래 PR의 브랜치다. `--base`를 주지 않으면 preflight가 지금 브랜치의 열린
+// PR의 base를 기준으로 잡는다 — main을 기준으로 잡으면 아래 PR의 변경까지 리뷰한다.
+
+const stackedRepo = t => {
+  const dir = mkdtempSync(join(tmpdir(), 'preflight-stacked-'))
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const git = (...args) => execFileSync('git', [
+    '-c', 'user.name=t', '-c', 'user.email=t@example.com', '-c', 'commit.gpgsign=false', '-c', 'init.defaultBranch=main', ...args,
+  ], { cwd: dir, encoding: 'utf8' }).trim()
+  const commit = file => {
+    writeFileSync(join(dir, file), `${file}\n`)
+    git('add', '-A')
+    git('commit', '-qm', file)
+  }
+  git('init', '-q')
+  commit('a.txt')
+  git('switch', '-q', '-c', 'lower')
+  commit('lower.txt')
+  git('switch', '-q', '-c', 'upper')
+  commit('upper.txt')
+  git('update-ref', 'refs/remotes/origin/lower', git('rev-parse', 'lower'))
+  git('branch', '-D', 'lower')
+  return { dir, git }
+}
+
+const preflightIn = (repo, dir, extra) => spawnSync(process.execPath, [
+  SCRIPT, '--dir', dir, '--run', RUN, '--rules', RULES, '--workflow', 'full', '--repo', repo.dir, '--host', 'test', ...extra,
+], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+
+test('--base 없이 쌓인 PR에서 시작하면 그 PR의 base를 기준으로 잡고, 무엇을 기준으로 했는지 남긴다', t => {
+  const repo = stackedRepo(t)
+  const dir = freshDir(t)
+  const pr = join(dir, 'pr.json')
+  writeFileSync(pr, JSON.stringify({ number: 96, baseRefName: 'lower', headRefName: 'upper', state: 'OPEN', url: 'u' }), 'utf8')
+  const out = preflightIn(repo, dir, ['--pr-json', pr])
+  assert.equal(out.status, 0, out.stderr)
+  assert.match(out.stdout, /base {10}origin\/lower \(PR #96의 base — 기본 브랜치가 아니라 `lower` 위에 쌓인 PR이다/)
+  assert.match(out.stdout, /변경 파일 {5}1개/)
+  const [start] = linesOf(dir)
+  assert.deepEqual([start.base, start.baseSource, start.prNumber, start.prBase, start.changedFiles], ['origin/lower', 'pr', 96, 'lower', 1])
+  assert.equal(start.mergeBase, repo.git('rev-parse', 'origin/lower'))
+})
+
+test('PR을 보지 않으면 지금까지처럼 main을 기준으로 잡고, 사용자가 준 --base는 그대로 쓴다', t => {
+  const repo = stackedRepo(t)
+  const dir = freshDir(t)
+  assert.equal(preflightIn(repo, dir, ['--no-pr']).status, 0)
+  const [start] = linesOf(dir)
+  assert.deepEqual([start.base, start.baseSource, start.changedFiles, 'prNumber' in start], ['main', 'default', 2, false])
+  const other = freshDir(t)
+  assert.equal(preflightIn(repo, other, ['--base', 'origin/lower']).status, 0)
+  assert.deepEqual([linesOf(other)[0].base, linesOf(other)[0].baseSource], ['origin/lower', 'user'])
+})
+
+test('PR의 base를 찾을 수 없으면 시작하지 않는다 — 기록도 남기지 않는다', t => {
+  const repo = stackedRepo(t)
+  const dir = freshDir(t)
+  const pr = join(dir, 'pr.json')
+  writeFileSync(pr, JSON.stringify({ number: 96, baseRefName: 'gone', state: 'OPEN' }), 'utf8')
+  const out = preflightIn(repo, dir, ['--pr-json', pr])
+  assert.equal(out.status, 2)
+  assert.match(out.stderr, /git fetch origin gone/)
+  assert.equal(existsSync(join(dir, '.timing', `${RUN}.jsonl`)), false)
+})

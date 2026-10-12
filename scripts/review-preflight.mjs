@@ -19,10 +19,14 @@
 // Usage:
 //
 //   review-preflight.mjs --dir <리포트 디렉터리> --run <리포트 basename> \
-//     --rules <RULES_DIR> --workflow full [--base main] [--host claude-code] [--repo .] \
+//     --rules <RULES_DIR> --workflow full [--base <사용자가 정한 base>] [--host claude-code] [--repo .] \
 //     [--correctness on|off] [--max-duration 30m] [--max-tasks 40] [--stale-after 20m] [--continues <runId>] \
-//     [--previous <이전 스냅숏>]
+//     [--previous <이전 스냅숏>] [--pr-json <gh pr view 출력>] [--no-pr]
 //
+//   --base      사용자가 리뷰 범위를 정했을 때만 준다. 주지 않으면 지금 브랜치의 열린 PR의 base를 쓰고
+//               (다른 PR 위에 쌓인 PR이면 그 브랜치), PR이 없으면 main → master → origin/HEAD다(C-4)
+//   --pr-json   gh를 쓸 수 없는 호스트에서 `gh pr view --json number,baseRefName,headRefName,state,url`의 출력
+//   --no-pr     PR을 보지 않는다
 //   --max-duration·--max-tasks  이 실행의 시간·호출 한도(C-12). 작업 대장(review-tasks.mjs)이 지킨다
 //   --stale-after               끝을 받지 못한 시도를 죽은 것으로 볼 시간(기본 20m)
 //   --continues                 대상이 바뀌어 이어 가지 못한 앞 실행의 ID
@@ -38,6 +42,7 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { durationLimitScope, hostCapabilities } from './lib/hosts.mjs'
+import { baseLine, reviewBaseOf } from './lib/review-base.mjs'
 import { parseSnapshot } from './lib/review-snapshot.mjs'
 import { currentTarget, newRunId, repoIdentity, rulesDigest } from './lib/run-identity.mjs'
 import { runNameProblem } from './lib/run-name.mjs'
@@ -51,8 +56,8 @@ const die = message => {
   process.exit(2)
 }
 
-const VALUE_FLAGS = new Set(['dir', 'run', 'rules', 'workflow', 'base', 'host', 'repo', 'correctness', 'max-duration', 'max-tasks', 'stale-after', 'continues', 'previous'])
-const BOOL_FLAGS = new Set(['dry-run'])
+const VALUE_FLAGS = new Set(['dir', 'run', 'rules', 'workflow', 'base', 'host', 'repo', 'correctness', 'max-duration', 'max-tasks', 'stale-after', 'continues', 'previous', 'pr-json'])
+const BOOL_FLAGS = new Set(['dry-run', 'no-pr'])
 {
   const argv = process.argv.slice(2)
   const seen = new Set()
@@ -84,7 +89,9 @@ const dir = flag('dir')
 const run = flag('run')
 const rules = flag('rules')
 const workflow = flag('workflow')
-const base = flag('base', 'main')
+// 사용자가 정한 base. 없으면 아래에서 PR의 base나 기본값으로 정한다(C-4, `lib/review-base.mjs`).
+const requestedBase = flag('base')
+if (has('no-pr') && flag('pr-json') !== undefined) die('--no-pr와 --pr-json을 함께 줄 수 없다')
 // host는 **harness 이름**이다(claude-code / opencode / …). 기존 기록이 한 번은
 // OS를, 한 번은 harness를 적어 두 실행을 나란히 놓을 수 없었다. OS가 필요하면
 // `--set os=win32`로 따로 싣는다.
@@ -127,7 +134,7 @@ const previous = (() => {
 })()
 
 if (!dir || !run || !rules || !workflow) {
-  die('usage: review-preflight.mjs --dir <리포트 디렉터리> --run <리포트 basename> --rules <RULES_DIR> --workflow <이름> [--base main] [--host 이름]')
+  die('usage: review-preflight.mjs --dir <리포트 디렉터리> --run <리포트 basename> --rules <RULES_DIR> --workflow <이름> [--base <base>] [--host 이름]')
 }
 const runProblem = runNameProblem(run)
 if (runProblem) die(runProblem)
@@ -195,11 +202,12 @@ const branch = (() => {
   return typeof out === 'string' ? out : 'unknown'
 })()
 
-const mergeBase = (() => {
-  const out = git(['merge-base', base, 'HEAD'])
-  if (typeof out === 'string' && out) return out
-  die(`base ${JSON.stringify(base)}를 HEAD와 맞춰볼 수 없다 — 존재하는 ref를 --base로 넘겨라\n${typeof out === 'object' ? out.error : ''}`)
-})()
+// 리뷰 범위의 기준. 사용자가 정한 범위 → 지금 브랜치의 열린 PR의 base → main·master·origin/HEAD 순이다.
+// 다른 PR 위에 쌓은 PR을 main 기준으로 리뷰하면 아래 PR의 변경까지 리뷰한다(C-4).
+const chosenBase = reviewBaseOf(repo, { requested: requestedBase, prJson: flag('pr-json'), noPr: has('no-pr') })
+if (chosenBase.error) die(chosenBase.error)
+const base = chosenBase.ref
+const mergeBase = chosenBase.mergeBase
 
 const changed = (() => {
   const out = git(['diff', '--name-only', `${mergeBase}...HEAD`])
@@ -250,6 +258,8 @@ const logged = (() => {
     mergeBase,
     runId: identity.runId,
     base,
+    baseSource: chosenBase.source,
+    ...(chosenBase.pr ? { prNumber: chosenBase.pr.number, prBase: chosenBase.pr.baseRefName } : {}),
     head: identity.head,
     worktree: identity.worktree,
     dirtyFiles: identity.dirtyFiles,
@@ -280,7 +290,7 @@ const out = [
   `규칙 경로     ${rules}`,
   `워크플로우    ${workflow}`,
   `브랜치        ${branch}`,
-  `base          ${base}`,
+  `base          ${baseLine(chosenBase)}`,
   `merge-base    ${mergeBase}`,
   `HEAD          ${identity.head}`,
   `작업 트리     ${identity.worktree === 'clean' ? 'clean' : `커밋하지 않은 변경 ${identity.dirtyFiles}개 (${identity.worktree})`}`,

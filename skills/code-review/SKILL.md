@@ -30,7 +30,7 @@ React 전용 모듈러 코드 리뷰 시스템. 리뷰 규칙 폴더에서 **숫
 
 ### Step 1: Diff 범위 결정
 
-`workflow-contract.md` C-4를 따른다. 결정된 범위로 아래를 확인한다.
+`workflow-contract.md` C-4를 따른다. 기준은 스크립트로 정한다 — `node "$RULES_DIR/../scripts/review-base.mjs" --repo .`(사용자가 범위를 정했으면 `--base <그 base>`)가 낸 `mergeBase`를 `$MERGE_BASE`로, `line`을 리포트의 기준 줄로 쓴다. 지금 브랜치에 열린 PR이 있으면 그 PR의 base가 기준이다 — 다른 PR 위에 쌓은 PR이면 아래 PR의 브랜치이고, 그 위에 더한 변경만 리뷰한다. 종료 코드 2면(PR의 base를 이 저장소에서 찾을 수 없다) main으로 물러서지 않고 `git fetch origin <base>` 뒤 다시 돌리거나 사용자에게 범위를 묻는다. 결정된 범위로 아래를 확인한다.
 
 ```bash
 git diff --stat $MERGE_BASE..HEAD

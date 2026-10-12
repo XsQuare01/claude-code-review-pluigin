@@ -43,7 +43,7 @@ description: Use when the user invokes /code-review-math or wants a specialized 
 
 ### Step 1: Diff 범위 결정
 
-범위 결정은 `workflow-contract.md` C-4를 따른다. 결정된 범위로 `git diff --stat $MERGE_BASE..HEAD`와 `git diff $MERGE_BASE..HEAD`를 확인한다. 제외 경로는 C-5를 따른다. 변경 파일 중 **행렬/3D 변환 연산이 포함된 파일만** 리뷰 대상으로 좁힌다 (해당 연산이 전혀 없는 UI 전용 파일은 제외).
+범위 결정은 `workflow-contract.md` C-4를 따른다. 기준은 스크립트로 정한다 — `node "$RULES_DIR/../scripts/review-base.mjs" --repo .`(사용자가 범위를 정했으면 `--base <그 base>`)가 낸 `mergeBase`를 `$MERGE_BASE`로, `line`을 리포트의 기준 줄로 쓴다. 지금 브랜치에 열린 PR이 있으면 그 PR의 base가 기준이다 — 다른 PR 위에 쌓은 PR이면 아래 PR의 브랜치이고, 그 위에 더한 변경만 리뷰한다. 종료 코드 2면(PR의 base를 이 저장소에서 찾을 수 없다) main으로 물러서지 않고 `git fetch origin <base>` 뒤 다시 돌리거나 사용자에게 범위를 묻는다. 결정된 범위로 `git diff --stat $MERGE_BASE..HEAD`와 `git diff $MERGE_BASE..HEAD`를 확인한다. 제외 경로는 C-5를 따른다. 변경 파일 중 **행렬/3D 변환 연산이 포함된 파일만** 리뷰 대상으로 좁힌다 (해당 연산이 전혀 없는 UI 전용 파일은 제외).
 
 **diff는 여기서 오케스트레이터가 한 번만 수집한다.** `git diff $MERGE_BASE..HEAD` 출력 전체가 Step 3 producer 프롬프트의 `{DIFF}`가 된다. producer는 git을 돌리지 않는다 — 셸이 없는 에이전트로 띄우기 때문이다(Step 3, 계약 C-6). 좁히는 것은 `{CHANGED_MATH_FILES}`(지적 대상)이고 `{DIFF}`는 좁히기 전 전체다 — 행렬의 shape과 storage order는 대상이 아닌 파일의 변경에서 정해질 수 있다. 테스트 파일 변경도 그대로 담는다. 테스트는 지적 대상에서 빠질 뿐 증거에서 빠지지 않는다(계약 C-5).
 

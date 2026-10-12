@@ -1039,6 +1039,22 @@ These scenarios pin the behaviour that `review-rules/workflow-contract.md` promi
       ],
       "scenario": "A skill dispatches its producer with task(category=\"unspecified-high\", ...) and no subagent_type, or names the agent in a form validate-rules cannot read",
       "expected": "validate-rules fails and points at that task( line (default deny); zero extracted targets is never reported as a pass. A skill with no dispatch at all is not flagged, and prose such as subagent_type=react-code-review-plugin:rule-module-reviewer로 띄운다 still counts as a named agent"
+    },
+    {
+      "id": 131,
+      "clauses": [
+        "C-4"
+      ],
+      "scenario": "The current branch has an open PR whose base is another PR's branch (a stacked PR), and the user gives no range",
+      "expected": "The base is the PR's base branch (origin/<base> before the local branch), so only the changes added on top of the lower PR are reviewed; 리뷰 기준 says it is a stacked PR. If that base branch is not in the repository, the run stops and asks for a fetch or a range instead of falling back to main"
+    },
+    {
+      "id": 132,
+      "clauses": [
+        "C-4"
+      ],
+      "scenario": "The branch has merged the latest origin/main, local main has not been pulled yet, and the PR's base is main",
+      "expected": "The base is origin/main, not the stale local main, so files from other PRs already in main are not reviewed"
     }
   ],
   "defaultWorkflowOnlyCases": [

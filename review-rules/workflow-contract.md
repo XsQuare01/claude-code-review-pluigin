@@ -74,22 +74,27 @@ ls "$RULES_DIR"/[0-9]*.md
 
 **사용자가 범위를 지정했으면 그것이 최우선이다.** 지정된 범위가 있으면 아래 자동 판정을 수행하지 않는다.
 
-지정이 없으면 base 브랜치를 다음 순서로 찾는다.
+지정이 없으면 **지금 브랜치의 PR이 비교하는 범위**를 리뷰한다. 기준(base)은 스크립트가 정한다 — 셸로 고르지 않는다.
 
 ```bash
-for candidate in main master; do
-  if git rev-parse --verify --quiet "$candidate" >/dev/null; then
-    BASE_BRANCH=$candidate; break
-  fi
-done
-BASE_BRANCH=${BASE_BRANCH:-$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD | sed 's|origin/||')}
-
-MERGE_BASE=$(git merge-base $BASE_BRANCH HEAD)
+node "$RULES_DIR/../scripts/review-base.mjs" --repo .   # 사용자가 base를 정했으면 --base <그 base>
 ```
 
+출력(JSON)의 `mergeBase`가 `$MERGE_BASE`이고, `base`는 쓴 기준, `line`은 `리뷰 기준`에 옮길 한 줄(기준과 그 이유)이다. `/code-review-full`은 preflight(`review-preflight.mjs`)가 같은 규칙(`scripts/lib/review-base.mjs`)으로 정해 `run.start`에 남기므로 이 스크립트를 따로 부르지 않는다.
+
+기준을 고르는 순서:
+
+1. 사용자가 정한 범위(`--base`)
+2. **지금 브랜치에 열린 PR이 있으면 그 PR의 base.** 다른 PR 위에 쌓은 PR이면 아래 PR의 브랜치다. 원격 추적 브랜치(`origin/<base>`)를 같은 이름의 로컬 브랜치보다 먼저 본다. PR은 `gh pr view`(읽기만 한다)로 읽고, gh를 쓸 수 없는 호스트는 `gh pr view --json number,baseRefName,headRefName,state,url`의 출력을 담은 파일을 `--pr-json`으로 준다
+3. PR이 없거나 열려 있지 않거나 확인할 수 없으면 `main` → `master` → `origin/HEAD`
+
+- **쌓인 PR을 main 기준으로 리뷰하면 아래 PR의 변경까지 리뷰한다.** 그 지적은 이 PR의 결함이 아니고, 아래 PR의 리뷰와 겹친다. 그래서 PR의 base를 쓴다(이 저장소의 #96은 base가 #95의 브랜치였다)
+- 원격을 먼저 보는 이유: 같은 이름의 로컬 브랜치는 뒤처져 있을 수 있다. 2026-10-06 실행은 pull하기 전의 로컬 `main`을 기준으로 잡아, 이미 main에 들어간 다른 PR의 파일 34개까지 리뷰했다 — 지적 24건 중 9건(🔴 하나 포함)이 그 파일에 있었다. PR의 diff는 원격의 base와 비교한다
+- **PR의 base를 이 저장소에서 찾을 수 없으면 멈춘다**(종료 코드 2). main으로 물러서지 않는다 — 물러서면 쌓인 PR을 다시 main 기준으로 리뷰한다. `git fetch origin <base>`로 받은 뒤 다시 돌리거나 사용자에게 범위를 묻는다
+- PR이 없는 브랜치는 지금까지처럼 로컬 `main`이 기준이다. 뒤처졌을 수 있으면 pull한 뒤 리뷰하거나 범위를 직접 준다
 - 후보가 모두 없으면 **사용자에게 base를 묻는다.** 임의로 정하지 않는다
 - `MERGE_BASE == HEAD`이면 리뷰할 변경이 없는 것으로 보고 종료한다
-- 결정된 base와 범위를 리포트에 적는다
+- 결정된 base와 그 이유(`line`)를 리포트에 적는다
 
 커밋 단위 리뷰처럼 범위 결정 방식이 다른 워크플로우는 자기 SKILL 문서에서 그 차이만 선언한다.
 
