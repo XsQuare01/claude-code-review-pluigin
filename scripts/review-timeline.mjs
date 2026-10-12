@@ -1237,6 +1237,12 @@ const data = (() => {
   if (phase === 'run.end' && absent.includes('verdict')) {
     die('`run.end`에 verdict가 없다 — 남기지 않았다. run.end 뒤에는 아무것도 덧붙이지 않으므로 빠진 판정을 고칠 수 없다. `--set verdict=<리포트의 판정>`을 붙여 다시 부른다')
   }
+  // `applied`는 적용한 **번호 모듈** 수다 — Props·수학·예외·정확성 패스는 세지 않는다(C-9). 그래서 후보 수를
+  // 넘을 수 없다. 2026-10-12 실행은 특수 패스까지 22로 적어(후보 20) `--check`가 "22인데 19개"라는 거짓 경고를
+  // 냈다. 디스패치 전에 남기는 줄이라 거부해도 다시 부르면 된다.
+  if (phase === 'modules.planned' && Number.isInteger(data.applied) && Number.isInteger(data.candidates) && data.applied > data.candidates) {
+    die(`\`modules.planned\`의 applied ${data.applied}가 candidates ${data.candidates}보다 크다 — 남기지 않았다. applied는 적용한 번호 모듈만 센다(Props·수학·예외·정확성 패스는 빼고 센다)`)
+  }
   if (absent.length) {
     process.stderr.write(`경고: \`${phase}\`에 ${absent.join(', ')}가 없다 (C-9 표가 요구한다)\n`)
   }

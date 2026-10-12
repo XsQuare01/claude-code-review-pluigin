@@ -573,6 +573,17 @@ test('run.end에 verdict가 없으면 남기지 않는다 — 그 뒤에는 고�
   assert.equal(linesOf(dir).at(-1).verdict, 'MERGE_BLOCKED')
 })
 
+test('modules.planned의 applied가 후보 수보다 크면 남기지 않는다 — 번호 모듈만 센다', t => {
+  // 2026-10-12 실행은 특수 패스까지 22로 적어(후보 20) --check가 "22인데 19개"라는 거짓 경고를 냈다.
+  const dir = freshDir(t)
+  log(dir, 'run.start')
+  const refused = log(dir, 'modules.planned', { candidates: 20, applied: 22 })
+  assert.equal(refused.status, 2)
+  assert.match(refused.stderr, /applied는 적용한 번호 모듈만 센다/)
+  assert.equal(linesOf(dir).length, 1)
+  assert.equal(log(dir, 'modules.planned', { candidates: 20, applied: 19 }).status, 0)
+})
+
 // ── 인자 검증 ──────────────────────────────────────────────────────────────
 
 test('run에 경로 구분자가 들어오면 거부한다', t => {
