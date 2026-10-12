@@ -42,7 +42,7 @@ import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { durationLimitScope, hostCapabilities } from './lib/hosts.mjs'
-import { baseLine, reviewBaseOf } from './lib/review-base.mjs'
+import { baseLine, changedFilesSince, reviewBaseOf } from './lib/review-base.mjs'
 import { parseSnapshot } from './lib/review-snapshot.mjs'
 import { currentTarget, newRunId, repoIdentity, rulesDigest, runOutputs } from './lib/run-identity.mjs'
 import { runNameProblem } from './lib/run-name.mjs'
@@ -225,9 +225,11 @@ const mergeBase = chosenBase.mergeBase
 }
 
 const changed = (() => {
-  const out = git(['diff', '--name-only', `${mergeBase}...HEAD`])
-  if (typeof out !== 'string') die(`변경 파일 목록을 읽지 못했다: ${out.error}`)
-  return out ? out.split('\n').filter(Boolean) : []
+  try {
+    return changedFilesSince(repo, mergeBase)
+  } catch (error) {
+    die(`변경 파일 목록을 읽지 못했다: ${String(error.stderr || error.message).trim()}`)
+  }
 })()
 
 // 지적 대상으로 삼는 파일(C-5). 이름 규칙으로 빼는 테스트·mock 파일은 여기서 센다 — `scope.done`의 수다.
