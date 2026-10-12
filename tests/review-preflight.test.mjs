@@ -468,12 +468,24 @@ test('git이 인용해 내는 이름(한글·공백)도 실제 경로로 남기�
   for (const path of [...list.files, ...list.excluded]) assert.ok(existsSync(join(repo.dir, path)), path)
 })
 
-test('리포트를 대상 저장소 루트에 쓰면 알리고, 그래도 대상은 깨끗한 채로 시작한다', t => {
+test('리포트 디렉터리가 대상 저장소의 루트면 아무것도 쓰지 않고 멈추며 자리를 정하는 순서를 보인다', t => {
+  // 2026-10-12에 세 실행 중 둘이 루트에 썼다. 사용자는 전역 지시로 문서 폴더를 정해 두고 있었다.
   const repo = scopeRepo(t)
-  const out = preflightAt(repo, repo.dir, RUN)
+  for (const extra of [[], ['--dry-run']]) {
+    const out = preflightAt(repo, repo.dir, RUN, extra)
+    assert.equal(out.status, 2, out.stdout)
+    assert.match(out.stderr, /대상 저장소의 루트다/)
+    assert.match(out.stderr, /1\. 사용자가 이번 요청에서 정한 곳[\s\S]*2\. 사용자·프로젝트 지시 파일[\s\S]*3\. 둘 다 없으면 .*review-reports/)
+    assert.equal(existsSync(join(repo.dir, '.timing')), false)
+  }
+})
+
+test('리포트 디렉터리가 저장소 안이고 무시 목록에 없으면 알리고 시작한다 — 사용자 지시가 먼저라고 덧붙인다', t => {
+  const repo = scopeRepo(t)
+  const out = preflightAt(repo, join(repo.dir, 'review-reports'), RUN)
   assert.equal(out.status, 0, out.stderr)
-  assert.match(out.stdout, /리포트 위치 {3}리포트를 대상 저장소의 루트에 쓴다/)
-  assert.equal(JSON.parse(readFileSync(join(repo.dir, '.timing', `${RUN}.jsonl`), 'utf8').split('\n')[0]).worktree, 'clean')
+  assert.match(out.stdout, /리포트 위치 {3}리포트 디렉터리\(review-reports\)가 대상 저장소 안에 있고 무시 목록에 없다/)
+  assert.match(out.stdout, /사용자·프로젝트 지시에 문서 저장 위치가 있으면 그쪽이 먼저다/)
 })
 
 test('리포트 디렉터리가 무시 목록에 있으면 위치를 알리지 않는다', t => {
