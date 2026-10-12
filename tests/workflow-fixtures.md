@@ -1055,6 +1055,41 @@ These scenarios pin the behaviour that `review-rules/workflow-contract.md` promi
       ],
       "scenario": "The branch has merged the latest origin/main, local main has not been pulled yet, and the PR's base is main",
       "expected": "The base is origin/main, not the stale local main, so files from other PRs already in main are not reviewed"
+    },
+    {
+      "id": 133,
+      "clauses": [
+        "C-10"
+      ],
+      "scenario": "The report directory is the repository root; the run writes .timing/ and its report there, and no reviewed file changes",
+      "expected": "The snapshot reports no drift — the run's own .timing/ and <run>.md are excluded even though the root cannot be — and the verdict does not cite a target change"
+    },
+    {
+      "id": 134,
+      "clauses": [
+        "C-6"
+      ],
+      "scenario": "/code-review-full on OpenCode, whose task tool accepts load_skills",
+      "expected": "Producers and verifiers are dispatched as rule-module-reviewer with load_skills=[]; the orchestrator's own skill is never injected"
+    },
+    {
+      "id": 135,
+      "clauses": [
+        "C-9",
+        "C-12"
+      ],
+      "scenario": "A run saved its synthesis output and later re-prepares verification with --collect --discard-verdicts",
+      "expected": "Synthesis output lives in <run>.synthesis.json, and --collect does not treat a post-verification synthesis module as a producer, so re-collection succeeds"
+    },
+    {
+      "id": 136,
+      "clauses": [
+        "C-5",
+        "C-7",
+        "C-9"
+      ],
+      "scenario": "The orchestrator starts with --run full-code-review-2026-10-12, then runs lint, typecheck and test together",
+      "expected": "Preflight refuses the name and suggests code-review-full-<branch>-<date>; with a valid name it records scope.done and scope.json from the C-5 name rules; each tool runs through review-tool.mjs so its tool.start and tool.done carry that tool's own times"
     }
   ],
   "defaultWorkflowOnlyCases": [

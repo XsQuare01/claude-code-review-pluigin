@@ -111,6 +111,8 @@ node "$RULES_DIR/../scripts/review-base.mjs" --repo .   # 사용자가 base를 �
 
 제외의 의미는 `00-rule.md` 00-3을 따른다. **테스트 파일을 지적 대상에서 빼는 것이지, 테스트 변경을 증거에서 빼는 것이 아니다.**
 
+**이름 규칙으로 가를 수 있는 것은 스크립트가 센다.** `/code-review-full`은 preflight가 위 이름 규칙(디렉터리 `__test__`·`__tests__`·`__mocks__`·`mock`·`mocks`·`mockData`, 파일 `*.test.*`·`*.spec.*`·`*.mock.*`)으로 변경 파일을 나눠 `.timing/<run>.scope.json`(`files`·`excluded`)에 두고 `scope.done`을 남긴다(`scripts/lib/review-scope.mjs`). 2026-10-12 실행은 손으로 세어 249개를 빼고도 `excluded: 0`을 적었다. 이름으로 드러나지 않는 fixture를 더 뺐으면 그 목록을 리포트에 적는다.
+
 **제외는 오케스트레이터가 적용한다.** producer 프롬프트에 담는 diff 본문(C-4)은 테스트·목 변경까지 그대로 두고, 변경 파일 목록과 지적 범위에서만 뺀다. producer가 받는 제외 경로 목록은 "지적하지 않을 경로"이지 "읽지 않을 경로"가 아니다 — diff에서 테스트 hunk를 지우면 producer는 영향 범위를 읽을 증거를 잃고, 그 사실을 알 길도 없다.
 
 ## C-6. 실행 안전
@@ -872,8 +874,8 @@ deletionPhase:
 
 ## C-7. 리포트 저장
 
-- 파일명: `code-review-{workflow-name}-{branch-name}-{date}.md`
-- 기본 저장 위치는 `./review-reports/`
+- 파일명: `code-review-{workflow-name}-{branch-name}-{date}.md`. 실행 이름(`--run`)은 이 파일명에서 `.md`를 뺀 것이고, **preflight가 `code-review-{workflow-name}-`로 시작하지 않는 이름을 거부한다** — 2026-10-12 실행은 `full-code-review-2026-10-12`로 지어 브랜치가 빠졌다
+- 기본 저장 위치는 `./review-reports/`. **대상 저장소의 루트에 두지 않는다** — 리포트와 `.timing`이 미추적 파일로 남아 함께 커밋될 수 있다. 리포트 디렉터리가 대상 저장소 안이고 무시 목록에 없으면 preflight가 `리포트 위치`로 알린다(막지는 않는다)
 - **프로젝트나 사용자 설정이 문서 저장 위치를 따로 지정하고 있으면 그쪽이 우선한다** (`CLAUDE.md`, `AGENTS.md` 등). 사용자 지시가 이 계약보다 우선하며, 그렇게 저장한 것은 위반이 아니다. 어디에 저장했든 **경로를 사용자에게 보고**한다
 - `workflow-name`은 아래 등록된 값만 사용하고 생략하지 않는다
 
@@ -1220,7 +1222,7 @@ UTF-16 파일도 읽는다 — PowerShell 5.1의 `Set-Content -Encoding UTF8`은
 |---|---|---|
 | `run.start` | 가장 먼저 | `host`, `rules`(해석된 RULES_DIR), `version`, `branch`, `changedFiles` · 무엇을 리뷰하는지(C-10): `runId`, `base`, `head`, `worktree`, `dirtyFiles`, `repo`, `repoRoot`, `rulesDigest` · 선택 패스를 켰는지: `correctness`(`on`/`off`, 선택 패스가 있는 워크플로우만) · 한도(C-12): `maxTasks`, `maxDurationSec`(준 것만), `staleAfterSec` · (새 실행으로 이어 받았으면) `continues` · (이전 리뷰와 비교하면, C-13) `previousSnapshot`, `previousRunId`, `previousSha256` — preflight가 쓴다 |
 | `run.resume` | 멈춘 실행을 이어 갈 때 (`review-tasks.mjs resume`이 쓴다) | 새 구간의 `maxTasks`·`maxDurationSec`·`staleAfterSec`, 다시 잰 `head`·`worktree` |
-| `scope.done` | 범위 확정(C-4) | `files`, `excluded` |
+| `scope.done` | 범위 확정(C-4) — `/code-review-full`은 **preflight가 남긴다**(C-5의 이름 규칙으로 센 수) | `files`, `excluded` |
 | `modules.planned` | 적용 모듈 확정(C-3) | `candidates`, `applied` · `skipped`, `unknown`(중첩, `--data-file`) |
 | `dispatch.start` | **첫 sub-agent를 실제로 띄운 직후** (full은 작업 대장이 첫 시도를 내줄 때 쓴다) | `modules`, `inflight` |
 | `module.start` | **모듈 하나를 띄운 직후** (full은 작업 대장이 띄우기 **전에** 쓴다 — C-12) | `module`, `attempt`, `taskId`, (재시도면) `retryOf` · 대장이 쓰면 `claim` |
@@ -1231,8 +1233,8 @@ UTF-16 파일도 읽는다 — PowerShell 5.1의 `Set-Content -Encoding UTF8`은
 | `dispatch.end` | 전부 수집 후 (full은 작업 대장이 모듈 단계가 끝났을 때 쓴다) | `terminalOk`, `terminalFailed`(최종 모듈 단위) · `attemptsTotal`, `attemptsFailed`(시도 단위) — **이 넷은 스크립트가 `module.done`에서 센다.** 넘기지 않아도 되고, 넘긴 값이 기록과 다르면 경고하고 센 값을 남긴다 · `attemptFailureClasses`(중첩, `--data-file`), (있으면) `tokensIn`·`tokensOut` |
 | `script.start` | `prepare-verification.mjs` 진입 직후 (스크립트가 직접 남긴다) | `script` |
 | `script.done` | `prepare-verification.mjs` 실행 후 | `ran`, `counts`(중첩, 스크립트가 직접 남긴다) |
-| `tool.start` | **도구 하나를 돌리기 직전** | `name`, (재시도면) `attempt` · 재현 명령이면 `candidateId`·`evidenceId`(C-11, `review-evidence.mjs`가 쓴다) |
-| `tool.done` | lint/typecheck/test를 돌린 직후 | `name`, `exit`, `treeSha` · `failedNow`, `failedBaseline`(재지 못했으면 `null`) · `failing`(중첩, `--data-file`) · (재시도면) `attempt` · 재현 명령이면 `candidateId`·`evidenceId` |
+| `tool.start` | **도구 하나를 돌리기 직전** — `review-tool.mjs`가 남긴다 | `name`, (재시도면) `attempt` · 재현 명령이면 `candidateId`·`evidenceId`(C-11, `review-evidence.mjs`가 쓴다) |
+| `tool.done` | lint/typecheck/test를 돌린 직후 — `review-tool.mjs`가 남긴다 | `name`, `exit`, `treeSha` · `failedNow`, `failedBaseline`(재지 못했으면 `null`) · `failing`(중첩, `--data-file`) · (재시도면) `attempt` · 재현 명령이면 `candidateId`·`evidenceId` |
 | `crossverify.start` / `.end` | 교차검증 패스 — 시작은 `prepare-verification.mjs`가 검증 작업을 만든 직후, 끝은 `tally-verdicts.mjs`가 **직접 남긴다** | `targets`, `round`(이 교차검증 라운드의 이름 — C-12) / `upheld`, `rejected`, `needsContext`, `noVerdict`, `countsFrom`, (있으면) `malformedTasksCorrected`·`tokensIn`·`tokensOut` |
 | `synthesis.start` / `.end` | synthesis 패스 | `findings` / `clusters`, (있으면) `tokensIn`·`tokensOut` |
 | `render.start` | **문서를 쓰기 직전** | `findings`(중복 제거 후) |
@@ -1623,7 +1625,7 @@ preflight가 `run.start`에 다음을 함께 남긴다(`scripts/lib/run-identity
 - 추적하지 않는 파일(무시 규칙 밖)·지운 파일·mode 변경을 넣는다. **새 파일은 stage 여부와 상관없이 같은 값이다** — 추적하지 않는 파일의 mode를 git이 stage할 때 매길 mode(심볼릭 링크·실행 비트·그 밖)로 센다. 내용을 바꾸지 않고 `git add`만 해도 대상이 바뀐 것으로 보이면 안 된다(PR #89 리뷰)
 - 서브모듈은 내용을 열지 않고 **체크아웃된 commit**으로 센다. 상위 저장소가 gitlink를 stage하지 않으면 diff가 주는 id는 0이라, 서브모듈만 B → C로 바꿔도 같은 대상으로 보였다(PR #89 리뷰). 그래서 서브모듈의 HEAD를 직접 읽는다 — stage 여부와 상관없이 같은 체크아웃이면 같은 값이다. HEAD의 gitlink와 같은 commit이면(안쪽 파일만 바뀌었으면) 넣지 않고, 읽지 못하면 `submodule-unreadable`로 따로 남긴다. 서브모듈 안의 작업 트리는 추적하지 않는다
 - 내용은 git의 blob id로 센다. 줄 끝 설정이 달라도 같은 내용이면 같은 값이다
-- **리포트 디렉터리는 뺀다.** 기본 저장 위치는 대상 저장소 안이고, 실행이 스스로 쓰는 기록이 대상을 바꾼 것으로 보이면 안 된다
+- **리포트 디렉터리는 뺀다.** 기본 저장 위치는 대상 저장소 안이고, 실행이 스스로 쓰는 기록이 대상을 바꾼 것으로 보이면 안 된다. **리포트 디렉터리가 저장소 루트면** 루트는 통째로 뺄 수 없으므로 그 실행의 `.timing/`과 리포트 파일(`<run>.md`)만 뺀다(`runOutputs`) — 2026-10-12 실행은 리포트를 루트에 써서 아무것도 빠지지 않았고, 실행이 쓴 기록 100개 때문에 "검토 도중 대상이 바뀌었다"가 나와 리포트가 그것을 차단 사유로 적었다
 - 대상 저장소에 아무것도 쓰지 않는다(`hash-object`에 `-w`를 주지 않고, `GIT_OPTIONAL_LOCKS=0`으로 인덱스 갱신을 막는다)
 
 **작업 트리 변경은 리뷰 diff(`merge-base..HEAD`)에 들어가지 않는다.** 그래도 대상의
