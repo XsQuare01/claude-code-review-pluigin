@@ -1150,6 +1150,12 @@ producer 출력을 하나의 JSON으로 조립한 시간, 실패한 입력 전�
 도구는 하나씩 돌리므로 열린 시작이 둘이면 앞의 것은 끝나지 못한 시도다. **재시도라면
 `attempt`를 양쪽에 적는다** — 그러면 추측할 것이 없어진다.
 
+**`callId`가 있으면 그것으로 짝을 맞춘다.** `review-tool.mjs`는 호출마다 `callId`를 시작과 끝
+양쪽에 적고, 같은 값으로 그 호출의 로그(`.timing/<run>.tool.<name>.<callId>.log`)를 남긴다.
+baseline과 현재의 `lint`를 함께 돌리면 열린 시작 둘이 모두 살아 있는 호출이라, 가장 최근
+것부터 닫으면 먼저 끝난 쪽의 끝이 다른 쪽 시작에 붙어 시간과 종료 코드가 서로 바뀐다. 로그도
+도구 이름으로만 지었을 때는 두 호출이 같은 파일을 써 baseline 로그가 지워졌다(2.25.0 리뷰에서 재현).
+
 ### 그 다음 단계들
 
 ```
@@ -1233,8 +1239,8 @@ UTF-16 파일도 읽는다 — PowerShell 5.1의 `Set-Content -Encoding UTF8`은
 | `dispatch.end` | 전부 수집 후 (full은 작업 대장이 모듈 단계가 끝났을 때 쓴다) | `terminalOk`, `terminalFailed`(최종 모듈 단위) · `attemptsTotal`, `attemptsFailed`(시도 단위) — **이 넷은 스크립트가 `module.done`에서 센다.** 넘기지 않아도 되고, 넘긴 값이 기록과 다르면 경고하고 센 값을 남긴다 · `attemptFailureClasses`(중첩, `--data-file`), (있으면) `tokensIn`·`tokensOut` |
 | `script.start` | `prepare-verification.mjs` 진입 직후 (스크립트가 직접 남긴다) | `script` |
 | `script.done` | `prepare-verification.mjs` 실행 후 | `ran`, `counts`(중첩, 스크립트가 직접 남긴다) |
-| `tool.start` | **도구 하나를 돌리기 직전** — `review-tool.mjs`가 남긴다 | `name`, (재시도면) `attempt` · 재현 명령이면 `candidateId`·`evidenceId`(C-11, `review-evidence.mjs`가 쓴다) |
-| `tool.done` | lint/typecheck/test를 돌린 직후 — `review-tool.mjs`가 남긴다 | `name`, `exit`, `treeSha` · `failedNow`, `failedBaseline`(재지 못했으면 `null`) · `failing`(중첩, `--data-file`) · (재시도면) `attempt` · 재현 명령이면 `candidateId`·`evidenceId` |
+| `tool.start` | **도구 하나를 돌리기 직전** — `review-tool.mjs`가 남긴다 | `name`, `callId`(`review-tool.mjs`, 로그 이름) · (재시도면) `attempt` · 재현 명령이면 `candidateId`·`evidenceId`(C-11, `review-evidence.mjs`가 쓴다) |
+| `tool.done` | lint/typecheck/test를 돌린 직후 — `review-tool.mjs`가 남긴다 | `name`, `exit`(시간 상한으로 끊었으면 `null`), `treeSha`, `callId` · `failedNow`, `failedBaseline`(재지 못했으면 `null`) · `failing`(중첩, `--data-file`) · (재시도면) `attempt` · 재현 명령이면 `candidateId`·`evidenceId` |
 | `crossverify.start` / `.end` | 교차검증 패스 — 시작은 `prepare-verification.mjs`가 검증 작업을 만든 직후, 끝은 `tally-verdicts.mjs`가 **직접 남긴다** | `targets`, `round`(이 교차검증 라운드의 이름 — C-12) / `upheld`, `rejected`, `needsContext`, `noVerdict`, `countsFrom`, (있으면) `malformedTasksCorrected`·`tokensIn`·`tokensOut` |
 | `synthesis.start` / `.end` | synthesis 패스 | `findings` / `clusters`, (있으면) `tokensIn`·`tokensOut` |
 | `render.start` | **문서를 쓰기 직전** | `findings`(중복 제거 후) |
