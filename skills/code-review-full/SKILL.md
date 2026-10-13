@@ -60,7 +60,7 @@ node "$RULES_DIR/../scripts/review-preflight.mjs" --dir "$REPORT_DIR" --run "$RE
 
 **`$REPORT_DIR`와 `$REPORT_BASENAME`은 리포트를 실제로 저장할 곳과 그 파일 이름이다.** 여기서 정한 값이 사이드카의 자리를 결정하므로, 나중에 리포트를 다른 디렉터리나 다른 이름으로 쓰면 기록과 리포트가 서로를 못 찾는다. 실제로 한 실행이 리포트만 다른 폴더에 쓰고 사이드카는 워크트리에 남겨 **이름도 디렉터리도 달랐다** — 문제는 그 폴더가 아니라 둘을 갈라놓은 것이다. 사용자가 정한 문서 폴더가 있으면 그 폴더를 처음부터 `$REPORT_DIR`로 쓴다(2026-10-12의 한 실행은 이 사례를 그 폴더를 피하라는 뜻으로 읽고 저장소 루트에 썼다). `--check`가 `render.wrote`의 경로와 대조해 그 어긋남을 짚는다. **`$REPORT_BASENAME`에는 확장자를 붙이지 않는다** — `.md`로 끝나면 preflight와 기록 스크립트가 거부한다. 2026-09-30의 한 실행은 리포트 파일 이름을 그대로 넘겨 기록이 전부 `….md.jsonl`로 남았다. **이름은 C-7의 `code-review-full-{브랜치}-{날짜}`다** — `code-review-full-`로 시작하지 않으면 preflight가 거부하고 예를 보인다(2026-10-12 실행은 `full-code-review-2026-10-12`로 지어 브랜치가 빠졌다). **대상 저장소의 루트는 preflight가 거부한다** — 아무것도 쓰지 않고 멈추므로, 위 순서로 자리를 다시 정해 부른다. 루트가 아닌 저장소 안이고 무시 목록에 없으면 `리포트 위치` 줄로 알린다. 리포트와 `.timing`이 미추적 파일로 남아 함께 커밋될 수 있다.
 
-**리뷰 범위의 기준도 여기서 정해진다(C-4).** `--base`는 사용자가 범위를 정했을 때만 준다 — 주지 않으면 preflight가 지금 브랜치의 열린 PR을 `gh pr view`로 읽어 그 base를 기준으로 잡는다. 다른 PR 위에 쌓은 PR이면 아래 PR의 브랜치(`origin/<그 브랜치>`)이고, 그 위에 더한 변경만 리뷰한다. main을 기준으로 잡으면 아래 PR의 변경까지 리뷰하게 된다. 출력의 `base` 줄(기준과 이유)을 `리뷰 기준`에 옮긴다. PR의 base를 이 저장소에서 찾을 수 없으면 preflight가 멈춘다 — `git fetch origin <base>` 뒤 다시 돌리거나 사용자에게 범위를 묻는다. gh를 쓸 수 없는 호스트는 `gh pr view --json number,baseRefName,headRefName,state,url`의 출력을 파일로 담아 `--pr-json`으로 준다.
+**리뷰 범위의 기준도 여기서 정해진다(C-4).** `--base`는 사용자가 범위를 정했을 때만 준다 — 주지 않으면 preflight가 지금 브랜치의 열린 PR을 `gh pr view`로 읽어 그 base를 기준으로 잡는다. 다른 PR 위에 쌓은 PR이면 아래 PR의 브랜치(`origin/<그 브랜치>`)이고, 그 위에 더한 변경만 리뷰한다. main을 기준으로 잡으면 아래 PR의 변경까지 리뷰하게 된다. 출력의 `base` 줄(기준과 이유)을 `리뷰 기준`에 옮긴다. 그 아래 `base 앞섬` 줄은 base가 merge-base 뒤로 앞서 나가 이 브랜치와 같은 파일을 바꿨는지, `의존성 변경` 줄은 이 변경이 의존성 매니페스트를 바꿨는지다 — 도구 실패를 읽을 때 쓴다(`리포팅`, C-6). PR의 base를 이 저장소에서 찾을 수 없으면 preflight가 멈춘다 — `git fetch origin <base>` 뒤 다시 돌리거나 사용자에게 범위를 묻는다. gh를 쓸 수 없는 호스트는 `gh pr view --json number,baseRefName,headRefName,state,url`의 출력을 파일로 담아 `--pr-json`으로 준다.
 
 C-9의 `run.start`를 이 스크립트가 쓴다. 동시에 `리뷰 기준`과 `실행 계획`에 적을 값을 낸다 — 플러그인 버전, 해석된 규칙 경로, 브랜치, merge-base, 변경 파일 수, **후보 모듈 수와 목록**. 그 값을 손으로 세지 않는다. 후보에서 빠진 `00-rule.md`와 synthesis 전용 모듈도 이유와 함께 출력되므로, 아래 (2)와 (4)는 이 목록에서 출발한다.
 
@@ -282,7 +282,7 @@ task(
     - 켰으면 **적용 대상이다.** 관련 범위가 없다는 이유로 `SKIPPED`로 두지 않는다 — 대장의 `next`가 다른 모듈과 같이 `correctness`를 낸다. 결과 파일은 `$REPORT_BASENAME.correctness.json`, `module.done`의 `module`은 `correctness`다. 대장이 시도마다 `module.start`/`module.done`을 남긴다 — 이 패스가 더한 호출량이 시도 수로 기록에 남고 호출 한도에 든다.
     - 실패 처리는 특수 패스와 같다. no-start·timeout은 fresh retry 1회, `malformed-output`은 교정 재시도 1회. 두 번째도 실패하면 대장이 그 작업을 끝낸다(`done --status failed`와 그 `failureClass` — `inactivity-timeout`·`malformed-output` 등). 다음으로 간다. 그 실행은 `FAILED orchestration`(부분 완료)이고, 렌더러는 이 패스를 "결과 없음"으로, 스냅숏은 `FAILED`로 그린다. **지적 0건이나 통과로 쓰지 않는다.**
     - 껐으면 띄우지 않는다. `--planned`에 적지 않는다 — 렌더러와 스냅숏이 `run.start`에서 읽어 `SKIPPED`(선택 패스, 켜지 않았다)로 그린다.
-    - 규칙 패스가 같은 자리를 지적했어도 이 패스의 지적을 버리지 않는다. 둘은 합쳐지지 않는다(exact dedup은 규칙 ID가 같아야 병합한다). `prepare-verification.mjs`가 같은 정규화 위치의 다른 namespace 지적을 `relatedCandidateIds`로 잇고, 렌더러가 `관련 지적:` 줄로 그린다.
+    - 규칙 패스가 같은 자리를 지적했어도 이 패스의 지적을 버리지 않는다. 둘은 합쳐지지 않는다(exact dedup은 규칙 ID가 같아야 병합한다). `prepare-verification.mjs`가 같은 자리(같은 파일에서 줄이 겹치는 범위)를 짚은 다른 규칙의 지적을 `relatedCandidateIds`로 잇고, 렌더러가 `관련 지적:` 줄로 그린다. 규칙 모듈끼리도 같다 — 같은 규칙 ID끼리와 `CR-*`끼리만 잇지 않는다.
  7. 요약/리포팅 규칙.
     - 모든 패스가 끝난 뒤에 패스 리포트를 출력한다.
     - 패스별 출처 라벨이 일반, Props, 수학, 예외, 정확성으로 구분되도록 유지한다.
@@ -486,8 +486,10 @@ node "$RULES_DIR/../scripts/tally-verdicts.mjs" --dir "$REPORT_DIR" --run "$REPO
   ```
 
   출력(JSON)의 `exit`·`durationSec`·`tail`과 `log`(호출마다 따로 남는 `.timing/$REPORT_BASENAME.tool.<이름>.<callId>.log`)로 `도구 실행 결과`를 쓴다. **baseline은 그 트리(merge-base를 꺼낸 worktree 등)를 `--repo`로 주고 같은 `--name`으로 돌린다** — 두 호출의 로그가 따로 남고 `treeSha`로 갈린다(C-6). 명령은 수정 옵션 없이 준다(C-6). `--timeout`(기본 1800초)을 넘기면 도구가 띄운 프로세스까지 끊는다. 호스트의 셸 시간 제한이 도구보다 짧으면 그 제한을 늘려 부른다 — 끊기면 끝을 남기지 못한다
+
+  **도구가 실패하면 이 변경의 것으로 읽기 전에 preflight 출력의 `base 앞섬`·`의존성 변경` 줄을 본다(C-6).** `base 앞섬`이 이 브랜치와 같은 파일을 바꿨다고 하면, 실패가 그 파일들(의존성 파일이면 바뀐 패키지)에서 오는지 확인한다. 이어지면 `도구 실행 결과`에 "base를 따라잡지 않은 데서 올 수 있다"를, `미해결 / 후속 확인`에 "rebase 뒤 다시 잰다"를 적고, 이 변경의 차단 사유로 쓰지 않는다. `의존성 변경`이 있으면 baseline 트리에는 **그 트리의 의존성을 설치해** 잰다 — merge-base 트리가 지금 트리의 `node_modules`를 빌려 쓰면 baseline도 같은 실패를 내 "신규 0"으로 잘못 나온다. 설치하지 못하면 `baseline 미측정`이다. 2026-10-13 실행은 main이 merge-base 뒤로 4커밋 앞서 `package.json`을 바꿔 둔 것을 모른 채 typecheck·test 실패를 "baseline 미측정"으로만 남겼다. PR은 SDK를 main과 같은 버전으로 올렸지만 main이 그 버전에 맞춰 고친 코드를 받지 않았고, 사용자가 할 일(rebase)이 리포트에 없었다
 - **lint/typecheck/test는 모듈이 도는 동안 함께 돌린다.** 이 도구들은 sub-agent 결과에 의존하지 않으므로 디스패치가 끝나기를 기다릴 이유가 없다. 09-17 실행은 2번째 wave가 도는 중에 넷을 끝내 벽시계에 거의 아무것도 더하지 않았고, 09-18 실행은 교차검증까지 끝난 뒤에 돌려 **442초를 통째로 직렬로 썼다.** 같은 일에 같은 시간이 들었지만 한쪽만 값을 치렀다.
-- `실행 타임라인` 섹션에는 `review-timeline.mjs --summary` 출력을 **마지막으로 한 번 더 돌려** 그대로 붙인다. 표를 직접 만들지 않고, 사이드카를 남기지 못했으면 그 사실을 그 섹션에 적는다 (C-9).
+- `실행 타임라인` 섹션에는 `review-timeline.mjs --summary --out "$REPORT_DIR/.timing/$REPORT_BASENAME.timeline.md"`를 `render.start`를 남긴 뒤 **마지막으로 한 번 더 돌려** 그 파일을 넣는다(아래 `리포트 조립`). 표를 직접 만들지 않고, 사이드카를 남기지 못했으면 그 사실을 그 섹션에 적는다 (C-9).
 
   **중간에 뽑은 표를 그대로 두지 않는다.** 한 리포트가 교차검증 직후에 뽑은 4줄짜리 표를 실었는데 사이드카에는 13줄이 있었고, 빠진 9줄 안에 **전체 두 번째로 긴 442초 구간**이 들어 있었다. 그 리포트는 표 밑에 "렌더 시점 요약이므로 `run.end`는 포함되지 않습니다"라고 적었지만 실제로 빠진 것은 `run.end` 하나가 아니었다. `render.start`를 남긴 뒤에 뽑으면 그 문장이 참이 된다.
 
@@ -498,6 +500,13 @@ node "$RULES_DIR/../scripts/tally-verdicts.mjs" --dir "$REPORT_DIR" --run "$REPO
 - 패스에 적용 범위가 없으면 패스 이름, 사유, 그리고 `SKIPPED`가 비차단임을 명시해 `SKIPPED`로 출력한다. **특수 패스(Props·수학·예외)의 SKIPPED는 실행 계획 파일(`--planned`)의 `skipped`에 그 패스 이름으로 적는다** — `{"module":"math","reasonCode":"…","reason":"…"}`. 렌더러가 그 사유를 `특수 패스` 절의 그 자리에 옮기고, 지적이 0건인 패스에는 "지적 없음."을 찍는다. **건너뛴 패스의 결과 파일을 만들지 않는다** — 2026-09-30 실행은 SKIPPED인 수학 패스에 빈 `math.json`을 써 두었고, 리포트에는 Props(실행·0건)와 수학(SKIPPED)이 모두 빠졌다. 특수 패스가 하나라도 건너뛰어졌으면 `--planned`를 반드시 준다. **렌더러는 `--collect`가 남긴 `collected.sources`와 대조한다** — 지적이 없는데 결과 파일도 수집되지 않은 모듈·패스는 "지적 없음."이 아니라 "결과 없음"으로 찍힌다. 그 표시는 실행이 실패했거나 결과가 빠졌다는 뜻이므로, `실행 계획`에 그 모듈의 실패를 적는다(`FAILED orchestration`).
 - 모든 패스가 끝난 뒤에는 사용자가 다른 언어를 명시하지 않은 한 한국어로 전체 요약 리포트를 출력한다.
 - **리포트는 오케스트레이터가 직접 조립해 저장한다 — sub-agent에 맡기지 않는다.** 상세 지적·특수 패스(렌더러), 실행 계획(스냅숏), 실행 타임라인(`--summary`)은 이미 완성된 Markdown이고, 오케스트레이터가 새로 쓰는 것은 판정·요약·도구 실행 결과·미해결뿐이다. 2026-10-12 실행 둘이 조립을 writing sub-agent에 맡겼다. 한 실행은 파일을 다 쓴 sub-agent의 마지막 모델 호출이 응답 없이 2시간 21분 멈췄고, 작업 도구가 그 sub-agent가 끝나야 돌아오는데 시간 상한이 없어 사용자가 끊을 때까지 `run.end`가 남지 않았다. 다른 실행은 context 압축 뒤 그 작업에 이 스킬을 실어 즉시 실패했고, 다시 맡긴 조립에 12분이 걸렸다.
+- **조립은 `assemble-report.mjs`로 한다 — 스크립트가 만든 조각을 셸로 옮기지 않는다(C-7).** 스냅숏·렌더러·`--summary`는 각자 `--out`으로 `.timing/$REPORT_BASENAME.plan.md`·`.findings.md`·`.timeline.md`를 쓴다. 오케스트레이터가 쓰는 부분(리뷰 기준·판정·요약·도구 실행 결과·미해결)은 **파일 쓰기 도구로** 틀 파일에 쓰고, 조각이 들어갈 자리에 `{{plan}}`·`{{findings}}`·`{{timeline}}` 줄을 하나씩 둔다(그 줄에는 다른 글자를 두지 않는다).
+
+  ```bash
+  node "$RULES_DIR/../scripts/assemble-report.mjs" --dir "$REPORT_DIR" --run "$REPORT_BASENAME" --template "$REPORT_DIR/.timing/$REPORT_BASENAME.template.md"
+  ```
+
+  스크립트가 `$REPORT_DIR/$REPORT_BASENAME.md`를 쓰고 JSON(`path`·`lines`·`sha256`)을 낸다 — 그 `path`·`lines`로 `render.wrote`를 남긴다. 조각을 PowerShell 변수나 `$(…)`로 받아 틀에 끼우지 않는다. 2026-10-13 실행은 그렇게 조립했고, PowerShell 5.1이 node의 UTF-8 출력을 시스템 코드 페이지로 읽어 한글이 깨진 리포트를 저장한 뒤에야 알아챘다. 스크립트가 거부하면(종료 코드 2) 아무것도 쓰지 않은 것이다. 자리표시자가 빠졌거나 남았으면 틀을, 조각이 다른 실행의 것이거나 타임라인 표가 지금 기록보다 앞선 것이면 그 조각을 다시 만들어 부른다
 - 요약 저장은 `workflow-contract.md` C-7을 따른다 (`workflow-name`은 `full`).
 - 저장 자리는 (0)에서 정한 `$REPORT_DIR`이다 — 사용자가 이번 요청에서 정한 곳 → 사용자·프로젝트 지시 파일(전역 포함 `CLAUDE.md`·`AGENTS.md`)에 적힌 문서 저장 위치 → `./review-reports/` 순서로 정한 곳이다. 끝난 뒤 사용자가 리포트를 옮기라고 하면 `.timing/`도 함께 옮기고, 기록의 `render.wrote` 경로는 옛 자리를 가리킨다고 알린다. 리포트만 옮기면 기록과 리포트가 서로를 못 찾는다.
 - 일반/Props/수학/예외 producer 결과는 수집 직후 `workflow-contract.md` C-6A validation 규칙으로 검사한다. JSON 파싱 실패, 필수 필드 누락, 금지 필드 `severity`, 허용되지 않은 enum/location 값은 `malformed-output`이다.
@@ -520,12 +529,13 @@ node "$RULES_DIR/../scripts/render-findings.mjs" \
      --workflow full \
      [--planned <modules-planned 페이로드 경로>] \
      [--evidence "$REPORT_DIR/.timing/$REPORT_BASENAME.evidence.json"] \
-     [--rechecks "$REPORT_DIR/.timing/$REPORT_BASENAME.rechecks.json"]
+     [--rechecks "$REPORT_DIR/.timing/$REPORT_BASENAME.rechecks.json"] \
+     --out "$REPORT_DIR/.timing/$REPORT_BASENAME.findings.md"
 ```
 
 **교차검증을 끝낸 뒤에 렌더한다.** `render.start`를 남긴 뒤 판정을 다시 받으면 이미 그린 지적과 판정이 어긋나고, `review-timeline.mjs --check`가 그 기록을 문제로 짚는다.
 
-출력을 두 섹션 자리에 그대로 붙인다. 같은 명령이 실행마다 다른 모양의 지적을 냈고, 규칙은 이미 계약에 다 있었는데도 그랬다 — 문서가 부탁하는 동안에는 지켜지지 않는다. **`--phase-high`와 `--phase-low`는 별개 값이다.** phase는 전역이 아니라 `impact`별 설정이므로(`workflow-contract.md`의 `deletionPhase`), high가 아직 `rollout-shadow`인 동안 low만 `active-deletion`으로 옮기는 것이 정상 구성이다. 둘 다 기본값이 없다 — 반박된 finding의 처리가 갈리고 그 값이 차단 판정에 걸리므로, 조용히 틀린 쪽으로 도는 것보다 멈추는 편이 낫다.
+출력(`--out` 파일)이 두 섹션 자리(`{{findings}}`)에 그대로 들어간다 — 위 `조립은 assemble-report.mjs로 한다`. 같은 명령이 실행마다 다른 모양의 지적을 냈고, 규칙은 이미 계약에 다 있었는데도 그랬다 — 문서가 부탁하는 동안에는 지켜지지 않는다. **`--phase-high`와 `--phase-low`는 별개 값이다.** phase는 전역이 아니라 `impact`별 설정이므로(`workflow-contract.md`의 `deletionPhase`), high가 아직 `rollout-shadow`인 동안 low만 `active-deletion`으로 옮기는 것이 정상 구성이다. 둘 다 기본값이 없다 — 반박된 finding의 처리가 갈리고 그 값이 차단 판정에 걸리므로, 조용히 틀린 쪽으로 도는 것보다 멈추는 편이 낫다.
 
 **명령 틀은 둘 다 `rollout-shadow`다. `active-deletion`은 승인 파일 없이는 켜지지 않는다.** 렌더러는 `--phase-high`·`--phase-low` 중 하나라도 `active-deletion`이면 `--deletion-approval <승인 파일>`을 요구하고 없으면 멈춘다(exit 2). 승인 파일은 사람이 impact·검증 경로별로 잰 false-suppression 기록이고(`workflow-contract.md` C-6B `승인 파일`), **플러그인은 그런 승인을 싣고 오지 않는다.** 사용자가 승인 파일을 주며 명시적으로 요청할 때만 그 impact를 `active-deletion`으로 바꾸고 `--deletion-approval`을 붙인다 — 스스로 고르지 않는다. 승인을 쓴 뒤에 반박 kind 목록이나 검증자 지시문이 바뀌었으면 렌더러가 그 impact를 `rollout-shadow`로 되돌리고 stderr로 경고하며, 그 사실을 `## 상세 지적` 맨 위 줄에도 적는다. 승인 파일에 적을 기준은 `--print-deletion-basis --rules "$RULES_DIR"`이 낸다.
 
@@ -544,10 +554,11 @@ node "$RULES_DIR/../scripts/render-findings.mjs" \
 **렌더 뒤, 리포트를 쓰기 전에 돌린다(C-10).** 이 실행이 무엇을 리뷰했고 어디까지 끝냈고 무엇을 찾았는지를 `$REPORT_DIR/.timing/$REPORT_BASENAME.snapshot.json`에 남기고, `실행 계획`에 붙일 블록을 낸다. preflight와 같은 디렉터리(리뷰 대상 저장소)에서 돌린다 — 다르면 `--repo`로 그 저장소를 준다.
 
 ```bash
-node "$RULES_DIR/../scripts/review-snapshot.mjs" --dir "$REPORT_DIR" --run "$REPORT_BASENAME" --rules "$RULES_DIR" --verification-state <ran|disabled>
+node "$RULES_DIR/../scripts/review-snapshot.mjs" --dir "$REPORT_DIR" --run "$REPORT_BASENAME" --rules "$RULES_DIR" --verification-state <ran|disabled> --out "$REPORT_DIR/.timing/$REPORT_BASENAME.plan.md"
 ```
 
-- **출력을 `실행 계획` 섹션 맨 앞에 그대로 붙인다.** 그 블록은 방금 저장한 스냅숏 파일을 다시 읽어 그린 것이다. 손으로 고치면 리포트와 JSON이 다른 것을 말한다. 리포트를 다시 쓸 때는 `--show <스냅숏 경로>`로 같은 블록을 다시 낸다
+- **블록(`--out` 파일)이 `실행 계획` 섹션 맨 앞 자리(`{{plan}}`)에 그대로 들어간다.** 그 블록은 방금 저장한 스냅숏 파일을 다시 읽어 그린 것이다. 손으로 고치면 리포트와 JSON이 다른 것을 말한다. 리포트를 다시 쓸 때는 `--show <스냅숏 경로>`로 같은 블록을 다시 낸다
+- 블록에 `base가 앞서 있다`가 찍히면 base가 merge-base 뒤로 이 브랜치와 같은 파일을 바꿨다는 뜻이다. 도구 실패를 읽는 법은 위 `도구가 실패하면`을 따른다(C-6)
 - `--verification-state`는 렌더러에 준 값과 같다. routed 출력과 판정은 위 명령들이 남긴 자리(`$REPORT_BASENAME.routed.json`·`.verdicts.json`)에서 읽는다
 - **`검토 상태`가 `완료`가 아니면 `판정`을 통과로 쓰지 않는다.** `부분 완료`와 `실패`는 `FAILED orchestration`이다(C-8). 표에 나온 모듈(`FAILED`·결과 없음·`SKIPPED`·`UNKNOWN`)이 이 실행이 검토하지 않은 범위다
 - `검토 도중 대상이 바뀌었다`가 찍히면 `판정`에도 한 줄 적는다 — 그 실행의 결과는 한 시점의 코드에 대한 것이 아니다. 위치 대조를 무엇으로 했는지는 routed 출력의 `target`에 있다(`start-head`면 시작한 HEAD). 사용자가 정하지 않았으면 사용자의 요청으로 적지 않는다

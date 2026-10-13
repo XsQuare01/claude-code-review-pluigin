@@ -166,6 +166,27 @@ SDK 드리프트로 원래부터 그만큼 실패하고 있었고, 그 브랜치
   끝만 넷 남기면 네 번의 실행이 하나의 이름 없는 구간으로 뭉친다 — 실제로 한
   실행이 442초를 그렇게 남겼고, 그 시간이 어느 도구의 것인지 알 수 없었다
 
+### 도구 실패를 이 변경의 것으로 읽기 전에 base와 의존성을 본다
+
+baseline이 없을 때 `미측정`으로 적는 것으로 끝내지 않는다. preflight가 `run.start`에 남긴 두 값이
+실패의 원인을 다른 자리로 가리킬 수 있다.
+
+**왜.** 2026-10-13 실행은 typecheck 14건·test 8건 실패를 "baseline 미측정이라 이 변경의 것인지
+단정하지 않는다"로만 남겼다. 원인은 따로 있었다. PR이 SDK를 main과 같은 버전으로 올렸는데, main이
+그 버전에 맞춰 고친 코드는 아직 받지 않았다. main은 merge-base 뒤로 4커밋 앞서 `package.json`을
+바꿔 두었고, PR의 CI는 main과 합친 트리를 돌려 통과했다. 사용자가 할 일은 rebase였는데 리포트에는
+그 말이 없었다. 리뷰 diff는 merge-base부터 HEAD까지라 base가 그 뒤에 한 일은 보이지 않는다.
+
+- **base 앞섬(`baseAhead`·`baseOverlap`).** base가 merge-base 뒤로 앞서 나가 이 브랜치와 같은
+  파일을 바꿨으면, 실패가 그 파일들과 이어지는지 본다(실패한 파일·심볼이 그 파일에서 오는지, 의존성이면
+  바뀐 패키지에서 오는지). 이어지면 `도구 실행 결과`에 "base를 따라잡지 않은 데서 올 수 있다"고 적고,
+  `미해결 / 후속 확인`에 "rebase 뒤 다시 잰다"를 남긴다. 이 실패를 이 변경의 차단 사유로 쓰지 않는다 —
+  고칠 일은 코드가 아니라 브랜치를 따라잡는 것이다. 스냅숏 블록(`실행 계획`)이 이 사실을 그린다
+- **의존성 변경(`dependencyFiles`).** 이 변경이 의존성 매니페스트·잠금 파일을 바꿨으면 두 트리는 서로
+  다른 의존성을 가리킨다. baseline은 그 트리에 **그 트리의 의존성을 설치해** 잰다. merge-base 트리에 지금
+  트리의 의존성을 같이 쓰면(같은 `node_modules`를 가리키거나 위쪽 디렉터리의 것을 빌리면) baseline도 같은
+  실패를 내 "신규 0"으로 잘못 나온다. 설치하지 못하면 `baseline 미측정`이다
+
 ## C-6A. 구조화된 결과 ownership 및 lifecycle
 
 `REVIEW_RESULT_CONTRACT_V1`은 **producer → orchestrator 내부 인터페이스**다. 최종 Markdown 공개 형식은 유지하고, 이 내부 인터페이스만 구조화한다. 이 변경은 **의도적으로 수용한 내부 계약 변경**이며 `.claude-plugin/plugin.json` `2.4.0`에서 **MINOR**로 취급한다. 기본 이유는 producer 출력과 최종 리포트 렌더링을 분리해, shared contract·validation·dedupe를 한 곳에서 고정하기 위해서다.
@@ -313,7 +334,7 @@ verifier가 반환하는 값과 오케스트레이터가 부여하는 값을 구
 - **검증자도 변경 의도의 원문을 받는다.** producer가 받은 PR 설명·사용자 요청·커밋 메시지를 `review-intent.mjs`가 원문 그대로 `.timing/<run>.intent.json`에 모으고(출처·참조·sha256, 밝힌 의도인지 커밋 메시지뿐인 추정인지 없는지), `prepare-verification.mjs`가 그 블록을 CR 검증 프롬프트에 붙인다. 오케스트레이터가 의도를 요약해 넘기지 않는다 — 그것은 producer 쪽의 해석이고 검증이 독립하지 않는다. 의도 파일이 없으면 프롬프트에 그렇다고 적어, "전제한 의도가 다르다"로 반박하지 못하게 한다. 원문은 신뢰하지 않는 데이터다. 규칙 지적의 프롬프트에는 붙이지 않고, 1차의 축을 감추는 정책은 그대로다(PR #90 리뷰)
 - **반박의 종류는 같은 닫힌 목록이다.** 막는 장치(`guard-exists`), 도달하지 않는 경로(`unreachable`), 전제한 의도와 다른 실제 계약(`contract-differs`)이 그대로 쓰인다. disposition·상태표·삭제 rollout도 다른 후보와 같다 — 별도 파이프라인이 없다
 - **출처와 ID는 서로 맞아야 한다.** 정확성 패스가 규칙 ID를 쓰거나, 다른 모듈이 `CR-*`를 쓰면 `prepare-verification.mjs`가 거부한다. 근거가 다른 지적이 다른 근거로 검증되기 때문이다
-- **같은 자리의 규칙 지적과 합치지 않는다.** exact dedup은 규칙 ID가 같아야 병합하고, 교차 namespace 병합은 입증된 동일성 규칙이 생길 때까지 하지 않는다. 대신 같은 정규화 위치의 다른 namespace 지적을 `relatedCandidateIds`로 잇고, 렌더러가 `관련 지적:` 줄로 그린다(C-7)
+- **같은 자리의 규칙 지적과 합치지 않는다.** exact dedup은 규칙 ID가 같아야 병합하고, 교차 namespace 병합은 입증된 동일성 규칙이 생길 때까지 하지 않는다. 대신 같은 자리(같은 파일에서 줄이 겹치는 범위)를 짚은 다른 주인의 지적을 `relatedCandidateIds`로 잇고, 렌더러가 `관련 지적:` 줄로 그린다(C-7). 주인은 규칙 ID이고, 조항이 없는 패스는 접두 하나(`CR`)가 주인이다
 
 ### `rebuttal.kind = other`
 
@@ -960,6 +981,7 @@ H1은 **`# {대상} {워크플로우 이름} 리포트`** 형식이며, 대상�
 - 워크플로우에 해당하지 않는 섹션은 **생략한다**. 빈 섹션을 남기지 않는다
 - 위 목록에 없는 섹션을 추가하지 않는다. 남길 내용이 있으면 `미해결 / 후속 확인`에 넣는다
 - **플러그인 버전을 적는 이유**는 severity의 눈금이 버전에 따라 다르기 때문이다. 같은 🔴이 다른 판정 기준에서 나왔을 수 있으므로, 어느 눈금으로 판정된 리포트인지 리포트만 보고 알 수 있어야 한다. `RULES_DIR`이 어느 규칙 파일을 썼는지 알려주는 것과 같은 목적이다
+- **`full`은 스크립트가 만든 조각을 셸로 옮기지 않는다.** `review-snapshot.mjs`·`render-findings.mjs`·`review-timeline.mjs --summary`에 `--out "$REPORT_DIR/.timing/$REPORT_BASENAME.{plan,findings,timeline}.md"`를 주어 파일로 받고, 오케스트레이터가 파일 쓰기 도구로 쓴 틀(`{{plan}}`·`{{findings}}`·`{{timeline}}` 줄 하나씩)과 `assemble-report.mjs`로 잇는다. 그 스크립트가 `$REPORT_DIR/$REPORT_BASENAME.md`를 쓰고 `render.wrote`에 남길 `path`·`lines`를 낸다. 2026-10-13 실행은 세 출력을 PowerShell 변수로 받아 조립했고, PowerShell 5.1이 node의 UTF-8 출력을 시스템 코드 페이지로 읽어 한글이 깨진 리포트를 저장했다. 조립 스크립트는 자리표시자가 빠지거나 남았을 때, 조각이 다른 실행의 것이거나 타임라인 표가 지금 기록보다 앞선 시점의 것일 때, 깨진 글자가 섞였을 때 아무것도 쓰지 않는다
 
 **하위 에이전트가 만든 헤딩을 그대로 옮기지 않는다.** structured result 워크플로우에서는 하위 에이전트가 헤딩 자체를 만들지 않고 JSON만 반환한다. 레거시 Markdown 워크플로우에서 헤딩이 섞여 오면 오케스트레이터가 이 골격에 맞게 낮춘다. 어느 경우든 최종 문서 골격과 Markdown 표기는 오케스트레이터가 정한다.
 
@@ -976,7 +998,7 @@ finding 헤딩 **바로 다음 줄**에 영향도와 확신도를 적는다. `00
 개선 제안: 계산을 상위에서 memoize하거나 필요 시 데이터 shape를 안정화하세요.
 ```
 
-**같은 자리에 다른 namespace의 지적이 있으면 `관련 지적:` 줄을 `출처 패스:` 줄 다음에 둔다.** 정확성 패스의 `CR-*`와 규칙 모듈의 지적이 같은 정규화 위치를 가리킬 때다. 이 리포트에 그려진 지적은 순번까지 붙은 규칙 ID로, 그려지지 않은 지적은 candidate ID와 `(상세 지적에 없음)`으로 적는다. 두 지적을 합치지 않는다(C-6B `조항이 없는 지적`).
+**같은 자리를 다른 규칙의 지적도 짚었으면 `관련 지적:` 줄을 `출처 패스:` 줄 다음에 둔다.** 같은 파일에서 줄 범위가 겹치는 지적끼리다 — 규칙 모듈끼리든, 정확성 패스의 `CR-*`와 규칙 모듈이든. 같은 규칙 ID끼리, 그리고 `CR-*`끼리는 잇지 않는다(같은 주인이다). 이 리포트에 그려진 지적은 순번까지 붙은 규칙 ID로, 그려지지 않은 지적은 candidate ID와 `(상세 지적에 없음)`으로 적는다. 두 지적을 합치지 않는다(C-6B `조항이 없는 지적`) — 같은 줄의 다른 결함도 있다. 2026-10-13 실행은 차집합 재계산 하나를 네 모듈이, 주석 하나를 세 모듈이 따로 냈는데 서로를 가리키는 줄이 없어 읽는 쪽이 지적 수를 그대로 셌다. 잇는 줄은 그것이 같은 결함인지를 읽는 사람이 판단할 재료다.
 
 **`location-wrong`으로 반박된 지적은 위치 줄 바로 다음에 `검증자가 짚은 위치(대조하지 않음): …` 줄을 둔다(C-6B).** producer의 위치 줄은 그대로 두고, 검증자가 본 결함의 자리를 같은 모양(`` `path:line` — `인용` ``)으로 덧붙인다. 판정에 위치가 없으면 `검증자가 짚은 위치: 판정에 위치가 없다`를 적는다. 렌더러가 그린다 — 직접 쓰지 않는다.
 
@@ -1227,7 +1249,7 @@ UTF-16 파일도 읽는다 — PowerShell 5.1의 `Set-Content -Encoding UTF8`은
 
 | `--phase` | 시점 | `--set`/`--data`에 담는 것 |
 |---|---|---|
-| `run.start` | 가장 먼저 | `host`, `rules`(해석된 RULES_DIR), `version`, `branch`, `changedFiles` · 무엇을 리뷰하는지(C-10): `runId`, `base`, `head`, `worktree`, `dirtyFiles`, `repo`, `repoRoot`, `rulesDigest` · 선택 패스를 켰는지: `correctness`(`on`/`off`, 선택 패스가 있는 워크플로우만) · 한도(C-12): `maxTasks`, `maxDurationSec`(준 것만), `staleAfterSec` · (새 실행으로 이어 받았으면) `continues` · (이전 리뷰와 비교하면, C-13) `previousSnapshot`, `previousRunId`, `previousSha256` — preflight가 쓴다 |
+| `run.start` | 가장 먼저 | `host`, `rules`(해석된 RULES_DIR), `version`, `branch`, `changedFiles` · 무엇을 리뷰하는지(C-10): `runId`, `base`, `head`, `worktree`, `dirtyFiles`, `repo`, `repoRoot`, `rulesDigest` · 선택 패스를 켰는지: `correctness`(`on`/`off`, 선택 패스가 있는 워크플로우만) · 한도(C-12): `maxTasks`, `maxDurationSec`(준 것만), `staleAfterSec` · (새 실행으로 이어 받았으면) `continues` · (이전 리뷰와 비교하면, C-13) `previousSnapshot`, `previousRunId`, `previousSha256` · base 앞섬(C-6): `baseAhead`(merge-base 뒤 base의 커밋 수), (같은 파일을 바꿨으면) `baseOverlapCount`, `baseOverlap`(20개까지) · (의존성 매니페스트를 바꿨으면) `dependencyFiles` — preflight가 쓴다 |
 | `run.resume` | 멈춘 실행을 이어 갈 때 (`review-tasks.mjs resume`이 쓴다) | 새 구간의 `maxTasks`·`maxDurationSec`·`staleAfterSec`, 다시 잰 `head`·`worktree` |
 | `scope.done` | 범위 확정(C-4) — `/code-review-full`은 **preflight가 남긴다**(C-5의 이름 규칙으로 센 수) | `files`, `excluded` |
 | `modules.planned` | 적용 모듈 확정(C-3) | `candidates`, `applied`(적용한 **번호 모듈** 수 — Props·수학·예외·정확성 패스는 세지 않는다. 후보 수를 넘으면 스크립트가 거부한다. 스냅숏의 `적용 N개`는 패스 전부를 센 수라 다르다) · `skipped`, `unknown`(중첩, `--data-file`) |
@@ -1245,7 +1267,7 @@ UTF-16 파일도 읽는다 — PowerShell 5.1의 `Set-Content -Encoding UTF8`은
 | `crossverify.start` / `.end` | 교차검증 패스 — 시작은 `prepare-verification.mjs`가 검증 작업을 만든 직후, 끝은 `tally-verdicts.mjs`가 **직접 남긴다** | `targets`, `round`(이 교차검증 라운드의 이름 — C-12) / `upheld`, `rejected`, `needsContext`, `noVerdict`, `countsFrom`, (있으면) `malformedTasksCorrected`·`tokensIn`·`tokensOut` |
 | `synthesis.start` / `.end` | synthesis 패스 | `findings` / `clusters`, (있으면) `tokensIn`·`tokensOut` |
 | `render.start` | **문서를 쓰기 직전** | `findings`(중복 제거 후) |
-| `render.wrote` | 파일을 쓴 직후 | `path`, `lines`, (있으면) `tokensIn`·`tokensOut` |
+| `render.wrote` | 파일을 쓴 직후 | `path`, `lines`(`assemble-report.mjs`가 낸 값), (있으면) `tokensIn`·`tokensOut` |
 | `run.end` | 마지막 | `verdict`(없으면 스크립트가 거부한다 — 그 뒤에 고칠 줄을 덧붙일 수 없다), `usageSource`, (있으면) `tokensIn`·`tokensOut`·`tokensCacheRead`·`costUsd` |
 
 **교차검증은 시작과 끝이 짝을 이루고, 판정을 입력으로 쓰는 단계(`synthesis.start`·`render.start` 중 먼저 온 것)보다 앞에서 끝난다.** `--check`는 시작 없이 남은 끝, 끝나지 않은 시작, 그 단계 뒤의 교차검증 기록을 문제로 짚는다. **검증 준비를 다시 돌려 다음 `crossverify.start`가 대체한 라운드는 예외다** — 버려진 라운드라 끝이 없는 것이 맞고, `--check`는 참고로만 알린다(2026-10-06 실행의 seq 54). 끝을 요구하는 것은 마지막 라운드다. 같은 날 다른 실행은 `synthesis.start` 뒤에 판정 하나를 다시 받아 유지를 반박으로 바꿨다. 2026-09-30 실행이 시작 하나에 끝 둘을 남겼고, 두 번째 끝은 리포트를 조립하다 판정 하나를 다시 받아 집계를 바꾼 것이었다. 잘못 센 끝을 바로잡는 줄은 예외다 — 앞 끝 바로 뒤에 `note`를 달아 다시 쓴다(append 전용 기록의 정정).

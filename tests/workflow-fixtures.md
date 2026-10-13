@@ -1149,6 +1149,39 @@ These scenarios pin the behaviour that `review-rules/workflow-contract.md` promi
       ],
       "scenario": "The orchestrator records run.end without verdict, or modules.planned with applied counting Props, math and exception passes",
       "expected": "The timeline script refuses both lines without writing them; the orchestrator calls again with verdict, or with applied counting numbered modules only"
+    },
+    {
+      "id": 144,
+      "clauses": [
+        "C-6"
+      ],
+      "scenario": "The PR bumps a dependency to the version main already uses, main has moved past the merge-base and changed package.json, and typecheck fails at HEAD in files the PR did not touch",
+      "expected": "Preflight shows the base drift and the dependency change; the report says the failures may come from not catching up with the base, asks for a rebase and a re-run under follow-ups, and does not use them as this change's blocking reason"
+    },
+    {
+      "id": 145,
+      "clauses": [
+        "C-6"
+      ],
+      "scenario": "A baseline is wanted for a change that edits package.json and the lock file",
+      "expected": "The baseline tree gets its own dependencies installed before the tools run; if that is not possible the report says baseline not measured rather than reusing the current tree's node_modules"
+    },
+    {
+      "id": 146,
+      "clauses": [
+        "C-6B",
+        "C-7"
+      ],
+      "scenario": "04-6 points at line 216 and 14-4 at lines 211-217 of the same file; 12-4 and 06-5 both point at line 37 of another file",
+      "expected": "Each pair is linked with a 관련 지적 line and neither pair is merged; findings with the same rule ID are not linked to each other"
+    },
+    {
+      "id": 147,
+      "clauses": [
+        "C-7"
+      ],
+      "scenario": "The orchestrator assembles the /code-review-full report on Windows PowerShell 5.1",
+      "expected": "The snapshot, renderer and timeline sections are written with --out and joined by assemble-report.mjs into a template the orchestrator wrote with its file tool; no section passes through a shell variable, and render.wrote takes path and lines from the script's output"
     }
   ],
   "defaultWorkflowOnlyCases": [
