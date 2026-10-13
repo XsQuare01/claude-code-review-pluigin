@@ -130,6 +130,45 @@ export function changedFilesSince(repo, mergeBase) {
   return out.split('\0').filter(Boolean)
 }
 
+/**
+ * 의존성 매니페스트·잠금 파일의 이름. 이 이름이 변경 파일에 있으면 두 트리가 서로 다른 의존성을 가리킨다 —
+ * baseline을 그 트리에 따로 설치한 의존성으로 재야 하는 이유다(C-6).
+ */
+export const DEPENDENCY_FILES = new Set(['package.json', 'package-lock.json', 'npm-shrinkwrap.json', 'yarn.lock', 'pnpm-lock.yaml', 'bun.lock', 'bun.lockb'])
+
+/** 변경 파일 중 의존성 매니페스트·잠금 파일. 디렉터리와 상관없이 파일 이름으로 가른다. */
+export const dependencyFilesOf = files => files.filter(path => DEPENDENCY_FILES.has(path.split('/').pop()))
+
+/**
+ * base가 merge-base 뒤로 얼마나 앞서 나갔고, 그동안 이 브랜치와 **같은 파일**을 바꿨는지 잰다.
+ *
+ * 리뷰 diff는 merge-base부터 HEAD까지라 base가 그 뒤에 한 일은 보이지 않는다. 그런데 lint·typecheck·test는
+ * HEAD 그대로의 트리에서 돌고, base가 같은 파일을 바꿨으면 실패의 원인이 이 변경이 아니라 "base를 따라잡지 않은 것"일
+ * 수 있다. 2026-10-13 실행은 PR이 SDK를 main과 같은 버전으로 올렸는데 main이 그 버전에 맞춰 고친 코드는 아직 받지 않아
+ * typecheck 14건·test 8건이 실패했다. main은 merge-base 뒤로 4커밋 앞서 `package.json`을 바꿔 두었고, PR의 CI는
+ * main과 합친 트리를 돌려 통과했다. 리포트는 원인을 "baseline 미측정"으로만 남겼다.
+ *
+ * 돌려주는 값: `{ ahead, overlap }` — `ahead`는 merge-base 뒤 base의 커밋 수, `overlap`은 그 커밋들이 바꾼 파일 중
+ * 이 브랜치도 바꾼 것(정렬). 재지 못하면 null이다 — 이 값은 알림이고, 못 쟀다고 리뷰를 멈추지 않는다.
+ */
+export function baseDrift(repo, baseRef, mergeBase, changedFiles) {
+  const git = gitIn(repo)
+  const count = git(['rev-list', '--count', `${mergeBase}..${baseRef}`])
+  if (count === null || !/^\d+$/.test(count)) return null
+  const ahead = Number(count)
+  if (ahead === 0) return { ahead, overlap: [] }
+  let moved
+  try {
+    moved = execFileSync('git', ['diff', '--name-only', '-z', mergeBase, baseRef], {
+      cwd: repo, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 64 * 1024 * 1024,
+    }).split('\0').filter(Boolean)
+  } catch {
+    return null
+  }
+  const mine = new Set(changedFiles)
+  return { ahead, overlap: moved.filter(path => mine.has(path)).sort() }
+}
+
 /** 사람이 읽는 한 줄. preflight와 `review-base.mjs`가 같은 문장을 쓴다. */
 export function baseLine(chosen) {
   if (chosen.source === 'user') return `${chosen.ref} (사용자가 정한 범위)`

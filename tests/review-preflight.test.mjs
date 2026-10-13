@@ -495,3 +495,65 @@ test('리포트 디렉터리가 무시 목록에 있으면 위치를 알리지 �
   assert.equal(out.status, 0, out.stderr)
   assert.doesNotMatch(out.stdout, /리포트 위치/)
 })
+
+// ── 2.26.0 실행(2026-10-13) 후속 ─────────────────────────────────────────
+//
+// 그 실행의 PR은 SDK를 main과 같은 버전으로 올렸지만, main이 그 버전에 맞춰 고친 코드는 아직 받지 않았다. HEAD에서
+// typecheck·test가 실패했고 리포트는 "baseline 미측정"으로만 남겼다. main은 merge-base 뒤로 4커밋 앞서 `package.json`을
+// 바꿔 두었다 — 리뷰 diff에는 보이지 않는 사실이다.
+
+const behindRepo = t => {
+  const dir = mkdtempSync(join(tmpdir(), 'preflight-behind-'))
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const git = (...args) => execFileSync('git', [
+    '-c', 'user.name=t', '-c', 'user.email=t@example.com', '-c', 'commit.gpgsign=false', '-c', 'init.defaultBranch=main', ...args,
+  ], { cwd: dir, encoding: 'utf8' }).trim()
+  const commit = (files, message) => {
+    for (const [path, text] of Object.entries(files)) {
+      mkdirSync(join(dir, dirname(path)), { recursive: true })
+      writeFileSync(join(dir, path), text)
+    }
+    git('add', '-A')
+    git('commit', '-qm', message)
+  }
+  git('init', '-q')
+  commit({ 'package.json': '{"dependencies":{"sdk":"0.1.29"}}\n', 'src/judge.ts': 'd.bbox\n' }, 'base')
+  git('switch', '-q', '-c', 'feature')
+  commit({ 'package.json': '{"dependencies":{"sdk":"0.1.30"}}\n', 'src/dialog.tsx': 'dialog\n' }, 'bump sdk with the ui change')
+  git('switch', '-q', 'main')
+  commit({ 'package.json': '{"dependencies":{"sdk":"0.1.30"}}\n', 'src/judge.ts': 'd.bbox_xyxy\n' }, 'bump sdk and migrate')
+  commit({ 'src/other.ts': 'other\n' }, 'unrelated')
+  git('switch', '-q', 'feature')
+  return { dir, git }
+}
+
+test('base가 merge-base 뒤로 앞서 나가 같은 파일을 바꿨으면 알리고 run.start에 남긴다 — 의존성 매니페스트 변경도 함께', t => {
+  const repo = behindRepo(t)
+  const dir = freshDir(t)
+  const out = preflightIn(repo, dir, ['--base', 'main'])
+  assert.equal(out.status, 0, out.stderr)
+  assert.match(out.stdout, /base 앞섬 {5}main이 merge-base 뒤로 2커밋 앞서 있고, 이 브랜치와 같은 파일 1개를 바꿨다: package\.json — .*rebase 뒤 다시 잰다/)
+  assert.match(out.stdout, /의존성 변경 {3}package\.json — baseline은 그 트리에 그 트리의 의존성을 설치해 잰다/)
+  const [start] = linesOf(dir)
+  assert.deepEqual([start.baseAhead, start.baseOverlapCount, start.baseOverlap, start.dependencyFiles], [2, 1, ['package.json'], ['package.json']])
+})
+
+test('base를 따라잡았으면 앞섬이 없다고 적고, 같은 파일을 건드리지 않았으면 겹친 목록을 남기지 않는다', t => {
+  const repo = behindRepo(t)
+  const caught = freshDir(t)
+  assert.equal(preflightIn(repo, caught, ['--base', 'feature']).status, 0)
+  const [even] = linesOf(caught)
+  assert.deepEqual([even.baseAhead, 'baseOverlap' in even], [0, false])
+  // main에서 package.json을 바꾸지 않은 갈래 — 앞섰지만 겹치지 않는다.
+  repo.git('switch', '-q', '-c', 'side', 'main~2')
+  writeFileSync(join(repo.dir, 'src', 'side.ts'), 'side\n')
+  repo.git('add', '-A')
+  repo.git('commit', '-qm', 'side')
+  const apart = freshDir(t)
+  const out = preflightIn(repo, apart, ['--base', 'main'])
+  assert.equal(out.status, 0, out.stderr)
+  assert.match(out.stdout, /base 앞섬 {5}main이 merge-base 뒤로 2커밋 앞서 있다 — 이 브랜치가 바꾼 파일은 건드리지 않았다/)
+  assert.doesNotMatch(out.stdout, /의존성 변경/)
+  const [start] = linesOf(apart)
+  assert.deepEqual([start.baseAhead, 'baseOverlap' in start, 'dependencyFiles' in start], [2, false, false])
+})

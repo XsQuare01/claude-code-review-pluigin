@@ -133,11 +133,13 @@ const readLines = () => {
 const PHASES = new Map([
   // `runId`부터는 무엇을 리뷰했는지다(`lib/run-identity.mjs`). 결과 스냅숏이 이 줄에서
   // 대상을 읽으므로, preflight가 쓴 기록만 스냅숏을 만들 수 있다.
+  // `baseAhead`부터 셋은 base가 merge-base 뒤로 앞서 나간 정도와 겹친 파일, `dependencyFiles`는 이 변경이 바꾼
+  // 의존성 매니페스트다 — 도구 실패를 이 변경의 것으로 읽어도 되는지를 가르는 값이다(C-6).
   ['run.start', {
     required: ['host', 'rules', 'version', 'branch', 'changedFiles'],
-    structured: [],
+    structured: ['baseOverlap', 'dependencyFiles'],
     allowed: ['candidates', 'workflow', 'mergeBase', 'os', 'runId', 'base', 'baseSource', 'prNumber', 'prBase', 'head', 'worktree', 'dirtyFiles', 'repo', 'repoRoot', 'rulesDigest', 'correctness',
-      'maxTasks', 'maxDurationSec', 'staleAfterSec', 'continues', 'previousSnapshot', 'previousRunId', 'previousSha256'],
+      'maxTasks', 'maxDurationSec', 'staleAfterSec', 'continues', 'previousSnapshot', 'previousRunId', 'previousSha256', 'baseAhead', 'baseOverlapCount'],
   }],
   // 한도에 닿아 멈춘 실행을 이어 갈 때 새 한도 구간을 연다(C-12). 대상이 그대로인지 확인한 값을 함께 남긴다.
   ['run.resume', { required: [], structured: [], allowed: ['maxTasks', 'maxDurationSec', 'staleAfterSec', 'head', 'worktree'] }],
