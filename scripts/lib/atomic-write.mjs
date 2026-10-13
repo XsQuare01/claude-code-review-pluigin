@@ -1,5 +1,6 @@
 import * as nodeFs from 'node:fs'
-import { randomBytes } from 'node:crypto'
+import { createHash, randomBytes } from 'node:crypto'
+import { dirname, resolve } from 'node:path'
 
 // 기록 파일을 반쪽으로 남기지 않는 쓰기.
 //
@@ -32,4 +33,22 @@ export function writeTextAtomic(path, text, { verify = () => null, fs = nodeFs }
     }
     throw error
   }
+}
+
+/** 글의 줄 수. 마지막 줄바꿈 뒤의 빈 자리는 세지 않는다 — `wc -l`이 끝에 줄바꿈이 있는 파일에서 내는 값과 같다. */
+export const lineCount = text => (text === '' ? 0 : text.split('\n').length - (text.endsWith('\n') ? 1 : 0))
+
+/**
+ * 리포트에 붙일 조각을 `--out` 자리에 UTF-8로 쓰고, 표준 출력에 낼 요약(`out`·`sha256`·`lines`)을 돌려준다.
+ *
+ * 조각을 셸이 표준 출력으로 받아 옮기면 PowerShell 5.1이 node의 UTF-8 출력을 시스템 코드 페이지로 읽어 한글을
+ * 깨뜨린다. 2026-10-13 실행은 렌더러·스냅숏·타임라인 출력을 셸 변수로 받아 리포트를 조립했다가 한글이 깨진 리포트를
+ * 썼고, 저장 뒤 검사에서 알아채 다시 조립했다. 파일로 받으면 글이 셸을 지나지 않는다.
+ */
+export function writeOutFile(outPath, text, options = {}) {
+  const path = resolve(outPath)
+  const fs = options.fs ?? nodeFs
+  fs.mkdirSync(dirname(path), { recursive: true })
+  writeTextAtomic(path, text, options)
+  return { out: path, sha256: createHash('sha256').update(text).digest('hex'), lines: lineCount(text) }
 }

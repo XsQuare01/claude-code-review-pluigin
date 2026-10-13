@@ -1976,3 +1976,20 @@ test('이전 리뷰 줄은 비교한 실행에만 나오고, 신규에는 그 �
     '이전 리뷰: 신규 — 이번 변경이 이 파일을 바꾸지 않았다 — 이전 리뷰가 놓쳤거나 판단이 달라진 것이다 · 이 지적의 규칙 문서가 바뀌었다')
   assert.match(lineageLine({ status: 'recheck', reason: 'ambiguous' }), /^이전 리뷰: 재확인 필요 — 같은 규칙·같은 자리에/)
 })
+
+test('--out은 같은 Markdown을 파일에 UTF-8로 쓰고, 표준 출력에는 쓴 자리만 낸다', t => {
+  // 2026-10-13 실행은 이 출력을 PowerShell 변수로 받아 리포트에 끼웠고, 한글이 깨진 리포트를 저장했다.
+  const dir = mkdtempSync(join(tmpdir(), 'render-out-'))
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const plain = runWith([ok()])
+  assert.equal(plain.status, 0, plain.stderr)
+  const path = join(dir, 'findings.md')
+  const out = runWith([ok()], ['--out', path])
+  assert.equal(out.status, 0, out.stderr)
+  assert.equal(readFileSync(path, 'utf8'), plain.stdout)
+  const written = JSON.parse(out.stdout)
+  assert.deepEqual([written.out, written.lines], [path, plain.stdout.split('\n').length - (plain.stdout.endsWith('\n') ? 1 : 0)])
+  const missing = runWith([ok()], ['--out'])
+  assert.equal(missing.status, 2)
+  assert.match(missing.stderr, /--out에는 상세 지적을 쓸 파일 경로를 준다/)
+})

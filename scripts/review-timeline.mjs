@@ -16,7 +16,7 @@
 //   review-timeline.mjs --dir review-reports --run <리포트 basename> --phase render.start --set findings=47
 //   review-timeline.mjs --dir ... --run ... --phase dispatch.end --data-file payload.json
 //   review-timeline.mjs --dir ... --run ... --phase render.start --data '{"findings":47}'
-//   review-timeline.mjs --dir ... --run ... --summary
+//   review-timeline.mjs --dir ... --run ... --summary [--out <경로>]   --out이면 표를 그 파일에 UTF-8로 쓴다
 //   review-timeline.mjs --dir ... --run ... --check     종료 직전, 기록 자체를 검사
 //
 // --set은 따옴표도 중괄호도 쓰지 않는다. PowerShell에서 --data의 JSON이 두 번
@@ -28,6 +28,7 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs'
 import { basename, dirname, extname, join, resolve } from 'node:path'
 
+import { writeOutFile } from './lib/atomic-write.mjs'
 import { moduleOutcomes } from './lib/run-record.mjs'
 import { CANCEL_REASONS, HALT_REASONS, STAGES } from './lib/task-ledger.mjs'
 import { runNameProblem } from './lib/run-name.mjs'
@@ -59,7 +60,7 @@ const flagAll = name => process.argv
  * 그것을 조용히 무시하면 **잘린 값이 기록되고 아무도 모른다.** 기록을 남기는
  * 도구에서 가장 나쁜 실패 방식이라, 인용을 잊었으면 시끄럽게 실패시킨다.
  */
-const VALUE_FLAGS = new Set(['dir', 'run', 'phase', 'data', 'data-file', 'set'])
+const VALUE_FLAGS = new Set(['dir', 'run', 'phase', 'data', 'data-file', 'set', 'out'])
 const BOOL_FLAGS = new Set(['summary', 'check', 'before-end'])
 {
   const argv = process.argv.slice(2)
@@ -78,6 +79,7 @@ const BOOL_FLAGS = new Set(['summary', 'check', 'before-end'])
 }
 
 if (has('before-end') && !has('check')) die('--before-end는 --check와 함께 쓴다 — run.end를 남기기 전에 기록을 검사하는 모드다')
+if (has('out') && !has('summary')) die('--out은 --summary와 함께 쓴다 — 리포트에 붙일 표를 파일로 받는 자리다')
 
 const dir = flag('dir', 'review-reports')
 const run = flag('run')
@@ -1110,7 +1112,19 @@ if (has('summary')) {
   // 없어진다.
   out.push('', `> 출처: \`${path}\` · 이벤트 ${events.length}개 · 마지막 \`${finalPhase}\`. 이 표는 그 기록에서 만든 것이고, 손으로 고치면 대조가 깨진다.`)
 
-  process.stdout.write(out.join('\n') + '\n')
+  const table = out.join('\n') + '\n'
+  if (!has('out')) {
+    process.stdout.write(table)
+    process.exit(0)
+  }
+  // 표를 셸로 받아 옮기지 않게 파일로 쓴다(`assemble-report.mjs`가 읽는다). 표준 출력에는 쓴 자리만 낸다.
+  let written
+  try {
+    written = writeOutFile(flag('out'), table)
+  } catch (error) {
+    die(`--out에 타임라인 표를 쓰지 못했다: ${flag('out')} — ${error.message}`)
+  }
+  process.stdout.write(`${JSON.stringify(written)}\n`)
   process.exit(0)
 }
 

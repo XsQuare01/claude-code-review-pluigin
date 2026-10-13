@@ -13,7 +13,8 @@
 //        [--verdicts <경로> …] --phase-high <active-deletion|rollout-shadow> \
 //        --phase-low <active-deletion|rollout-shadow> \
 //        [--deletion-approval <승인 파일> — active-deletion을 줄 때만, 그때는 필수] \
-//        --verification-state <ran|disabled> --rules <RULES_DIR> --workflow <이름>
+//        --verification-state <ran|disabled> --rules <RULES_DIR> --workflow <이름> [--out <경로>]
+//        — --out이면 Markdown을 그 파일에 UTF-8로 쓰고, 표준 출력에는 쓴 경로·sha256·줄 수만 낸다
 //   node scripts/render-findings.mjs --print-deletion-basis --rules <RULES_DIR>
 //        — 승인 파일의 basis에 적을 지금의 기준(JSON)을 낸다
 
@@ -21,6 +22,7 @@ import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
+import { writeOutFile } from './lib/atomic-write.mjs'
 import { markedBlock, markedJson, CROSS_VERIFICATION_TOKEN_KEYS } from './lib/contract-blocks.mjs'
 import { assessEvidence, loadEvidence } from './lib/evidence.mjs'
 import { finalizeCurrent } from './lib/review-compare.mjs'
@@ -1318,6 +1320,11 @@ if (process.argv[1] && process.argv[1].endsWith('render-findings.mjs')) {
   }
   if (!inputPath) die('--input <경로>가 필요하다')
   if (!rulesDir) die('--rules <RULES_DIR>가 필요하다')
+  // 그린 Markdown을 이 자리에 UTF-8로 쓴다(`assemble-report.mjs`가 읽는다). 표준 출력을 셸로 받아 옮기지 않게 한다.
+  const outPath = flag('out')
+  if (process.argv.includes('--out') && (outPath === undefined || outPath.startsWith('--'))) {
+    die('--out에는 상세 지적을 쓸 파일 경로를 준다(보통 <리포트 디렉터리>/.timing/<실행 이름>.findings.md)')
+  }
   if (!workflow) die('--workflow <이름>이 필요하다 — 어느 모듈이 섹션이 되는지가 여기서 갈린다')
   // 기본값을 두지 않는다. 반박된 finding의 처리가 갈리고 그 값이 차단 판정에
   // 걸리므로, 조용히 틀린 쪽으로 도는 것보다 멈추는 편이 낫다. high와 low를
@@ -1545,5 +1552,16 @@ if (process.argv[1] && process.argv[1].endsWith('render-findings.mjs')) {
       `이 렌더러는 \`미해결 / 후속 확인\`을 쓰지 않으므로 아래를 직접 그 섹션에 옮겨 적어야 한다:\n` +
       [...highLines, lowCount > 0 ? `  - impact 낮음: ${lowCount}건 (건별 내역 없음)` : null].filter(Boolean).join('\n') + '\n')
   }
-  process.stdout.write(output.markdown)
+  if (outPath === undefined) {
+    process.stdout.write(output.markdown)
+  } else {
+    // `--out`이면 표준 출력에는 무엇을 어디에 썼는지만 낸다 — 같은 Markdown을 다시 내면 셸로 받는 길이 남는다.
+    let written
+    try {
+      written = writeOutFile(outPath, output.markdown)
+    } catch (error) {
+      die(`--out에 상세 지적을 쓰지 못했다: ${outPath} — ${error.message}`)
+    }
+    process.stdout.write(`${JSON.stringify(written)}\n`)
+  }
 }
