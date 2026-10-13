@@ -125,41 +125,46 @@ export function computeOwnerCollisions(candidates) {
 }
 
 /**
- * 같은 정규화 위치에 걸린 지적 중 **namespace가 다른 것**을 서로 잇는다.
+ * 같은 자리를 짚은 **다른 규칙**의 지적을 서로 잇는다. 같은 파일에서 줄 범위가 겹치면 같은 자리다.
  *
- * correctness 패스(`CR-*`)와 규칙 모듈이 같은 자리를 지적하면, 둘은 근거가 다르다 —
- * 하나는 의도와 경로, 하나는 규칙 문장이다. exact dedup은 규칙 ID가 같아야 병합하므로
- * 둘은 합쳐지지 않고, 합쳐서도 안 된다: 같은 결함인지 입증할 규칙이 아직 없다(#88).
- * 그렇다고 따로 두기만 하면 읽는 사람이 같은 자리의 두 지적을 서로 모른 채 읽는다.
- * 그래서 합치지 않고 잇기만 한다. 각자의 출처와 판정은 그대로다.
+ * 두 지적은 근거가 다르다 — 규칙 문장이 다르거나(규칙 모듈끼리), 하나는 의도와 경로, 하나는 규칙
+ * 문장이다(정확성 패스 `CR-*`와 규칙 모듈). exact dedup은 규칙 ID가 같아야 병합하므로 둘은 합쳐지지
+ * 않고, 합쳐서도 안 된다: 같은 결함인지 입증할 규칙이 아직 없다(#88). 실제로 같은 줄의 슬라이더 이름
+ * 누락(`12-4`)과 rest props 펼침(`06-5`)은 다른 결함이었다. 그렇다고 따로 두기만 하면 읽는 사람이 같은
+ * 문제를 여러 모듈이 따로 낸 것을 모른 채 센다 — 2026-10-13 실행은 차집합 재계산 하나를 `04-6`·`14-4`·
+ * `15-4`·`15-11`이, 주석 하나를 `07-8`·`13-4`·`19-3`이 따로 냈다. 그래서 합치지 않고 잇기만 한다.
+ * 각자의 출처와 판정은 그대로다.
  *
- * `prefixes`는 이을 namespace다(조항이 없는 패스의 접두, catalog의 `ruleClauses: false`).
- * 규칙 모듈끼리의 같은 자리는 `ownerCollision`이 이미 다루므로 여기서 잇지 않는다.
+ * 처음에는 namespace를 넘는 것만 이었다. 규칙 모듈끼리의 같은 자리는 `ownerCollision`이 검증 경로를
+ * 정하는 데만 쓰였고, 리포트에는 보이지 않았다. 시작 줄이 같아야 하던 것도 겹치는 범위로 넓혔다 —
+ * 7줄짜리 `useMemo` 전체를 짚은 지적과 그 의존성 배열 한 줄을 짚은 지적은 시작 줄이 다르다.
+ *
+ * 같은 주인의 지적끼리는 잇지 않는다. 주인은 규칙 ID이고, 조항이 없는 패스(`prefixes`, catalog의
+ * `ruleClauses: false`)는 접두 하나가 주인이다 — `CR-1`과 `CR-2`는 다른 결함이라는 뜻이 아니다.
  */
-export function relatedAcrossNamespaces(candidates, prefixes) {
+export function relatedAtSameLocation(candidates, prefixes = []) {
+  const ownerOf = candidate => {
+    const ruleId = String(candidate.ruleId ?? '')
+    const prefix = ruleId.split('-')[0]
+    return prefixes.includes(prefix) ? prefix : ruleId
+  }
+  const spanOf = candidate => {
+    const location = candidate.location
+    if (!location || (location.kind !== 'verified' && location.kind !== 'deleted') || typeof location.path !== 'string') return null
+    const { start, end } = locationSpan(location)
+    if (!Number.isInteger(start) || !Number.isInteger(end) || end < start) return null
+    return { file: `${location.kind}:${location.path}`, start, end }
+  }
+  const spans = (candidates ?? []).map(candidate => ({ candidate, span: spanOf(candidate) })).filter(entry => entry.span)
   const linked = new Map()
-  if (!prefixes.length) return linked
-  const namespaceOf = candidate => {
-    const prefix = String(candidate.ruleId ?? '').split('-')[0]
-    return prefixes.includes(prefix) ? prefix : null
-  }
-  const byLocation = new Map()
-  for (const candidate of candidates ?? []) {
-    const key = collisionKey(candidate.location)
-    if (!key) continue
-    if (!byLocation.has(key)) byLocation.set(key, [])
-    byLocation.get(key).push(candidate)
-  }
-  for (const group of byLocation.values()) {
-    for (const candidate of group) {
-      const own = namespaceOf(candidate)
-      // 적어도 한쪽이 이을 namespace여야 하고, 둘의 namespace가 달라야 한다.
-      const others = group
-        .filter(other => other !== candidate && namespaceOf(other) !== own && (own !== null || namespaceOf(other) !== null))
-        .map(other => other.candidateId)
-        .sort()
-      if (others.length) linked.set(candidate.candidateId, others)
-    }
+  for (const { candidate, span } of spans) {
+    const others = spans
+      .filter(other => other.candidate !== candidate && other.span.file === span.file
+        && other.span.start <= span.end && span.start <= other.span.end
+        && ownerOf(other.candidate) !== ownerOf(candidate))
+      .map(other => other.candidate.candidateId)
+      .sort()
+    if (others.length) linked.set(candidate.candidateId, others)
   }
   return linked
 }
@@ -267,7 +272,7 @@ export function prepareVerification(candidates, blobs, options = {}) {
   const list = candidates ?? []
   if (options.locationsOnly) return locationsOnly(list, blobs)
   const collisions = computeOwnerCollisions(list)
-  const related = relatedAcrossNamespaces(list, options.linkPrefixes ?? [])
+  const related = relatedAtSameLocation(list, options.linkPrefixes ?? [])
   const decided = list.map(candidate => {
     const check = checkLocation(candidate.location, blobs)
     const input = { candidate, locationCheck: check.status, ownerCollision: collisions.has(candidate.candidateId) }

@@ -611,7 +611,7 @@ export function renderFinding(candidate, { label, vocabulary, related = [], evid
     ...(source ? [source] : []),
     // 이전 리뷰와의 관계(C-13). 이전 리뷰와 비교한 실행에만 있다.
     ...(lineageText ? [lineageText] : []),
-    // 같은 자리에 걸린 다른 namespace의 지적. 합치지 않고 잇기만 한다 — 근거가 다른 두
+    // 같은 자리(겹치는 줄)를 짚은 다른 규칙의 지적. 합치지 않고 잇기만 한다 — 근거가 다른 두
     // 지적이 같은 결함인지는 이 렌더러가 정하지 않는다. 값은 호출자가 이미 code span으로 만든다.
     ...(related.length ? [`관련 지적: ${related.join(', ')}`] : []),
     locationLine(candidate),
@@ -1160,7 +1160,7 @@ export function render(candidates, verdictByCandidateId, phaseByImpact, vocabula
     ? NOT_COLLECTED
     : '지적 없음.')
 
-  // 같은 자리에 걸린 다른 namespace의 지적(`relatedCandidateIds`, prepare-verification이
+  // 같은 자리(겹치는 줄)를 짚은 다른 규칙의 지적(`relatedCandidateIds`, prepare-verification이
   // 붙인다)을 리포트에서 부르는 이름. 이 리포트에 그려진 지적은 순번까지 붙은 이름으로,
   // 그려지지 않은 지적(범위 미확정으로 옮겨졌거나 삭제된 것)은 candidate ID와 그 사실로
   // 적는다 — 이름만 적으면 독자가 상세 지적에서 찾다 실패한다.
