@@ -609,17 +609,33 @@ test('같은 자리의 CR 지적과 규칙 지적은 합치지 않고 서로 관
   const byId = new Map(JSON.parse(out.stdout).candidates.map(candidate => [candidate.candidateId, candidate]))
   assert.equal(byId.size, 3, '출처마다 남는다')
   assert.deepEqual(byId.get('CR-1#1').relatedCandidateIds, ['01-1#1', '04-3#1'])
-  assert.deepEqual(byId.get('04-3#1').relatedCandidateIds, ['CR-1#1'])
-  assert.deepEqual(byId.get('01-1#1').relatedCandidateIds, ['CR-1#1'])
+  assert.deepEqual(byId.get('04-3#1').relatedCandidateIds, ['01-1#1', 'CR-1#1'])
+  assert.deepEqual(byId.get('01-1#1').relatedCandidateIds, ['04-3#1', 'CR-1#1'])
 })
 
-test('규칙 지적끼리는 같은 자리여도 관련 지적으로 잇지 않는다 — 이번 범위는 namespace를 넘는 것뿐이다', t => {
+test('규칙 지적끼리도 줄이 겹치면 관련 지적으로 잇고, 같은 주인의 지적이나 겹치지 않는 자리는 잇지 않는다', t => {
+  // 2026-10-13 실행은 차집합 재계산 하나를 `useMemo` 전체(211-217행)를 짚은 `14-4`·`15-11`과 의존성 배열(216행)을
+  // 짚은 `04-6`·`15-4`가 따로 냈다. 처음에는 namespace를 넘는 것만, 그것도 시작 줄이 같을 때만 이어 넷이 서로를 몰랐다.
+  const readme = readFileSync(join(dirname(SCRIPT), '..', 'README.md'), 'utf8').replace(/\r\n?/g, '\n').split('\n')
+  const at = (line, endLine = line) => ({ kind: 'verified', path: 'README.md', line, ...(endLine !== line ? { endLine } : {}), quote: readme.slice(line - 1, endLine).join('\n') })
+  const whole = { ...FINDING, ruleId: '14-4', title: '렌더 중 차집합', location: at(1, 3) }
+  const sameRule = { ...FINDING, ruleId: '14-4', title: '다른 14-4', location: at(2) }
+  const deps = { ...FINDING, ruleId: '04-6', title: '의존성 배열', location: at(3) }
+  const apart = { ...FINDING, ruleId: '07-8', title: '떨어진 자리', location: at(5) }
   const out = prepare(t, { results: [
-    { source: '04-state', result: { ...RESULT, findings: [HIGH] } },
-    { source: '01-fsd', result: { ...RESULT, findings: [FINDING] } },
+    { source: '14-react-performance', result: { ...RESULT, findings: [whole, sameRule] } },
+    { source: '04-state', result: { ...RESULT, findings: [deps] } },
+    { source: '07-naming', result: { ...RESULT, findings: [apart] } },
+    { source: 'correctness', result: { ...RESULT, findings: [{ ...CR, location: at(5) }, { ...CR, ruleId: 'CR-2', title: '둘째', location: at(5) }] } },
   ] })
   assert.equal(out.status, 0, out.stderr)
-  for (const candidate of JSON.parse(out.stdout).candidates) assert.equal(candidate.relatedCandidateIds, undefined)
+  const related = new Map(JSON.parse(out.stdout).candidates.map(candidate => [candidate.candidateId, candidate.relatedCandidateIds]))
+  assert.deepEqual(related.get('14-4#1'), ['04-6#1'], '겹치는 범위면 시작 줄이 달라도 잇는다')
+  assert.deepEqual(related.get('04-6#1'), ['14-4#1'])
+  assert.equal(related.get('14-4#2'), undefined, '같은 규칙끼리는 잇지 않고, 겹치지 않는 다른 규칙과도 잇지 않는다')
+  // 조항이 없는 패스는 접두 하나가 주인이다 — CR-1과 CR-2는 서로 잇지 않고 같은 자리의 규칙 지적과만 잇는다.
+  assert.deepEqual(related.get('07-8#1'), ['CR-1#1', 'CR-2#1'])
+  assert.deepEqual([related.get('CR-1#1'), related.get('CR-2#1')], [['07-8#1'], ['07-8#1']])
 })
 
 // full 실행의 run.start — 선택 패스를 켰는지가 여기 있다.

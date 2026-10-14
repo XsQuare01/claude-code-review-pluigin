@@ -12,7 +12,9 @@
 // Usage:
 //
 //   review-snapshot.mjs --dir <리포트 디렉터리> --run <리포트 basename> --rules <RULES_DIR> \
-//     --verification-state <ran|disabled> [--repo .] [--routed <경로>] [--verdicts <경로> | --no-verdicts]
+//     --verification-state <ran|disabled> [--repo .] [--routed <경로>] [--verdicts <경로> | --no-verdicts] [--out <경로>]
+//
+//   --out  리포트에 붙일 블록을 그 파일에 UTF-8로 쓰고, 표준 출력에는 쓴 경로·sha256·줄 수만 낸다
 //
 //   review-snapshot.mjs --show <스냅숏 경로>     저장된 스냅숏을 검사하고 같은 블록을 낸다
 //
@@ -25,6 +27,7 @@ import { createHash } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
 import { join, relative } from 'node:path'
 
+import { writeOutFile } from './lib/atomic-write.mjs'
 import { requireStartedTimeline, readEvents } from './lib/run-record.mjs'
 import { currentTarget, ruleDocDigests, rulesDigest, runOutputs } from './lib/run-identity.mjs'
 import { buildSnapshot, parseSnapshot, renderSnapshotMarkdown, writeSnapshotAtomic } from './lib/review-snapshot.mjs'
@@ -36,7 +39,7 @@ const die = message => {
   process.exit(2)
 }
 
-const VALUE_FLAGS = new Set(['dir', 'run', 'rules', 'verification-state', 'repo', 'routed', 'verdicts', 'show'])
+const VALUE_FLAGS = new Set(['dir', 'run', 'rules', 'verification-state', 'repo', 'routed', 'verdicts', 'show', 'out'])
 const BOOL_FLAGS = new Set(['no-verdicts'])
 {
   const argv = process.argv.slice(2)
@@ -233,4 +236,16 @@ try {
 const saved = parseSnapshot(readText(path, '스냅숏'))
 if (saved.error) die(`쓴 스냅숏을 다시 읽지 못했다: ${saved.error}`)
 for (const note of saved.value.notes) process.stderr.write(`참고: ${note}\n`)
-process.stdout.write(`${renderSnapshotMarkdown(saved.value)}\n`)
+const block = `${renderSnapshotMarkdown(saved.value)}\n`
+if (flag('out') === undefined) {
+  process.stdout.write(block)
+} else {
+  // 블록을 셸로 받아 옮기지 않게 파일로 쓴다(`assemble-report.mjs`가 읽는다). 스냅숏은 이미 썼으므로 실패해도 그대로다.
+  let written
+  try {
+    written = writeOutFile(flag('out'), block)
+  } catch (error) {
+    die(`--out에 실행 계획 블록을 쓰지 못했다: ${flag('out')} — ${error.message}`)
+  }
+  process.stdout.write(`${JSON.stringify(written)}\n`)
+}

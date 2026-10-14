@@ -223,6 +223,30 @@ test('실행 도중 대상이 바뀌었으면 그 사실을 남긴다 — 같은
   assert.deepEqual(buildSnapshot(fixture()).drift, [])
 })
 
+test('base가 merge-base 뒤로 앞서 같은 파일을 바꿨으면 대상에 남기고, 도구 결과를 어떻게 읽을지 블록에 적는다', () => {
+  // 2026-10-13 실행은 main이 4커밋 앞서 package.json을 바꿔 둔 사실을 모른 채 typecheck·test 실패를 "baseline 미측정"으로만 남겼다.
+  const overlap = ['package-lock.json', 'package.json', 'src/a.json', 'src/b.json', 'src/c.json', 'src/d.json']
+  const behind = buildSnapshot(fixture({ events: [runStart({ baseAhead: 4, baseOverlapCount: 7, baseOverlap: overlap }), ...fixture().events.slice(1)] }))
+  assert.deepEqual([behind.target.baseAhead, behind.target.baseOverlapCount, behind.target.baseOverlap], [4, 7, overlap])
+  assert.deepEqual(snapshotProblems(behind), [])
+  const markdown = renderSnapshotMarkdown(behind)
+  assert.match(markdown, /\*\*base가 앞서 있다\*\* — `main`이 merge-base 뒤로 4커밋 앞서 있고, 이 브랜치와 같은 파일 7개를 바꿨다: `package-lock\.json`, `package\.json`, `src\/a\.json`, `src\/b\.json`, `src\/c\.json` 외 2개\. .*이 브랜치를 base에 합친 트리에서 다시 재 가린다 — 파일이 겹친다는 것만으로 이 변경의 실패가 아니라고 하지 않는다\(C-6\)\./)
+  const apart = buildSnapshot(fixture({ events: [runStart({ baseAhead: 2 }), ...fixture().events.slice(1)] }))
+  assert.match(renderSnapshotMarkdown(apart), /base `main`이 merge-base 뒤로 2커밋 앞서 있다 — 이 브랜치가 바꾼 파일은 건드리지 않았다/)
+  // 재지 않은 실행(예전 기록)에는 줄이 없다 — 앞서지 않았다고 지어내지 않는다.
+  const unmeasured = buildSnapshot(fixture())
+  assert.equal('baseAhead' in unmeasured.target, false)
+  assert.doesNotMatch(renderSnapshotMarkdown(unmeasured), /merge-base 뒤로/)
+  for (const [target, pattern] of [
+    [{ ...behind.target, baseAhead: -1 }, /baseAhead/],
+    [{ ...behind.target, baseOverlapCount: undefined }, /함께 있어야/],
+    [{ ...behind.target, baseOverlapCount: 1 }, /길이보다 작다/],
+  ]) {
+    const problems = snapshotProblems({ ...behind, target: Object.fromEntries(Object.entries(target).filter(([, value]) => value !== undefined)) })
+    assert.ok(problems.some(problem => pattern.test(problem)), `${pattern}: ${problems.join(' / ')}`)
+  }
+})
+
 test('실행 식별이 없는 기록으로는 스냅숏을 만들지 않는다', () => {
   // 2.16.0 이전 preflight로 시작한 실행이다. 대상을 모르는 결과는 다른 실행과 이을 수 없다.
   const events = [runStart({ runId: undefined }), ...ALL.map(name => done(name))]

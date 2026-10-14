@@ -16,7 +16,7 @@
 //   review-timeline.mjs --dir review-reports --run <리포트 basename> --phase render.start --set findings=47
 //   review-timeline.mjs --dir ... --run ... --phase dispatch.end --data-file payload.json
 //   review-timeline.mjs --dir ... --run ... --phase render.start --data '{"findings":47}'
-//   review-timeline.mjs --dir ... --run ... --summary
+//   review-timeline.mjs --dir ... --run ... --summary [--out <경로>]   --out이면 표를 그 파일에 UTF-8로 쓴다
 //   review-timeline.mjs --dir ... --run ... --check     종료 직전, 기록 자체를 검사
 //
 // --set은 따옴표도 중괄호도 쓰지 않는다. PowerShell에서 --data의 JSON이 두 번
@@ -28,8 +28,9 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs'
 import { basename, dirname, extname, join, resolve } from 'node:path'
 
+import { writeOutFile } from './lib/atomic-write.mjs'
 import { moduleOutcomes } from './lib/run-record.mjs'
-import { CANCEL_REASONS, HALT_REASONS, STAGES } from './lib/task-ledger.mjs'
+import { CANCEL_REASONS, HALT_REASONS, STAGES, endState } from './lib/task-ledger.mjs'
 import { runNameProblem } from './lib/run-name.mjs'
 
 const die = message => {
@@ -59,7 +60,7 @@ const flagAll = name => process.argv
  * 그것을 조용히 무시하면 **잘린 값이 기록되고 아무도 모른다.** 기록을 남기는
  * 도구에서 가장 나쁜 실패 방식이라, 인용을 잊었으면 시끄럽게 실패시킨다.
  */
-const VALUE_FLAGS = new Set(['dir', 'run', 'phase', 'data', 'data-file', 'set'])
+const VALUE_FLAGS = new Set(['dir', 'run', 'phase', 'data', 'data-file', 'set', 'out'])
 const BOOL_FLAGS = new Set(['summary', 'check', 'before-end'])
 {
   const argv = process.argv.slice(2)
@@ -78,6 +79,7 @@ const BOOL_FLAGS = new Set(['summary', 'check', 'before-end'])
 }
 
 if (has('before-end') && !has('check')) die('--before-end는 --check와 함께 쓴다 — run.end를 남기기 전에 기록을 검사하는 모드다')
+if (has('out') && !has('summary')) die('--out은 --summary와 함께 쓴다 — 리포트에 붙일 표를 파일로 받는 자리다')
 
 const dir = flag('dir', 'review-reports')
 const run = flag('run')
@@ -131,11 +133,13 @@ const readLines = () => {
 const PHASES = new Map([
   // `runId`부터는 무엇을 리뷰했는지다(`lib/run-identity.mjs`). 결과 스냅숏이 이 줄에서
   // 대상을 읽으므로, preflight가 쓴 기록만 스냅숏을 만들 수 있다.
+  // `baseAhead`부터 셋은 base가 merge-base 뒤로 앞서 나간 정도와 겹친 파일, `dependencyFiles`는 이 변경이 바꾼
+  // 의존성 매니페스트다 — 도구 실패를 이 변경의 것으로 읽어도 되는지를 가르는 값이다(C-6).
   ['run.start', {
     required: ['host', 'rules', 'version', 'branch', 'changedFiles'],
-    structured: [],
+    structured: ['baseOverlap', 'dependencyFiles'],
     allowed: ['candidates', 'workflow', 'mergeBase', 'os', 'runId', 'base', 'baseSource', 'prNumber', 'prBase', 'head', 'worktree', 'dirtyFiles', 'repo', 'repoRoot', 'rulesDigest', 'correctness',
-      'maxTasks', 'maxDurationSec', 'staleAfterSec', 'continues', 'previousSnapshot', 'previousRunId', 'previousSha256'],
+      'maxTasks', 'maxDurationSec', 'staleAfterSec', 'continues', 'previousSnapshot', 'previousRunId', 'previousSha256', 'baseAhead', 'baseOverlapCount'],
   }],
   // 한도에 닿아 멈춘 실행을 이어 갈 때 새 한도 구간을 연다(C-12). 대상이 그대로인지 확인한 값을 함께 남긴다.
   ['run.resume', { required: [], structured: [], allowed: ['maxTasks', 'maxDurationSec', 'staleAfterSec', 'head', 'worktree'] }],
@@ -906,7 +910,9 @@ if (has('summary')) {
   // 줄이 더 붙은 실행을 정상 종료로 읽는다 — 실제로 기록 실패 때문에 순서가
   // 밀려 그런 타임라인이 만들어진 적이 있다. 없는 것과 자리에 없는 것은 다르다.
   const finalPhase = events[events.length - 1].phase
-  const ended = events.some(event => event.phase === 'run.end')
+  // 끝났는지는 지금 구간에서 본다. 부분 보고로 닫은 뒤 `run.resume`으로 이어 간 실행의 앞 `run.end`는 그 구간의
+  // 끝이지 이 렌더를 고쳐 쓴 것이 아니다 — 기록 어딘가에 있다는 것으로 보면 이어 간 실행의 표에 틀린 문장이 실린다.
+  const ended = endState(events).ended
   if (finalPhase === 'render.start') {
     // C-7은 이 표를 `render.start` 직후, `render.wrote`와 `run.end`를 적기 전에
     // 만들라고 한다. 그 자리에서 종료 줄이 없는 것은 사고가 아니라 순서다.
@@ -1110,7 +1116,19 @@ if (has('summary')) {
   // 없어진다.
   out.push('', `> 출처: \`${path}\` · 이벤트 ${events.length}개 · 마지막 \`${finalPhase}\`. 이 표는 그 기록에서 만든 것이고, 손으로 고치면 대조가 깨진다.`)
 
-  process.stdout.write(out.join('\n') + '\n')
+  const table = out.join('\n') + '\n'
+  if (!has('out')) {
+    process.stdout.write(table)
+    process.exit(0)
+  }
+  // 표를 셸로 받아 옮기지 않게 파일로 쓴다(`assemble-report.mjs`가 읽는다). 표준 출력에는 쓴 자리만 낸다.
+  let written
+  try {
+    written = writeOutFile(flag('out'), table)
+  } catch (error) {
+    die(`--out에 타임라인 표를 쓰지 못했다: ${flag('out')} — ${error.message}`)
+  }
+  process.stdout.write(`${JSON.stringify(written)}\n`)
   process.exit(0)
 }
 

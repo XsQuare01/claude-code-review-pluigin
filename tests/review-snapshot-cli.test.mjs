@@ -216,3 +216,13 @@ test('재현 근거 파일을 읽을 수 없으면 스냅숏을 쓰지 않는다
   assert.equal(out.status, 2)
   assert.match(out.stderr, /근거/)
 })
+
+test('--out은 리포트 블록을 파일에 쓰고 쓴 자리만 낸다 — 블록은 저장된 스냅숏에서 만든 것과 같다', t => {
+  // 2026-10-13 실행은 이 블록을 PowerShell 변수로 받아 리포트에 끼웠고, 한글이 깨진 리포트를 저장했다.
+  const { repo, dir, timing } = startedRun(t)
+  const path = join(timing, `${RUN}.plan.md`)
+  const out = snapshot(dir, repo, ['--verification-state', 'ran', '--out', path])
+  assert.equal(out.status, 0, out.stderr)
+  assert.equal(readFileSync(path, 'utf8'), `${renderSnapshotMarkdown(savedSnapshot(timing).value)}\n`)
+  assert.equal(JSON.parse(out.stdout).out, path)
+})

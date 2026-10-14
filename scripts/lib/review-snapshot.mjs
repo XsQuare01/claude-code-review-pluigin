@@ -382,6 +382,9 @@ export function buildSnapshot({ name, events, catalog, routed, verdicts, verific
       head: start.head,
       worktree: start.worktree,
       dirtyFiles: start.dirtyFiles,
+      // base가 merge-base 뒤로 앞서 나간 정도(C-6). preflight가 잰 실행에만 있다 — 없는 값을 0으로 짓지 않는다.
+      ...(count(start.baseAhead) ? { baseAhead: start.baseAhead } : {}),
+      ...(count(start.baseOverlapCount) && Array.isArray(start.baseOverlap) ? { baseOverlapCount: start.baseOverlapCount, baseOverlap: start.baseOverlap } : {}),
     },
     drift,
     status: statusOf(counts),
@@ -431,6 +434,12 @@ export function snapshotProblems(snapshot) {
     if (target.repoRoot !== null && !OBJECT_ID.test(String(target.repoRoot))) problems.push('target.repoRoot가 commit id도 null도 아니다')
     if (target.repo !== null && !nonEmpty(target.repo)) problems.push('target.repo가 문자열도 null도 아니다')
     for (const key of ['branch', 'base']) if (!nonEmpty(target[key])) problems.push(`target.${key}가 없다`)
+    if ('baseAhead' in target && !count(target.baseAhead)) problems.push('target.baseAhead가 0 이상의 정수가 아니다')
+    if (('baseOverlap' in target) !== ('baseOverlapCount' in target)) problems.push('target.baseOverlap과 target.baseOverlapCount는 함께 있어야 한다')
+    else if ('baseOverlap' in target) {
+      if (!Array.isArray(target.baseOverlap) || !target.baseOverlap.every(nonEmpty)) problems.push('target.baseOverlap이 경로 배열이 아니다')
+      else if (!count(target.baseOverlapCount) || target.baseOverlapCount < target.baseOverlap.length) problems.push('target.baseOverlapCount가 baseOverlap의 길이보다 작다')
+    }
   }
 
   if (!Array.isArray(snapshot.drift)) problems.push('drift가 배열이 아니다')
@@ -681,6 +690,14 @@ export function renderSnapshotMarkdown(snapshot) {
   const { target, run } = snapshot
   const worktree = target.worktree === 'clean' ? 'clean' : `커밋하지 않은 변경 ${target.dirtyFiles}개 (${codeSpan(target.worktree.slice(0, 19))}…)`
   lines.push('', `검토 대상: HEAD ${codeSpan(short(target.head))} · 작업 트리 ${worktree} · base ${codeSpan(target.base)} (merge-base ${codeSpan(short(target.mergeBase))}) · 실행 ID ${codeSpan(run.runId)}`)
+  // base가 앞서 나가 같은 파일을 바꿨으면 도구 결과를 읽는 법이 달라진다(C-6). 리뷰 diff에는 보이지 않는 사실이라 여기서 적는다.
+  if (target.baseAhead > 0 && target.baseOverlapCount > 0) {
+    const shown = target.baseOverlap.slice(0, 5).map(codeSpan).join(', ')
+    const rest = target.baseOverlapCount - Math.min(5, target.baseOverlap.length)
+    lines.push('', `**base가 앞서 있다** — ${codeSpan(target.base)}이 merge-base 뒤로 ${target.baseAhead}커밋 앞서 있고, 이 브랜치와 같은 파일 ${target.baseOverlapCount}개를 바꿨다: ${shown}${rest > 0 ? ` 외 ${rest}개` : ''}. lint·typecheck·test는 base를 따라잡지 않은 HEAD에서 돌았다. 실패가 그 때문인지는 이 브랜치를 base에 합친 트리에서 다시 재 가린다 — 파일이 겹친다는 것만으로 이 변경의 실패가 아니라고 하지 않는다(C-6).`)
+  } else if (target.baseAhead > 0) {
+    lines.push('', `base ${codeSpan(target.base)}이 merge-base 뒤로 ${target.baseAhead}커밋 앞서 있다 — 이 브랜치가 바꾼 파일은 건드리지 않았다.`)
+  }
   if (snapshot.drift.length) {
     const changes = snapshot.drift.map(entry => `${entry.field} ${codeSpan(short(entry.recorded))} → ${codeSpan(short(entry.current))}`).join(' · ')
     lines.push('', `**검토 도중 대상이 바뀌었다** — ${changes}. 이 실행의 결과는 한 시점의 코드에 대한 것이 아니다.`)

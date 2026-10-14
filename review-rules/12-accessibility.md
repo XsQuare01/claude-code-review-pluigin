@@ -76,7 +76,7 @@ modal, dialog, popover, flyout, drawer, route transition처럼 화면의 작업 
 
 ## 12-5. Form error announcement 🔴
 
-validation 또는 error UI를 추가하거나 바꾸면서 control과 error가 연결되지 않거나 announced text가 없으면 지적한다.
+form 입력의 validation 오류나 제출 실패를 **화면에 표시하는** UI를 추가하거나 바꾸면서, 그 오류가 control과 연결되지 않거나 보조기술에 전달되지 않으면 지적한다.
 
 - invalid input과 error text가 `aria-describedby`, `aria-errormessage`, visible label 구조 등으로 연결되지 않음
 - field error가 화면에는 보이지만 screen reader가 어떤 control의 오류인지 알 수 없음
@@ -84,6 +84,11 @@ validation 또는 error UI를 추가하거나 바꾸면서 control과 error가 �
 - `aria-invalid` 상태가 실제 validation 상태와 맞지 않음
 
 모든 form에 live region을 강제하지 않는다. 변경 코드가 오류를 동적으로 표시할 때만 적용한다.
+
+이 조항이 아닌 것:
+
+- **오류를 화면에 아예 표시하지 않는 것.** 조회·저장 실패를 삼키거나 `error`·`isPending`을 읽지 않아 빈 화면이나 이전 결과가 남는 것은 공지의 문제가 아니라 상태·예외 처리의 문제다(04 상태 관리 모듈, 예외 패스). 보이지 않는 오류를 "보조기술에 전달되지 않는다"로 적지 않는다.
+- **form과 무관한 상태 변화의 공지.** 연결 상태, 진행률, 로딩 표시가 바뀔 때 live region이 없는 것은 이 조항으로 지적하지 않는다. 그 상태가 색·아이콘으로만 전달되면 `12-6`이다.
 
 ## 12-6. Image/visual-only content alternatives 🔴
 

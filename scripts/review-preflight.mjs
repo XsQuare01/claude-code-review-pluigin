@@ -42,7 +42,7 @@ import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { durationLimitScope, hostCapabilities } from './lib/hosts.mjs'
-import { baseLine, changedFilesSince, reviewBaseOf } from './lib/review-base.mjs'
+import { baseDrift, baseLine, changedFilesSince, dependencyFilesOf, reviewBaseOf } from './lib/review-base.mjs'
 import { parseSnapshot } from './lib/review-snapshot.mjs'
 import { currentTarget, newRunId, repoIdentity, rulesDigest, runOutputs } from './lib/run-identity.mjs'
 import { runNameProblem } from './lib/run-name.mjs'
@@ -235,6 +235,15 @@ const changed = (() => {
 // 지적 대상으로 삼는 파일(C-5). 이름 규칙으로 빼는 테스트·mock 파일은 여기서 센다 — `scope.done`의 수다.
 const scope = scopeOf(changed)
 
+// base가 merge-base 뒤로 앞서 나가 같은 파일을 바꿨는지(C-6). 리뷰 diff에는 보이지 않지만, 도구는 base를 따라잡지
+// 않은 HEAD에서 돈다 — 실패가 이 변경이 아니라 따라잡지 않은 데서 올 수 있다. 어느 쪽인지는 합친 트리에서 다시 재야
+// 가린다(C-6). 재지 못하면 알리기만 하고 계속한다.
+const baseMoved = baseDrift(repo, base, mergeBase, changed)
+// 목록은 기록에 20개까지만 싣는다. `--summary` 표가 `run.start` 한 줄에 이 값을 그대로 펼친다.
+const OVERLAP_RECORDED = 20
+// 의존성 매니페스트를 바꾼 변경이면 baseline은 그 트리에 따로 설치한 의존성으로 잰다(C-6).
+const dependencyFiles = dependencyFilesOf(changed)
+
 // 리포트를 어디에 쓰는가(C-7). **대상 저장소의 루트면 시작하지 않는다.** 2026-10-12에 세 실행 중 둘이 루트에
 // 썼다 — 리포트와 `.timing`이 미추적 파일로 남아 함께 커밋될 수 있고, 한 실행은 그 파일들이 작업 트리 변경으로
 // 세져 "검토 도중 대상이 바뀌었다"는 거짓 경보를 판정에 옮겼다. 사용자는 문서 폴더를 따로 정해 두고 있었다.
@@ -308,6 +317,9 @@ const logged = (() => {
     head: identity.head,
     worktree: identity.worktree,
     dirtyFiles: identity.dirtyFiles,
+    ...(baseMoved ? { baseAhead: baseMoved.ahead } : {}),
+    ...(baseMoved?.overlap.length ? { baseOverlapCount: baseMoved.overlap.length, baseOverlap: baseMoved.overlap.slice(0, OVERLAP_RECORDED) } : {}),
+    ...(dependencyFiles.length ? { dependencyFiles } : {}),
     // 원격이 없으면 필드를 비워 둔다. 없는 값을 지어 넣지 않는다.
     ...(identity.remote ? { repo: identity.remote } : {}),
     repoRoot: identity.root,
@@ -340,6 +352,15 @@ const logged = (() => {
   return { ok: true, skipped: false }
 })()
 
+/** `base 앞섬` 줄. 같은 파일을 바꿨으면 도구 결과를 어떻게 읽어야 하는지까지 적는다. */
+function baseMovedLine(moved) {
+  if (!moved) return '재지 못했다 — base와 merge-base 사이의 커밋을 읽지 못했다'
+  if (moved.ahead === 0) return '없음 — HEAD가 base를 따라잡았다'
+  if (!moved.overlap.length) return `${base}이 merge-base 뒤로 ${moved.ahead}커밋 앞서 있다 — 이 브랜치가 바꾼 파일은 건드리지 않았다`
+  const shown = moved.overlap.slice(0, 5).join(', ')
+  return `${base}이 merge-base 뒤로 ${moved.ahead}커밋 앞서 있고, 이 브랜치와 같은 파일 ${moved.overlap.length}개를 바꿨다: ${shown}${moved.overlap.length > 5 ? ` 외 ${moved.overlap.length - 5}개` : ''} — lint·typecheck·test는 base를 따라잡지 않은 HEAD에서 돈다. 실패가 그 때문인지는 이 브랜치를 base에 합친 트리에서 다시 재 가린다. 파일이 겹친다는 것만으로 이 변경의 실패가 아니라고 하지 않는다(C-6)`
+}
+
 const out = [
   `플러그인      ${version}`,
   `규칙 경로     ${rules}`,
@@ -347,11 +368,13 @@ const out = [
   `브랜치        ${branch}`,
   `base          ${baseLine(chosenBase)}`,
   `merge-base    ${mergeBase}`,
+  `base 앞섬     ${baseMovedLine(baseMoved)}`,
   `HEAD          ${identity.head}`,
   `작업 트리     ${identity.worktree === 'clean' ? 'clean' : `커밋하지 않은 변경 ${identity.dirtyFiles}개 (${identity.worktree})`}`,
   `실행 ID       ${identity.runId}`,
   `변경 파일     ${changed.length}개`,
   `리뷰 파일     ${scope.files.length}개 (제외 ${scope.excluded.length}개 — 테스트·mock, C-5)${logged.ok && !logged.skipped ? ` · 목록 .timing/${run}.scope.json` : ''}`,
+  ...(dependencyFiles.length ? [`의존성 변경   ${dependencyFiles.join(', ')} — baseline은 그 트리에 그 트리의 의존성을 설치해 잰다. 지금 트리의 의존성을 같이 쓰면 baseline도 같은 실패를 내 "신규 0"으로 잘못 나온다(C-6)`] : []),
   '',
   `후보 모듈     ${candidates.length}개  ${candidates.map(module => module.id).join(' ')}`,
 ]

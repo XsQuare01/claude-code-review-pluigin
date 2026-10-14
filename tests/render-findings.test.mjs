@@ -1976,3 +1976,46 @@ test('이전 리뷰 줄은 비교한 실행에만 나오고, 신규에는 그 �
     '이전 리뷰: 신규 — 이번 변경이 이 파일을 바꾸지 않았다 — 이전 리뷰가 놓쳤거나 판단이 달라진 것이다 · 이 지적의 규칙 문서가 바뀌었다')
   assert.match(lineageLine({ status: 'recheck', reason: 'ambiguous' }), /^이전 리뷰: 재확인 필요 — 같은 규칙·같은 자리에/)
 })
+
+test('--out은 같은 Markdown을 파일에 UTF-8로 쓰고, 표준 출력에는 쓴 자리만 낸다', t => {
+  // 2026-10-13 실행은 이 출력을 PowerShell 변수로 받아 리포트에 끼웠고, 한글이 깨진 리포트를 저장했다.
+  const dir = mkdtempSync(join(tmpdir(), 'render-out-'))
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const plain = runWith([ok()])
+  assert.equal(plain.status, 0, plain.stderr)
+  const path = join(dir, 'findings.md')
+  const out = runWith([ok()], ['--out', path])
+  assert.equal(out.status, 0, out.stderr)
+  assert.equal(readFileSync(path, 'utf8'), plain.stdout)
+  const written = JSON.parse(out.stdout)
+  assert.deepEqual([written.out, written.lines], [path, plain.stdout.split('\n').length - (plain.stdout.endsWith('\n') ? 1 : 0)])
+  const missing = runWith([ok()], ['--out'])
+  assert.equal(missing.status, 2)
+  assert.match(missing.stderr, /--out에는 상세 지적을 쓸 파일 경로를 준다/)
+})
+
+test('--collect 출력을 그리면 맨 끝에 실행 ID를 적은 출처 줄을 둔다 — 조립이 그것으로 같은 실행인지 본다', t => {
+  // 출처 줄이 없으면 다른 실행의 상세 지적이 assemble-report.mjs를 그대로 지나간다(PR #105 리뷰).
+  const dir = mkdtempSync(join(tmpdir(), 'render-source-'))
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const renderOf = collected => {
+    const input = join(dir, 'code-review-full-feat-x-2026-10-13.routed.json')
+    writeFileSync(input, JSON.stringify({ candidates: [ok()], ...(collected ? { collected } : {}) }), 'utf8')
+    return spawnSync(process.execPath, [
+      SCRIPT, '--input', input, '--rules', RULES, '--phase-high', 'rollout-shadow', '--phase-low', 'rollout-shadow',
+      '--workflow', 'full', '--verification-state', 'disabled',
+    ], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+  }
+  const collected = renderOf({ sources: ['04-state'], runId: 'run-20261013-feat-x' })
+  assert.equal(collected.status, 0, collected.stderr)
+  assert.match(collected.stdout, /\n\n출처: `render-findings\.mjs` · `code-review-full-feat-x-2026-10-13\.routed\.json` · 실행 ID `run-20261013-feat-x`\n$/)
+  // 실행 ID가 없는 입력에는 적을 것이 없다
+  const withoutId = renderOf({ sources: ['04-state'] })
+  const legacy = renderOf(null)
+  for (const out of [withoutId, legacy]) {
+    assert.equal(out.status, 0, out.stderr)
+    assert.doesNotMatch(out.stdout, /출처: `render-findings\.mjs`/)
+  }
+  // 출처 줄은 그린 섹션 뒤에 덧붙을 뿐 섹션은 그대로다
+  assert.ok(collected.stdout.startsWith(withoutId.stdout.replace(/\n+$/, '')))
+})

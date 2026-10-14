@@ -2157,3 +2157,37 @@ test('--before-end는 --check 없이 받지 않는다', t => {
   assert.equal(out.status, 2)
   assert.match(out.stderr, /--before-end는 --check와 함께 쓴다/)
 })
+
+// ── 2.26.0 실행(2026-10-13) 후속 ─────────────────────────────────────────
+
+test('--summary --out은 같은 표를 파일에 UTF-8로 쓰고 쓴 자리만 낸다 — --summary 없이는 받지 않는다', t => {
+  // 그 실행은 이 표를 PowerShell 변수로 받아 리포트에 끼웠고, 한글이 깨진 리포트를 저장했다.
+  const dir = freshDir(t)
+  assert.equal(log(dir, 'run.start', { host: 'test', rules: 'r', version: 'v', branch: '기능/한글', changedFiles: 1 }).status, 0)
+  assert.equal(log(dir, 'render.start', { findings: 1 }).status, 0)
+  const plain = summary(dir)
+  assert.equal(plain.status, 0, plain.stderr)
+  const path = join(dir, '.timing', `${RUN}.timeline.md`)
+  const out = spawnSync(process.execPath, [SCRIPT, '--dir', dir, '--run', RUN, '--summary', '--out', path], { encoding: 'utf8' })
+  assert.equal(out.status, 0, out.stderr)
+  assert.equal(readFileSync(path, 'utf8'), plain.stdout)
+  const written = JSON.parse(out.stdout)
+  assert.deepEqual([written.out, written.lines], [path, plain.stdout.split('\n').length - 1])
+  const refused = spawnSync(process.execPath, [SCRIPT, '--dir', dir, '--run', RUN, '--check', '--out', path], { encoding: 'utf8' })
+  assert.equal(refused.status, 2)
+  assert.match(refused.stderr, /--out은 --summary와 함께 쓴다/)
+})
+
+test('run.start는 base 앞섬·겹친 파일·의존성 변경을 경고 없이 받는다(C-6)', t => {
+  const dir = freshDir(t)
+  const out = log(dir, 'run.start', {
+    host: 'test', rules: 'r', version: 'v', branch: 'b', changedFiles: 2,
+    baseAhead: 4, baseOverlapCount: 2, baseOverlap: ['package-lock.json', 'package.json'], dependencyFiles: ['package.json'],
+  })
+  assert.equal(out.status, 0, out.stderr)
+  assert.equal(out.stderr, '')
+  const scalar = spawnSync(process.execPath, [SCRIPT, '--dir', freshDir(t), '--run', RUN, '--phase', 'run.start',
+    '--set', 'host=test', '--set', 'rules=r', '--set', 'version=v', '--set', 'branch=b', '--set', 'changedFiles=1', '--set', 'baseOverlap=package.json'], { encoding: 'utf8' })
+  assert.equal(scalar.status, 2, '목록을 문자열 하나로 밀어 넣지 않는다')
+  assert.match(scalar.stderr, /baseOverlap/)
+})
