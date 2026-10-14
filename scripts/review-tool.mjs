@@ -24,7 +24,9 @@
 // 리뷰와 같은 차례에 돌리면, 모듈이 끝나도 가장 긴 도구가 끝날 때까지 다음 모듈을 띄우지 못한다. 2026-10-13의
 // 두 실행에서 `npm test`가 그렇게 4분과 6.5분을 막았다. 띄워 두고 돌아오면 그 차례는 모듈만 기다린다.
 //
-// 결과는 호출마다 `.timing/<run>.tool.<name>.<callId>.json`에도 남는다 — `--wait`가 거기서 모은다.
+// 실패하면 출력에서 실패한 자리를 읽어(`failures`) 이 변경이 바꾼 파일·바꾸지 않은 파일·저장소가 추적하지 않는
+// 파일로 가른다(`scripts/lib/tool-failures.mjs`). 결과는 호출마다 `.timing/<run>.tool.<name>.<callId>.json`에도
+// 남는다 — `--wait`가 거기서 모은다.
 
 import { execFileSync, spawn, spawnSync } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
@@ -36,6 +38,7 @@ import { fileURLToPath } from 'node:url'
 import { writeTextAtomic } from './lib/atomic-write.mjs'
 import { readJsonFile } from './lib/read-text.mjs'
 import { logPhase, readEvents, requireStartedTimeline } from './lib/run-record.mjs'
+import { classifyFailures, failureCounts, failureLocations } from './lib/tool-failures.mjs'
 
 const die = message => {
   process.stderr.write(`${message}\n`)
@@ -283,9 +286,22 @@ const durationSec = Math.round((Date.now() - startedAt) / 100) / 10
 const { timedOut, spawnError } = result
 // 끊은 도구에는 제 종료 코드가 없다 — Windows에서 끊긴 프로세스가 내는 1은 taskkill의 것이다.
 const exit = !timedOut && typeof result.code === 'number' ? result.code : null
-logPhase(dir, run, 'tool.done', { name, exit, treeSha, callId, ...extra })
-
 const { stdout, stderr } = result
+
+// 실패한 자리를 가른다(C-6). 변경 목록은 preflight가 남긴 `scope.json`(리뷰 대상과 대상에서 뺀 파일)이다.
+let failures = null
+if (exit !== 0) {
+  let changed = null
+  try {
+    const scope = readJsonFile(join(dir, '.timing', `${run}.scope.json`))
+    changed = [...(scope.files ?? []), ...(scope.excluded ?? []).map(entry => (typeof entry === 'string' ? entry : entry?.path)).filter(Boolean)]
+  } catch {
+    // 변경 목록이 없으면 추적 여부만 가른다
+  }
+  failures = classifyFailures(failureLocations(`${stdout.toString('utf8')}\n${stderr.toString('utf8')}`), { repo, changed })
+}
+const failureFiles = failureCounts(failures)
+logPhase(dir, run, 'tool.done', { name, exit, treeSha, callId, ...extra, ...(failureFiles ? { failureFiles } : {}) })
 
 const header = [
   shell ? `$ ${command[0]}` : `$ ${JSON.stringify(command)}`,
@@ -298,7 +314,8 @@ writeFileSync(logPath, Buffer.concat([Buffer.from(header, 'utf8'), stdout, Buffe
 
 const tail = `${stdout.toString('utf8')}\n${stderr.toString('utf8')}`.split(/\r?\n/).filter(line => line.trim() !== '').slice(-30)
 const output = {
-  name, callId, exit, timedOut, signal: result.signal ?? null, ...(spawnError ? { spawnError } : {}), durationSec, treeSha, log: logPath, tail,
+  name, callId, exit, timedOut, signal: result.signal ?? null, ...(spawnError ? { spawnError } : {}), durationSec, treeSha, log: logPath,
+  ...(failures ? { failures } : {}), tail,
 }
 writeTextAtomic(resultPath, `${JSON.stringify({ status: 'done', output })}\n`)
 process.stdout.write(`${JSON.stringify(output, null, 2)}\n`)

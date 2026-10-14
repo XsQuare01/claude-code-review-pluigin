@@ -224,3 +224,34 @@ test('--wait는 끝을 남기지 못하고 사라진 도구를 기다리지 않�
   assert.match(waited.stderr, /--detach 없이 다시 돌린다/)
 })
 
+test('실패하면 실패한 자리를 이 변경의 파일·바꾸지 않은 파일·추적하지 않는 파일로 가르고 tool.done에 그 수를 남긴다', t => {
+  const ctx = setup(t)
+  const git = (...args) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.com', '-c', 'commit.gpgsign=false', ...args], { cwd: ctx.repo, encoding: 'utf8' })
+  mkdirSync(join(ctx.repo, 'src'))
+  mkdirSync(join(ctx.repo, 'tmp'))
+  writeFileSync(join(ctx.repo, '.gitignore'), 'tmp/\nreview-reports/\n')
+  writeFileSync(join(ctx.repo, 'src', 'a.ts'), 'a\n')
+  writeFileSync(join(ctx.repo, 'src', 'old.ts'), 'old\n')
+  writeFileSync(join(ctx.repo, 'tmp', 'x.cjs'), 'x\n')
+  git('add', '.gitignore', 'src')
+  git('commit', '-qm', 'files')
+  // preflight가 남기는 변경 목록 — 리뷰 대상과 대상에서 뺀 파일
+  writeFileSync(join(ctx.dir, '.timing', `${RUN}.scope.json`), JSON.stringify({ schemaVersion: 1, files: ['src/a.ts'], excluded: [{ path: 'src/a.test.ts', reason: 'test' }] }), 'utf8')
+  const report = [
+    join(ctx.repo, 'tmp', 'x.cjs'), '  1:1  error  bad  no-undef', '',
+    join(ctx.repo, 'src', 'a.ts'), '  2:1  error  bad  no-undef', '',
+    join(ctx.repo, 'src', 'old.ts'), '  3:1  warning  bad  prettier/prettier', '',
+  ].join('\n')
+  const out = tool(ctx, '--name', 'lint', '--', process.execPath, '-e', `console.log(${JSON.stringify(report)}); process.exit(1)`)
+  assert.equal(out.status, 0, out.stderr)
+  const result = JSON.parse(out.stdout)
+  assert.deepEqual(result.failures, { parsed: true, files: 3, inChange: ['src/a.ts'], outsideChange: ['src/old.ts'], untracked: ['tmp/x.cjs'] })
+  const done = linesOf(ctx).find(line => line.phase === 'tool.done')
+  assert.deepEqual(done.failureFiles, { inChange: 1, outsideChange: 1, untracked: 1 })
+  // 결과 파일에도 같은 것이 남는다(--wait가 모은다)
+  const saved = JSON.parse(readFileSync(join(ctx.dir, '.timing', `${RUN}.tool.lint.${result.callId}.json`), 'utf8'))
+  assert.deepEqual([saved.status, saved.output.failures], ['done', result.failures])
+  // 성공한 도구에는 실패 자리가 없다
+  const passed = JSON.parse(tool(ctx, '--name', 'typecheck', '--', process.execPath, '-e', 'process.exit(0)').stdout)
+  assert.equal('failures' in passed, false)
+})
