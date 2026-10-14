@@ -1813,6 +1813,38 @@ test('--planned 파일에 BOM이 붙어 있어도 읽는다 — PowerShell 5.1�
   assert.match(out.stdout, /### 수학\n\n`SKIPPED` — 행렬 연산 없음 · 비차단/)
 })
 
+test('--dir·--run이면 실행 계획을 기록의 마지막 modules.planned에서 읽고, --planned와 함께 받지 않는다', t => {
+  // 같은 내용을 파일로 한 벌 더 두면 갈린다 — 2026-10-13의 한 실행은 그 파일의 사유 코드가 기록과 달랐다.
+  const dir = mkdtempSync(join(tmpdir(), 'render-plan-'))
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const run = 'code-review-full-feat-x-2026-10-14'
+  const log = (phase, data) => {
+    const out = spawnSync(process.execPath, [join(ROOT, 'scripts', 'review-timeline.mjs'), '--dir', dir, '--run', run, '--phase', phase, '--data', JSON.stringify(data)], { encoding: 'utf8' })
+    assert.equal(out.status, 0, out.stderr)
+  }
+  log('run.start', { host: 'test', rules: 'r', version: 'x', branch: 'feat/x', changedFiles: 1, workflow: 'full', runId: 'r-1' })
+  log('modules.planned', { candidates: 20, applied: 19, skipped: [{ module: 'math', status: 'skipped', reasonCode: 'trigger-absent', evidence: '먼저 적은 사유' }], unknown: [] })
+  // 다시 적은 계획이 정본이다(append 전용 기록의 정정)
+  log('modules.planned', { candidates: 20, applied: 19, skipped: [{ module: 'math', status: 'skipped', reasonCode: 'trigger-absent', evidence: '행렬 연산 없음' }], unknown: [] })
+  const fromRecord = runWith([ok()], ['--dir', dir, '--run', run])
+  assert.equal(fromRecord.status, 0, fromRecord.stderr)
+  assert.match(fromRecord.stdout, /### 수학\n\n`SKIPPED` — 행렬 연산 없음 · 비차단/)
+
+  const planned = join(dir, 'planned.json')
+  writeFileSync(planned, JSON.stringify({ skipped: [], unknown: [] }), 'utf8')
+  const both = runWith([ok()], ['--dir', dir, '--run', run, '--planned', planned])
+  assert.equal(both.status, 2)
+  assert.match(both.stderr, /--planned를 함께 주지 않는다/)
+  assert.equal(both.stdout, '')
+
+  const half = runWith([ok()], ['--dir', dir])
+  assert.equal(half.status, 2)
+  assert.match(half.stderr, /--dir와 --run은 함께 준다/)
+})
+
+// 수집 기록과 대조한다. `prepare-verification.mjs --collect`는 결과 파일을 모은 모듈을
+// `collected.sources`로 남긴다. 그 목록이 있는데 거기 없는 모듈·패스를 "지적 없음."으로
+// 찍으면, 실행이 실패했거나 결과가 빠진 모듈이 0건인 것처럼 보인다.
 test('수집 목록이 있으면 결과가 수집되지 않은 모듈과 패스를 지적 없음과 구분한다', () => {
   const sections = [
     { kind: 'module', id: '04', title: '상태와 Effect', source: '04-state' },
