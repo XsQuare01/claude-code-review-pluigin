@@ -165,6 +165,26 @@ SDK 드리프트로 원래부터 그만큼 실패하고 있었고, 그 브랜치
 - 기록은 C-9의 `tool.start`와 `tool.done` **한 쌍**으로 남긴다. 도구를 넷 돌리고
   끝만 넷 남기면 네 번의 실행이 하나의 이름 없는 구간으로 뭉친다 — 실제로 한
   실행이 442초를 그렇게 남겼고, 그 시간이 어느 도구의 것인지 알 수 없었다
+- 모듈 리뷰와 함께 돌리는 도구는 띄워 두고(`review-tool.mjs --detach`) 끝은 띄운 프로세스가 남긴다.
+  `도구 실행 결과`를 쓰기 전에 `--wait`로 받는다. 한 차례의 호출이 전부 끝나야 넘어가는 호스트에서 도구를
+  모듈과 같은 차례에 부르면, 가장 긴 도구가 다음 모듈을 막는다 — 2026-10-13의 두 실행이 4분과 6.5분을 잃었다
+
+### 실패한 자리를 먼저 가른다
+
+baseline을 재기 전에, 도구가 **어디서** 실패했는지부터 본다. `review-tool.mjs`가 출력에서 실패한 파일을 읽어
+(`failures`) 이 변경이 바꾼 파일(`inChange`), 저장소가 추적하지만 바꾸지 않은 파일(`outsideChange`), 저장소가
+추적하지 않는 파일(`untracked`)로 가르고, `tool.done`에 그 수(`failureFiles`)를 남긴다.
+
+**왜.** baseline을 잰 실행은 지금까지 없다 — 모든 실행이 "baseline 미측정"으로 남겼다. 2026-10-13 실행의 lint
+실패(오류 12·경고 25)는 전부 .gitignore에 든 `tmp/` 아래였고, 테스트 실패 3건은 이 변경이 바꾸지 않은 파일이었다
+(둘은 시간 초과). 비싼 측정이 없어도 낼 수 있는 사실을 리포트가 내지 않았다.
+
+- `untracked`만의 실패는 저장소의 상태가 아니라 작업 트리에 남은 파일의 것이다. 그 사실을 적고 차단 사유와
+  baseline 비교에 넣지 않는다
+- 시간 초과는 그 파일만 다시 돌려 본다. 혼자 돌려 통과하면 부하로 난 시간 초과로 적고 실패로 세지 않는다
+- `outsideChange`는 이 변경과 무관하다는 뜻이 아니다. 바꾼 코드를 가져다 쓰는 파일이 깨질 수 있다 — 남은
+  실패는 아래 baseline·base 절차로 가린다. baseline에서는 실패한 파일만 다시 돌려도 된다
+- 아는 모양의 자리를 찾지 못했으면(`failures.parsed` 거짓) 로그를 직접 읽는다
 
 ### 도구 실패를 이 변경의 것으로 읽기 전에 base와 의존성을 본다
 
@@ -1273,8 +1293,8 @@ UTF-16 파일도 읽는다 — PowerShell 5.1의 `Set-Content -Encoding UTF8`은
 | `dispatch.end` | 전부 수집 후 (full은 작업 대장이 모듈 단계가 끝났을 때 쓴다) | `terminalOk`, `terminalFailed`(최종 모듈 단위) · `attemptsTotal`, `attemptsFailed`(시도 단위) — **이 넷은 스크립트가 `module.done`에서 센다.** 넘기지 않아도 되고, 넘긴 값이 기록과 다르면 경고하고 센 값을 남긴다 · `attemptFailureClasses`(중첩, `--data-file`), (있으면) `tokensIn`·`tokensOut` |
 | `script.start` | `prepare-verification.mjs` 진입 직후 (스크립트가 직접 남긴다) | `script` |
 | `script.done` | `prepare-verification.mjs` 실행 후 | `ran`, `counts`(중첩, 스크립트가 직접 남긴다) |
-| `tool.start` | **도구 하나를 돌리기 직전** — `review-tool.mjs`가 남긴다 | `name`, `callId`(`review-tool.mjs`, 로그 이름) · (재시도면) `attempt` · 재현 명령이면 `candidateId`·`evidenceId`(C-11, `review-evidence.mjs`가 쓴다) |
-| `tool.done` | lint/typecheck/test를 돌린 직후 — `review-tool.mjs`가 남긴다 | `name`, `exit`(시간 상한으로 끊었으면 `null`), `treeSha`, `callId` · `failedNow`, `failedBaseline`(재지 못했으면 `null`) · `failing`(중첩, `--data-file`) · (재시도면) `attempt` · 재현 명령이면 `candidateId`·`evidenceId` |
+| `tool.start` | **도구 하나를 돌리기 직전** — `review-tool.mjs`가 남긴다 | `name`, `callId`(`review-tool.mjs`, 로그 이름) · (`--detach`로 띄웠으면) `detached` · (재시도면) `attempt` · 재현 명령이면 `candidateId`·`evidenceId`(C-11, `review-evidence.mjs`가 쓴다) |
+| `tool.done` | lint/typecheck/test를 돌린 직후 — `review-tool.mjs`가 남긴다 | `name`, `exit`(시간 상한으로 끊었으면 `null`), `treeSha`, `callId` · (실패했으면, C-6) `failureFiles`(중첩 — `inChange`·`outsideChange`·`untracked`, 변경 목록이 없으면 `tracked`·`untracked`) · `failedNow`, `failedBaseline`(재지 못했으면 `null`) · `failing`(중첩, `--data-file`) · (재시도면) `attempt` · 재현 명령이면 `candidateId`·`evidenceId` |
 | `crossverify.start` / `.end` | 교차검증 패스 — 시작은 `prepare-verification.mjs`가 검증 작업을 만든 직후, 끝은 `tally-verdicts.mjs`가 **직접 남긴다** | `targets`, `round`(이 교차검증 라운드의 이름 — C-12) / `upheld`, `rejected`, `needsContext`, `noVerdict`, `countsFrom`, (있으면) `malformedTasksCorrected`·`tokensIn`·`tokensOut` |
 | `synthesis.start` / `.end` | synthesis 패스 | `findings` / `clusters`, (있으면) `tokensIn`·`tokensOut` |
 | `render.start` | **문서를 쓰기 직전** | `findings`(중복 제거 후) |

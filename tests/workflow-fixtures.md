@@ -1207,6 +1207,40 @@ These scenarios pin the behaviour that `review-rules/workflow-contract.md` promi
       ],
       "scenario": "The timeline section in .timing was taken from another run with the same number of events, or the snapshot block or rendered findings carry another run's ID",
       "expected": "assemble-report.mjs writes nothing, naming the section whose source path or run ID differs from this run, and the orchestrator regenerates that section"
+    },
+    {
+      "id": 151,
+      "clauses": [
+        "C-6",
+        "C-9"
+      ],
+      "scenario": "On OpenCode the orchestrator starts lint, typecheck and npm test (14 minutes) in the same turn as a wave of four modules that finish in 7 minutes",
+      "expected": "The tools are started with review-tool.mjs --detach and return at once, so the next wave starts when the modules finish; tool.done is written by the detached process, and review-tool.mjs --wait collects the results before the tool section is written; a tool listed as lost is re-run without --detach"
+    },
+    {
+      "id": 152,
+      "clauses": [
+        "C-6"
+      ],
+      "scenario": "npm run lint fails only in gitignored tmp/ files, and npm test fails in three test files the change did not touch, two of them with Test timed out in 5000ms",
+      "expected": "The report names the lint failures as untracked files unrelated to the change and the repository, re-runs the two timed-out files alone and reports them as load-induced if they pass, and compares the remaining failure against a baseline rather than calling it unrelated because the change did not touch that file"
+    },
+    {
+      "id": 153,
+      "clauses": [
+        "C-7",
+        "C-9"
+      ],
+      "scenario": "The orchestrator writes modules.planned through a PowerShell 5.1 file with a UTF-8 BOM and then renders the findings",
+      "expected": "review-timeline.mjs accepts the file, and render-findings.mjs reads the skipped modules and passes from the recorded modules.planned via --dir and --run, so no second copy of the plan is passed with --planned"
+    },
+    {
+      "id": 154,
+      "clauses": [
+        "C-9"
+      ],
+      "scenario": "Three detached tools and the orchestrator record timeline lines within the same millisecond",
+      "expected": "Every line gets its own seq because review-timeline.mjs writes under a lock; review-timeline.mjs --check reports any record whose seq repeats"
     }
   ],
   "defaultWorkflowOnlyCases": [
