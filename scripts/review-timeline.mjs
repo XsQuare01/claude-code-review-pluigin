@@ -162,7 +162,8 @@ const PHASES = new Map([
   ['script.start', { required: [], structured: [], allowed: ['script'] }],
   ['script.done', { required: ['ran'], structured: ['counts'], allowed: [] }],
   // `callId`는 `review-tool.mjs`가 호출마다 시작·끝 양쪽에 적는다 — 그 호출의 로그 이름이고, 짝을 맞추는 값이다.
-  ['tool.start', { required: ['name'], structured: [], allowed: ['attempt', 'callId', 'candidateId', 'evidenceId'] }],
+  // `detached`: 띄워 두고 돌아온 도구(review-tool --detach) — 끝은 띄운 프로세스가 남긴다.
+  ['tool.start', { required: ['name'], structured: [], allowed: ['attempt', 'callId', 'candidateId', 'evidenceId', 'detached'] }],
   ['tool.done', { required: ['name', 'exit', 'treeSha'], structured: ['failing'], allowed: ['failedNow', 'failedBaseline', 'attempt', 'callId', 'candidateId', 'evidenceId'] }],
   ['crossverify.start', { required: ['targets'], structured: [], allowed: ['round'] }],
   ['crossverify.end', { required: ['upheld', 'rejected'], structured: [], allowed: ['needsContext', 'noVerdict', 'malformedTasksCorrected', 'countsFrom'] }],
