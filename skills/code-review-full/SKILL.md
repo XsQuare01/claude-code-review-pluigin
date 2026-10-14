@@ -487,7 +487,12 @@ node "$RULES_DIR/../scripts/tally-verdicts.mjs" --dir "$REPORT_DIR" --run "$REPO
 
   출력(JSON)의 `exit`·`durationSec`·`tail`과 `log`(호출마다 따로 남는 `.timing/$REPORT_BASENAME.tool.<이름>.<callId>.log`)로 `도구 실행 결과`를 쓴다. **baseline은 그 트리(merge-base를 꺼낸 worktree 등)를 `--repo`로 주고 같은 `--name`으로 돌린다** — 두 호출의 로그가 따로 남고 `treeSha`로 갈린다(C-6). 명령은 수정 옵션 없이 준다(C-6). `--timeout`(기본 1800초)을 넘기면 도구가 띄운 프로세스까지 끊는다. 호스트의 셸 시간 제한이 도구보다 짧으면 그 제한을 늘려 부른다 — 끊기면 끝을 남기지 못한다
 
-  **도구가 실패하면 이 변경의 것으로 읽기 전에 preflight 출력의 `base 앞섬`·`의존성 변경` 줄을 본다(C-6).** `base 앞섬`이 이 브랜치와 같은 파일을 바꿨다고 하면, 실패가 그 파일들(의존성 파일이면 바뀐 패키지)에서 오는지 확인한다. 이어지면 `도구 실행 결과`에 "base를 따라잡지 않은 데서 올 수 있다"를, `미해결 / 후속 확인`에 "rebase 뒤 다시 잰다"를 적고, 이 변경의 차단 사유로 쓰지 않는다. `의존성 변경`이 있으면 baseline 트리에는 **그 트리의 의존성을 설치해** 잰다 — merge-base 트리가 지금 트리의 `node_modules`를 빌려 쓰면 baseline도 같은 실패를 내 "신규 0"으로 잘못 나온다. 설치하지 못하면 `baseline 미측정`이다. 2026-10-13 실행은 main이 merge-base 뒤로 4커밋 앞서 `package.json`을 바꿔 둔 것을 모른 채 typecheck·test 실패를 "baseline 미측정"으로만 남겼다. PR은 SDK를 main과 같은 버전으로 올렸지만 main이 그 버전에 맞춰 고친 코드를 받지 않았고, 사용자가 할 일(rebase)이 리포트에 없었다
+  **도구가 실패하면 이 변경의 것으로 읽기 전에 preflight 출력의 `base 앞섬`·`의존성 변경` 줄을 본다(C-6).** `base 앞섬`이 이 브랜치와 같은 파일을 바꿨다고 하면, HEAD의 실패는 base를 따라잡지 않은 트리의 결과일 수 있다. 그런지는 **이 브랜치를 지금 base에 합친 트리**에서 실패한 도구를 다시 돌려 가린다. 그 트리를 따로 꺼내(`git worktree add --detach "$MERGED" <base>` 뒤 `git -C "$MERGED" merge --no-commit --no-ff <리뷰한 HEAD sha>`) 그 트리의 의존성을 설치하고, `review-tool.mjs --repo "$MERGED"`로 같은 `--name`을 돌린다. 끝나면 `git worktree remove --force "$MERGED"`로 지운다.
+  - 합친 트리에서 실패가 사라지면 `도구 실행 결과`에 두 결과를 함께 적고, `미해결 / 후속 확인`에 "rebase 뒤 다시 잰다"를 남긴다. 이 실패는 이 변경의 차단 사유로 쓰지 않는다.
+  - 합친 트리에서도 실패하면 base 끝의 트리와 비교한다. base 끝에서 통과하면 이 변경이 만든 실패다.
+  - 합치지 못했으면(충돌) 그 사실과 rebase를 후속 확인에 적되, 실패를 base 탓으로 돌리지 않는다.
+
+  **파일이 겹친다는 것만으로 실패를 차단 사유에서 빼지 않는다.** base가 같은 파일의 다른 곳을 바꾸는 동안 이 브랜치가 그 파일에 진짜 회귀를 넣을 수 있고, 그 파일도 `base 앞섬`에 잡힌다. `의존성 변경`이 있으면 baseline 트리에는 **그 트리의 의존성을 설치해** 잰다 — merge-base 트리가 지금 트리의 `node_modules`를 빌려 쓰면 baseline도 같은 실패를 내 "신규 0"으로 잘못 나온다. 설치하지 못하면 `baseline 미측정`이다. 2026-10-13 실행은 main이 merge-base 뒤로 4커밋 앞서 `package.json`을 바꿔 둔 것을 모른 채 typecheck·test 실패를 "baseline 미측정"으로만 남겼다. PR은 SDK를 main과 같은 버전으로 올렸지만 main이 그 버전에 맞춰 고친 코드를 받지 않았고, 사용자가 할 일(rebase)이 리포트에 없었다
 - **lint/typecheck/test는 모듈이 도는 동안 함께 돌린다.** 이 도구들은 sub-agent 결과에 의존하지 않으므로 디스패치가 끝나기를 기다릴 이유가 없다. 09-17 실행은 2번째 wave가 도는 중에 넷을 끝내 벽시계에 거의 아무것도 더하지 않았고, 09-18 실행은 교차검증까지 끝난 뒤에 돌려 **442초를 통째로 직렬로 썼다.** 같은 일에 같은 시간이 들었지만 한쪽만 값을 치렀다.
 - `실행 타임라인` 섹션에는 `review-timeline.mjs --summary --out "$REPORT_DIR/.timing/$REPORT_BASENAME.timeline.md"`를 `render.start`를 남긴 뒤 **마지막으로 한 번 더 돌려** 그 파일을 넣는다(아래 `리포트 조립`). 표를 직접 만들지 않고, 사이드카를 남기지 못했으면 그 사실을 그 섹션에 적는다 (C-9).
 

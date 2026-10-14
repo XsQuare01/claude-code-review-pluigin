@@ -694,7 +694,7 @@ export function renderSnapshotMarkdown(snapshot) {
   if (target.baseAhead > 0 && target.baseOverlapCount > 0) {
     const shown = target.baseOverlap.slice(0, 5).map(codeSpan).join(', ')
     const rest = target.baseOverlapCount - Math.min(5, target.baseOverlap.length)
-    lines.push('', `**base가 앞서 있다** — ${codeSpan(target.base)}이 merge-base 뒤로 ${target.baseAhead}커밋 앞서 있고, 이 브랜치와 같은 파일 ${target.baseOverlapCount}개를 바꿨다: ${shown}${rest > 0 ? ` 외 ${rest}개` : ''}. lint·typecheck·test는 base를 따라잡지 않은 HEAD에서 돌았다 — 실패가 이 파일들과 이어지면 이 변경이 아니라 따라잡지 않은 데서 온 것일 수 있다. rebase 뒤 다시 잰다(C-6).`)
+    lines.push('', `**base가 앞서 있다** — ${codeSpan(target.base)}이 merge-base 뒤로 ${target.baseAhead}커밋 앞서 있고, 이 브랜치와 같은 파일 ${target.baseOverlapCount}개를 바꿨다: ${shown}${rest > 0 ? ` 외 ${rest}개` : ''}. lint·typecheck·test는 base를 따라잡지 않은 HEAD에서 돌았다. 실패가 그 때문인지는 이 브랜치를 base에 합친 트리에서 다시 재 가린다 — 파일이 겹친다는 것만으로 이 변경의 실패가 아니라고 하지 않는다(C-6).`)
   } else if (target.baseAhead > 0) {
     lines.push('', `base ${codeSpan(target.base)}이 merge-base 뒤로 ${target.baseAhead}커밋 앞서 있다 — 이 브랜치가 바꾼 파일은 건드리지 않았다.`)
   }

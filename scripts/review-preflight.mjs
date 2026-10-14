@@ -236,7 +236,8 @@ const changed = (() => {
 const scope = scopeOf(changed)
 
 // base가 merge-base 뒤로 앞서 나가 같은 파일을 바꿨는지(C-6). 리뷰 diff에는 보이지 않지만, 도구는 base를 따라잡지
-// 않은 HEAD에서 돈다 — 실패가 이 변경이 아니라 따라잡지 않은 데서 올 수 있다. 재지 못하면 알리기만 하고 계속한다.
+// 않은 HEAD에서 돈다 — 실패가 이 변경이 아니라 따라잡지 않은 데서 올 수 있다. 어느 쪽인지는 합친 트리에서 다시 재야
+// 가린다(C-6). 재지 못하면 알리기만 하고 계속한다.
 const baseMoved = baseDrift(repo, base, mergeBase, changed)
 // 목록은 기록에 20개까지만 싣는다. `--summary` 표가 `run.start` 한 줄에 이 값을 그대로 펼친다.
 const OVERLAP_RECORDED = 20
@@ -357,7 +358,7 @@ function baseMovedLine(moved) {
   if (moved.ahead === 0) return '없음 — HEAD가 base를 따라잡았다'
   if (!moved.overlap.length) return `${base}이 merge-base 뒤로 ${moved.ahead}커밋 앞서 있다 — 이 브랜치가 바꾼 파일은 건드리지 않았다`
   const shown = moved.overlap.slice(0, 5).join(', ')
-  return `${base}이 merge-base 뒤로 ${moved.ahead}커밋 앞서 있고, 이 브랜치와 같은 파일 ${moved.overlap.length}개를 바꿨다: ${shown}${moved.overlap.length > 5 ? ` 외 ${moved.overlap.length - 5}개` : ''} — lint·typecheck·test의 실패가 이 파일들과 이어지면 이 변경이 아니라 base를 따라잡지 않은 데서 올 수 있다. rebase 뒤 다시 잰다(C-6)`
+  return `${base}이 merge-base 뒤로 ${moved.ahead}커밋 앞서 있고, 이 브랜치와 같은 파일 ${moved.overlap.length}개를 바꿨다: ${shown}${moved.overlap.length > 5 ? ` 외 ${moved.overlap.length - 5}개` : ''} — lint·typecheck·test는 base를 따라잡지 않은 HEAD에서 돈다. 실패가 그 때문인지는 이 브랜치를 base에 합친 트리에서 다시 재 가린다. 파일이 겹친다는 것만으로 이 변경의 실패가 아니라고 하지 않는다(C-6)`
 }
 
 const out = [

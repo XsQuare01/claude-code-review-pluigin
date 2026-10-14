@@ -148,6 +148,10 @@ export const dependencyFilesOf = files => files.filter(path => DEPENDENCY_FILES.
  * typecheck 14건·test 8건이 실패했다. main은 merge-base 뒤로 4커밋 앞서 `package.json`을 바꿔 두었고, PR의 CI는
  * main과 합친 트리를 돌려 통과했다. 리포트는 원인을 "baseline 미측정"으로만 남겼다.
  *
+ * 겹친다는 것은 어디를 볼지일 뿐 원인의 근거가 아니다. base가 같은 파일의 다른 곳을 바꾸는 동안 이 브랜치가 그
+ * 파일에 진짜 회귀를 넣어도 그 파일은 `overlap`에 잡힌다(PR #105 리뷰에서 재현). 원인은 이 브랜치를 base에 합친
+ * 트리에서 다시 재 가린다(C-6).
+ *
  * 돌려주는 값: `{ ahead, overlap }` — `ahead`는 merge-base 뒤 base의 커밋 수, `overlap`은 그 커밋들이 바꾼 파일 중
  * 이 브랜치도 바꾼 것(정렬). 재지 못하면 null이다 — 이 값은 알림이고, 못 쟀다고 리뷰를 멈추지 않는다.
  */

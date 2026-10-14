@@ -1156,7 +1156,7 @@ These scenarios pin the behaviour that `review-rules/workflow-contract.md` promi
         "C-6"
       ],
       "scenario": "The PR bumps a dependency to the version main already uses, main has moved past the merge-base and changed package.json, and typecheck fails at HEAD in files the PR did not touch",
-      "expected": "Preflight shows the base drift and the dependency change; the report says the failures may come from not catching up with the base, asks for a rebase and a re-run under follow-ups, and does not use them as this change's blocking reason"
+      "expected": "Preflight shows the base drift and the dependency change; the orchestrator re-runs typecheck on the branch merged into the current base with that tree's dependencies installed, and because the failures disappear there the report says they come from not catching up with the base, asks for a rebase and a re-run under follow-ups, and does not use them as this change's blocking reason"
     },
     {
       "id": 145,
@@ -1182,6 +1182,14 @@ These scenarios pin the behaviour that `review-rules/workflow-contract.md` promi
       ],
       "scenario": "The orchestrator assembles the /code-review-full report on Windows PowerShell 5.1",
       "expected": "The snapshot, renderer and timeline sections are written with --out and joined by assemble-report.mjs into a template the orchestrator wrote with its file tool; no section passes through a shell variable, and render.wrote takes path and lines from the script's output"
+    },
+    {
+      "id": 148,
+      "clauses": [
+        "C-6"
+      ],
+      "scenario": "main has moved past the merge-base and changed the top of a file; the PR changed the bottom of the same file and broke it; the merge-base and main pass the test, HEAD fails, and the file is listed in baseOverlap",
+      "expected": "The orchestrator re-runs the test on the branch merged into main; it still fails there while main passes, so the report treats the failure as this change's own and does not drop it from the blocking reasons because the file overlaps"
     }
   ],
   "defaultWorkflowOnlyCases": [
