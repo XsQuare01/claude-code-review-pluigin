@@ -29,6 +29,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs'
 import { basename, dirname, extname, join, resolve } from 'node:path'
 
 import { writeOutFile } from './lib/atomic-write.mjs'
+import { withFileLock } from './lib/file-lock.mjs'
 import { readTextFile } from './lib/read-text.mjs'
 import { moduleOutcomes } from './lib/run-record.mjs'
 import { CANCEL_REASONS, HALT_REASONS, STAGES, endState } from './lib/task-ledger.mjs'
@@ -427,6 +428,17 @@ if (has('check')) {
 
   const unknown = [...new Set(events.map(event => event.phase).filter(name => !PHASES.has(name)))]
   if (unknown.length) problems.push(`표에 없는 단계 이름: ${unknown.join(', ')}. 실행마다 이름이 달라지면 실행 간 비교가 불가능해진다`)
+
+  // 순번이 겹치면 두 프로세스가 같은 순간 기록에 썼다는 뜻이다. 기록은 잠금 안에서 쓰므로 지금 스크립트로 쓴
+  // 기록에서는 나오지 않는다 — 나오면 잠금 밖에서 쓴 줄이 있다.
+  const seen = new Set()
+  const repeated = new Set()
+  for (const event of events) {
+    if (!Number.isInteger(event.seq)) continue
+    if (seen.has(event.seq)) repeated.add(event.seq)
+    seen.add(event.seq)
+  }
+  if (repeated.size) problems.push(`seq가 겹친다(${[...repeated].slice(0, 5).join(', ')}) — 두 프로세스가 같은 순간 기록에 썼다. 기록은 review-timeline.mjs가 잠금 안에서 쓴다 — 그 밖에서 덧붙인 줄이 있거나, 잠금 전의 스크립트로 쓴 기록이다`)
 
   const missing = []
   for (const event of events) {
@@ -1304,21 +1316,31 @@ if (phase === 'run.start' && events.length && events[events.length - 1].phase ==
   die(`이미 끝난 타임라인이다(${path}). 새 실행은 다른 --run 이름으로 남겨라 — 같은 파일에 이어붙이면 두 실행이 섞인다`)
 }
 
-const at = new Date()
-const startedAt = events.length ? new Date(events[0].at) : at
-
 mkdirSync(timingDir, { recursive: true })
 // 시각·순번·경과를 **여기서** 만든다. 호출자가 같은 이름으로 값을 넘겨도
 // 버린다 — 측정한 값과 주장한 값이 같은 자리에 있으면, 나중에 읽는 사람이
 // 둘을 구분할 방법이 없다.
 const MEASURED = new Set(['at', 'seq', 'sinceStartSec', 'phase'])
 const claimed = Object.fromEntries(Object.entries(data).filter(([key]) => !MEASURED.has(key)))
-const line = JSON.stringify({
-  at: at.toISOString(),
-  seq: events.length + 1,
-  sinceStartSec: Math.round((at.getTime() - startedAt.getTime()) / 1000),
-  phase,
-  ...claimed,
-})
-appendFileSync(path, line + '\n', 'utf8')
+// 순번은 지금까지 쓴 줄 수로 정한다. 두 프로세스가 같은 순간 읽고 쓰면 같은 번호가 두 줄에 붙는다 — 2026-10-06·
+// 10-13 실행의 기록에 그런 줄이 있다. 그래서 잠금 안에서 다시 읽고, 번호를 정하고, 덧붙인다.
+let line
+try {
+  line = withFileLock(`${path}.lock`, () => {
+    const current = readLines().events
+    const at = new Date()
+    const startedAt = current.length ? new Date(current[0].at) : at
+    const text = JSON.stringify({
+      at: at.toISOString(),
+      seq: current.length + 1,
+      sinceStartSec: Math.round((at.getTime() - startedAt.getTime()) / 1000),
+      phase,
+      ...claimed,
+    })
+    appendFileSync(path, text + '\n', 'utf8')
+    return text
+  })
+} catch (error) {
+  die(`${phase}를 남기지 못했다 — ${error.message}`)
+}
 process.stdout.write(line + '\n')
