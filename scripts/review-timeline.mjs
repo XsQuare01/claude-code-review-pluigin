@@ -30,7 +30,7 @@ import { basename, dirname, extname, join, resolve } from 'node:path'
 
 import { writeOutFile } from './lib/atomic-write.mjs'
 import { moduleOutcomes } from './lib/run-record.mjs'
-import { CANCEL_REASONS, HALT_REASONS, STAGES } from './lib/task-ledger.mjs'
+import { CANCEL_REASONS, HALT_REASONS, STAGES, endState } from './lib/task-ledger.mjs'
 import { runNameProblem } from './lib/run-name.mjs'
 
 const die = message => {
@@ -910,7 +910,9 @@ if (has('summary')) {
   // 줄이 더 붙은 실행을 정상 종료로 읽는다 — 실제로 기록 실패 때문에 순서가
   // 밀려 그런 타임라인이 만들어진 적이 있다. 없는 것과 자리에 없는 것은 다르다.
   const finalPhase = events[events.length - 1].phase
-  const ended = events.some(event => event.phase === 'run.end')
+  // 끝났는지는 지금 구간에서 본다. 부분 보고로 닫은 뒤 `run.resume`으로 이어 간 실행의 앞 `run.end`는 그 구간의
+  // 끝이지 이 렌더를 고쳐 쓴 것이 아니다 — 기록 어딘가에 있다는 것으로 보면 이어 간 실행의 표에 틀린 문장이 실린다.
+  const ended = endState(events).ended
   if (finalPhase === 'render.start') {
     // C-7은 이 표를 `render.start` 직후, `render.wrote`와 `run.end`를 적기 전에
     // 만들라고 한다. 그 자리에서 종료 줄이 없는 것은 사고가 아니라 순서다.

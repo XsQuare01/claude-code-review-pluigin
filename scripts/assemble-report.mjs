@@ -19,6 +19,9 @@
 //   {{findings}}  → .timing/<run>.findings.md  (render-findings.mjs --out)
 //   {{timeline}}  → .timing/<run>.timeline.md  (review-timeline.mjs --summary --out, `render.start` 뒤에 뽑은 것)
 //
+// 조립은 지금 구간(마지막 `run.start`·`run.resume` 뒤)의 `render.start` 뒤에 하고, 그 구간에 `run.end`가 있으면
+// 하지 않는다.
+//
 // 리포트는 `<dir>/<run>.md`에 쓴다(C-7). 표준 출력은 JSON 하나 — `path`·`lines`·`sha256`. `render.wrote`에 그
 // `path`와 `lines`를 남긴다. 거부하면(종료 코드 2) 아무것도 쓰지 않은 것이다.
 
@@ -27,6 +30,7 @@ import { join } from 'node:path'
 
 import { writeOutFile } from './lib/atomic-write.mjs'
 import { readEvents, requireStartedTimeline } from './lib/run-record.mjs'
+import { endState, segmentOf } from './lib/task-ledger.mjs'
 
 const die = message => {
   process.stderr.write(`${message}\n`)
@@ -57,11 +61,18 @@ if (!templatePath) die('usage: assemble-report.mjs --dir <리포트 디렉터리
 
 const sidecar = requireStartedTimeline(dir, run)
 const events = readEvents(sidecar)
-const phases = events.map(event => event?.phase)
-// 조립은 `render.start`와 `run.end` 사이의 일이다(C-7·C-9). `run.end` 뒤에는 기록에 아무것도 덧붙이지 않으므로,
-// 그 뒤에 다시 조립한 리포트는 기록이 가리키지 않는 리포트가 된다.
-if (phases.includes('run.end')) die(`이미 끝난 실행이다(${sidecar}에 run.end가 있다) — 리포트를 다시 조립하지 않는다`)
-if (!phases.includes('render.start')) die('render.start가 없다 — `review-timeline.mjs --phase render.start`를 남긴 뒤 조각을 만들고 조립한다')
+// 조립은 지금 구간의 `render.start`와 `run.end` 사이의 일이다(C-7·C-9). 끝은 지금 구간의 `run.end`다 — 한도에
+// 닿아 부분 보고로 닫은 실행은 `run.resume`으로 새 구간을 열어 이어 가고(C-12), 그 끝에서 리포트를 다시 조립한다.
+// 기록 어딘가에 `run.end`가 있다는 것으로 끝났다고 보면 그 흐름이 막힌다(PR #105 리뷰에서 재현). 끝났는지는
+// `review-tasks.mjs`와 같은 정의(`endState`)로 본다.
+if (endState(events).ended) die(`이미 끝난 실행이다(${sidecar}의 마지막 구간에 run.end가 있다) — 리포트를 다시 조립하지 않는다. 부분 보고를 이어 가려면 review-tasks.mjs resume으로 새 구간을 먼저 연다`)
+const segment = segmentOf(events)
+if (!events.some(event => event?.phase === 'render.start')) die('render.start가 없다 — `review-timeline.mjs --phase render.start`를 남긴 뒤 조각을 만들고 조립한다')
+// 앞 구간의 `render.start`는 부분 보고를 그릴 때 남긴 것이다. 새 구간은 검증을 다시 하므로 렌더도 다시 시작한다 —
+// 그 전에 조립하면 부분 보고의 조각이 실린다.
+if (!events.slice(segment.index).some(event => event?.phase === 'render.start')) {
+  die('이 구간에 render.start가 없다 — 앞 구간(부분 보고)의 render.start다. `review-timeline.mjs --phase render.start`를 남긴 뒤 조각을 다시 만들고 조립한다')
+}
 
 const PARTS = [
   { name: 'plan', from: 'review-snapshot.mjs --out' },
