@@ -23,9 +23,11 @@ import { readFileSync } from 'node:fs'
 import { basename, join } from 'node:path'
 
 import { writeOutFile } from './lib/atomic-write.mjs'
+import { readJsonFile, readTextFile } from './lib/read-text.mjs'
 import { markedBlock, markedJson, CROSS_VERIFICATION_TOKEN_KEYS } from './lib/contract-blocks.mjs'
 import { assessEvidence, loadEvidence } from './lib/evidence.mjs'
 import { finalizeCurrent } from './lib/review-compare.mjs'
+import { readEvents, requireStartedTimeline } from './lib/run-record.mjs'
 import { collectVerdicts } from './lib/verdicts.mjs'
 import { instructionsWithManifest } from './lib/verifier-tasks.mjs'
 
@@ -881,13 +883,30 @@ export function dispositionOf(candidate, verdict, verificationState) {
 }
 
 /**
+ * 실행 계획(`modules.planned`의 페이로드)을 받는다. 객체면 그대로, 경로면 읽는다. 없으면 `null`이다.
+ *
+ * CLI는 기록의 마지막 `modules.planned`를 넘긴다(`--dir`·`--run`). 경로(`--planned`)는 기록이 없는
+ * 호출을 위해 남겨 둔 길이다 — 같은 내용을 파일로 한 벌 더 두면 두 벌이 갈린다. 2026-10-13의 한 실행은
+ * 그 파일의 사유 코드가 기록과 달랐고, 다른 실행은 그 파일에 BOM이 붙어 렌더를 다시 돌렸다.
+ */
+function readPlanned(planned) {
+  if (planned === undefined || planned === null) return { value: null }
+  if (typeof planned === 'object') return { value: planned }
+  try {
+    return { value: readJsonFile(planned) }
+  } catch (error) {
+    return { error: `--planned를 읽지 못했다: ${planned} — ${error.message}` }
+  }
+}
+
+/**
  * 섹션이 될 모듈을 catalog에서 뽑는다.
  *
  * 손으로 넘기지 않는 이유는 이 저장소가 후보 수에 대해 이미 내린 결론과 같다 —
- * 목록을 사람이 적으면 적다가 틀린다. 건너뛴 모듈은 실행 계획에 기록되므로
- * 그 파일에서 뺀다.
+ * 목록을 사람이 적으면 적다가 틀린다. 건너뛴 모듈은 실행 계획(`planned` — 페이로드 객체 또는
+ * 그 파일 경로)에 기록되므로 거기서 뺀다.
  */
-export function loadModuleSections(rulesDir, workflow, plannedPath) {
+export function loadModuleSections(rulesDir, workflow, planned) {
   let catalog
   try {
     catalog = JSON.parse(readFileSync(join(rulesDir, 'catalog.json'), 'utf8'))
@@ -895,14 +914,10 @@ export function loadModuleSections(rulesDir, workflow, plannedPath) {
     return { error: `catalog.json을 읽지 못했다: ${error.message}` }
   }
   const skipped = new Set()
-  if (plannedPath) {
-    let planned
-    try {
-      planned = JSON.parse(readFileSync(plannedPath, 'utf8'))
-    } catch (error) {
-      return { error: `--planned를 읽지 못했다: ${plannedPath} — ${error.message}` }
-    }
-    for (const entry of [...(planned.skipped ?? []), ...(planned.unknown ?? [])]) {
+  const plan = readPlanned(planned)
+  if (plan.error) return { error: plan.error }
+  if (plan.value) {
+    for (const entry of [...(plan.value.skipped ?? []), ...(plan.value.unknown ?? [])]) {
       skipped.add(String(entry.module ?? entry).slice(0, 2))
     }
   }
@@ -945,7 +960,7 @@ export function loadModuleSections(rulesDir, workflow, plannedPath) {
  * 방식(`{value}`/`{error}`)을 쓴다 — catalog를 그 사실의 단일 소스로 만든
  * 것(Ruling 1)은, 그 소스가 조용히 사라질 수 있으면 단일 소스가 아니다.
  */
-export function loadSpecialistPasses(rulesDir, plannedPath) {
+export function loadSpecialistPasses(rulesDir, planned) {
   let catalog
   try {
     catalog = JSON.parse(readFileSync(join(rulesDir, 'catalog.json'), 'utf8'))
@@ -957,14 +972,10 @@ export function loadSpecialistPasses(rulesDir, plannedPath) {
   // 그 패스 자리에 옮긴다 — 번호 모듈의 SKIPPED가 `실행 계획`에 적히는 것과 달리,
   // 특수 패스는 `특수 패스` 절이 제 상태를 말하는 유일한 자리다.
   const skipped = new Map()
-  if (plannedPath) {
-    let planned
-    try {
-      planned = JSON.parse(readFileSync(plannedPath, 'utf8'))
-    } catch (error) {
-      return { error: `--planned를 읽지 못했다: ${plannedPath} — ${error.message}` }
-    }
-    for (const entry of planned.skipped ?? []) {
+  const plan = readPlanned(planned)
+  if (plan.error) return { error: plan.error }
+  if (plan.value) {
+    for (const entry of plan.value.skipped ?? []) {
       if (entry && typeof entry === 'object') skipped.set(String(entry.module), { reason: entry.reason ?? entry.evidence ?? entry.reasonCode })
     }
   }
@@ -1372,7 +1383,7 @@ if (process.argv[1] && process.argv[1].endsWith('render-findings.mjs')) {
   if (wantsDeletion) {
     let approval
     try {
-      approval = JSON.parse(readFileSync(approvalPath, 'utf8'))
+      approval = readJsonFile(approvalPath)
     } catch (error) {
       die(`--deletion-approval을 읽지 못했다: ${approvalPath} — ${error.message}`)
     }
@@ -1392,7 +1403,7 @@ if (process.argv[1] && process.argv[1].endsWith('render-findings.mjs')) {
   let payload
   let inputText
   try {
-    inputText = readFileSync(inputPath, 'utf8')
+    inputText = readTextFile(inputPath)
     payload = JSON.parse(inputText)
   } catch (error) {
     die(`--input을 읽지 못했다: ${inputPath} — ${error.message}`)
@@ -1406,7 +1417,19 @@ if (process.argv[1] && process.argv[1].endsWith('render-findings.mjs')) {
   const vocabulary = loadVocabulary(rulesDir)
   if (vocabulary.error) die(vocabulary.error)
 
-  const sections = loadModuleSections(rulesDir, workflow, flag('planned'))
+  // 실행 계획은 기록이 정본이다(`--dir`·`--run`이면 마지막 `modules.planned`). 같은 내용을 파일로도 받으면 두 벌
+  // 중 어느 것을 그렸는지 알 수 없으므로 함께 받지 않는다. `--planned`만 주는 길은 기록이 없는 호출을 위해 남긴다.
+  const planned = (() => {
+    const dirFlag = flag('dir')
+    const runFlag = flag('run')
+    if ((dirFlag === undefined) !== (runFlag === undefined)) die('--dir와 --run은 함께 준다 — 실행 계획(modules.planned)을 그 실행의 기록에서 읽는다')
+    if (dirFlag === undefined) return flag('planned')
+    if (flag('planned') !== undefined) die('--dir·--run을 주면 실행 계획은 기록의 modules.planned에서 읽는다 — --planned를 함께 주지 않는다(두 벌이 갈린 실행이 있었다)')
+    const recorded = readEvents(requireStartedTimeline(dirFlag, runFlag)).filter(event => event?.phase === 'modules.planned').at(-1)
+    if (!recorded) process.stderr.write('경고: 기록에 modules.planned가 없다 — 건너뛴 모듈 없이 후보 전부를 섹션으로 그린다\n')
+    return recorded ?? null
+  })()
+  const sections = loadModuleSections(rulesDir, workflow, planned)
   if (sections.error) die(sections.error)
 
   // 특수 패스(Props·수학·예외) 섹션도 같은 catalog.json에서 나온다. render는
@@ -1418,14 +1441,14 @@ if (process.argv[1] && process.argv[1].endsWith('render-findings.mjs')) {
   // 아직 남아 있는 별도 정리 항목이다. 여기서 두 loader의 결과를 합쳐
   // 하나의 `sections`로 넘기는 것은 그 중복을 막기 위해서가 아니라, render
   // 자체를 두 loader의 파일 I/O에서 떼어 놓기 위해서다.)
-  const specialistPasses = loadSpecialistPasses(rulesDir, flag('planned'))
+  const specialistPasses = loadSpecialistPasses(rulesDir, planned)
   if (specialistPasses.error) die(specialistPasses.error)
 
   const byCandidateId = new Map()
   for (const path of flagAll('verdicts')) {
     let parsed
     try {
-      parsed = JSON.parse(readFileSync(path, 'utf8'))
+      parsed = readJsonFile(path)
     } catch (error) {
       die(`--verdicts를 읽지 못했다: ${path} — ${error.message}`)
     }
@@ -1486,7 +1509,7 @@ if (process.argv[1] && process.argv[1].endsWith('render-findings.mjs')) {
     if (!payload.previous) die('--rechecks는 이전 리뷰와 비교한 실행(routed 출력에 previous가 있다)에서만 준다')
     let list
     try {
-      list = collectVerdicts(JSON.parse(readFileSync(rechecksPath, 'utf8')))
+      list = collectVerdicts(readJsonFile(rechecksPath))
     } catch (error) {
       die(`--rechecks를 읽지 못했다: ${rechecksPath} — ${error.message}`)
     }

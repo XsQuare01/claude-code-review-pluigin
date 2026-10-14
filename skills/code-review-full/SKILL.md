@@ -281,7 +281,7 @@ task(
     - 범위는 변경 파일과 그 호출자·피호출자다. 변경되지 않은 호출자도 본다(삭제된 동작을 전제하는 쪽). 관련 없는 저장소 전체를 훑지 않는다.
     - 켰으면 **적용 대상이다.** 관련 범위가 없다는 이유로 `SKIPPED`로 두지 않는다 — 대장의 `next`가 다른 모듈과 같이 `correctness`를 낸다. 결과 파일은 `$REPORT_BASENAME.correctness.json`, `module.done`의 `module`은 `correctness`다. 대장이 시도마다 `module.start`/`module.done`을 남긴다 — 이 패스가 더한 호출량이 시도 수로 기록에 남고 호출 한도에 든다.
     - 실패 처리는 특수 패스와 같다. no-start·timeout은 fresh retry 1회, `malformed-output`은 교정 재시도 1회. 두 번째도 실패하면 대장이 그 작업을 끝낸다(`done --status failed`와 그 `failureClass` — `inactivity-timeout`·`malformed-output` 등). 다음으로 간다. 그 실행은 `FAILED orchestration`(부분 완료)이고, 렌더러는 이 패스를 "결과 없음"으로, 스냅숏은 `FAILED`로 그린다. **지적 0건이나 통과로 쓰지 않는다.**
-    - 껐으면 띄우지 않는다. `--planned`에 적지 않는다 — 렌더러와 스냅숏이 `run.start`에서 읽어 `SKIPPED`(선택 패스, 켜지 않았다)로 그린다.
+    - 껐으면 띄우지 않는다. `modules.planned`에 적지 않는다 — 렌더러와 스냅숏이 `run.start`에서 읽어 `SKIPPED`(선택 패스, 켜지 않았다)로 그린다.
     - 규칙 패스가 같은 자리를 지적했어도 이 패스의 지적을 버리지 않는다. 둘은 합쳐지지 않는다(exact dedup은 규칙 ID가 같아야 병합한다). `prepare-verification.mjs`가 같은 자리(같은 파일에서 줄이 겹치는 범위)를 짚은 다른 규칙의 지적을 `relatedCandidateIds`로 잇고, 렌더러가 `관련 지적:` 줄로 그린다. 규칙 모듈끼리도 같다 — 같은 규칙 ID끼리와 `CR-*`끼리만 잇지 않는다.
  7. 요약/리포팅 규칙.
     - 모든 패스가 끝난 뒤에 패스 리포트를 출력한다.
@@ -481,19 +481,28 @@ node "$RULES_DIR/../scripts/tally-verdicts.mjs" --dir "$REPORT_DIR" --run "$REPO
 - **도구는 `review-tool.mjs`로 돌린다 — 시작(`tool.start`)과 끝(`tool.done`)을 스크립트가 돌리기 직전과 끝난 직후에 남긴다** (C-9). 손으로 남기면 그 시각은 도구가 돈 시각이 아니라 오케스트레이터가 깨어난 시각이다 — 2026-10-12 실행은 세 도구의 시작과 끝을 같은 초에 남겨 셋 다 416초로 기록됐다. 끝만 모아 찍던 실행은 442초를 이름 없는 구간 하나로 남겼다.
 
   ```bash
-  node "$RULES_DIR/../scripts/review-tool.mjs" --dir "$REPORT_DIR" --run "$REPORT_BASENAME" --name typecheck -- npx tsc --noEmit
-  node "$RULES_DIR/../scripts/review-tool.mjs" --dir "$REPORT_DIR" --run "$REPORT_BASENAME" --name test --shell -- "npm test"   # 셸이 필요한 명령은 문자열 하나
+  node "$RULES_DIR/../scripts/review-tool.mjs" --dir "$REPORT_DIR" --run "$REPORT_BASENAME" --name typecheck --detach -- npx tsc --noEmit
+  node "$RULES_DIR/../scripts/review-tool.mjs" --dir "$REPORT_DIR" --run "$REPORT_BASENAME" --name test --shell --detach -- "npm test"   # 셸이 필요한 명령은 문자열 하나
+  # … 모듈 리뷰와 검증을 이어 간다 …
+  node "$RULES_DIR/../scripts/review-tool.mjs" --dir "$REPORT_DIR" --run "$REPORT_BASENAME" --wait   # `도구 실행 결과`를 쓰기 직전에
   ```
 
-  출력(JSON)의 `exit`·`durationSec`·`tail`과 `log`(호출마다 따로 남는 `.timing/$REPORT_BASENAME.tool.<이름>.<callId>.log`)로 `도구 실행 결과`를 쓴다. **baseline은 그 트리(merge-base를 꺼낸 worktree 등)를 `--repo`로 주고 같은 `--name`으로 돌린다** — 두 호출의 로그가 따로 남고 `treeSha`로 갈린다(C-6). 명령은 수정 옵션 없이 준다(C-6). `--timeout`(기본 1800초)을 넘기면 도구가 띄운 프로세스까지 끊는다. 호스트의 셸 시간 제한이 도구보다 짧으면 그 제한을 늘려 부른다 — 끊기면 끝을 남기지 못한다
+  `--detach`는 띄우고 바로 돌아온다 — 끝(`tool.done`)과 로그·결과 파일은 띄운 프로세스가 남긴다. `--wait`는 이 실행에서 시작한 도구가 모두 끝나기를 기다려 결과를 `done`에 모아 낸다. `lost`에 오른 도구는 끝을 남기지 못하고 사라진 것이다 — 그 도구는 `--detach` 없이 다시 돌린다. 결과(`--wait`의 `done` 항목, 또는 `--detach` 없이 부른 호출의 출력)의 `exit`·`durationSec`·`tail`·`failures`와 `log`(호출마다 따로 남는 `.timing/$REPORT_BASENAME.tool.<이름>.<callId>.log`)로 `도구 실행 결과`를 쓴다. **baseline은 그 트리(merge-base를 꺼낸 worktree 등)를 `--repo`로 주고 같은 `--name`으로 돌린다** — 두 호출의 로그가 따로 남고 `treeSha`로 갈린다(C-6). 명령은 수정 옵션 없이 준다(C-6). `--timeout`(기본 1800초)을 넘기면 도구가 띄운 프로세스까지 끊는다. 호스트의 셸 시간 제한이 도구보다 짧으면 그 제한을 늘려 부른다 — 끊기면 끝을 남기지 못한다
 
-  **도구가 실패하면 이 변경의 것으로 읽기 전에 preflight 출력의 `base 앞섬`·`의존성 변경` 줄을 본다(C-6).** `base 앞섬`이 이 브랜치와 같은 파일을 바꿨다고 하면, HEAD의 실패는 base를 따라잡지 않은 트리의 결과일 수 있다. 그런지는 **이 브랜치를 지금 base에 합친 트리**에서 실패한 도구를 다시 돌려 가린다. 그 트리를 따로 꺼내(`git worktree add --detach "$MERGED" <base>` 뒤 `git -C "$MERGED" merge --no-commit --no-ff <리뷰한 HEAD sha>`) 그 트리의 의존성을 설치하고, `review-tool.mjs --repo "$MERGED"`로 같은 `--name`을 돌린다. 끝나면 `git worktree remove --force "$MERGED"`로 지운다.
+  **도구가 실패하면 먼저 실패한 자리(`failures`)를 본다(C-6).** `review-tool`이 출력에서 실패한 파일을 읽어 세 무리로 가른다 — `inChange`(이 변경이 바꾼 파일), `outsideChange`(저장소가 추적하지만 이 변경이 바꾸지 않은 파일), `untracked`(저장소가 추적하지 않는 파일: .gitignore에 든 것, 커밋하지 않은 새 파일). 2026-10-13 실행의 lint 실패(오류 12·경고 25)는 전부 .gitignore에 든 `tmp/` 아래였고, 테스트 실패 3건은 이 변경이 바꾸지 않은 파일이었다(둘은 시간 초과). 로그에 다 있던 사실인데 리포트에는 "baseline 미측정"만 있었다.
+  - `untracked`만의 실패는 저장소의 상태가 아니라 작업 트리에 남은 파일의 것이다. `도구 실행 결과`에 그 파일과 함께 "이 변경·저장소와 무관"이라고 적고, 차단 사유와 baseline 비교에 넣지 않는다.
+  - 시간 초과(`timeouts`·`timedOutFiles`)는 그 파일만 다시 돌려 본다(예: `--name test-rerun -- npx vitest run <파일…>`). 혼자 돌려 통과하면 함께 돈 도구·모듈의 부하로 난 시간 초과다 — 그렇게 적고 실패로 세지 않는다. 다시 실패하면 아래로 간다.
+  - 남은 실패(`inChange`·`outsideChange`)는 baseline과 비교해야 이 변경의 것인지 안다. **`outsideChange`라고 이 변경과 무관한 것이 아니다** — 바꾼 함수를 가져다 쓰는 다른 파일의 테스트가 깨질 수 있다. baseline 트리에서는 실패한 파일만 다시 돌려도 된다(테스트 파일·lint 대상 파일. typecheck는 전체).
+  - `failures.parsed`가 거짓이면 아는 모양의 실패 자리를 찾지 못한 것이다 — 로그를 직접 읽는다.
+
+  **남은 실패를 이 변경의 것으로 읽기 전에 preflight 출력의 `base 앞섬`·`의존성 변경` 줄을 본다(C-6).** `base 앞섬`이 이 브랜치와 같은 파일을 바꿨다고 하면, HEAD의 실패는 base를 따라잡지 않은 트리의 결과일 수 있다. 그런지는 **이 브랜치를 지금 base에 합친 트리**에서 실패한 도구를 다시 돌려 가린다. 그 트리를 따로 꺼내(`git worktree add --detach "$MERGED" <base>` 뒤 `git -C "$MERGED" merge --no-commit --no-ff <리뷰한 HEAD sha>`) 그 트리의 의존성을 설치하고, `review-tool.mjs --repo "$MERGED"`로 같은 `--name`을 돌린다. 끝나면 `git worktree remove --force "$MERGED"`로 지운다.
   - 합친 트리에서 실패가 사라지면 `도구 실행 결과`에 두 결과를 함께 적고, `미해결 / 후속 확인`에 "rebase 뒤 다시 잰다"를 남긴다. 이 실패는 이 변경의 차단 사유로 쓰지 않는다.
   - 합친 트리에서도 실패하면 base 끝의 트리와 비교한다. base 끝에서 통과하면 이 변경이 만든 실패다.
   - 합치지 못했으면(충돌) 그 사실과 rebase를 후속 확인에 적되, 실패를 base 탓으로 돌리지 않는다.
 
   **파일이 겹친다는 것만으로 실패를 차단 사유에서 빼지 않는다.** base가 같은 파일의 다른 곳을 바꾸는 동안 이 브랜치가 그 파일에 진짜 회귀를 넣을 수 있고, 그 파일도 `base 앞섬`에 잡힌다. `의존성 변경`이 있으면 baseline 트리에는 **그 트리의 의존성을 설치해** 잰다 — merge-base 트리가 지금 트리의 `node_modules`를 빌려 쓰면 baseline도 같은 실패를 내 "신규 0"으로 잘못 나온다. 설치하지 못하면 `baseline 미측정`이다. 2026-10-13 실행은 main이 merge-base 뒤로 4커밋 앞서 `package.json`을 바꿔 둔 것을 모른 채 typecheck·test 실패를 "baseline 미측정"으로만 남겼다. PR은 SDK를 main과 같은 버전으로 올렸지만 main이 그 버전에 맞춰 고친 코드를 받지 않았고, 사용자가 할 일(rebase)이 리포트에 없었다
 - **lint/typecheck/test는 모듈이 도는 동안 함께 돌린다.** 이 도구들은 sub-agent 결과에 의존하지 않으므로 디스패치가 끝나기를 기다릴 이유가 없다. 09-17 실행은 2번째 wave가 도는 중에 넷을 끝내 벽시계에 거의 아무것도 더하지 않았고, 09-18 실행은 교차검증까지 끝난 뒤에 돌려 **442초를 통째로 직렬로 썼다.** 같은 일에 같은 시간이 들었지만 한쪽만 값을 치렀다.
+  **함께 돌릴 때는 `--detach`로 띄운다.** 한 차례에 띄운 호출이 전부 끝나야 다음 차례로 넘어가는 호스트(OpenCode)에서 도구를 모듈과 같은 차례에 그냥 부르면, 모듈이 끝나도 가장 긴 도구가 끝날 때까지 다음 모듈을 띄우지 못한다 — 2026-10-13의 두 실행이 `npm test` 때문에 4분과 6.5분을 그렇게 잃었다. `--wait`는 `도구 실행 결과`를 쓰기 직전에 부른다.
 - `실행 타임라인` 섹션에는 `review-timeline.mjs --summary --out "$REPORT_DIR/.timing/$REPORT_BASENAME.timeline.md"`를 `render.start`를 남긴 뒤 **마지막으로 한 번 더 돌려** 그 파일을 넣는다(아래 `리포트 조립`). 표를 직접 만들지 않고, 사이드카를 남기지 못했으면 그 사실을 그 섹션에 적는다 (C-9).
 
   **중간에 뽑은 표를 그대로 두지 않는다.** 한 리포트가 교차검증 직후에 뽑은 4줄짜리 표를 실었는데 사이드카에는 13줄이 있었고, 빠진 9줄 안에 **전체 두 번째로 긴 442초 구간**이 들어 있었다. 그 리포트는 표 밑에 "렌더 시점 요약이므로 `run.end`는 포함되지 않습니다"라고 적었지만 실제로 빠진 것은 `run.end` 하나가 아니었다. `render.start`를 남긴 뒤에 뽑으면 그 문장이 참이 된다.
@@ -502,7 +511,7 @@ node "$RULES_DIR/../scripts/tally-verdicts.mjs" --dir "$REPORT_DIR" --run "$REPO
 - **리포트를 저장하기 직전에 `review-timeline.mjs --check --before-end`를 돌린다.** 종료 코드 1은 리뷰 실패가 아니지만, 지적된 빈 곳은 `실행 타임라인` 섹션에 함께 적는다 (C-9). 리포트를 저장하면 `render.wrote`를, 이어서 `run.end`를 남긴다 — **`run.end`가 마지막 줄이다.** 그 뒤에는 기록에 아무것도 덧붙이지 않는다. 빠진 줄을 사후에 채우지 않고(`dispatch.end` 등), 리포트를 고쳐도 `render.*`를 다시 남기지 않는다. 2026-10-06 실행은 `run.end` 뒤에 검사해 찾은 빈 곳을 채우려고 `dispatch.end`·`run.end`·렌더 줄을 덧붙였고, 기록의 끝이 셋이 됐다
 - 개별 패스의 구조화 결과는 출력 전에 임의 축약하거나 버리지 않는다. aggregation은 parsed field를 유지한 채 병합·정렬만 하고, 최종 헤딩/섹션/표현은 renderer가 새로 만든다.
 - 같은 규칙 ID로 finding이 둘 이상이면 C-7에 따라 `17-3 (1/2)` 형태로 순번을 붙인다.
-- 패스에 적용 범위가 없으면 패스 이름, 사유, 그리고 `SKIPPED`가 비차단임을 명시해 `SKIPPED`로 출력한다. **특수 패스(Props·수학·예외)의 SKIPPED는 실행 계획 파일(`--planned`)의 `skipped`에 그 패스 이름으로 적는다** — `{"module":"math","reasonCode":"…","reason":"…"}`. 렌더러가 그 사유를 `특수 패스` 절의 그 자리에 옮기고, 지적이 0건인 패스에는 "지적 없음."을 찍는다. **건너뛴 패스의 결과 파일을 만들지 않는다** — 2026-09-30 실행은 SKIPPED인 수학 패스에 빈 `math.json`을 써 두었고, 리포트에는 Props(실행·0건)와 수학(SKIPPED)이 모두 빠졌다. 특수 패스가 하나라도 건너뛰어졌으면 `--planned`를 반드시 준다. **렌더러는 `--collect`가 남긴 `collected.sources`와 대조한다** — 지적이 없는데 결과 파일도 수집되지 않은 모듈·패스는 "지적 없음."이 아니라 "결과 없음"으로 찍힌다. 그 표시는 실행이 실패했거나 결과가 빠졌다는 뜻이므로, `실행 계획`에 그 모듈의 실패를 적는다(`FAILED orchestration`).
+- 패스에 적용 범위가 없으면 패스 이름, 사유, 그리고 `SKIPPED`가 비차단임을 명시해 `SKIPPED`로 출력한다. **특수 패스(Props·수학·예외)의 SKIPPED는 실행 계획(`modules.planned`)의 `skipped`에 그 패스 이름으로 적는다** — `{"module":"math","reasonCode":"…","reason":"…"}`. 렌더러가 그 사유를 `특수 패스` 절의 그 자리에 옮기고, 지적이 0건인 패스에는 "지적 없음."을 찍는다. **건너뛴 패스의 결과 파일을 만들지 않는다** — 2026-09-30 실행은 SKIPPED인 수학 패스에 빈 `math.json`을 써 두었고, 리포트에는 Props(실행·0건)와 수학(SKIPPED)이 모두 빠졌다. 렌더러는 실행 계획을 기록의 `modules.planned`에서 읽는다(`--dir`·`--run`) — 같은 내용을 `--planned` 파일로 다시 주지 않는다. 2026-10-13의 한 실행은 그 파일의 사유 코드가 기록과 달랐고, 다른 실행은 PowerShell이 붙인 BOM 때문에 렌더러가 그 파일을 읽지 못해 렌더를 다시 돌렸다. **렌더러는 `--collect`가 남긴 `collected.sources`와 대조한다** — 지적이 없는데 결과 파일도 수집되지 않은 모듈·패스는 "지적 없음."이 아니라 "결과 없음"으로 찍힌다. 그 표시는 실행이 실패했거나 결과가 빠졌다는 뜻이므로, `실행 계획`에 그 모듈의 실패를 적는다(`FAILED orchestration`).
 - 모든 패스가 끝난 뒤에는 사용자가 다른 언어를 명시하지 않은 한 한국어로 전체 요약 리포트를 출력한다.
 - **리포트는 오케스트레이터가 직접 조립해 저장한다 — sub-agent에 맡기지 않는다.** 상세 지적·특수 패스(렌더러), 실행 계획(스냅숏), 실행 타임라인(`--summary`)은 이미 완성된 Markdown이고, 오케스트레이터가 새로 쓰는 것은 판정·요약·도구 실행 결과·미해결뿐이다. 2026-10-12 실행 둘이 조립을 writing sub-agent에 맡겼다. 한 실행은 파일을 다 쓴 sub-agent의 마지막 모델 호출이 응답 없이 2시간 21분 멈췄고, 작업 도구가 그 sub-agent가 끝나야 돌아오는데 시간 상한이 없어 사용자가 끊을 때까지 `run.end`가 남지 않았다. 다른 실행은 context 압축 뒤 그 작업에 이 스킬을 실어 즉시 실패했고, 다시 맡긴 조립에 12분이 걸렸다.
 - **조립은 `assemble-report.mjs`로 한다 — 스크립트가 만든 조각을 셸로 옮기지 않는다(C-7).** 스냅숏·렌더러·`--summary`는 각자 `--out`으로 `.timing/$REPORT_BASENAME.plan.md`·`.findings.md`·`.timeline.md`를 쓴다. 오케스트레이터가 쓰는 부분(리뷰 기준·판정·요약·도구 실행 결과·미해결)은 **파일 쓰기 도구로** 틀 파일에 쓰고, 조각이 들어갈 자리에 `{{plan}}`·`{{findings}}`·`{{timeline}}` 줄을 하나씩 둔다(그 줄에는 다른 글자를 두지 않는다).
@@ -532,7 +541,7 @@ node "$RULES_DIR/../scripts/render-findings.mjs" \
      --verification-state <ran|disabled> \
      --rules "$RULES_DIR" \
      --workflow full \
-     [--planned <modules-planned 페이로드 경로>] \
+     --dir "$REPORT_DIR" --run "$REPORT_BASENAME" \
      [--evidence "$REPORT_DIR/.timing/$REPORT_BASENAME.evidence.json"] \
      [--rechecks "$REPORT_DIR/.timing/$REPORT_BASENAME.rechecks.json"] \
      --out "$REPORT_DIR/.timing/$REPORT_BASENAME.findings.md"
@@ -544,7 +553,7 @@ node "$RULES_DIR/../scripts/render-findings.mjs" \
 
 **명령 틀은 둘 다 `rollout-shadow`다. `active-deletion`은 승인 파일 없이는 켜지지 않는다.** 렌더러는 `--phase-high`·`--phase-low` 중 하나라도 `active-deletion`이면 `--deletion-approval <승인 파일>`을 요구하고 없으면 멈춘다(exit 2). 승인 파일은 사람이 impact·검증 경로별로 잰 false-suppression 기록이고(`workflow-contract.md` C-6B `승인 파일`), **플러그인은 그런 승인을 싣고 오지 않는다.** 사용자가 승인 파일을 주며 명시적으로 요청할 때만 그 impact를 `active-deletion`으로 바꾸고 `--deletion-approval`을 붙인다 — 스스로 고르지 않는다. 승인을 쓴 뒤에 반박 kind 목록이나 검증자 지시문이 바뀌었으면 렌더러가 그 impact를 `rollout-shadow`로 되돌리고 stderr로 경고하며, 그 사실을 `## 상세 지적` 맨 위 줄에도 적는다. 승인 파일에 적을 기준은 `--print-deletion-basis --rules "$RULES_DIR"`이 낸다.
 
-**`--verification-state`도 기본값이 없다.** `ran`은 교차검증이 실제로 돌았다는 뜻이고, `disabled`는 이번 실행에서 교차검증을 껐다는 뜻이다 — 계약(C-6B)이 "검증을 끈 실행"과 "검증이 깨진 실행"을 가르는 것과 같은 이유로, 이 값을 `--verdicts` 유무로 추측하지 않는다. `ran`이면 후보별 판정에 따라 `대상 아님`·`유지`·`반박됨 — 관찰 중` 등으로 갈리고, `disabled`면 판정 데이터(누가 반박했는지)는 보지 않는다 — 하지만 **eligibility까지 무시하지는 않는다.** disposition 표(C-6B)는 `verification-disabled`를 "검증을 끈 실행의 **검증 대상**"에만 준다: SKIP-VERIFY였던 후보는 검증을 껐든 켰든 애초에 대상이 아니었으므로 `대상 아님`을 그대로 유지하고, VERIFY 대상이었던 후보에만 `꺼짐`을 찍는다. `--verdicts`는 `ran`일 때만 주고, `disabled`에서는 애초에 판정 파일이 없으므로 생략한다 — `tally-verdicts.mjs --collect`가 정본 순서로 모아 남긴 `verdicts.json`을 준다. 판정 파일을 직접 넘길 때는 `tally-verdicts.mjs`에 넘긴 순서(bundle 다음 isolated)와 같게 둔다. 두 스크립트는 같은 로더(`scripts/lib/verdicts.mjs`)로 판정 파일을 읽으므로 tally가 받은 모양은 렌더러도 받고, 판정 목록을 찾지 못하는 파일은 둘 다 거부한다 — 2.14.0까지 렌더러는 `{"tasks":[…]}`를 판정 0건으로 읽어 검증 대상 전부를 `검증 실패`로 찍을 수 있었다. `disabled`에서 `--verdicts`를 함께 주면 렌더러가 거부한다(모순된 두 신호). `--planned`는 `실행 계획`에서 건너뛴/미확인 모듈이 있을 때만 주고, 없으면 생략한다.
+**`--verification-state`도 기본값이 없다.** `ran`은 교차검증이 실제로 돌았다는 뜻이고, `disabled`는 이번 실행에서 교차검증을 껐다는 뜻이다 — 계약(C-6B)이 "검증을 끈 실행"과 "검증이 깨진 실행"을 가르는 것과 같은 이유로, 이 값을 `--verdicts` 유무로 추측하지 않는다. `ran`이면 후보별 판정에 따라 `대상 아님`·`유지`·`반박됨 — 관찰 중` 등으로 갈리고, `disabled`면 판정 데이터(누가 반박했는지)는 보지 않는다 — 하지만 **eligibility까지 무시하지는 않는다.** disposition 표(C-6B)는 `verification-disabled`를 "검증을 끈 실행의 **검증 대상**"에만 준다: SKIP-VERIFY였던 후보는 검증을 껐든 켰든 애초에 대상이 아니었으므로 `대상 아님`을 그대로 유지하고, VERIFY 대상이었던 후보에만 `꺼짐`을 찍는다. `--verdicts`는 `ran`일 때만 주고, `disabled`에서는 애초에 판정 파일이 없으므로 생략한다 — `tally-verdicts.mjs --collect`가 정본 순서로 모아 남긴 `verdicts.json`을 준다. 판정 파일을 직접 넘길 때는 `tally-verdicts.mjs`에 넘긴 순서(bundle 다음 isolated)와 같게 둔다. 두 스크립트는 같은 로더(`scripts/lib/verdicts.mjs`)로 판정 파일을 읽으므로 tally가 받은 모양은 렌더러도 받고, 판정 목록을 찾지 못하는 파일은 둘 다 거부한다 — 2.14.0까지 렌더러는 `{"tasks":[…]}`를 판정 0건으로 읽어 검증 대상 전부를 `검증 실패`로 찍을 수 있었다. `disabled`에서 `--verdicts`를 함께 주면 렌더러가 거부한다(모순된 두 신호). `--dir`·`--run`은 실행 계획(`modules.planned`)을 기록에서 읽는 자리다 — 건너뛴·미확인 모듈과 특수 패스의 SKIPPED가 거기서 온다.
 
 **`ran`일 때 `needs-context`로 판정된 finding은 상세 지적에서 빠지고 stderr 알림으로 나온다.** 렌더러는 `미해결 / 후속 확인` 섹션을 쓰지 않으므로, 그 알림에 실린 내용을 실제로 그 섹션에 옮겨 적는다 — 옮겨 적지 않으면 그 finding은 리포트 어디에도 없는 채로 사라진다.
 

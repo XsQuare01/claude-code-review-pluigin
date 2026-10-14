@@ -176,3 +176,82 @@ test('시작된 타임라인 없이는 돌리지 않는다', t => {
   const out = spawnSync(process.execPath, [SCRIPT, '--dir', ctx.dir, '--run', 'code-review-full-other-2026-10-12', '--name', 'lint', '--', 'echo'], { encoding: 'utf8' })
   assert.equal(out.status, 2)
 })
+
+// 2026-10-13의 두 실행은 도구를 모듈 리뷰와 같은 차례에 돌려, 모듈이 끝나고도 `npm test`가 끝날 때까지 다음 모듈을
+// 띄우지 못했다(4분, 6.5분). `--detach`는 띄우고 돌아오며, 끝은 띄운 프로세스가 남긴다.
+test('--detach는 띄우고 바로 돌아오고, 끝·로그·결과는 띄운 프로세스가 남기며, --wait가 그 결과를 모은다', t => {
+  const ctx = setup(t)
+  const started = Date.now()
+  const out = tool(ctx, '--name', 'test', '--detach', '--', process.execPath, '-e', 'setTimeout(() => { console.log("1 failed"); process.exit(1) }, 3000)')
+  const returnedAfter = Date.now() - started
+  assert.equal(out.status, 0, out.stderr)
+  const launched = JSON.parse(out.stdout)
+  assert.equal(launched.detached, true)
+  assert.match(launched.callId, /^[0-9a-f]{8}$/)
+  assert.ok(returnedAfter < 2500, `도구가 끝나기 전에 돌아와야 한다 — ${returnedAfter}ms`)
+  // 돌아온 순간에는 시작만 있다
+  assert.deepEqual(linesOf(ctx).filter(line => line.phase.startsWith('tool.')).map(line => [line.phase, line.detached ?? null]), [['tool.start', true]])
+
+  const waited = spawnSync(process.execPath, [SCRIPT, '--dir', ctx.dir, '--run', RUN, '--wait', '--timeout', '30'], { encoding: 'utf8' })
+  assert.equal(waited.status, 0, waited.stderr)
+  const outcome = JSON.parse(waited.stdout)
+  assert.deepEqual([outcome.running, outcome.lost, outcome.timedOut], [[], [], false])
+  assert.equal(outcome.done.length, 1)
+  assert.deepEqual([outcome.done[0].callId, outcome.done[0].exit, outcome.done[0].treeSha], [launched.callId, 1, ctx.head])
+  assert.match(readFileSync(launched.log, 'utf8'), /1 failed/)
+  const tools = linesOf(ctx).filter(line => line.phase.startsWith('tool.'))
+  assert.deepEqual(tools.map(line => [line.phase, line.callId]), [['tool.start', launched.callId], ['tool.done', launched.callId]])
+  // 띄운 프로세스가 잰 시간이다 — 돌아온 시각이 아니다
+  assert.ok((Date.parse(tools[1].at) - Date.parse(tools[0].at)) / 1000 >= 2.5)
+})
+
+test('--wait는 끝을 남기지 못하고 사라진 도구를 기다리지 않고 lost로 낸다', t => {
+  const ctx = setup(t)
+  const sidecar = join(ctx.dir, '.timing', `${RUN}.jsonl`)
+  const append = event => writeFileSync(sidecar, `${readFileSync(sidecar, 'utf8')}${JSON.stringify(event)}\n`, 'utf8')
+  // 결과 파일에 적힌 pid가 이미 없다
+  const gone = spawnSync(process.execPath, ['-e', 'process.stdout.write(String(process.pid))'], { encoding: 'utf8' })
+  append({ at: new Date().toISOString(), seq: 2, phase: 'tool.start', name: 'test', callId: 'aaaaaaaa' })
+  writeFileSync(join(ctx.dir, '.timing', `${RUN}.tool.test.aaaaaaaa.json`), JSON.stringify({ status: 'running', name: 'test', callId: 'aaaaaaaa', pid: Number(gone.stdout) }), 'utf8')
+  // 시작한 지 오래인데 결과 파일조차 없다
+  append({ at: new Date(Date.now() - 120000).toISOString(), seq: 3, phase: 'tool.start', name: 'lint', callId: 'bbbbbbbb' })
+  const started = Date.now()
+  const waited = spawnSync(process.execPath, [SCRIPT, '--dir', ctx.dir, '--run', RUN, '--wait', '--timeout', '30'], { encoding: 'utf8' })
+  assert.ok(Date.now() - started < 10000, '사라진 도구를 상한까지 기다리지 않는다')
+  assert.equal(waited.status, 1)
+  const outcome = JSON.parse(waited.stdout)
+  assert.deepEqual(outcome.lost.map(call => call.callId), ['aaaaaaaa', 'bbbbbbbb'])
+  assert.match(waited.stderr, /--detach 없이 다시 돌린다/)
+})
+
+test('실패하면 실패한 자리를 이 변경의 파일·바꾸지 않은 파일·추적하지 않는 파일로 가르고 tool.done에 그 수를 남긴다', t => {
+  const ctx = setup(t)
+  const git = (...args) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.com', '-c', 'commit.gpgsign=false', ...args], { cwd: ctx.repo, encoding: 'utf8' })
+  mkdirSync(join(ctx.repo, 'src'))
+  mkdirSync(join(ctx.repo, 'tmp'))
+  writeFileSync(join(ctx.repo, '.gitignore'), 'tmp/\nreview-reports/\n')
+  writeFileSync(join(ctx.repo, 'src', 'a.ts'), 'a\n')
+  writeFileSync(join(ctx.repo, 'src', 'old.ts'), 'old\n')
+  writeFileSync(join(ctx.repo, 'tmp', 'x.cjs'), 'x\n')
+  git('add', '.gitignore', 'src')
+  git('commit', '-qm', 'files')
+  // preflight가 남기는 변경 목록 — 리뷰 대상과 대상에서 뺀 파일
+  writeFileSync(join(ctx.dir, '.timing', `${RUN}.scope.json`), JSON.stringify({ schemaVersion: 1, files: ['src/a.ts'], excluded: [{ path: 'src/a.test.ts', reason: 'test' }] }), 'utf8')
+  const report = [
+    join(ctx.repo, 'tmp', 'x.cjs'), '  1:1  error  bad  no-undef', '',
+    join(ctx.repo, 'src', 'a.ts'), '  2:1  error  bad  no-undef', '',
+    join(ctx.repo, 'src', 'old.ts'), '  3:1  warning  bad  prettier/prettier', '',
+  ].join('\n')
+  const out = tool(ctx, '--name', 'lint', '--', process.execPath, '-e', `console.log(${JSON.stringify(report)}); process.exit(1)`)
+  assert.equal(out.status, 0, out.stderr)
+  const result = JSON.parse(out.stdout)
+  assert.deepEqual(result.failures, { parsed: true, files: 3, inChange: ['src/a.ts'], outsideChange: ['src/old.ts'], untracked: ['tmp/x.cjs'] })
+  const done = linesOf(ctx).find(line => line.phase === 'tool.done')
+  assert.deepEqual(done.failureFiles, { inChange: 1, outsideChange: 1, untracked: 1 })
+  // 결과 파일에도 같은 것이 남는다(--wait가 모은다)
+  const saved = JSON.parse(readFileSync(join(ctx.dir, '.timing', `${RUN}.tool.lint.${result.callId}.json`), 'utf8'))
+  assert.deepEqual([saved.status, saved.output.failures], ['done', result.failures])
+  // 성공한 도구에는 실패 자리가 없다
+  const passed = JSON.parse(tool(ctx, '--name', 'typecheck', '--', process.execPath, '-e', 'process.exit(0)').stdout)
+  assert.equal('failures' in passed, false)
+})

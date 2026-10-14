@@ -13,7 +13,8 @@
 // 3. PR이 없거나 확인할 수 없으면 `main` → `master` → `origin/HEAD`(지금까지의 기본값)
 
 import { execFileSync } from 'node:child_process'
-import { readFileSync } from 'node:fs'
+
+import { readTextFile } from './read-text.mjs'
 
 export const DEFAULT_BRANCHES = ['main', 'master']
 
@@ -75,7 +76,7 @@ export function readCurrentPr(repo, { prJson, noPr = false } = {}) {
   let raw
   if (prJson !== undefined) {
     try {
-      raw = readFileSync(prJson, 'utf8')
+      raw = readTextFile(prJson)
     } catch (error) {
       return { problem: `--pr-json을 읽지 못했다: ${prJson} — ${error.message}` }
     }

@@ -7,6 +7,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import { writeTextAtomic } from './lib/atomic-write.mjs'
 import { markedBlock } from './lib/contract-blocks.mjs'
 import { intentBlock, intentProblems } from './lib/intent.mjs'
+import { readTextFile } from './lib/read-text.mjs'
 import { CURRENT_STATUSES, countBy, enclosingSymbol, identityPending, linkFindings, pathChanges, recheckable } from './lib/review-compare.mjs'
 import { parseSnapshot } from './lib/review-snapshot.mjs'
 import { currentTarget, ruleDocDigests, rulesDigest, runOutputs } from './lib/run-identity.mjs'
@@ -700,7 +701,7 @@ async function main() {
       sourceNames: new Set([...sourceNames.value].filter(name => !synthesisOnly.has(name))),
       notRequested,
       pathOf: name => join(dir, '.timing', `${run}.${name}.json`),
-      read: path => (existsSync(path) ? readFileSync(path, 'utf8') : undefined),
+      read: path => (existsSync(path) ? readTextFile(path) : undefined),
     })
     if (gathered.problems.length) fail(`모듈별 결과를 모으지 못했다:\n  - ${gathered.problems.join('\n  - ')}`)
     for (const warning of gathered.warnings) process.stderr.write(`경고: ${warning}\n`)
@@ -715,7 +716,7 @@ async function main() {
       for await (const chunk of process.stdin) raw += chunk
     } else {
       try {
-        raw = readFileSync(inputPath, 'utf8')
+        raw = readTextFile(inputPath)
       } catch (error) {
         fail(`--input을 읽지 못했다: ${inputPath} — ${error.message}`)
       }
@@ -792,7 +793,7 @@ async function main() {
   let intent = null
   const intentPath = join(dir, '.timing', `${run}.intent.json`)
   if (existsSync(intentPath)) {
-    const text = readFileSync(intentPath, 'utf8')
+    const text = readTextFile(intentPath)
     let doc
     try {
       doc = JSON.parse(text)

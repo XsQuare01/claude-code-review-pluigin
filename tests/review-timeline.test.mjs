@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { spawn, spawnSync } from 'node:child_process'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -2190,4 +2190,61 @@ test('run.start는 base 앞섬·겹친 파일·의존성 변경을 경고 없이
     '--set', 'host=test', '--set', 'rules=r', '--set', 'version=v', '--set', 'branch=b', '--set', 'changedFiles=1', '--set', 'baseOverlap=package.json'], { encoding: 'utf8' })
   assert.equal(scalar.status, 2, '목록을 문자열 하나로 밀어 넣지 않는다')
   assert.match(scalar.stderr, /baseOverlap/)
+})
+
+// 순번(seq)은 지금까지 쓴 줄 수로 정한다. 두 프로세스가 같은 순간 읽고 쓰면 같은 번호가 두 줄에 붙는다 — 2026-10-06과
+// 10-13 실행의 기록에 그런 줄이 있었다(함께 띄운 모듈의 module.start, 함께 띄운 도구의 tool.start). 기록은 잠금 안에서 쓴다.
+const appendAsync = (dir, phase, data) => new Promise(resolve => {
+  const child = spawn(process.execPath, [SCRIPT, '--dir', dir, '--run', RUN, '--phase', phase, '--data', JSON.stringify(data)], { stdio: ['ignore', 'pipe', 'pipe'] })
+  let stderr = ''
+  child.stderr.on('data', chunk => { stderr += chunk })
+  child.on('close', status => resolve({ status, stderr }))
+})
+
+test('다른 프로세스가 기록을 잠그고 있으면 풀릴 때까지 기다렸다가 쓴다', async t => {
+  const dir = freshDir(t)
+  assert.equal(log(dir, 'run.start', { host: 'test' }).status, 0)
+  const lock = join(dir, '.timing', `${RUN}.jsonl.lock`)
+  writeFileSync(lock, 'held by test', 'utf8')
+  const pending = appendAsync(dir, 'tool.start', { name: 'test' })
+  await new Promise(resolve => setTimeout(resolve, 800))
+  assert.equal(linesOf(dir).length, 1, '잠금이 풀리기 전에는 쓰지 않는다')
+  rmSync(lock)
+  const out = await pending
+  assert.equal(out.status, 0, out.stderr)
+  assert.deepEqual(linesOf(dir).map(line => [line.seq, line.phase]), [[1, 'run.start'], [2, 'tool.start']])
+  assert.equal(existsSync(lock), false, '쓴 뒤에는 잠금을 지운다')
+})
+
+test('잡은 프로세스가 죽어 남은 오래된 잠금은 치우고 쓴다', t => {
+  const dir = freshDir(t)
+  assert.equal(log(dir, 'run.start', { host: 'test' }).status, 0)
+  const lock = join(dir, '.timing', `${RUN}.jsonl.lock`)
+  writeFileSync(lock, '12345', 'utf8')
+  const old = new Date(Date.now() - 120000)
+  utimesSync(lock, old, old)
+  const out = log(dir, 'tool.start', { name: 'test' })
+  assert.equal(out.status, 0, out.stderr)
+  assert.equal(linesOf(dir).length, 2)
+})
+
+test('여러 프로세스가 함께 써도 순번이 겹치지 않는다', async t => {
+  const dir = freshDir(t)
+  assert.equal(log(dir, 'run.start', { host: 'test' }).status, 0)
+  const outs = await Promise.all(Array.from({ length: 16 }, (_, at) => appendAsync(dir, 'tool.start', { name: `t${at}` })))
+  for (const out of outs) assert.equal(out.status, 0, out.stderr)
+  assert.deepEqual(linesOf(dir).map(line => line.seq), Array.from({ length: 17 }, (_, at) => at + 1))
+})
+
+test('--check는 순번이 겹친 기록을 짚는다 — 잠금 밖에서 쓴 줄이다', t => {
+  const dir = freshDir(t)
+  const at = '2026-10-13T09:32:41.107Z'
+  plant(dir, [
+    { at, seq: 1, sinceStartSec: 0, phase: 'run.start', host: 'test', rules: 'r', version: 'v', branch: 'b', changedFiles: 1 },
+    { at, seq: 2, sinceStartSec: 0, phase: 'tool.start', name: 'test', callId: '1118d5b7' },
+    { at, seq: 2, sinceStartSec: 0, phase: 'tool.start', name: 'lint', callId: 'f92e750d' },
+  ])
+  const out = check(dir)
+  assert.equal(out.status, 1)
+  assert.match(out.stdout + out.stderr, /seq가 겹친다\(2\)/)
 })

@@ -40,6 +40,7 @@ import {
 } from './lib/evidence.mjs'
 import { currentTarget, runOutputs } from './lib/run-identity.mjs'
 import { logPhase, readEvents, requireStartedTimeline } from './lib/run-record.mjs'
+import { readJsonFile } from './lib/read-text.mjs'
 
 const die = message => {
   process.stderr.write(`${message}\n`)
@@ -264,7 +265,7 @@ const inputPath = values.get('input')
 if (!inputPath) die('--input <항목 JSON 경로>가 필요하다 — 산문을 셸 인자로 넘기지 않는다')
 let input
 try {
-  input = JSON.parse(readFileSync(inputPath, 'utf8'))
+  input = readJsonFile(inputPath)
 } catch (error) {
   die(`--input을 읽지 못했다: ${inputPath} — ${error.message}`)
 }

@@ -16,14 +16,29 @@
 // `treeSha`로 갈린다. 실패 수와 baseline 대비는 그 로그로 리포트의 `도구 실행 결과`에 적는다. 시간 상한을
 // 넘기면 도구가 띄운 프로세스까지 끊는다. 도구가 실패해도 이 스크립트는 0으로 끝난다 — 실패는 기록할
 // 결과이지 이 스크립트의 실패가 아니다.
+//
+//   review-tool.mjs … --detach -- <명령>          띄우고 바로 돌아온다. 끝(`tool.done`)은 띄운 프로세스가 남긴다
+//   review-tool.mjs --dir D --run R --wait [--timeout 3600]   이 실행에서 띄운 도구가 모두 끝나기를 기다린다
+//
+// 왜 `--detach`인가: 한 차례에 띄운 호출이 전부 끝나야 다음 차례로 넘어가는 호스트(OpenCode)에서 도구를 모듈
+// 리뷰와 같은 차례에 돌리면, 모듈이 끝나도 가장 긴 도구가 끝날 때까지 다음 모듈을 띄우지 못한다. 2026-10-13의
+// 두 실행에서 `npm test`가 그렇게 4분과 6.5분을 막았다. 띄워 두고 돌아오면 그 차례는 모듈만 기다린다.
+//
+// 실패하면 출력에서 실패한 자리를 읽어(`failures`) 이 변경이 바꾼 파일·바꾸지 않은 파일·저장소가 추적하지 않는
+// 파일로 가른다(`scripts/lib/tool-failures.mjs`). 결과는 호출마다 `.timing/<run>.tool.<name>.<callId>.json`에도
+// 남는다 — `--wait`가 거기서 모은다.
 
 import { execFileSync, spawn, spawnSync } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
-import { closeSync, openSync, writeFileSync } from 'node:fs'
+import { closeSync, existsSync, openSync, writeFileSync } from 'node:fs'
 import { constants } from 'node:os'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
-import { logPhase, requireStartedTimeline } from './lib/run-record.mjs'
+import { writeTextAtomic } from './lib/atomic-write.mjs'
+import { readJsonFile } from './lib/read-text.mjs'
+import { logPhase, readEvents, requireStartedTimeline } from './lib/run-record.mjs'
+import { classifyFailures, failureCounts, failureLocations } from './lib/tool-failures.mjs'
 
 const die = message => {
   process.stderr.write(`${message}\n`)
@@ -35,8 +50,9 @@ const separator = argv.indexOf('--')
 const flags = separator === -1 ? argv : argv.slice(0, separator)
 const command = separator === -1 ? [] : argv.slice(separator + 1)
 
-const VALUE_FLAGS = new Set(['dir', 'run', 'name', 'repo', 'timeout', 'attempt'])
-const BOOL_FLAGS = new Set(['shell'])
+// `call-id`는 `--detach`가 띄운 프로세스에 넘기는 값이다 — 부모가 이미 잡아 둔 로그와 `tool.start`를 이어 쓴다.
+const VALUE_FLAGS = new Set(['dir', 'run', 'name', 'repo', 'timeout', 'attempt', 'call-id'])
+const BOOL_FLAGS = new Set(['shell', 'detach', 'wait'])
 const values = new Map()
 for (let at = 0; at < flags.length; at += 1) {
   const arg = flags[at]
@@ -56,7 +72,70 @@ for (let at = 0; at < flags.length; at += 1) {
 
 const dir = values.get('dir')
 const run = values.get('run')
-requireStartedTimeline(dir, run)
+const sidecar = requireStartedTimeline(dir, run)
+
+const sleep = ms => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
+const resultPathOf = (tool, id) => join(dir, '.timing', `${run}.tool.${tool}.${id}.json`)
+const alive = pid => {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (error) {
+    return error.code === 'EPERM' // 있지만 신호를 보낼 권한이 없다
+  }
+}
+
+/**
+ * 이 실행에서 시작한 도구가 모두 끝나기를 기다린다. 끝은 기록의 `tool.done`(같은 `callId`)이다.
+ *
+ * 끝을 남기지 못하고 사라진 도구는 기다리지 않는다 — 결과 파일의 `pid`가 살아 있지 않거나, 시작한 지 30초가
+ * 지나도록 결과 파일이 생기지 않았으면 `lost`다. 그 도구는 다시 돌린다.
+ */
+function waitForTools(limitSec) {
+  const STARTUP_GRACE_MS = 30000
+  const deadline = Date.now() + limitSec * 1000
+  for (;;) {
+    const events = readEvents(sidecar)
+    const ended = new Set(events.filter(event => event?.phase === 'tool.done' && typeof event.callId === 'string').map(event => event.callId))
+    const done = []
+    const running = []
+    const lost = []
+    for (const start of events.filter(event => event?.phase === 'tool.start' && typeof event.callId === 'string' && typeof event.name === 'string')) {
+      const call = { name: start.name, callId: start.callId }
+      let result = null
+      try {
+        result = readJsonFile(resultPathOf(start.name, start.callId))
+      } catch {
+        // 아직 없거나 쓰는 중이다
+      }
+      if (ended.has(start.callId)) {
+        done.push(result?.status === 'done' ? result.output : { ...call, note: '결과 파일이 없다 — 로그를 본다' })
+      } else if (result?.status === 'running' && Number.isInteger(result.pid)) {
+        if (alive(result.pid)) running.push(call)
+        else lost.push({ ...call, reason: `프로세스(pid ${result.pid})가 끝을 남기지 못하고 사라졌다` })
+      } else if (Date.now() - Date.parse(start.at) < STARTUP_GRACE_MS) {
+        running.push(call)
+      } else {
+        lost.push({ ...call, reason: '시작은 기록됐지만 도는 흔적(결과 파일)이 없다' })
+      }
+    }
+    if (!running.length || Date.now() > deadline) return { done, running, lost, timedOut: running.length > 0 }
+    sleep(1000)
+  }
+}
+
+// 띄워 둔 도구를 기다린다. 리포트의 `도구 실행 결과`를 쓰기 전에 부른다.
+if (values.get('wait') === true) {
+  if (command.length || values.has('name') || values.has('detach')) die('--wait는 --dir·--run(·--timeout)만 받는다 — 이 실행에서 시작한 도구가 모두 끝나기를 기다린다')
+  const limitSec = Number(values.get('timeout') ?? 3600)
+  if (!Number.isFinite(limitSec) || limitSec <= 0) die('--timeout은 양수(초)다')
+  const outcome = waitForTools(limitSec)
+  process.stdout.write(`${JSON.stringify(outcome, null, 2)}\n`)
+  if (outcome.lost.length) process.stderr.write(`끝을 남기지 못한 도구가 있다: ${outcome.lost.map(call => `${call.name}(${call.callId})`).join(', ')} — 그 도구는 --detach 없이 다시 돌린다\n`)
+  if (outcome.timedOut) process.stderr.write(`${limitSec}초 안에 끝나지 않은 도구가 있다: ${outcome.running.map(call => `${call.name}(${call.callId})`).join(', ')}\n`)
+  process.exit(outcome.lost.length || outcome.timedOut ? 1 : 0)
+}
+
 const name = values.get('name')
 if (!name || !/^[a-z][a-z0-9-]*$/.test(name)) die('--name <도구 이름>이 필요하다(lint·typecheck·test·build처럼 소문자와 -)')
 if (!command.length) die('돌릴 명령을 -- 뒤에 준다')
@@ -157,7 +236,14 @@ const runTool = () => new Promise(resolve => {
 // 돌린 두 호출이 같은 파일을 써, 나중 호출이 baseline 로그를 지웠다 — C-6의 "기존 실패 대비 신규 실패"를 다시 볼
 // 근거가 없어진다. 돌리기 전에 파일을 배타적으로 만들어 이름을 잡아 두므로 함께 돈 호출끼리도 겹치지 않는다.
 // 그 이름의 `callId`를 `tool.start`·`tool.done`에도 적어, 기록의 한 쌍과 로그 하나가 이어진다.
+const childCall = values.get('call-id')
+if (childCall !== undefined && !/^[0-9a-f]{8}$/.test(childCall)) die('--call-id는 --detach가 넘기는 값이다')
 const { callId, logPath } = (() => {
+  if (childCall !== undefined) {
+    const path = join(dir, '.timing', `${run}.tool.${name}.${childCall}.log`)
+    if (!existsSync(path)) die(`--call-id ${childCall}의 로그 자리가 없다(${path}) — --detach가 잡아 둔 자리에서만 이어 쓴다`)
+    return { callId: childCall, logPath: path }
+  }
   for (;;) {
     const id = randomBytes(4).toString('hex')
     const path = join(dir, '.timing', `${run}.tool.${name}.${id}.log`)
@@ -171,16 +257,52 @@ const { callId, logPath } = (() => {
 })()
 
 const extra = attempt > 1 ? { attempt } : {}
-logPhase(dir, run, 'tool.start', { name, callId, ...extra })
+const resultPath = resultPathOf(name, callId)
+
+// 띄우고 돌아온다. `tool.start`는 띄우기 전에 여기서 남긴다 — 띄운 프로세스가 아주 빨리 끝나도 끝이 시작보다
+// 앞에 오지 않는다. 끝(`tool.done`)과 로그·결과 파일은 띄운 프로세스가 남긴다.
+if (values.get('detach') === true) {
+  if (childCall !== undefined) die('--detach와 --call-id는 함께 쓰지 않는다')
+  logPhase(dir, run, 'tool.start', { name, callId, detached: true, ...extra })
+  const forwarded = flags.filter(arg => arg !== '--detach')
+  const child = spawn(process.execPath, [fileURLToPath(import.meta.url), ...forwarded, '--call-id', callId, '--', ...command], {
+    cwd: process.cwd(), detached: true, stdio: 'ignore', windowsHide: true,
+  })
+  if (child.pid === undefined) {
+    logPhase(dir, run, 'tool.done', { name, exit: null, treeSha, callId, ...extra })
+    die(`${name}을 띄우지 못했다`)
+  }
+  child.unref()
+  process.stdout.write(`${JSON.stringify({ name, callId, detached: true, pid: child.pid, log: logPath, result: resultPath }, null, 2)}\n`)
+  process.exit(0)
+}
+
+if (childCall === undefined) logPhase(dir, run, 'tool.start', { name, callId, ...extra })
+// 도는 동안의 결과 파일 — `--wait`가 이 pid로 살아 있는지 본다.
+writeTextAtomic(resultPath, `${JSON.stringify({ status: 'running', name, callId, pid: process.pid })}\n`)
 const startedAt = Date.now()
 const result = await runTool()
 const durationSec = Math.round((Date.now() - startedAt) / 100) / 10
 const { timedOut, spawnError } = result
 // 끊은 도구에는 제 종료 코드가 없다 — Windows에서 끊긴 프로세스가 내는 1은 taskkill의 것이다.
 const exit = !timedOut && typeof result.code === 'number' ? result.code : null
-logPhase(dir, run, 'tool.done', { name, exit, treeSha, callId, ...extra })
-
 const { stdout, stderr } = result
+
+// 실패한 자리를 가른다(C-6). 변경 목록은 preflight가 남긴 `scope.json`(리뷰 대상과 대상에서 뺀 파일)이다.
+let failures = null
+if (exit !== 0) {
+  let changed = null
+  try {
+    const scope = readJsonFile(join(dir, '.timing', `${run}.scope.json`))
+    changed = [...(scope.files ?? []), ...(scope.excluded ?? []).map(entry => (typeof entry === 'string' ? entry : entry?.path)).filter(Boolean)]
+  } catch {
+    // 변경 목록이 없으면 추적 여부만 가른다
+  }
+  failures = classifyFailures(failureLocations(`${stdout.toString('utf8')}\n${stderr.toString('utf8')}`), { repo, changed })
+}
+const failureFiles = failureCounts(failures)
+logPhase(dir, run, 'tool.done', { name, exit, treeSha, callId, ...extra, ...(failureFiles ? { failureFiles } : {}) })
+
 const header = [
   shell ? `$ ${command[0]}` : `$ ${JSON.stringify(command)}`,
   `# cwd ${repo} · HEAD ${treeSha}`,
@@ -191,6 +313,9 @@ const header = [
 writeFileSync(logPath, Buffer.concat([Buffer.from(header, 'utf8'), stdout, Buffer.from('\n--- stderr ---\n', 'utf8'), stderr]))
 
 const tail = `${stdout.toString('utf8')}\n${stderr.toString('utf8')}`.split(/\r?\n/).filter(line => line.trim() !== '').slice(-30)
-process.stdout.write(`${JSON.stringify({
-  name, callId, exit, timedOut, signal: result.signal ?? null, ...(spawnError ? { spawnError } : {}), durationSec, treeSha, log: logPath, tail,
-}, null, 2)}\n`)
+const output = {
+  name, callId, exit, timedOut, signal: result.signal ?? null, ...(spawnError ? { spawnError } : {}), durationSec, treeSha, log: logPath,
+  ...(failures ? { failures } : {}), tail,
+}
+writeTextAtomic(resultPath, `${JSON.stringify({ status: 'done', output })}\n`)
+process.stdout.write(`${JSON.stringify(output, null, 2)}\n`)

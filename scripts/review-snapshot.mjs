@@ -24,11 +24,12 @@
 // 종료 코드: 0 성공 / 1 `--show`가 읽을 수 없는 스냅숏 / 2 사용법·입력 문제(스냅숏을 쓰지 않았다)
 
 import { createHash } from 'node:crypto'
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync } from 'node:fs'
 import { join, relative } from 'node:path'
 
 import { writeOutFile } from './lib/atomic-write.mjs'
 import { requireStartedTimeline, readEvents } from './lib/run-record.mjs'
+import { readTextFile } from './lib/read-text.mjs'
 import { currentTarget, ruleDocDigests, rulesDigest, runOutputs } from './lib/run-identity.mjs'
 import { buildSnapshot, parseSnapshot, renderSnapshotMarkdown, writeSnapshotAtomic } from './lib/review-snapshot.mjs'
 import { assessEvidence, executionsDirOf, loadEvidence } from './lib/evidence.mjs'
@@ -68,7 +69,7 @@ const has = name => process.argv.includes(`--${name}`)
 
 const readText = (path, what) => {
   try {
-    return readFileSync(path, 'utf8')
+    return readTextFile(path)
   } catch (error) {
     die(`${what}를 읽지 못했다: ${path} — ${error.message}`)
   }

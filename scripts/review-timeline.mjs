@@ -29,6 +29,8 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs'
 import { basename, dirname, extname, join, resolve } from 'node:path'
 
 import { writeOutFile } from './lib/atomic-write.mjs'
+import { withFileLock } from './lib/file-lock.mjs'
+import { readTextFile } from './lib/read-text.mjs'
 import { moduleOutcomes } from './lib/run-record.mjs'
 import { CANCEL_REASONS, HALT_REASONS, STAGES, endState } from './lib/task-ledger.mjs'
 import { runNameProblem } from './lib/run-name.mjs'
@@ -160,8 +162,10 @@ const PHASES = new Map([
   ['script.start', { required: [], structured: [], allowed: ['script'] }],
   ['script.done', { required: ['ran'], structured: ['counts'], allowed: [] }],
   // `callId`는 `review-tool.mjs`가 호출마다 시작·끝 양쪽에 적는다 — 그 호출의 로그 이름이고, 짝을 맞추는 값이다.
-  ['tool.start', { required: ['name'], structured: [], allowed: ['attempt', 'callId', 'candidateId', 'evidenceId'] }],
-  ['tool.done', { required: ['name', 'exit', 'treeSha'], structured: ['failing'], allowed: ['failedNow', 'failedBaseline', 'attempt', 'callId', 'candidateId', 'evidenceId'] }],
+  // `detached`: 띄워 두고 돌아온 도구(review-tool --detach) — 끝은 띄운 프로세스가 남긴다.
+  ['tool.start', { required: ['name'], structured: [], allowed: ['attempt', 'callId', 'candidateId', 'evidenceId', 'detached'] }],
+  // `failureFiles`: 실패한 자리가 이 변경의 파일·바꾸지 않은 파일·추적하지 않는 파일에 몇 개씩인지(C-6).
+  ['tool.done', { required: ['name', 'exit', 'treeSha'], structured: ['failing', 'failureFiles'], allowed: ['failedNow', 'failedBaseline', 'attempt', 'callId', 'candidateId', 'evidenceId'] }],
   ['crossverify.start', { required: ['targets'], structured: [], allowed: ['round'] }],
   ['crossverify.end', { required: ['upheld', 'rejected'], structured: [], allowed: ['needsContext', 'noVerdict', 'malformedTasksCorrected', 'countsFrom'] }],
   ['synthesis.start', { required: [], structured: [], allowed: ['findings'] }],
@@ -426,6 +430,17 @@ if (has('check')) {
 
   const unknown = [...new Set(events.map(event => event.phase).filter(name => !PHASES.has(name)))]
   if (unknown.length) problems.push(`표에 없는 단계 이름: ${unknown.join(', ')}. 실행마다 이름이 달라지면 실행 간 비교가 불가능해진다`)
+
+  // 순번이 겹치면 두 프로세스가 같은 순간 기록에 썼다는 뜻이다. 기록은 잠금 안에서 쓰므로 지금 스크립트로 쓴
+  // 기록에서는 나오지 않는다 — 나오면 잠금 밖에서 쓴 줄이 있다.
+  const seen = new Set()
+  const repeated = new Set()
+  for (const event of events) {
+    if (!Number.isInteger(event.seq)) continue
+    if (seen.has(event.seq)) repeated.add(event.seq)
+    seen.add(event.seq)
+  }
+  if (repeated.size) problems.push(`seq가 겹친다(${[...repeated].slice(0, 5).join(', ')}) — 두 프로세스가 같은 순간 기록에 썼다. 기록은 review-timeline.mjs가 잠금 안에서 쓴다 — 그 밖에서 덧붙인 줄이 있거나, 잠금 전의 스크립트로 쓴 기록이다`)
 
   const missing = []
   for (const event of events) {
@@ -1164,26 +1179,7 @@ if (!PHASES.has(phase)) {
  * 쓴 것이 파일보다 뒤에 오는 이유는, 급히 한 값만 바꿔 다시 돌리는 쪽이
  * 파일을 고치는 쪽보다 흔하기 때문이다.
  */
-/**
- * BOM과 UTF-16을 견디며 텍스트를 읽는다.
- *
- * 이 경로는 PowerShell의 JSON 인용 문제를 피하려고 만든 것인데, 정작 PowerShell
- * 5.1이 만드는 파일을 못 읽으면 아무 소용이 없다. `Set-Content -Encoding UTF8`은
- * **BOM을 붙이고**, 기본 `Out-File`은 **UTF-16LE**로 쓴다. 둘 다 JSON.parse가
- * 첫 글자에서 실패한다.
- *
- * UTF-16BE는 Node 디코더가 없어 바이트를 뒤집어 LE로 읽는다.
- */
-const readTextFile = path => {
-  const bytes = readFileSync(path)
-  if (bytes[0] === 0xff && bytes[1] === 0xfe) return bytes.toString('utf16le').replace(/^﻿/, '')
-  if (bytes[0] === 0xfe && bytes[1] === 0xff) {
-    const swapped = Buffer.from(bytes)
-    swapped.swap16()
-    return swapped.toString('utf16le').replace(/^﻿/, '')
-  }
-  return bytes.toString('utf8').replace(/^﻿/, '')
-}
+// `--data-file`은 PowerShell이 쓴 파일(BOM, UTF-16)도 받는다 — 공용 리더(`lib/read-text.mjs`)를 쓴다.
 
 const parseObject = (raw, where) => {
   let parsed
@@ -1322,21 +1318,31 @@ if (phase === 'run.start' && events.length && events[events.length - 1].phase ==
   die(`이미 끝난 타임라인이다(${path}). 새 실행은 다른 --run 이름으로 남겨라 — 같은 파일에 이어붙이면 두 실행이 섞인다`)
 }
 
-const at = new Date()
-const startedAt = events.length ? new Date(events[0].at) : at
-
 mkdirSync(timingDir, { recursive: true })
 // 시각·순번·경과를 **여기서** 만든다. 호출자가 같은 이름으로 값을 넘겨도
 // 버린다 — 측정한 값과 주장한 값이 같은 자리에 있으면, 나중에 읽는 사람이
 // 둘을 구분할 방법이 없다.
 const MEASURED = new Set(['at', 'seq', 'sinceStartSec', 'phase'])
 const claimed = Object.fromEntries(Object.entries(data).filter(([key]) => !MEASURED.has(key)))
-const line = JSON.stringify({
-  at: at.toISOString(),
-  seq: events.length + 1,
-  sinceStartSec: Math.round((at.getTime() - startedAt.getTime()) / 1000),
-  phase,
-  ...claimed,
-})
-appendFileSync(path, line + '\n', 'utf8')
+// 순번은 지금까지 쓴 줄 수로 정한다. 두 프로세스가 같은 순간 읽고 쓰면 같은 번호가 두 줄에 붙는다 — 2026-10-06·
+// 10-13 실행의 기록에 그런 줄이 있다. 그래서 잠금 안에서 다시 읽고, 번호를 정하고, 덧붙인다.
+let line
+try {
+  line = withFileLock(`${path}.lock`, () => {
+    const current = readLines().events
+    const at = new Date()
+    const startedAt = current.length ? new Date(current[0].at) : at
+    const text = JSON.stringify({
+      at: at.toISOString(),
+      seq: current.length + 1,
+      sinceStartSec: Math.round((at.getTime() - startedAt.getTime()) / 1000),
+      phase,
+      ...claimed,
+    })
+    appendFileSync(path, text + '\n', 'utf8')
+    return text
+  })
+} catch (error) {
+  die(`${phase}를 남기지 못했다 — ${error.message}`)
+}
 process.stdout.write(line + '\n')
