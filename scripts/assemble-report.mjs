@@ -19,18 +19,20 @@
 //   {{findings}}  → .timing/<run>.findings.md  (render-findings.mjs --out)
 //   {{timeline}}  → .timing/<run>.timeline.md  (review-timeline.mjs --summary --out, `render.start` 뒤에 뽑은 것)
 //
-// 조립은 지금 구간(마지막 `run.start`·`run.resume` 뒤)의 `render.start` 뒤에 하고, 그 구간에 `run.end`가 있으면
-// 하지 않는다.
+// 조각은 이 실행의 것이어야 한다. 스냅숏 블록과 상세 지적은 `run.start`의 실행 ID를, 타임라인 표는 이 실행의 사이드카
+// 경로와 지금의 이벤트 수를 적고 있어야 한다. 조립은 지금 구간(마지막 `run.start`·`run.resume` 뒤)의 `render.start`
+// 뒤에 하고, 그 구간에 `run.end`가 있으면 하지 않는다.
 //
 // 리포트는 `<dir>/<run>.md`에 쓴다(C-7). 표준 출력은 JSON 하나 — `path`·`lines`·`sha256`. `render.wrote`에 그
 // `path`와 `lines`를 남긴다. 거부하면(종료 코드 2) 아무것도 쓰지 않은 것이다.
 
 import { existsSync, readFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 
 import { writeOutFile } from './lib/atomic-write.mjs'
 import { readEvents, requireStartedTimeline } from './lib/run-record.mjs'
 import { endState, segmentOf } from './lib/task-ledger.mjs'
+import { codeSpan } from './render-findings.mjs'
 
 const die = message => {
   process.stderr.write(`${message}\n`)
@@ -73,6 +75,10 @@ if (!events.some(event => event?.phase === 'render.start')) die('render.start가
 if (!events.slice(segment.index).some(event => event?.phase === 'render.start')) {
   die('이 구간에 render.start가 없다 — 앞 구간(부분 보고)의 render.start다. `review-timeline.mjs --phase render.start`를 남긴 뒤 조각을 다시 만들고 조립한다')
 }
+// 조각이 이 실행의 것인지는 실행 ID로 본다. 이름(`--run`)은 날짜까지만 담아 다른 디렉터리에 같은 이름의 실행이 있을 수 있다.
+// 스냅숏·검증 준비와 같은 `run.start`(첫 줄)를 읽는다 — 그 둘이 조각에 적는 실행 ID가 그것이다.
+const runId = events.find(event => event?.phase === 'run.start')?.runId
+if (typeof runId !== 'string' || !runId) die(`run.start에 runId가 없다 — 조각이 이 실행의 것인지 대조할 수 없다. review-preflight.mjs로 시작한 실행만 조립한다`)
 
 const PARTS = [
   { name: 'plan', from: 'review-snapshot.mjs --out' },
@@ -107,17 +113,29 @@ for (const { name, from } of PARTS) {
   parts.set(name, readFileSync(path, 'utf8').replace(/\r\n?/g, '\n').replace(/\n+$/, ''))
 }
 
-// 같은 실행의 조각인지 본다. 스냅숏 블록은 자기 파일을, 타임라인 표는 자기 사이드카와 그때의 이벤트 수를 적는다.
-if (!parts.get('plan').includes(`.timing/${run}.snapshot.json`)) {
-  die(`${partPath('plan')}은 이 실행(${run})의 스냅숏 블록이 아니다 — review-snapshot.mjs --dir … --run ${run} --out으로 다시 쓴다`)
+// 같은 실행의 조각인지 본다. 스냅숏 블록과 상세 지적은 실행 ID를, 타임라인 표는 자기 사이드카 경로와 그때의 이벤트 수를
+// 적는다. 이름이나 개수 하나만 보면 다른 실행의 조각이 지나간다 — 이벤트 수가 같은 두 실행의 표를 바꿔 넣으니
+// 조립이 통과해 다른 브랜치의 기록이 리포트에 실렸다(PR #105 리뷰에서 재현).
+const runIdMark = `실행 ID ${codeSpan(runId)}`
+if (!parts.get('plan').includes(`.timing/${run}.snapshot.json`) || !parts.get('plan').includes(runIdMark)) {
+  die(`${partPath('plan')}은 이 실행(${run}, ${runIdMark})의 스냅숏 블록이 아니다 — review-snapshot.mjs --dir … --run ${run} --out으로 다시 쓴다`)
+}
+if (!parts.get('findings').includes(runIdMark)) {
+  die(`${partPath('findings')}은 이 실행(${runIdMark})의 상세 지적이 아니다 — 이 실행의 routed 출력(.timing/${run}.routed.json)으로 render-findings.mjs --out을 다시 돌린다`)
 }
 {
-  const source = parts.get('timeline').match(/이벤트 (\d+)개 · 마지막 `([^`]+)`/)
+  const source = parts.get('timeline').match(/> 출처: `([^`]+)` · 이벤트 (\d+)개 · 마지막 `([^`]+)`/)
   if (!source) die(`${partPath('timeline')}에 출처 줄이 없다 — review-timeline.mjs --summary --out이 쓴 표가 아니다`)
+  // 사이드카 경로는 `--dir`을 준 모양 그대로 적힌다. 같은 자리를 다르게 쓴 것(상대·절대, 구분자, Windows의 대소문자)은 같은 것으로 본다.
+  const same = (a, b) => (process.platform === 'win32' ? resolve(a).toLowerCase() === resolve(b).toLowerCase() : resolve(a) === resolve(b))
+  if (!same(source[1], sidecar)) {
+    die(`${partPath('timeline')}은 다른 기록에서 뽑은 표다(${source[1]}) — 이 실행의 기록은 ${sidecar}다. review-timeline.mjs --dir … --run ${run} --summary --out을 다시 돌린다`)
+  }
   // `--summary`는 `render.start`를 남긴 뒤에 뽑는다(C-7). 그 뒤로 기록이 늘었거나 줄었으면 다른 시점의 표다 — 2026-09
-  // 한 리포트가 교차검증 직후에 뽑은 4줄짜리 표를 실었고, 빠진 9줄에 두 번째로 긴 구간이 있었다.
-  if (Number(source[1]) !== events.length) {
-    die(`${partPath('timeline')}은 이벤트 ${source[1]}개일 때 뽑은 표인데 지금 기록은 ${events.length}개다 — render.start를 남긴 뒤 review-timeline.mjs --summary --out을 다시 돌린다`)
+  // 한 리포트가 교차검증 직후에 뽑은 4줄짜리 표를 실었고, 빠진 9줄에 두 번째로 긴 구간이 있었다. 기록은 덧붙이기만
+  // 하므로 경로와 개수가 같으면 같은 기록이다.
+  if (Number(source[2]) !== events.length) {
+    die(`${partPath('timeline')}은 이벤트 ${source[2]}개일 때 뽑은 표인데 지금 기록은 ${events.length}개다 — render.start를 남긴 뒤 review-timeline.mjs --summary --out을 다시 돌린다`)
   }
 }
 

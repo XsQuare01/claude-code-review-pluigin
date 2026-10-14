@@ -20,7 +20,7 @@
 
 import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 
 import { writeOutFile } from './lib/atomic-write.mjs'
 import { markedBlock, markedJson, CROSS_VERIFICATION_TOKEN_KEYS } from './lib/contract-blocks.mjs'
@@ -1552,13 +1552,20 @@ if (process.argv[1] && process.argv[1].endsWith('render-findings.mjs')) {
       `이 렌더러는 \`미해결 / 후속 확인\`을 쓰지 않으므로 아래를 직접 그 섹션에 옮겨 적어야 한다:\n` +
       [...highLines, lowCount > 0 ? `  - impact 낮음: ${lowCount}건 (건별 내역 없음)` : null].filter(Boolean).join('\n') + '\n')
   }
+  // 이 출력이 어느 실행의 것인지 맨 끝에 적는다 — 스냅숏 블록과 타임라인 표가 각자 출처 줄을 싣는 것과 같다.
+  // `assemble-report.mjs`가 이 실행 ID를 `run.start`의 것과 대조한다. 적지 않으면 다른 실행의 상세 지적이 조립을
+  // 그대로 지나간다. 실행 ID가 없는 입력(`--collect`의 출력이 아닌 것)에는 적을 것이 없다.
+  const sourceRunId = payload.collected?.runId
+  const markdown = typeof sourceRunId === 'string' && sourceRunId
+    ? `${output.markdown.replace(/\n+$/, '')}\n\n출처: \`render-findings.mjs\` · ${codeSpan(basename(inputPath))} · 실행 ID ${codeSpan(sourceRunId)}\n`
+    : output.markdown
   if (outPath === undefined) {
-    process.stdout.write(output.markdown)
+    process.stdout.write(markdown)
   } else {
     // `--out`이면 표준 출력에는 무엇을 어디에 썼는지만 낸다 — 같은 Markdown을 다시 내면 셸로 받는 길이 남는다.
     let written
     try {
-      written = writeOutFile(outPath, output.markdown)
+      written = writeOutFile(outPath, markdown)
     } catch (error) {
       die(`--out에 상세 지적을 쓰지 못했다: ${outPath} — ${error.message}`)
     }

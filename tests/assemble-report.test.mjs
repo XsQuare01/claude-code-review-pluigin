@@ -16,8 +16,9 @@ const TIMELINE = join(ROOT, 'scripts', 'review-timeline.mjs')
 const RUN = 'code-review-full-feat-x-2026-10-13'
 const RUN_ID = 'run-20261013-feat-x'
 
-const PLAN = `**검토 상태: 완료** — 적용 19개 중 수집 19\n\n출처: \`review-snapshot.mjs\` · \`.timing/${RUN}.snapshot.json\`\n`
-const FINDINGS = '## 상세 지적\n\n### 04 상태 관리\n\n#### 🔴 `04-3` 입력 점군 조회 상태가 UI에 반영되지 않는다\n영향: 높음\n'
+// 스냅숏 블록과 렌더러 출력은 실행 ID를 적는다 — 조립은 그것을 `run.start`의 runId와 대조한다.
+const PLAN = `**검토 상태: 완료** — 적용 19개 중 수집 19\n\n검토 대상: HEAD \`5c68b45\` · 실행 ID \`${RUN_ID}\`\n\n출처: \`review-snapshot.mjs\` · \`.timing/${RUN}.snapshot.json\`\n`
+const FINDINGS = `## 상세 지적\n\n### 04 상태 관리\n\n#### 🔴 \`04-3\` 입력 점군 조회 상태가 UI에 반영되지 않는다\n영향: 높음\n\n출처: \`render-findings.mjs\` · \`${RUN}.routed.json\` · 실행 ID \`${RUN_ID}\`\n`
 const START = { host: 'test', rules: 'r', version: '2.26.2', branch: 'feat/x', changedFiles: 1, runId: RUN_ID }
 const TEMPLATE = [
   '# feat-x 전체 코드 리뷰 리포트',
@@ -122,7 +123,7 @@ test('조각 파일이 없거나 다른 실행·다른 시점의 것이면 쓰�
   writeFileSync(part(dir, 'plan'), plan.replace(RUN, 'code-review-full-other-2026-10-13'), 'utf8')
   let out = assemble(dir, template)
   assert.equal(out.status, 2)
-  assert.match(out.stderr, /이 실행\(code-review-full-feat-x-2026-10-13\)의 스냅숏 블록이 아니다/)
+  assert.match(out.stderr, /이 실행\(code-review-full-feat-x-2026-10-13, 실행 ID `run-20261013-feat-x`\)의 스냅숏 블록이 아니다/)
   writeFileSync(part(dir, 'plan'), plan, 'utf8')
 
   rmSync(part(dir, 'findings'))
@@ -137,6 +138,49 @@ test('조각 파일이 없거나 다른 실행·다른 시점의 것이면 쓰�
   assert.equal(out.status, 2)
   assert.match(out.stderr, /이벤트 2개일 때 뽑은 표인데 지금 기록은 3개다/)
   assert.equal(existsSync(reportOf(dir)), false)
+})
+
+test('이벤트 수가 같아도 다른 기록에서 뽑은 타임라인 표는 쓰지 않는다', t => {
+  const { dir, template } = readyRun(t)
+  const own = readFileSync(part(dir, 'timeline'), 'utf8')
+  const other = tempDir(t, 'assemble-other-')
+  // 다른 브랜치의 실행, 그리고 같은 이름으로 다른 디렉터리에 남은 실행(2026-10-12에는 같은 리뷰의 리포트가 저장소
+  // 루트와 문서 폴더에 따로 생겼다). 둘 다 이벤트 2개·마지막 `render.start`라 개수만 보면 이 실행의 표와 같다.
+  for (const run of ['code-review-full-feat-y-2026-10-13', RUN]) {
+    log(other, 'run.start', { ...START, branch: 'feat/y', runId: `run-other-${run}` }, run)
+    log(other, 'render.start', { findings: 1 }, run)
+    const table = join(other, `${run}.table.md`)
+    summarize(other, table, run)
+    assert.match(readFileSync(table, 'utf8'), /이벤트 2개 · 마지막 `render\.start`/)
+    writeFileSync(part(dir, 'timeline'), readFileSync(table, 'utf8'), 'utf8')
+    const out = assemble(dir, template)
+    assert.equal(out.status, 2, run)
+    assert.match(out.stderr, /다른 기록에서 뽑은 표다/)
+    assert.equal(existsSync(reportOf(dir)), false)
+  }
+  writeFileSync(part(dir, 'timeline'), own, 'utf8')
+  const out = assemble(dir, template)
+  assert.equal(out.status, 0, out.stderr)
+})
+
+test('스냅숏 블록과 상세 지적은 이 실행의 실행 ID를 적은 것만 받는다', t => {
+  const { dir, template } = readyRun(t)
+  // 같은 이름의 실행이 다른 디렉터리에 남긴 블록은 스냅숏 경로까지 같다 — 실행 ID만 다르다
+  const cases = [
+    ['plan', PLAN.replace(RUN_ID, 'run-20261012-feat-x'), /스냅숏 블록이 아니다/],
+    ['findings', FINDINGS.replace(RUN_ID, 'run-20261012-feat-x'), /상세 지적이 아니다/],
+    ['findings', FINDINGS.replace(/\n\n출처: [^\n]*\n$/, '\n'), /상세 지적이 아니다/],
+  ]
+  for (const [name, text, pattern] of cases) {
+    writeFileSync(part(dir, name), text, 'utf8')
+    const out = assemble(dir, template)
+    assert.equal(out.status, 2, text)
+    assert.match(out.stderr, pattern)
+    assert.equal(existsSync(reportOf(dir)), false)
+    writeFileSync(part(dir, name), name === 'plan' ? PLAN : FINDINGS, 'utf8')
+  }
+  const out = assemble(dir, template)
+  assert.equal(out.status, 0, out.stderr)
 })
 
 test('부분 보고로 닫고 run.resume으로 이어 간 실행은 새 구간의 render.start 뒤에 조립한다', t => {
@@ -192,6 +236,23 @@ test('render.start 전이나 run.end 뒤에는 조립하지 않는다', t => {
   out = assemble(dir, template)
   assert.equal(out.status, 2)
   assert.match(out.stderr, /이미 끝난 실행이다/)
+  assert.equal(existsSync(reportOf(dir)), false)
+})
+
+test('run.start에 실행 ID가 없으면 조각을 대조할 수 없으므로 조립하지 않는다', t => {
+  const dir = tempDir(t)
+  const { runId, ...withoutId } = START
+  assert.ok(runId)
+  log(dir, 'run.start', withoutId)
+  log(dir, 'render.start', { findings: 1 })
+  writeFileSync(part(dir, 'plan'), PLAN, 'utf8')
+  writeFileSync(part(dir, 'findings'), FINDINGS, 'utf8')
+  summarize(dir, part(dir, 'timeline'))
+  const template = join(dir, 'template.md')
+  writeFileSync(template, TEMPLATE, 'utf8')
+  const out = assemble(dir, template)
+  assert.equal(out.status, 2)
+  assert.match(out.stderr, /run\.start에 runId가 없다/)
   assert.equal(existsSync(reportOf(dir)), false)
 })
 

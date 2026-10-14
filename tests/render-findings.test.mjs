@@ -1993,3 +1993,29 @@ test('--out은 같은 Markdown을 파일에 UTF-8로 쓰고, 표준 출력에는
   assert.equal(missing.status, 2)
   assert.match(missing.stderr, /--out에는 상세 지적을 쓸 파일 경로를 준다/)
 })
+
+test('--collect 출력을 그리면 맨 끝에 실행 ID를 적은 출처 줄을 둔다 — 조립이 그것으로 같은 실행인지 본다', t => {
+  // 출처 줄이 없으면 다른 실행의 상세 지적이 assemble-report.mjs를 그대로 지나간다(PR #105 리뷰).
+  const dir = mkdtempSync(join(tmpdir(), 'render-source-'))
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const renderOf = collected => {
+    const input = join(dir, 'code-review-full-feat-x-2026-10-13.routed.json')
+    writeFileSync(input, JSON.stringify({ candidates: [ok()], ...(collected ? { collected } : {}) }), 'utf8')
+    return spawnSync(process.execPath, [
+      SCRIPT, '--input', input, '--rules', RULES, '--phase-high', 'rollout-shadow', '--phase-low', 'rollout-shadow',
+      '--workflow', 'full', '--verification-state', 'disabled',
+    ], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+  }
+  const collected = renderOf({ sources: ['04-state'], runId: 'run-20261013-feat-x' })
+  assert.equal(collected.status, 0, collected.stderr)
+  assert.match(collected.stdout, /\n\n출처: `render-findings\.mjs` · `code-review-full-feat-x-2026-10-13\.routed\.json` · 실행 ID `run-20261013-feat-x`\n$/)
+  // 실행 ID가 없는 입력에는 적을 것이 없다
+  const withoutId = renderOf({ sources: ['04-state'] })
+  const legacy = renderOf(null)
+  for (const out of [withoutId, legacy]) {
+    assert.equal(out.status, 0, out.stderr)
+    assert.doesNotMatch(out.stdout, /출처: `render-findings\.mjs`/)
+  }
+  // 출처 줄은 그린 섹션 뒤에 덧붙을 뿐 섹션은 그대로다
+  assert.ok(collected.stdout.startsWith(withoutId.stdout.replace(/\n+$/, '')))
+})
