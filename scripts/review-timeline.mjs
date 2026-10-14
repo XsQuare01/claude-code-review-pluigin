@@ -29,6 +29,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs'
 import { basename, dirname, extname, join, resolve } from 'node:path'
 
 import { writeOutFile } from './lib/atomic-write.mjs'
+import { readTextFile } from './lib/read-text.mjs'
 import { moduleOutcomes } from './lib/run-record.mjs'
 import { CANCEL_REASONS, HALT_REASONS, STAGES, endState } from './lib/task-ledger.mjs'
 import { runNameProblem } from './lib/run-name.mjs'
@@ -1164,26 +1165,7 @@ if (!PHASES.has(phase)) {
  * 쓴 것이 파일보다 뒤에 오는 이유는, 급히 한 값만 바꿔 다시 돌리는 쪽이
  * 파일을 고치는 쪽보다 흔하기 때문이다.
  */
-/**
- * BOM과 UTF-16을 견디며 텍스트를 읽는다.
- *
- * 이 경로는 PowerShell의 JSON 인용 문제를 피하려고 만든 것인데, 정작 PowerShell
- * 5.1이 만드는 파일을 못 읽으면 아무 소용이 없다. `Set-Content -Encoding UTF8`은
- * **BOM을 붙이고**, 기본 `Out-File`은 **UTF-16LE**로 쓴다. 둘 다 JSON.parse가
- * 첫 글자에서 실패한다.
- *
- * UTF-16BE는 Node 디코더가 없어 바이트를 뒤집어 LE로 읽는다.
- */
-const readTextFile = path => {
-  const bytes = readFileSync(path)
-  if (bytes[0] === 0xff && bytes[1] === 0xfe) return bytes.toString('utf16le').replace(/^﻿/, '')
-  if (bytes[0] === 0xfe && bytes[1] === 0xff) {
-    const swapped = Buffer.from(bytes)
-    swapped.swap16()
-    return swapped.toString('utf16le').replace(/^﻿/, '')
-  }
-  return bytes.toString('utf8').replace(/^﻿/, '')
-}
+// `--data-file`은 PowerShell이 쓴 파일(BOM, UTF-16)도 받는다 — 공용 리더(`lib/read-text.mjs`)를 쓴다.
 
 const parseObject = (raw, where) => {
   let parsed

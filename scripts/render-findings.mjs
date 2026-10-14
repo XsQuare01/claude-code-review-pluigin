@@ -23,6 +23,7 @@ import { readFileSync } from 'node:fs'
 import { basename, join } from 'node:path'
 
 import { writeOutFile } from './lib/atomic-write.mjs'
+import { readJsonFile, readTextFile } from './lib/read-text.mjs'
 import { markedBlock, markedJson, CROSS_VERIFICATION_TOKEN_KEYS } from './lib/contract-blocks.mjs'
 import { assessEvidence, loadEvidence } from './lib/evidence.mjs'
 import { finalizeCurrent } from './lib/review-compare.mjs'
@@ -898,7 +899,7 @@ export function loadModuleSections(rulesDir, workflow, plannedPath) {
   if (plannedPath) {
     let planned
     try {
-      planned = JSON.parse(readFileSync(plannedPath, 'utf8'))
+      planned = readJsonFile(plannedPath)
     } catch (error) {
       return { error: `--planned를 읽지 못했다: ${plannedPath} — ${error.message}` }
     }
@@ -960,7 +961,7 @@ export function loadSpecialistPasses(rulesDir, plannedPath) {
   if (plannedPath) {
     let planned
     try {
-      planned = JSON.parse(readFileSync(plannedPath, 'utf8'))
+      planned = readJsonFile(plannedPath)
     } catch (error) {
       return { error: `--planned를 읽지 못했다: ${plannedPath} — ${error.message}` }
     }
@@ -1372,7 +1373,7 @@ if (process.argv[1] && process.argv[1].endsWith('render-findings.mjs')) {
   if (wantsDeletion) {
     let approval
     try {
-      approval = JSON.parse(readFileSync(approvalPath, 'utf8'))
+      approval = readJsonFile(approvalPath)
     } catch (error) {
       die(`--deletion-approval을 읽지 못했다: ${approvalPath} — ${error.message}`)
     }
@@ -1392,7 +1393,7 @@ if (process.argv[1] && process.argv[1].endsWith('render-findings.mjs')) {
   let payload
   let inputText
   try {
-    inputText = readFileSync(inputPath, 'utf8')
+    inputText = readTextFile(inputPath)
     payload = JSON.parse(inputText)
   } catch (error) {
     die(`--input을 읽지 못했다: ${inputPath} — ${error.message}`)
@@ -1425,7 +1426,7 @@ if (process.argv[1] && process.argv[1].endsWith('render-findings.mjs')) {
   for (const path of flagAll('verdicts')) {
     let parsed
     try {
-      parsed = JSON.parse(readFileSync(path, 'utf8'))
+      parsed = readJsonFile(path)
     } catch (error) {
       die(`--verdicts를 읽지 못했다: ${path} — ${error.message}`)
     }
@@ -1486,7 +1487,7 @@ if (process.argv[1] && process.argv[1].endsWith('render-findings.mjs')) {
     if (!payload.previous) die('--rechecks는 이전 리뷰와 비교한 실행(routed 출력에 previous가 있다)에서만 준다')
     let list
     try {
-      list = collectVerdicts(JSON.parse(readFileSync(rechecksPath, 'utf8')))
+      list = collectVerdicts(readJsonFile(rechecksPath))
     } catch (error) {
       die(`--rechecks를 읽지 못했다: ${rechecksPath} — ${error.message}`)
     }

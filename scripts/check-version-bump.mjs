@@ -15,7 +15,7 @@
 //   e.g. node scripts/check-version-bump.mjs origin/main
 
 import { execFileSync } from 'node:child_process'
-import { readFileSync } from 'node:fs'
+import { readJsonFile } from './lib/read-text.mjs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -43,7 +43,7 @@ if (changed.length === 0) {
 
 let current
 try {
-  current = JSON.parse(readFileSync(join(ROOT, MANIFEST), 'utf8')).version
+  current = readJsonFile(join(ROOT, MANIFEST)).version
 } catch (err) {
   console.error(`${MANIFEST} is missing or not valid JSON: ${err.message}`)
   process.exit(2)

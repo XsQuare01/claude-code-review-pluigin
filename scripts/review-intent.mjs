@@ -25,6 +25,7 @@ import { join } from 'node:path'
 
 import { writeTextAtomic } from './lib/atomic-write.mjs'
 import { intentBlock, INTENT_SCHEMA_VERSION } from './lib/intent.mjs'
+import { readTextFile } from './lib/read-text.mjs'
 import { readEvents, requireStartedTimeline } from './lib/run-record.mjs'
 
 const die = message => {
@@ -64,7 +65,7 @@ const repo = values.get('repo') ?? process.cwd()
 const sha256 = text => createHash('sha256').update(text).digest('hex')
 const readText = (path, what) => {
   try {
-    return readFileSync(path, 'utf8').replace(/^﻿/, '')
+    return readTextFile(path)
   } catch (error) {
     die(`${what}을 읽지 못했다: ${path} — ${error.message}`)
   }

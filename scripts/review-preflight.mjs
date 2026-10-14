@@ -48,6 +48,7 @@ import { currentTarget, newRunId, repoIdentity, rulesDigest, runOutputs } from '
 import { runNameProblem } from './lib/run-name.mjs'
 import { writeTextAtomic } from './lib/atomic-write.mjs'
 import { scopeOf } from './lib/review-scope.mjs'
+import { readJsonFile } from './lib/read-text.mjs'
 import { DEFAULT_STALE_AFTER_SEC, parseDuration } from './lib/task-ledger.mjs'
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)))
@@ -157,7 +158,7 @@ const version = (() => {
   const path = join(ROOT, '.claude-plugin', 'plugin.json')
   if (!existsSync(path)) return 'unknown'
   try {
-    return JSON.parse(readFileSync(path, 'utf8')).version ?? 'unknown'
+    return readJsonFile(path).version ?? 'unknown'
   } catch {
     return 'unknown'
   }
@@ -167,7 +168,7 @@ const catalog = (() => {
   const path = join(rules, 'catalog.json')
   if (!existsSync(path)) die(`catalog.json not found in --rules: ${path}`)
   try {
-    return JSON.parse(readFileSync(path, 'utf8'))
+    return readJsonFile(path)
   } catch (error) {
     die(`catalog.json is not valid JSON: ${error.message}`)
   }

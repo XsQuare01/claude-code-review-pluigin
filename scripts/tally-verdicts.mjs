@@ -28,6 +28,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { lastPhase, logPhase, readEvents, requireStartedTimeline } from './lib/run-record.mjs'
+import { readTextFile } from './lib/read-text.mjs'
 import { MAX_ATTEMPTS, attemptsOf, budgetOf, foldAttempts, haltOf, isTerminal, segmentOf, taskState } from './lib/task-ledger.mjs'
 import { checkTaskVerdict, collectVerdicts, loadVerdictValidator } from './lib/verdicts.mjs'
 import { buildRetryPrompt } from './lib/verifier-tasks.mjs'
@@ -124,7 +125,7 @@ if (!collectMode && !validateMode && !inputs.length) die('--input <경로>가 �
 const readJson = (path, what) => {
   let raw
   try {
-    raw = readFileSync(path, 'utf8')
+    raw = readTextFile(path)
   } catch (error) {
     die(`${what}을 읽지 못했다: ${path} — ${error.message}`)
   }

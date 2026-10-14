@@ -1802,9 +1802,17 @@ test('CLI가 --planned의 SKIPPED 특수 패스를 그 패스 자리에 표시�
   assert.match(out.stdout, /### 수학\n\n`SKIPPED` — 행렬 연산 없음 · 비차단/)
 })
 
-// 수집 기록과 대조한다. `prepare-verification.mjs --collect`는 결과 파일을 모은 모듈을
-// `collected.sources`로 남긴다. 그 목록이 있는데 거기 없는 모듈·패스를 "지적 없음."으로
-// 찍으면, 실행이 실패했거나 결과가 빠진 모듈이 0건인 것처럼 보인다.
+test('--planned 파일에 BOM이 붙어 있어도 읽는다 — PowerShell 5.1의 Set-Content -Encoding UTF8', t => {
+  // 2026-10-13 실행은 이 파일을 BOM과 함께 써서 렌더러가 "Unexpected token"으로 멈췄고, BOM을 지운 뒤 다시 돌렸다.
+  const dir = mkdtempSync(join(tmpdir(), 'render-bom-'))
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const planned = join(dir, 'planned.json')
+  writeFileSync(planned, `﻿${JSON.stringify({ skipped: [{ module: 'math', reasonCode: 'trigger-absent', evidence: '행렬 연산 없음' }], unknown: [] })}`, 'utf8')
+  const out = runWith([ok()], ['--planned', planned])
+  assert.equal(out.status, 0, out.stderr)
+  assert.match(out.stdout, /### 수학\n\n`SKIPPED` — 행렬 연산 없음 · 비차단/)
+})
+
 test('수집 목록이 있으면 결과가 수집되지 않은 모듈과 패스를 지적 없음과 구분한다', () => {
   const sections = [
     { kind: 'module', id: '04', title: '상태와 Effect', source: '04-state' },

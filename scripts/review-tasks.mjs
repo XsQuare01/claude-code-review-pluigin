@@ -32,6 +32,7 @@ import { dirname, join, resolve } from 'node:path'
 import { writeTextAtomic } from './lib/atomic-write.mjs'
 import { durationLimitScope, hostCapabilities } from './lib/hosts.mjs'
 import { moduleScope, plannedModules } from './lib/review-snapshot.mjs'
+import { readJsonFile, readTextFile } from './lib/read-text.mjs'
 import { readEvents, recordPhase, requireStartedTimeline } from './lib/run-record.mjs'
 import { currentTarget, runOutputs } from './lib/run-identity.mjs'
 import {
@@ -165,7 +166,7 @@ const readRouted = ({ required }) => {
     return null
   }
   try {
-    return JSON.parse(readFileSync(path, 'utf8'))
+    return readJsonFile(path)
   } catch (error) {
     throw new LedgerError(`${path}를 JSON으로 읽지 못했다: ${error.message}`)
   }
@@ -432,8 +433,8 @@ const done = () => {
       if (path === undefined || !existsSync(path)) {
         throw new LedgerError(`받은 결과 파일이 없다: ${path ?? '(경로를 정할 수 없다)'} — 호스트가 돌려준 응답을 next가 준 resultPath에 그대로 쓰거나 --result로 준다`)
       }
-      // BOM은 내용이 아니라 인코딩이다. 남겨 두면 JSON으로 읽히지 않는다(PowerShell 5.1은 BOM을 붙인다).
-      text = readFileSync(path, 'utf8').replace(/^\uFEFF/, '')
+      // BOM은 내용이 아니라 인코딩이다. 남겨 두면 JSON으로 읽히지 않는다(PowerShell 5.1은 BOM을 붙이고, Out-File은 UTF-16으로 쓴다).
+      text = readTextFile(path)
     }
     const decision = settleDecision({
       fold, stage, task, attempt, hostTaskId: hostTask, status, resultSha256: text === undefined ? undefined : sha256(text),
