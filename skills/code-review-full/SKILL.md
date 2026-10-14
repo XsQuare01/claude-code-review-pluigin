@@ -154,7 +154,7 @@ node "$RULES_DIR/../scripts/review-tasks.mjs" next --stage module --dir "$REPORT
 - **`expired`에 나온 시도는 끝 알림 없이 `staleAfterSec`를 넘겨 대장이 끝낸 것이다.** 그 시도의 응답이 나중에 와도 `done`이 받지 않는다. 재시도는 같은 응답의 `dispatch`에 이미 있다
 - **`cancelled`에 나온 시도는 시간 상한이 지나 취소된 것이다.** 호스트가 작업을 멈출 수 있으면(`host.cancel`) 그 작업을 멈춘다. `halted`가 나오면 더 띄우지 않는다 — 이미 받은 결과로 다음 단계로 가고, 띄우지 못한 모듈은 스냅숏이 미검토 범위로 그린다(`FAILED orchestration`)
 - **사용자가 멈추라고 하면** `review-tasks.mjs cancel --all --reason user`를 부르고, 같은 방식으로 받은 결과까지 리포트를 쓴다
-- **멈춘 실행(`halted`)도 리포트를 쓰고 `run.end`를 남긴다** — 부분 보고다. 사용자가 더 돌리라고 하면 `review-tasks.mjs resume`이 새 구간을 열고, `next`가 멈춰서 띄우지 못한 모듈을 낸다. 모듈 단계를 마치면 `prepare-verification.mjs … --collect --discard-verdicts --out <같은 routed 자리>`로 다시 모으고 검증을 새 라운드로 한 뒤 리포트를 다시 쓴다. 멈춘 적 없이 끝난 실행은 이어 가지 않는다
+- **멈춘 실행(`halted`)도 리포트를 쓰고 `run.end`를 남긴다** — 부분 보고다. 사용자가 더 돌리라고 하면 `review-tasks.mjs resume`이 새 구간을 열고, `next`가 멈춰서 띄우지 못한 모듈을 낸다. 모듈 단계를 마치면 `prepare-verification.mjs … --collect --discard-verdicts --out <같은 routed 자리>`로 다시 모으고 검증을 새 라운드로 한 뒤 리포트를 다시 쓴다. 다시 쓸 때도 새 구간에서 `render.start`를 남기고 세 조각을 다시 만들어 `assemble-report.mjs`로 조립한다 — 앞 구간의 `render.start`로는 조립하지 않는다. 멈춘 적 없이 끝난 실행은 이어 가지 않는다
 - **깨어날 때마다** — 작업 완료 알림, 사용자 메시지, 컨텍스트 압축 뒤, 같은 실행에서 스킬을 다시 불렀을 때 — 먼저 `review-tasks.mjs status`로 남은 일을 보고 `next`를 부른다. 같은 실행을 다른 세션에서 이어 가면 `review-tasks.mjs resume --repo <대상 저장소>`부터 부른다. 대상이 바뀌었다고 하면(종료 코드 3) 이 실행을 이어 가지 않고, 새 `--run` 이름으로 preflight를 `--continues <앞 실행 ID>`와 함께 다시 시작한다. 한도에 닿아 멈춘 실행을 사용자가 더 돌리라고 하면 `resume`에 새 한도를 준다
 - 작업 하나가 끝나도 깨우지 않는 호스트(`host.perTaskNotification: false`, oh-my-openagent)에서는 `dispatch`를 전부 한 번에 foreground 병렬로 부르고, 돌아온 응답마다 `done`을 부른 뒤 `next`를 다시 부른다(아래 교차검증 `디스패치`와 같은 이유). **첫 웨이브와 오래 걸리는 도구(lint·typecheck·test)를 같은 묶음으로 부르지 않는다** — 묶음 전체가 끝나야 응답을 받으므로, 첫 웨이브가 즉시 실패해도 도구가 끝날 때까지 알 수 없다. 2026-10-12 실행은 그렇게 7분을 잃었다. 도구는 두 번째 웨이브와 함께 부른다
 
@@ -511,7 +511,7 @@ node "$RULES_DIR/../scripts/tally-verdicts.mjs" --dir "$REPORT_DIR" --run "$REPO
   node "$RULES_DIR/../scripts/assemble-report.mjs" --dir "$REPORT_DIR" --run "$REPORT_BASENAME" --template "$REPORT_DIR/.timing/$REPORT_BASENAME.template.md"
   ```
 
-  스크립트가 `$REPORT_DIR/$REPORT_BASENAME.md`를 쓰고 JSON(`path`·`lines`·`sha256`)을 낸다 — 그 `path`·`lines`로 `render.wrote`를 남긴다. 조각을 PowerShell 변수나 `$(…)`로 받아 틀에 끼우지 않는다. 2026-10-13 실행은 그렇게 조립했고, PowerShell 5.1이 node의 UTF-8 출력을 시스템 코드 페이지로 읽어 한글이 깨진 리포트를 저장한 뒤에야 알아챘다. 스크립트가 거부하면(종료 코드 2) 아무것도 쓰지 않은 것이다. 자리표시자가 빠졌거나 남았으면 틀을, 조각이 다른 실행의 것이거나 타임라인 표가 지금 기록보다 앞선 것이면 그 조각을 다시 만들어 부른다
+  스크립트가 `$REPORT_DIR/$REPORT_BASENAME.md`를 쓰고 JSON(`path`·`lines`·`sha256`)을 낸다 — 그 `path`·`lines`로 `render.wrote`를 남긴다. 조각을 PowerShell 변수나 `$(…)`로 받아 틀에 끼우지 않는다. 2026-10-13 실행은 그렇게 조립했고, PowerShell 5.1이 node의 UTF-8 출력을 시스템 코드 페이지로 읽어 한글이 깨진 리포트를 저장한 뒤에야 알아챘다. 스크립트가 거부하면(종료 코드 2) 아무것도 쓰지 않은 것이다. 자리표시자가 빠졌거나 남았으면 틀을, 조각이 다른 실행의 것이거나(스냅숏 블록·상세 지적의 실행 ID, 타임라인 표의 출처 경로로 본다) 타임라인 표가 지금 기록보다 앞선 것이면 그 조각을 다시 만들어 부른다
 - 요약 저장은 `workflow-contract.md` C-7을 따른다 (`workflow-name`은 `full`).
 - 저장 자리는 (0)에서 정한 `$REPORT_DIR`이다 — 사용자가 이번 요청에서 정한 곳 → 사용자·프로젝트 지시 파일(전역 포함 `CLAUDE.md`·`AGENTS.md`)에 적힌 문서 저장 위치 → `./review-reports/` 순서로 정한 곳이다. 끝난 뒤 사용자가 리포트를 옮기라고 하면 `.timing/`도 함께 옮기고, 기록의 `render.wrote` 경로는 옛 자리를 가리킨다고 알린다. 리포트만 옮기면 기록과 리포트가 서로를 못 찾는다.
 - 일반/Props/수학/예외 producer 결과는 수집 직후 `workflow-contract.md` C-6A validation 규칙으로 검사한다. JSON 파싱 실패, 필수 필드 누락, 금지 필드 `severity`, 허용되지 않은 enum/location 값은 `malformed-output`이다.

@@ -1190,6 +1190,23 @@ These scenarios pin the behaviour that `review-rules/workflow-contract.md` promi
       ],
       "scenario": "main has moved past the merge-base and changed the top of a file; the PR changed the bottom of the same file and broke it; the merge-base and main pass the test, HEAD fails, and the file is listed in baseOverlap",
       "expected": "The orchestrator re-runs the test on the branch merged into main; it still fails there while main passes, so the report treats the failure as this change's own and does not drop it from the blocking reasons because the file overlaps"
+    },
+    {
+      "id": 149,
+      "clauses": [
+        "C-7",
+        "C-12"
+      ],
+      "scenario": "A run halts at its task limit, writes a partial report with run.end, and the user asks to continue; review-tasks.mjs resume opens a new segment",
+      "expected": "After the new segment's modules and verification, the orchestrator records render.start again, rebuilds the three sections and assembles the report; assemble-report.mjs accepts the earlier run.end as the end of the previous segment and refuses only while the new segment has no render.start"
+    },
+    {
+      "id": 150,
+      "clauses": [
+        "C-7"
+      ],
+      "scenario": "The timeline section in .timing was taken from another run with the same number of events, or the snapshot block or rendered findings carry another run's ID",
+      "expected": "assemble-report.mjs writes nothing, naming the section whose source path or run ID differs from this run, and the orchestrator regenerates that section"
     }
   ],
   "defaultWorkflowOnlyCases": [
