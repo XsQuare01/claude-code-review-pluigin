@@ -1051,7 +1051,7 @@ export function reuseContextOf(events, start) {
   for (const [key, value] of Object.entries({ runId: start.runId, searchId: state.searchId, head: start.head })) {
     if (value !== undefined && doc?.[key] !== value) return { context: null, state: 'mismatch', warning: `기존 구현 검색 결과의 ${key}(${JSON.stringify(doc?.[key] ?? null)})가 이 실행(${JSON.stringify(value)})과 다르다 — 근거로 쓰지 않는다` }
   }
-  return { context: doc }
+  return { context: doc, path: state.done.out }
 }
 
 export function verifyDirOf(dir, run) {

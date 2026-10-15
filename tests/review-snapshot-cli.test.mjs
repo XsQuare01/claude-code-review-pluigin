@@ -226,3 +226,49 @@ test('--out은 리포트 블록을 파일에 쓰고 쓴 자리만 낸다 — 블
   assert.equal(readFileSync(path, 'utf8'), `${renderSnapshotMarkdown(savedSnapshot(timing).value)}\n`)
   assert.equal(JSON.parse(out.stdout).out, path)
 })
+
+// 기존 구현 검색(C-6C) — 끝(`reuse.done`)이 가리키는 결과 파일을 검증 준비와 같은 함수로 읽고, 입력으로 해시를 남긴다.
+// 다른 실행의 결과 파일이면 생략 수를 싣지 않는다 — 상태와 대상 수는 기록에서 나오므로 그대로 그린다.
+const withReuse = (t, docOverrides = {}) => {
+  const run = startedRun(t)
+  const sidecar = join(run.timing, `${RUN}.jsonl`)
+  const start = readFileSync(sidecar, 'utf8').split('\n').filter(Boolean).map(line => JSON.parse(line)).find(event => event.phase === 'run.start')
+  const contextPath = join(run.timing, `${RUN}.reuse-context.json`)
+  writeFileSync(contextPath, JSON.stringify({
+    schemaVersion: 1, kind: 'reuse-context', runId: start.runId, searchId: 's1', head: start.head, status: 'partial',
+    targets: [{ targetId: 't1', status: 'partial', candidates: [], limits: { reached: ['candidates'], omittedCandidates: 4, omittedHits: 0 } }],
+    ...docOverrides,
+  }))
+  const at = new Date().toISOString()
+  for (const event of [
+    { phase: 'reuse.planned', searchId: 's1', scopeSha256: 'h', plan: 'p' },
+    { phase: 'reuse.start', searchId: 's1', plan: 'p' },
+    { phase: 'reuse.done', searchId: 's1', status: 'partial', reason: 'limits-or-errors', targets: { partial: 1 }, out: contextPath },
+  ]) fs.appendFileSync(sidecar, `${JSON.stringify({ at, ...event })}\n`)
+  return { ...run, contextPath }
+}
+
+test('검색 결과 파일을 읽어 생략 수를 싣고, 그 파일을 입력으로 해시와 함께 남긴다', t => {
+  const { repo, dir, timing, contextPath } = withReuse(t)
+  const out = snapshot(dir, repo, ['--verification-state', 'ran'])
+  assert.equal(out.status, 0, out.stderr)
+  const saved = savedSnapshot(timing)
+  assert.equal(saved.error, undefined, saved.error)
+  assert.deepEqual([saved.value.reuse.state, saved.value.reuse.status, saved.value.reuse.targets, saved.value.reuse.omitted],
+    ['done', 'partial', { partial: 1 }, { candidates: 4, hits: 0 }])
+  const input = saved.value.inputs.find(entry => entry.role === 'reuse-context')
+  assert.ok(input, JSON.stringify(saved.value.inputs.map(entry => entry.role)))
+  assert.equal(join(dir, input.path), contextPath)
+  assert.match(out.stdout, /검색 대상 1개 중 부분 완료 1 \(상한으로 생략한 후보 4개\)/)
+})
+
+test('다른 실행의 검색 결과 파일은 쓰지 않는다 — 경고를 내고 생략 수 없이 그린다', t => {
+  const { repo, dir, timing } = withReuse(t, { runId: 'r-other' })
+  const out = snapshot(dir, repo, ['--verification-state', 'ran'])
+  assert.equal(out.status, 0, out.stderr)
+  assert.match(out.stderr, /기존 구현 검색 결과의 runId/)
+  const saved = savedSnapshot(timing).value
+  assert.equal(saved.reuse.state, 'done')
+  assert.equal('omitted' in saved.reuse, false)
+  assert.equal(saved.inputs.some(entry => entry.role === 'reuse-context'), false)
+})
