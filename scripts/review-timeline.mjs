@@ -98,6 +98,12 @@ const timingDir = join(dir, '.timing')
 const path = join(timingDir, `${run}.jsonl`)
 
 /** 이미 쓴 줄을 읽는다. 깨진 줄은 세지 않되 조용히 버리지도 않는다. */
+/** 받침이 있으면 `이`, 없으면 `가` — "기존 구현 검색이", "모듈 4개가" */
+const subjectParticle = word => {
+  const code = String(word).charCodeAt(String(word).length - 1) - 0xac00
+  return code >= 0 && code < 11172 && code % 28 !== 0 ? '이' : '가'
+}
+
 const readLines = () => {
   if (!existsSync(path)) return { events: [], malformed: 0 }
   const events = []
@@ -659,6 +665,13 @@ if (has('check')) {
     const running = toolRuns(events).runs
       .filter(one => one.from !== null)
       .map(one => ({ from: one.from, to: one.to ?? Math.max(lastSeen, one.from) }))
+    // 기존 구현 검색(C-6C)도 같다. 끝을 남기지 못한 검색은 마지막 줄까지 돈 것으로 센다.
+    const searches = events
+      .filter(event => event?.phase === 'reuse.start')
+      .map(begin => {
+        const end = events.find(event => event?.phase === 'reuse.done' && event.searchId === begin.searchId && msOf(event) >= msOf(begin))
+        return { from: msOf(begin), to: end ? msOf(end) : Math.max(lastSeen, msOf(begin)) }
+      })
     const overlap = (list, from, to) => list.filter(one => one.from < to && one.to > from).length
     const gaps = []
     for (let at = 1; at < events.length; at += 1) {
@@ -673,14 +686,15 @@ if (has('check')) {
         to: events[at].phase,
         modules: overlap(spans, from, to),
         tools: overlap(running, from, to),
+        search: overlap(searches, from, to) > 0,
       })
     }
     gaps.sort((a, b) => b.sec - a.sec)
     const shown = gaps.filter((gap, at) => at === 0 || gap.share >= 10).slice(0, 3)
     shown.forEach((gap, at) => {
-      const busy = [gap.modules && `모듈 ${gap.modules}개`, gap.tools && `도구 ${gap.tools}개`].filter(Boolean)
+      const busy = [gap.modules && `모듈 ${gap.modules}개`, gap.tools && `도구 ${gap.tools}개`, gap.search && '기존 구현 검색'].filter(Boolean)
       notes.push(`${at === 0 ? '가장 긴 무기록 구간' : `그 다음 ${at + 1}위`} ${gap.sec}s (전체의 ${gap.share}%): \`${gap.from}\` → \`${gap.to}\` — ${
-        busy.length ? `${busy.join('와 ')}가 그 사이 돌고 있었다` : '돌고 있던 것이 기록에 없다'}`)
+        busy.length ? `${busy.join('와 ')}${subjectParticle(busy.at(-1))} 그 사이 돌고 있었다` : '돌고 있던 것이 기록에 없다'}`)
     })
   }
 

@@ -2332,3 +2332,10 @@ test('--check는 검색을 예정하지 않은 예전 기록에 검색 미실행
   plant(dir, numbered([reuseStart({ reuseSearch: undefined }), reuseLine(8, 'module.start', { module: '05-structure', attempt: 1 })]))
   assert.deepEqual(reuseProblems(check(dir)), [])
 })
+
+test('--check의 무기록 구간은 검색이 도는 동안을 비었다고 하지 않는다', t => {
+  const dir = freshDir(t)
+  plant(dir, numbered([reuseStart(), reuseLine(5, 'reuse.planned', { searchId: 's1', scopeSha256: 'h', plan: 'p' }), reuseLine(6, 'reuse.start', { searchId: 's1', plan: 'p' }),
+    reuseLine(300, 'reuse.done', { searchId: 's1', status: 'complete' })]))
+  assert.match(check(dir).stdout, /가장 긴 무기록 구간 294s .*`reuse\.start` → `reuse\.done` — 기존 구현 검색이 그 사이 돌고 있었다/)
+})
