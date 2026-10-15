@@ -2,20 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { resolve } from 'node:path'
 
-import {
-  normalizeForCompare,
-  checkLocation,
-  computeOwnerCollisions,
-  decideEligibility,
-  routeCandidate,
-  buildBundles,
-  prepareVerification,
-  candidatesFromResults,
-  collectBlobs,
-  resolveWithinRoot,
-  candidatesFromLocations,
-  verifyDirOf,
-} from '../scripts/prepare-verification.mjs'
+import { buildBundles, candidatesFromLocations, candidatesFromResults, checkLocation, collectBlobs, computeOwnerCollisions, crossFileEvidenceOf, decideEligibility, normalizeForCompare, prepareVerification, resolveWithinRoot, reuseContextOf, routeCandidate, verifyDirOf } from '../scripts/prepare-verification.mjs'
 import { renderFinding } from '../scripts/render-findings.mjs'
 
 // ------------------------------------------------------------- normalization
@@ -706,4 +693,147 @@ test('envelope이 candidatesFromResults → prepareVerification → renderFindin
   const vocabulary = { categoryLabels: { 'data-loss': '데이터 손상·유실' }, crossVerification: { upheld: '유지' } }
   const md = renderFinding(decided[0], { label: '유지', vocabulary })
   assert.match(md, /^출처 패스: 01-fsd, 11-styling$/m)
+})
+
+// ------------------------------------------- 기존 구현 검색 근거(cross-file-evidence, C-6C)
+//
+// 다른 파일의 기존 구현과 견준 05-7 지적은 anchor 파일만으로 판정할 수 없다. 영향 낮음·확신 높음이라 검증을 건너뛰던
+// 지적도 검증 대상으로, bundle이던 지적은 isolated로 보낸다. 검색 후보가 있다는 것만으로 승격하지 않는다 — 지적이
+// 그 후보(다른 파일)를 실제로 가리킬 때만이다.
+
+const REUSE_CONTEXT = {
+  schemaVersion: 1, runId: 'r-1', searchId: 's1', head: 'h'.repeat(40), status: 'complete',
+  targets: [{
+    targetId: 't1', anchor: { path: 'src/hooks/use-camera.ts', startLine: 1, endLine: 3, quote: 'const a = 1\nif (pending) return\nconst b = 2' }, status: 'complete',
+    candidates: [{ candidateId: 't1.c1', path: 'src/shared/camera-state.ts', startLine: 4, endLine: 6, quote: 'export const isPending = state =>\n  state.pending', sha256: 'x'.repeat(64), sourceRef: 'head', rev: 'h'.repeat(40), kind: 'production', existedAtMergeBase: true }],
+  }],
+}
+const dup = extra => ({
+  candidateId: 'd1', ruleId: '05-7', impact: 'low', confidence: 'high',
+  location: { kind: 'verified', path: 'src/hooks/use-camera.ts', line: 2, quote: 'if (pending) return' },
+  content: { title: '대기 판정 중복', body: '`shared/camera-state.ts`의 isPending과 같은 판정을 다시 구현했다', evidence: 'src/shared/camera-state.ts:4' },
+  ...extra,
+})
+
+test('다른 파일의 기존 구현을 가리킨 05-7 지적은 cross-file-evidence로 검증 대상·isolated가 되고, 근거 원문을 싣는다', () => {
+  const result = prepareVerification([dup()], blobs, { reuse: { context: REUSE_CONTEXT } })
+  const entry = result.candidates[0]
+  assert.deepEqual([entry.eligibility, entry.route, entry.reasons.includes('cross-file-evidence')], ['VERIFY', 'isolated', true])
+  assert.deepEqual(entry.crossFileEvidence.map(one => [one.targetId, one.candidateId, one.path, one.startLine, one.endLine, one.rev]),
+    [['t1', 't1.c1', 'src/shared/camera-state.ts', 4, 6, 'h'.repeat(40)]])
+  assert.equal(entry.crossFileEvidence[0].quote, REUSE_CONTEXT.targets[0].candidates[0].quote)
+  assert.deepEqual(result.counts.reuse, { context: 'used', crossFileEvidence: 1, newlyEligible: 1, movedToIsolated: 0, verificationTasksAdded: 1 })
+})
+
+test('검색 후보가 있다는 것만으로 승격하지 않는다 — 다른 파일을 가리키지 않은 05-7, 다른 규칙, anchor와 겹치지 않는 위치', () => {
+  const sameFile = dup({ candidateId: 'd2', content: { title: '중복', body: '같은 파일 안에서 두 번 판정한다' } })
+  const otherRule = dup({ candidateId: 'd3', ruleId: '06-2' })
+  const away = dup({ candidateId: 'd4', location: { kind: 'verified', path: 'src/wide.ts', line: 1, quote: 'first' } })
+  const result = prepareVerification([sameFile, otherRule, away], blobs, { reuse: { context: REUSE_CONTEXT } })
+  for (const entry of result.candidates) {
+    assert.equal('crossFileEvidence' in entry, false, entry.candidateId)
+    assert.equal(entry.reasons.includes('cross-file-evidence'), false, entry.candidateId)
+  }
+  assert.deepEqual(result.counts.reuse, { context: 'used', crossFileEvidence: 0, newlyEligible: 0, movedToIsolated: 0, verificationTasksAdded: 0 })
+})
+
+test('이미 검증 대상이던 bundle 지적은 isolated로 옮기고, 비어서 사라진 bundle까지 작업 수에 반영한다', () => {
+  const high = dup({ candidateId: 'd5', impact: 'high', category: 'user-malfunction' })
+  const result = prepareVerification([high], blobs, { reuse: { context: REUSE_CONTEXT } })
+  assert.equal(result.candidates[0].route, 'isolated')
+  // 전에는 bundle 1개, 지금은 isolated 1개 — 작업 수는 그대로다
+  assert.deepEqual(result.counts.reuse, { context: 'used', crossFileEvidence: 1, newlyEligible: 0, movedToIsolated: 1, verificationTasksAdded: 0 })
+})
+
+test('검색 근거를 주지 않은 준비에는 reuse 수가 없다', () => {
+  const result = prepareVerification([dup()], blobs)
+  assert.equal('reuse' in result.counts, false)
+  assert.equal(result.candidates[0].eligibility, 'SKIP-VERIFY')
+})
+
+// 05가 받은 것만 근거다. 상한에 풀려 05가 나간 뒤에 검색이 끝났으면 05는 그 결과를 보지 못했다 — 그 원문을 05-7 지적의
+// 검증 근거로 붙이면 producer가 보지 않은 근거로 검증하게 된다.
+test('05가 띄워질 때 검색이 끝나지 않았으면 늦게 온 결과를 근거로 쓰지 않는다', () => {
+  const at = sec => new Date(Date.UTC(2026, 9, 15) + sec * 1000).toISOString()
+  const start = { at: at(0), phase: 'run.start', runId: 'r-1', head: 'h'.repeat(40), reuseSearch: 'planned' }
+  const events = [start, { at: at(5), phase: 'reuse.planned', searchId: 's1', scopeSha256: 'x', plan: 'p', waitSec: 60 },
+    { at: at(6), phase: 'reuse.start', searchId: 's1', plan: 'p' }, { at: at(70), phase: 'module.start', module: '05-structure', attempt: 1 },
+    { at: at(200), phase: 'reuse.done', searchId: 's1', status: 'complete', out: 'no-such-file.json' }]
+  const reuse = reuseContextOf(events, start)
+  assert.deepEqual([reuse.context, reuse.state], [null, 'not-given-to-05'])
+  assert.match(reuse.warning, /05는 검색 결과를 받지 못하고 돌았다/)
+})
+
+// 지적이 후보를 가리키는지는 경로 단위로 본다. 끝 두 조각이 같다고(`lib/index.ts`) 다른 파일을 가리킨 지적에 원문을
+// 붙이거나, `.tsx`를 말한 지적을 `.ts` 후보와 묶지 않는다. 별칭(`@/`)·확장자 없는 import 경로·유일한 파일 이름·
+// 후보 ID(`t1.c2`)로 가리킨 지적은 놓치지 않는다.
+const contextWith = candidates => ({
+  targets: [{
+    targetId: 't1', anchor: { path: 'src/features/fb/lib/to-display.ts', startLine: 1, endLine: 3, quote: 'q' }, status: 'complete',
+    candidates: candidates.map((path, at) => ({ candidateId: `t1.c${at + 1}`, path, startLine: 1, endLine: 2, quote: `// ${path}`, sha256: 'x'.repeat(64), sourceRef: 'head', rev: 'h'.repeat(40), kind: 'production' })),
+  }],
+})
+const finding = body => ({
+  candidateId: 'f1', ruleId: '05-7', impact: 'low', confidence: 'high',
+  location: { kind: 'verified', path: 'src/features/fb/lib/to-display.ts', line: 2, quote: 'x' }, content: { title: '중복', body },
+})
+const pointed = (body, candidates) => crossFileEvidenceOf(finding(body), contextWith(candidates)).map(one => one.path)
+
+test('지적이 가리킨 후보는 경로 단위로 맞춘다 — 끝 조각·확장자만 같은 다른 파일은 아니다', () => {
+  assert.deepEqual(pointed('`src/features/b/lib/index.ts`와 같은 일을 한다', ['src/shared/lib/index.ts']), [])
+  assert.deepEqual(pointed('`src/shared/format.tsx`의 컴포넌트를 다시 만들었다', ['src/shared/format.ts']), [])
+  assert.deepEqual(pointed('`shared/lib/index.ts`를 다시 구현했다', ['src/shared/lib/index.ts']), ['src/shared/lib/index.ts'])
+})
+
+test('별칭·확장자 없는 import 경로·유일한 파일 이름·후보 ID로 가리킨 지적도 찾는다', () => {
+  const candidates = ['src/shared/lib/normalize-path.ts', 'src/entities/file/model/types.ts']
+  assert.deepEqual(pointed("`@/shared/lib/normalize-path`의 normalizePath를 다시 구현했다", candidates), ['src/shared/lib/normalize-path.ts'])
+  assert.deepEqual(pointed('normalize-path.ts에 이미 있다.', candidates), ['src/shared/lib/normalize-path.ts'])
+  assert.deepEqual(pointed('후보 t1.c2와 같은 타입이다', candidates), ['src/entities/file/model/types.ts'])
+  assert.deepEqual(pointed('t1.c20을 참고했다', candidates), [])
+  // 같은 이름의 후보가 둘이면 파일 이름만으로 고르지 않는다
+  assert.deepEqual(pointed('index.ts와 같다', ['src/shared/a/index.ts', 'src/shared/b/index.ts']), [])
+})
+
+test('잘린 후보 원문은 잘렸다는 표시와 함께 검증 근거로 간다', () => {
+  const context = contextWith(['src/shared/lib/normalize-path.ts'])
+  context.targets[0].candidates[0].truncated = true
+  const evidence = crossFileEvidenceOf(finding('`shared/lib/normalize-path.ts`를 다시 구현했다'), context)
+  assert.equal(evidence[0].truncated, true)
+})
+
+// 05가 받은 원문과 검증자가 받는 원문은 같은 바이트여야 한다. 검색이 끝난 뒤 결과 파일의 원문만 바뀌면(실행·검색 ID·HEAD는
+// 그대로) 기록한 해시(outSha256)와 달라진다 — 그 파일을 근거로 쓰지 않는다.
+test('결과 파일이 검색이 기록한 해시와 다르면 근거로 쓰지 않는다', async () => {
+  const { mkdtempSync, writeFileSync, rmSync } = await import('node:fs')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const { createHash } = await import('node:crypto')
+  const dir = mkdtempSync(join(tmpdir(), 'reuse-hash-'))
+  try {
+    const out = join(dir, 'ctx.json')
+    const original = `${JSON.stringify({ runId: 'r-1', searchId: 's1', head: 'h'.repeat(40), targets: [] })}\n`
+    writeFileSync(out, original, 'utf8')
+    const outSha256 = createHash('sha256').update(original).digest('hex')
+    const at = sec => new Date(Date.UTC(2026, 9, 15) + sec * 1000).toISOString()
+    const start = { at: at(0), phase: 'run.start', runId: 'r-1', head: 'h'.repeat(40), reuseSearch: 'planned' }
+    const events = [start, { at: at(5), phase: 'reuse.planned', searchId: 's1', scopeSha256: 'x', plan: 'p' },
+      { at: at(6), phase: 'reuse.start', searchId: 's1', plan: 'p' }, { at: at(9), phase: 'reuse.done', searchId: 's1', status: 'complete', out, outSha256 }]
+    assert.equal(reuseContextOf(events, start).context.searchId, 's1')
+    writeFileSync(out, `${JSON.stringify({ runId: 'r-1', searchId: 's1', head: 'h'.repeat(40), targets: [{ targetId: 't9' }] })}\n`, 'utf8')
+    const changed = reuseContextOf(events, start)
+    assert.deepEqual([changed.context, changed.state], [null, 'mismatch'])
+    assert.match(changed.warning, /해시/)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+// 같은 기존 구현이 두 검색 대상에서 나와도 같은 파일이다 — 파일 이름이 모호한지는 서로 다른 전체 경로 수로 본다.
+test('같은 후보 경로가 여러 대상에 나와도 파일 이름 하나로 가리킨 지적을 놓치지 않는다', () => {
+  const context = contextWith(['src/shared/normalize.ts'])
+  context.targets.push({ ...context.targets[0], targetId: 't2', candidates: context.targets[0].candidates.map(found => ({ ...found, candidateId: 't2.c1' })) })
+  const evidence = crossFileEvidenceOf(finding('normalize.ts에 같은 구현이 있다'), context)
+  assert.ok(evidence.length > 0)
+  assert.ok(evidence.every(one => one.path === 'src/shared/normalize.ts'))
 })

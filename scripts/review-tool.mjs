@@ -19,6 +19,7 @@
 //
 //   review-tool.mjs … --detach -- <명령>          띄우고 바로 돌아온다. 끝(`tool.done`)은 띄운 프로세스가 남긴다
 //   review-tool.mjs --dir D --run R --wait [--timeout 3600]   이 실행에서 띄운 도구가 모두 끝나기를 기다린다
+//       기존 구현 검색(`--name reuse-search`, C-6C)은 기다리지 않고 `notWaited`로만 알린다 — 도구가 아니다
 //
 // 왜 `--detach`인가: 한 차례에 띄운 호출이 전부 끝나야 다음 차례로 넘어가는 호스트(OpenCode)에서 도구를 모듈
 // 리뷰와 같은 차례에 돌리면, 모듈이 끝나도 가장 긴 도구가 끝날 때까지 다음 모듈을 띄우지 못한다. 2026-10-13의
@@ -37,6 +38,7 @@ import { fileURLToPath } from 'node:url'
 
 import { writeTextAtomic } from './lib/atomic-write.mjs'
 import { readJsonFile } from './lib/read-text.mjs'
+import { REUSE_TOOL_NAME } from './lib/reuse-state.mjs'
 import { logPhase, readEvents, requireStartedTimeline } from './lib/run-record.mjs'
 import { classifyFailures, failureCounts, failureLocations } from './lib/tool-failures.mjs'
 
@@ -100,8 +102,15 @@ function waitForTools(limitSec) {
     const done = []
     const running = []
     const lost = []
+    const notWaited = []
     for (const start of events.filter(event => event?.phase === 'tool.start' && typeof event.callId === 'string' && typeof event.name === 'string')) {
       const call = { name: start.name, callId: start.callId }
+      // 기존 구현 검색(C-6C)은 lint·test가 아니다 — 상태는 reuse.* 기록이 말하고, 05를 위한 기다림은 review-reuse.mjs wait가 한다.
+      // 여기서 기다리면 도구 결과를 쓰려다 검색까지 기다리고, 유실된 검색을 05가 돈 뒤에 다시 돌리라고 안내하게 된다.
+      if (start.name === REUSE_TOOL_NAME) {
+        notWaited.push({ ...call, reason: '기존 구현 검색은 도구가 아니다 — 상태는 reuse.* 기록과 스냅숏이 말하고, 05를 위한 기다림은 review-reuse.mjs wait가 한다' })
+        continue
+      }
       let result = null
       try {
         result = readJsonFile(resultPathOf(start.name, start.callId))
@@ -119,7 +128,7 @@ function waitForTools(limitSec) {
         lost.push({ ...call, reason: '시작은 기록됐지만 도는 흔적(결과 파일)이 없다' })
       }
     }
-    if (!running.length || Date.now() > deadline) return { done, running, lost, timedOut: running.length > 0 }
+    if (!running.length || Date.now() > deadline) return { done, running, lost, timedOut: running.length > 0, ...(notWaited.length ? { notWaited } : {}) }
     sleep(1000)
   }
 }
@@ -290,7 +299,8 @@ const { stdout, stderr } = result
 
 // 실패한 자리를 가른다(C-6). 변경 목록은 preflight가 남긴 `scope.json`(리뷰 대상과 대상에서 뺀 파일)이다.
 let failures = null
-if (exit !== 0) {
+// 기존 구현 검색의 실패는 검색 스크립트가 reuse.done에 남긴다 — 그 오류 문장의 `경로:줄`은 도구가 실패한 자리가 아니다(C-6C)
+if (exit !== 0 && name !== REUSE_TOOL_NAME) {
   let changed = null
   try {
     const scope = readJsonFile(join(dir, '.timing', `${run}.scope.json`))

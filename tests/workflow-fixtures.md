@@ -1241,6 +1241,66 @@ These scenarios pin the behaviour that `review-rules/workflow-contract.md` promi
       ],
       "scenario": "Three detached tools and the orchestrator record timeline lines within the same millisecond",
       "expected": "Every line gets its own seq because review-timeline.mjs writes under a lock; review-timeline.mjs --check reports any record whose seq repeats"
+    },
+    {
+      "id": 155,
+      "clauses": [
+        "C-6C",
+        "C-12"
+      ],
+      "scenario": "A full review whose change adds a path splitter while src/shared/normalize.ts already performs the same split",
+      "expected": "The orchestrator runs review-reuse.mjs register before the first dispatch, the task ledger holds 05 without spending a slot while the other modules run, the search runs under review-tool.mjs --detach --name reuse-search, and 05 is dispatched with the reuse-context path once reuse.done is recorded; review-tool.mjs --wait is not used to wait for the search, and review-reuse.mjs wait is used when only 05 is left"
+    },
+    {
+      "id": 156,
+      "clauses": [
+        "C-6C"
+      ],
+      "scenario": "The reuse plan has no decision for one file listed in scope.json, or a target anchor quote does not match the line at HEAD",
+      "expected": "review-reuse.mjs check reports the same problems without recording anything, so the orchestrator fixes the plan before launching the search; if a search is launched with such a plan anyway, review-reuse.mjs search collects no candidates, records reuse.done with status failed and reason plan-invalid, and exits 2; the snapshot draws that the search failed and that 05 ran without search evidence, and the orchestrator does not rewrite the plan into an empty successful result"
+    },
+    {
+      "id": 157,
+      "clauses": [
+        "C-6C",
+        "C-9"
+      ],
+      "scenario": "The detached reuse search is killed before it writes reuse.done, or the plan is registered but the search is never started",
+      "expected": "The task ledger releases 05 on the wrapper tool.done (lost) or waitSec after reuse.planned (timed-out), so 05 still runs its other rules; the orchestrator does not write reuse.done itself; review-timeline.mjs --check reports the missing end, and the snapshot says the search did not finish or did not run rather than reporting zero candidates"
+    },
+    {
+      "id": 158,
+      "clauses": [
+        "C-6C",
+        "C-6B"
+      ],
+      "scenario": "A low-impact, high-confidence 05-7 finding says the change re-implements isPending from shared/camera-state.ts, a candidate in another file of the reuse context",
+      "expected": "prepare-verification.mjs adds cross-file-evidence, sends the finding to VERIFY and isolated, attaches the candidate quote read at the searched commit to the verifier prompt as data, and counts newlyEligible and verificationTasksAdded in counts.reuse; a 05-7 finding about duplication inside the same file, or a finding from another rule, is not promoted"
+    },
+    {
+      "id": 159,
+      "clauses": [
+        "C-6C",
+        "C-10"
+      ],
+      "scenario": "A run that started before the reuse search existed (no run.start.reuseSearch) is snapshotted, or the reuse-context file named by reuse.done belongs to another run",
+      "expected": "The legacy snapshot has no search line and does not claim the search ran; the other run's file is not used as evidence, a warning names the mismatched runId, and the snapshot still draws the state and target counts from the record without omitted counts"
+    },
+    {
+      "id": 160,
+      "clauses": [
+        "C-6C"
+      ],
+      "scenario": "After the change both the old implementation and the new one remain called from production code",
+      "expected": "Only 05-7 reports the coexistence; 09-4 is not applied to coexistence alone because it needs the old implementation to have no calls, registrations or external contract left, and 13-7 does not report the repetition again but only how hard the shared entry point is to find or use"
+    },
+    {
+      "id": 161,
+      "clauses": [
+        "C-6C"
+      ],
+      "scenario": "The 05 producer reads a file outside the diff that it found through a symbol the changed code calls",
+      "expected": "This is allowed as a targeted search: the finding location stays on the changed implementation and the other file is cited only as evidence; the producer does not report other problems in the file it read, and does not read files that no clue from the change points to"
     }
   ],
   "defaultWorkflowOnlyCases": [

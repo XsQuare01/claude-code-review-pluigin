@@ -1,0 +1,25 @@
+{
+  "name": "reuse-duplicate",
+  "command": "/react-code-review-plugin:code-review-full",
+  "isolates": "diff 밖 기존 구현과의 중복(05-7). 새 파일이 shared/lib/normalize-path.ts와 같은 경로 정규화를 이름과 변수명을 바꿔 다시 구현한다 — diff만 보는 리뷰는 기존 구현을 볼 수 없다. 기존 구현 검색(C-6C)이 그 근거를 05에 넘기는지, 지적이 새 구현에 머무는지, 정책이 다른 유사 구현을 통합하라고 하지 않는지 본다.",
+  "notes": [
+    "**이 케이스를 직접 돌리지 않는다** — evals/README.md의 \"돌리지 않는다\" 절. 비교 실행은 사용자가 한다: 같은 fixture를 기능 전(main 워크트리를 --plugin-dir로)과 이 브랜치로 각각 돌린다.",
+    "mustFind는 1건(05-7, 새 구현 to-display-path.ts)이다. 대조군 둘: 청구서와 맞추려고 일부러 SI 단위로 나눈 format-disk-size.ts(05-7 과적용 대조군 — 1024 단위 formatBytes와 모양이 비슷하다), 기존 구현 파일 normalize-path.ts 자체(범위 대조군 — diff 밖이고 `raw: any`를 심었다. 검색이 그 파일을 읽어도 지적하지 않는다, 00-3).",
+    "기존 구현은 업로드 기능이 쓰고(build-storage-key.ts) 새 구현은 파일 목록이 쓴다 — 둘 다 쓰이므로 공존 판단은 05-7의 몫이고 09-4가 아니다.",
+    "채점 축 밖에서 함께 볼 것: 리포트 실행 계획의 기존 구현 검색 줄(상태·대상 수·조사한 commit), review-timeline --summary의 첫 디스패치까지·검색·05 대기·전체, 계획의 파일 결정(4파일 — 기계 검사가 완전성을 보장한다. 모든 파일을 제외했으면 대상 선정 실패로 센다), routed counts.reuse의 늘어난 검증 작업 수.",
+    "기능 전 팔에서도 이 지적이 나올 수 있다 — 00-3이 표적 참조 확인을 이미 허용한다. 두 팔의 차이를 run 여러 번으로 본다. 한 번의 적중이나 누락으로 효과를 판정하지 않는다.",
+    "timeoutMinutes 40은 render-throughput과 같은 이유다 — full은 fan-out·특수 패스·교차검증이 붙는다."
+  ],
+  "changedFiles": {
+    "added": [
+      "src/features/file-browser/index.ts",
+      "src/features/file-browser/lib/format-disk-size.ts",
+      "src/features/file-browser/lib/to-display-path.ts",
+      "src/features/file-browser/ui/file-row.tsx"
+    ],
+    "removed": [],
+    "modified": []
+  },
+  "runs": 1,
+  "timeoutMinutes": 40
+}

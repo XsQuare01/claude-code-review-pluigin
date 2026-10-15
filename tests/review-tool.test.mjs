@@ -255,3 +255,34 @@ test('실패하면 실패한 자리를 이 변경의 파일·바꾸지 않은 �
   const passed = JSON.parse(tool(ctx, '--name', 'typecheck', '--', process.execPath, '-e', 'process.exit(0)').stdout)
   assert.equal('failures' in passed, false)
 })
+
+// 기존 구현 검색(C-6C)도 review-tool --detach --name reuse-search로 띄우지만 lint·test 같은 도구가 아니다. 그 상태는
+// 검색 스크립트가 남기는 reuse.* 기록이 말한다 — `--wait`가 그것까지 기다리면 05 하나 때문에 모든 도구를 기다리게 되고,
+// 유실된 검색을 "--detach 없이 다시 돌린다"고 안내하면 05가 이미 돈 뒤에 검색을 다시 돌린다. 검색이 남긴 오류 문장의
+// `경로:줄`을 실패한 자리로 세면 도구 실행 결과에 이 변경의 실패로 잡힌다.
+test('--wait는 기존 구현 검색을 기다리지 않고 notWaited로만 알린다', t => {
+  const ctx = setup(t)
+  const sidecar = join(ctx.dir, '.timing', `${RUN}.jsonl`)
+  const append = event => writeFileSync(sidecar, `${readFileSync(sidecar, 'utf8')}${JSON.stringify(event)}\n`, 'utf8')
+  append({ at: new Date().toISOString(), seq: 2, phase: 'tool.start', name: 'reuse-search', callId: 'cccccccc', detached: true })
+  writeFileSync(join(ctx.dir, '.timing', `${RUN}.tool.reuse-search.cccccccc.json`), JSON.stringify({ status: 'running', name: 'reuse-search', callId: 'cccccccc', pid: process.pid }), 'utf8')
+  const started = Date.now()
+  const waited = spawnSync(process.execPath, [SCRIPT, '--dir', ctx.dir, '--run', RUN, '--wait', '--timeout', '5'], { encoding: 'utf8' })
+  assert.ok(Date.now() - started < 4000, '검색이 끝나기를 기다리지 않는다')
+  assert.equal(waited.status, 0, waited.stderr)
+  const outcome = JSON.parse(waited.stdout)
+  assert.deepEqual([outcome.done, outcome.running, outcome.lost], [[], [], []])
+  assert.deepEqual(outcome.notWaited.map(call => [call.name, call.callId]), [['reuse-search', 'cccccccc']])
+  assert.match(outcome.notWaited[0].reason, /review-reuse\.mjs wait/)
+})
+
+test('실패한 기존 구현 검색은 실패한 자리를 세지 않는다 — 검색의 실패는 reuse.done이 말한다', t => {
+  const ctx = setup(t)
+  writeFileSync(join(ctx.dir, '.timing', `${RUN}.scope.json`), JSON.stringify({ schemaVersion: 1, files: ['a.txt'], excluded: [] }), 'utf8')
+  const message = `${join(ctx.repo, 'a.txt')}:1: t1의 anchor 인용이 HEAD와 다르다`
+  const out = tool(ctx, '--name', 'reuse-search', '--', process.execPath, '-e', `console.error(${JSON.stringify(message)}); process.exit(2)`)
+  assert.equal(out.status, 0, out.stderr)
+  assert.equal('failures' in JSON.parse(out.stdout), false)
+  const done = linesOf(ctx).find(line => line.phase === 'tool.done')
+  assert.deepEqual([done.name, done.exit, 'failureFiles' in done], ['reuse-search', 2, false])
+})

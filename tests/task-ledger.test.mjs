@@ -36,9 +36,9 @@ class FakeRun {
   }
 
   /** 대장에 다음 할 일을 묻고, 결정을 CLI와 같은 순서로 기록한 뒤 띄운 시도에 호스트 작업 ID를 묶는다. */
-  next({ stage = 'module', inflight = 4, plan = this.plan } = {}) {
+  next({ stage = 'module', inflight = 4, plan = this.plan, hold } = {}) {
     const fold = foldAttempts(this.events)
-    const decision = decideNext({ stage, plan, fold, events: this.events, now: this.now, inflight })
+    const decision = decideNext({ stage, plan, fold, events: this.events, now: this.now, inflight, hold })
     for (const { phase, data } of decisionRecords({ stage, decision, plan, fold, events: this.events, runId: 'run-a', inflight })) this.push(phase, data)
     for (const one of decision.dispatch) {
       this.hostSeq += 1
@@ -357,4 +357,41 @@ test('끝 줄은 값이 없는 필드를 싣지 않는다', () => {
   assert.deepEqual(settleRecord('verify', 'bundle-1', 1, { status: 'ok', taskId: undefined, failureClass: null }), {
     phase: 'verify.done', data: { task: 'bundle-1', attempt: 1, status: 'ok' },
   })
+})
+
+test('보류한 작업은 슬롯과 호출을 쓰지 않고 뒤의 준비된 작업이 먼저 나가며, 보류가 풀리기 전에는 단계가 끝나지 않는다', () => {
+  // 05는 기존 구현 검색을 기다린다(C-6C). 기다리는 동안 자리를 차지하면 다른 모듈까지 검색을 기다리게 된다.
+  const plan = ['01-fsd', '05-structure', '06-jsx', '07-naming'].map(task => ({ task, kind: 'module' }))
+  const run = new FakeRun({ plan })
+  const hold = new Map([['05-structure', { reason: '기존 구현 검색을 기다린다' }]])
+  const first = run.next({ inflight: 2, hold })
+  assert.deepEqual(first.dispatch.map(one => one.task), ['01-fsd', '06-jsx'])
+  assert.deepEqual(first.held.map(one => [one.task, one.reason]), [['05-structure', '기존 구현 검색을 기다린다']])
+  for (const one of first.dispatch) run.deliver({ hostTaskId: one.hostTaskId, task: one.task, attempt: one.attempt })
+  const second = run.next({ inflight: 2, hold })
+  assert.deepEqual(second.dispatch.map(one => one.task), ['07-naming'])
+  run.deliver({ hostTaskId: second.dispatch[0].hostTaskId, task: '07-naming', attempt: 1 })
+  const idle = run.next({ inflight: 2, hold })
+  assert.deepEqual([idle.dispatch.length, idle.complete, idle.held.length], [0, false, 1])
+  // 05는 아직 시작하지 않았다 — 시도도, 디스패치의 끝도 없다
+  assert.equal(run.starts().some(event => event.module === '05-structure'), false)
+  assert.equal(run.events.some(event => event.phase === 'dispatch.end'), false)
+  const released = run.next({ inflight: 2 })
+  assert.deepEqual(released.dispatch.map(one => one.task), ['05-structure'])
+  run.deliver({ hostTaskId: released.dispatch[0].hostTaskId, task: '05-structure', attempt: 1 })
+  assert.equal(run.next({ inflight: 2 }).complete, true)
+})
+
+// 더 띄울 수 없는 실행은 검색이 풀리기를 기다리지 않는다 — 호출 예산이 바닥났으면 잡아 둔 05가 남아 있어도 한도로
+// 멈춘다(C-12). 그러지 않으면 보고를 쓸 수 있는 실행이 검색 해제까지 끝나지 않는다.
+test('호출 예산이 바닥났으면 잡아 둔 작업만 남아도 max-tasks로 멈추고 단계를 끝낸다', () => {
+  const plan = ['01-fsd', '05-structure'].map(task => ({ task, kind: 'module' }))
+  const run = new FakeRun({ plan, limits: { maxTasks: 1 } })
+  const hold = new Map([['05-structure', { reason: '기존 구현 검색을 기다린다' }]])
+  const first = run.next({ inflight: 2, hold })
+  // 01을 띄우면 예산이 0이다 — 잡아 둔 05는 더 띄울 수 없으므로 이 자리에서 멈춘다(잡아 두지 않은 작업과 같은 시점)
+  assert.deepEqual([first.dispatch.map(one => one.task), first.halt], [['01-fsd'], 'max-tasks'])
+  run.deliver({ hostTaskId: first.dispatch[0].hostTaskId, task: '01-fsd', attempt: 1 })
+  const after = run.next({ inflight: 2, hold })
+  assert.deepEqual([after.halted?.reason, after.complete, after.dispatch.length], ['max-tasks', true, 0])
 })

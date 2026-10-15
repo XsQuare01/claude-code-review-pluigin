@@ -560,3 +560,104 @@ test('--correctness off의 정상 경로는 그대로다 — 켜지 않은 패�
   assert.equal(snapshot.scope.modules.find(module => module.name === 'correctness').reasonCode, 'not-requested')
   assert.equal(snapshot.status, 'complete')
 })
+
+test('대상에 base 끝 SHA를 남기고 블록에 적는다 — 그 값이 없는 예전 기록은 미기록이라고 적는다', () => {
+  const pinned = buildSnapshot(fixture({ events: [runStart({ baseHead: 'b'.repeat(40) }), ...fixture().events.slice(1)] }))
+  assert.equal(pinned.target.baseHead, 'b'.repeat(40))
+  assert.deepEqual(snapshotProblems(pinned), [])
+  assert.match(renderSnapshotMarkdown(pinned), /base `main` \(끝 `bbbbbbbbbbbb` · merge-base `dddddddddddd`\)/)
+  // 나중에 ref를 다시 읽어 시작 때의 값인 것처럼 채우지 않는다
+  const legacy = buildSnapshot(fixture())
+  assert.equal('baseHead' in legacy.target, false)
+  assert.match(renderSnapshotMarkdown(legacy), /base `main` \(끝 SHA 미기록 · merge-base `dddddddddddd`\)/)
+  const broken = { ...pinned, target: { ...pinned.target, baseHead: 'main' } }
+  assert.ok(snapshotProblems(broken).some(problem => /baseHead/.test(problem)), snapshotProblems(broken).join(' / '))
+})
+
+// ── 기존 구현 검색(C-6C) ─────────────────────────────────────────────────
+// 검색 범위와 상태는 스크립트가 기록에서 세어 블록에 그린다. 오케스트레이터가 세거나 문장을 다시 쓰지 않는다.
+// 검색 기록이 없는 실행을 후보 0건으로 그리지 않고, 예전 실행에서는 이 기능이 돌았다고 추정하지 않는다.
+const reuseEvents = (tail, startExtra = {}) => [runStart({ reuseSearch: 'planned', baseHead: 'b'.repeat(40), ...startExtra }), ...fixture().events.slice(1),
+  { at: '2026-10-06T00:01:00.000Z', phase: 'reuse.planned', searchId: 's1', scopeSha256: 'h', plan: 'p' },
+  ...tail]
+const reuseDone = (status, extra = {}) => [
+  { at: '2026-10-06T00:01:05.000Z', phase: 'reuse.start', searchId: 's1', plan: 'p' },
+  { at: '2026-10-06T00:02:00.000Z', phase: 'reuse.done', searchId: 's1', status, ...extra },
+]
+const reuseDoc = {
+  schemaVersion: 1, runId: RUN_ID, searchId: 's1', status: 'partial',
+  targets: [{ targetId: 't1', status: 'complete', candidates: [] }, { targetId: 't2', status: 'partial', candidates: [], limits: { reached: ['candidates'], omittedCandidates: 3, omittedHits: 2 } }],
+}
+
+test('검색이 끝났으면 대상별 상태·생략 수·조사한 commit·늘어난 검증 작업을 기록에서 세어 그린다', () => {
+  const routed = { ...fixture().routed, counts: { reuse: { context: 'used', crossFileEvidence: 2, newlyEligible: 1, movedToIsolated: 1, verificationTasksAdded: 1 } } }
+  const snapshot = buildSnapshot(fixture({ events: reuseEvents(reuseDone('partial', { targets: { complete: 6, partial: 2 }, reason: 'limits-or-errors' })), routed, reuseContext: reuseDoc }))
+  assert.deepEqual(snapshot.reuse, {
+    state: 'done', searchId: 's1', status: 'partial', reason: 'limits-or-errors', targets: { complete: 6, partial: 2 },
+    omitted: { candidates: 3, hits: 2, quotes: 0 }, verification: { crossFileEvidence: 2, newlyEligible: 1, movedToIsolated: 1, verificationTasksAdded: 1 },
+  })
+  assert.deepEqual(snapshotProblems(snapshot), [])
+  const markdown = renderSnapshotMarkdown(snapshot)
+  assert.match(markdown, /\*\*기존 구현 검색\*\* — 검색 대상 8개 중 완료 6 · 부분 완료 2 \(상한으로 생략한 후보 3개 · hit 2개\)\. HEAD `[0-9a-f]{12}` · base 끝 `bbbbbbbbbbbb`에서 찾았다\. 다른 파일과 견준 05-7 지적 2개를 검증으로 보냈다\(검증 작업 \+1\)\./)
+})
+
+test('검색 대상이 없거나 실패·유실·시간 초과로 끝났으면 그대로 적는다 — 05가 근거 없이 돌았다는 것까지', () => {
+  const none = buildSnapshot(fixture({ events: reuseEvents(reuseDone('not-applicable', { targets: {} })) }))
+  assert.match(renderSnapshotMarkdown(none), /\*\*기존 구현 검색\*\* — 검색 대상이 없다\. 리뷰 파일마다 제외 사유를 남겼다\./)
+  const failed = buildSnapshot(fixture({ events: reuseEvents(reuseDone('failed', { targets: {}, reason: 'plan-invalid' })) }))
+  assert.match(renderSnapshotMarkdown(failed), /\*\*기존 구현 검색이 실패했다\*\* \(plan-invalid\)\. 05는 검색 근거 없이 돌았다\./)
+  const lost = buildSnapshot(fixture({ events: reuseEvents([{ at: '2026-10-06T00:01:05.000Z', phase: 'reuse.start', searchId: 's1', plan: 'p' }, { at: '2026-10-06T00:01:30.000Z', phase: 'tool.done', name: 'reuse-search', exit: 1, treeSha: 'x' }]) }))
+  assert.equal(lost.reuse.state, 'lost')
+  assert.match(renderSnapshotMarkdown(lost), /\*\*기존 구현 검색이 끝나지 않았다\*\* — 검색 프로세스가 끝\(reuse\.done\)을 남기지 못하고 끝났다\. 05는 검색 근거 없이 돌았다\./)
+  const timedOut = buildSnapshot(fixture({ events: reuseEvents([{ at: '2026-10-06T00:01:05.000Z', phase: 'reuse.start', searchId: 's1', plan: 'p' }]), now: '2026-10-06T05:00:00.000Z' }))
+  assert.equal(timedOut.reuse.state, 'timed-out')
+  assert.match(renderSnapshotMarkdown(timedOut), /\*\*기존 구현 검색이 끝나지 않았다\*\* — 검색을 1800초 기다렸다\. 05는 검색 근거 없이 돌았다\./)
+})
+
+test('검색을 예정하지 않은 예전 실행에는 검색 줄이 없다 — 후보 0건으로 그리지 않는다', () => {
+  const legacy = buildSnapshot(fixture())
+  assert.equal('reuse' in legacy, false)
+  assert.doesNotMatch(renderSnapshotMarkdown(legacy), /기존 구현 검색/)
+  const broken = { ...buildSnapshot(fixture({ events: reuseEvents(reuseDone('complete', { targets: { complete: 1 } })) })), reuse: { state: 'nope' } }
+  assert.ok(snapshotProblems(broken).some(problem => /reuse/.test(problem)), snapshotProblems(broken).join(' / '))
+})
+
+test('계획이나 시작이 없던 검색은 상한 뒤에 풀렸어도 "돌지 않았다"로 그린다 — 기다린 시간만 적지 않는다', () => {
+  const late = '2026-10-06T05:00:00.000Z'
+  const unplanned = buildSnapshot(fixture({ events: [runStart({ reuseSearch: 'planned', baseHead: 'b'.repeat(40) }), ...fixture().events.slice(1)], now: late }))
+  assert.equal(unplanned.reuse.state, 'timed-out')
+  assert.equal(unplanned.reuse.started, false)
+  assert.match(renderSnapshotMarkdown(unplanned), /\*\*기존 구현 검색이 돌지 않았다\*\* — 검색 계획\(`reuse\.planned`\)이 없다\. 05는 검색 근거 없이 돌았다\./)
+  const unstarted = buildSnapshot(fixture({ events: reuseEvents([]), now: late }))
+  assert.match(renderSnapshotMarkdown(unstarted), /\*\*기존 구현 검색이 돌지 않았다\*\* — 계획했지만 시작하지 않았다\(`reuse\.start` 없음\)\. 05는 검색 근거 없이 돌았다\./)
+  const running = buildSnapshot(fixture({ events: reuseEvents([{ at: '2026-10-06T00:01:05.000Z', phase: 'reuse.start', searchId: 's1', plan: 'p' }]), now: '2026-10-06T00:05:00.000Z' }))
+  assert.equal(running.reuse.started, true)
+  assert.match(renderSnapshotMarkdown(running), /\*\*기존 구현 검색이 끝나지 않았다\*\* — 검색이 아직 돌고 있다\./)
+})
+
+test('05가 검색이 끝나기 전에 돌았으면 검색 줄이 그 사실을 적는다 — 결과가 있어도 05는 받지 못했다', () => {
+  const tail = [{ at: '2026-10-06T00:01:05.000Z', phase: 'reuse.start', searchId: 's1', plan: 'p' }]
+  const fiveAt = at => ({ at, phase: 'module.start', module: '05-structure', attempt: 1 })
+  const doneAt = at => ({ at, phase: 'reuse.done', searchId: 's1', status: 'complete', targets: { complete: 2 } })
+  const late = buildSnapshot(fixture({ events: reuseEvents([...tail, fiveAt('2026-10-06T00:40:00.000Z'), doneAt('2026-10-06T00:50:00.000Z')]) }))
+  assert.deepEqual([late.reuse.state, late.reuse.givenTo05], ['done', false])
+  assert.match(renderSnapshotMarkdown(late), /검색 대상 2개 중 완료 2\. .*에서 찾았다\. 다만 05는 이 결과가 나오기 전에 돌아 검색 근거 없이 리뷰했다\./)
+  const inTime = buildSnapshot(fixture({ events: reuseEvents([...tail, doneAt('2026-10-06T00:20:00.000Z'), fiveAt('2026-10-06T00:21:00.000Z')]) }))
+  assert.equal(inTime.reuse.givenTo05, true)
+  assert.doesNotMatch(renderSnapshotMarkdown(inTime), /받지 못했다|근거 없이 리뷰했다/)
+})
+
+test('검증을 끈 실행은 다른 파일과 견준 지적을 검증으로 보냈다고 쓰지 않는다', () => {
+  const routed = { ...fixture().routed, counts: { reuse: { context: 'used', crossFileEvidence: 2, newlyEligible: 1, movedToIsolated: 1, verificationTasksAdded: 1 } } }
+  const snapshot = buildSnapshot(fixture({ events: reuseEvents(reuseDone('complete', { targets: { complete: 2 } })), routed, verdicts: new Map(), verificationState: 'disabled' }))
+  const markdown = renderSnapshotMarkdown(snapshot)
+  assert.match(markdown, /다른 파일과 견준 05-7 지적 2개 — 검증을 끈 실행이라 검증하지 않았다\./)
+  assert.doesNotMatch(markdown, /검증으로 보냈다/)
+})
+
+test('잘린 원문 수도 생략으로 그린다', () => {
+  const doc = { ...reuseDoc, targets: [{ targetId: 't1', status: 'partial', candidates: [], limits: { reached: ['quote'], truncatedQuotes: 2 } }] }
+  const snapshot = buildSnapshot(fixture({ events: reuseEvents(reuseDone('partial', { targets: { partial: 1 }, reason: 'limits-or-errors' })), reuseContext: doc }))
+  assert.deepEqual(snapshot.reuse.omitted, { candidates: 0, hits: 0, quotes: 2 })
+  assert.match(renderSnapshotMarkdown(snapshot), /검색 대상 1개 중 부분 완료 1 \(상한으로 잘린 원문 2개\)/)
+})

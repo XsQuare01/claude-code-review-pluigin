@@ -29,6 +29,7 @@ import { join, relative } from 'node:path'
 
 import { writeOutFile } from './lib/atomic-write.mjs'
 import { requireStartedTimeline, readEvents } from './lib/run-record.mjs'
+import { reuseContextOf } from './prepare-verification.mjs'
 import { readTextFile } from './lib/read-text.mjs'
 import { currentTarget, ruleDocDigests, rulesDigest, runOutputs } from './lib/run-identity.mjs'
 import { buildSnapshot, parseSnapshot, renderSnapshotMarkdown, writeSnapshotAtomic } from './lib/review-snapshot.mjs'
@@ -206,6 +207,12 @@ if (routed.value.previous) {
   }
 }
 
+// 기존 구현 검색 결과(C-6C) — 검증 준비와 같은 함수로 읽는다. 다른 실행·다른 시도의 파일이면 쓰지 않고, 생략 수 없이
+// 그린다(상태와 대상 수는 기록에서 나온다). 쓴 파일은 다른 입력처럼 해시를 남긴다.
+const reuse = reuseContextOf(events, events.find(event => event?.phase === 'run.start') ?? {})
+if (reuse?.warning) process.stderr.write(`경고: ${reuse.warning}\n`)
+if (reuse?.context) inputs.push({ role: 'reuse-context', path: relativeToDir(reuse.path), sha256: digest(readText(reuse.path, '기존 구현 검색 결과')) })
+
 // 지금의 대상. 시작할 때 기록한 값과 다르면 실행 도중 대상이 바뀐 것이다.
 let current
 try {
@@ -221,6 +228,7 @@ try {
     openQuestionsBySource, inputs, current, now: new Date().toISOString(), evidence,
     ruleDocs: ruleDocDigests(rules, (catalog.modules ?? []).map(module => module.path).filter(Boolean)),
     rechecks,
+    reuseContext: reuse?.context ?? null,
   })
 } catch (error) {
   die(`스냅숏을 만들지 못했다: ${error.message}`)

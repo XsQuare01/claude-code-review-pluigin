@@ -7,7 +7,8 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import { writeTextAtomic } from './lib/atomic-write.mjs'
 import { markedBlock } from './lib/contract-blocks.mjs'
 import { intentBlock, intentProblems } from './lib/intent.mjs'
-import { readTextFile } from './lib/read-text.mjs'
+import { decodeText, readJsonFile, readTextFile } from './lib/read-text.mjs'
+import { lastReuseModuleStart, reuseState, reuseStateBefore } from './lib/reuse-state.mjs'
 import { CURRENT_STATUSES, countBy, enclosingSymbol, identityPending, linkFindings, pathChanges, recheckable } from './lib/review-compare.mjs'
 import { parseSnapshot } from './lib/review-snapshot.mjs'
 import { currentTarget, ruleDocDigests, rulesDigest, runOutputs } from './lib/run-identity.mjs'
@@ -170,7 +171,91 @@ export function relatedAtSameLocation(candidates, prefixes = []) {
   return linked
 }
 
-function eligibilityReasons({ candidate, locationCheck, ownerCollision }) {
+/**
+ * 05-7 지적이 다른 파일의 기존 구현과 견준 것인지 — 그렇다면 그 기존 구현의 검색 근거(C-6C).
+ *
+ * 지적의 위치가 검색 대상의 anchor와 겹치고, 지적의 글(제목·본문·근거·개선 제안)이 그 대상의 **다른 파일** 후보를
+ * 가리킬 때만이다. 검색 후보가 있다는 것만으로 붙이지 않는다 — 같은 파일 안의 중복이나 다른 규칙의 지적까지
+ * 검증으로 보내면 비용만 늘고 근거는 없다. 가리켰는지는 `mentionsCandidate`가 경로 단위로 본다.
+ */
+export function crossFileEvidenceOf(candidate, context) {
+  if (normalizeRuleId(candidate?.ruleId ?? '').ruleId !== '05-7' || !context || !Array.isArray(context.targets)) return []
+  const location = candidate.location
+  if (location?.kind !== 'verified' || typeof location.path !== 'string') return []
+  const start = location.line
+  const end = location.endLine ?? location.line
+  if (!Number.isInteger(start) || !Number.isInteger(end)) return []
+  const text = Object.values(candidate.content ?? {}).filter(value => typeof value === 'string').join('\n')
+  // 파일 이름이 모호한지는 서로 다른 전체 경로 수로 본다 — 같은 기존 구현이 여러 대상에서 나와도 한 파일이다
+  const pathsByBasename = new Map()
+  for (const found of context.targets.flatMap(target => target?.candidates ?? [])) {
+    if (typeof found?.path !== 'string') continue
+    const name = found.path.split('/').at(-1)
+    pathsByBasename.set(name, (pathsByBasename.get(name) ?? new Set()).add(found.path))
+  }
+  const mentions = found => mentionsCandidate(text, found, { uniqueBasename: pathsByBasename.get(found.path.split('/').at(-1))?.size === 1 })
+  const evidence = []
+  for (const target of context.targets) {
+    const anchor = target?.anchor
+    if (anchor?.path !== location.path || !(anchor.startLine <= end && start <= anchor.endLine)) continue
+    for (const found of target.candidates ?? []) {
+      if (typeof found?.path !== 'string' || found.path === location.path || !mentions(found)) continue
+      evidence.push({
+        targetId: target.targetId, candidateId: found.candidateId, path: found.path, startLine: found.startLine, endLine: found.endLine,
+        rev: found.rev, sourceRef: found.sourceRef, sha256: found.sha256, quote: found.quote, kind: found.kind,
+        ...(found.onlyInBase ? { onlyInBase: true } : {}), ...(found.existedAtMergeBase !== undefined ? { existedAtMergeBase: found.existedAtMergeBase } : {}),
+        ...(found.truncated ? { truncated: true } : {}),
+      })
+    }
+  }
+  return evidence
+}
+
+const PATH_EXTENSION = /\.([A-Za-z0-9]+)$/
+const splitExtension = path => {
+  const match = path.split('/').at(-1).match(PATH_EXTENSION)
+  return match ? { stem: path.slice(0, -match[0].length), extension: match[1].toLowerCase() } : { stem: path, extension: '' }
+}
+
+/**
+ * 지적의 글이 검색 후보 하나를 가리키는가 — 경로 단위로 본다.
+ *
+ * - 후보 ID(`t1.c2`)를 그대로 쓴 것
+ * - 경로 조각: 별칭(`@/`·`~/`·`./`)과 줄 번호(`:12`·`:12-20`·`#L12`)를 떼고, 두 조각 이상이면 후보 경로의 끝 조각들과
+ *   **조각 단위로** 같아야 한다(`lib/index.ts`는 `src/features/b/lib/index.ts`를 말한 지적과 맞지 않는다). 확장자를
+ *   썼으면 같아야 한다(`.tsx` ≠ `.ts`). import 경로처럼 확장자가 없으면 줄기만 견준다
+ * - 파일 이름 하나: 그 이름의 후보가 하나뿐일 때만
+ * - 공백·한글이 든 경로는 조각으로 끊기므로 전체 경로를 경계와 함께 찾는다
+ */
+export function mentionsCandidate(text, found, { uniqueBasename = false } = {}) {
+  const idPattern = new RegExp(`(^|[^\\w.])${found.candidateId?.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\\w])`)
+  if (typeof found.candidateId === 'string' && found.candidateId && idPattern.test(text)) return true
+  const target = splitExtension(found.path)
+  const targetSegments = target.stem.split('/')
+  // 경로 문자로만 끊는다 — 한국어 조사가 붙어도(`normalize-path.ts에`) 경로만 남는다
+  for (const raw of text.match(/[A-Za-z0-9_./@~-]+(?:[:#][A-Za-z0-9–-]+)?/g) ?? []) {
+    const token = raw
+      .replace(/^(?:@\/|~\/|\.\/)+/, '')
+      .replace(/(?::\d+(?:[-–]\d+)?|#L\d+(?:-L?\d+)?)$/, '')
+      .replace(/[.,:;!?]+$/, '')
+    if (!token) continue
+    const mention = splitExtension(token)
+    if (mention.extension && mention.extension !== target.extension) continue
+    const segments = mention.stem.split('/').filter(Boolean)
+    if (segments.length >= 2) {
+      if (segments.length <= targetSegments.length && segments.every((segment, at) => segment === targetSegments[targetSegments.length - segments.length + at])) return true
+    } else if (segments.length === 1 && mention.extension && uniqueBasename && segments[0] === targetSegments.at(-1)) {
+      return true
+    }
+  }
+  if (/[^A-Za-z0-9_./@~-]/.test(found.path)) {
+    const at = text.indexOf(found.path)
+    if (at !== -1 && !/[\w./-]/.test(text[at - 1] ?? '') && !/[\w.-]/.test(text[at + found.path.length] ?? '')) return true
+  }
+  return false
+}
+
+function eligibilityReasons({ candidate, locationCheck, ownerCollision, crossFileEvidence }) {
   const reasons = []
   if (candidate?.impact === 'high') reasons.push('impact-high')
   if (candidate?.confidence === 'low') reasons.push('confidence-low')
@@ -178,6 +263,7 @@ function eligibilityReasons({ candidate, locationCheck, ownerCollision }) {
   if (locationCheck === 'location-mismatch' || locationCheck === 'location-unresolvable') reasons.push('location-check-failed')
   if (ownerCollision) reasons.push('owner-collision')
   if (HIGH_STAKES_CATEGORIES.has(candidate?.category)) reasons.push('category-high-stakes')
+  if (crossFileEvidence?.length) reasons.push('cross-file-evidence')
   return reasons
 }
 
@@ -202,7 +288,7 @@ export function decideEligibility(input, options = {}) {
  * while under-isolating can produce a wrong rejection that no later step undoes.
  */
 export function routeCandidate(input, options = {}) {
-  const { candidate, locationCheck, ownerCollision } = input
+  const { candidate, locationCheck, ownerCollision, crossFileEvidence } = input
   const { eligibility, reasons } = decideEligibility(input, options)
   if (eligibility === 'SKIP-VERIFY') return { route: 'none', reasons }
 
@@ -211,6 +297,8 @@ export function routeCandidate(input, options = {}) {
   if (locationCheck === 'location-mismatch' || locationCheck === 'location-unresolvable') isolationReasons.push('location-check-failed')
   if (ownerCollision) isolationReasons.push('owner-collision')
   if (HIGH_STAKES_CATEGORIES.has(candidate?.category)) isolationReasons.push('category-high-stakes')
+  // 다른 파일의 기존 구현과 견준 주장은 anchor 파일만으로 판정할 수 없다(C-6C)
+  if (crossFileEvidence?.length) isolationReasons.push('cross-file-evidence')
 
   if (isolationReasons.length > 0) return { route: 'isolated', reasons: isolationReasons }
   return { route: 'bundle', reasons }
@@ -274,11 +362,19 @@ export function prepareVerification(candidates, blobs, options = {}) {
   if (options.locationsOnly) return locationsOnly(list, blobs)
   const collisions = computeOwnerCollisions(list)
   const related = relatedAtSameLocation(list, options.linkPrefixes ?? [])
+  const reuseContext = options.reuse?.context ?? null
+  // 검색 근거가 없었다면의 결정 — 새로 검증 대상이 된 수와 늘어난 작업 수를 스크립트가 센다(C-6C)
+  const without = []
   const decided = list.map(candidate => {
     const check = checkLocation(candidate.location, blobs)
-    const input = { candidate, locationCheck: check.status, ownerCollision: collisions.has(candidate.candidateId) }
+    const crossFileEvidence = crossFileEvidenceOf(candidate, reuseContext)
+    const input = { candidate, locationCheck: check.status, ownerCollision: collisions.has(candidate.candidateId), crossFileEvidence }
     const { eligibility, reasons } = decideEligibility(input, options)
     const { route } = routeCandidate(input, options)
+    if (options.reuse) {
+      const bare = { ...input, crossFileEvidence: [] }
+      without.push({ candidateId: candidate.candidateId, eligibility: decideEligibility(bare, options).eligibility, route: routeCandidate(bare, options).route, location: candidate.location })
+    }
     return {
       candidateId: candidate.candidateId,
       ruleId: candidate.ruleId,
@@ -305,6 +401,7 @@ export function prepareVerification(candidates, blobs, options = {}) {
       ...(candidate.source !== undefined ? { source: candidate.source } : {}),
       ...(candidate.sources !== undefined ? { sources: candidate.sources } : {}),
       ...(related.has(candidate.candidateId) ? { relatedCandidateIds: related.get(candidate.candidateId) } : {}),
+      ...(crossFileEvidence.length ? { crossFileEvidence } : {}),
     }
   })
 
@@ -320,6 +417,18 @@ export function prepareVerification(candidates, blobs, options = {}) {
     // 리포트에 보이지 않으면, 읽는 사람은 producer가 덜 찾은 것으로 읽는다.
     dedupMerged: candidates?.dedupMerged ?? 0,
     ruleIdRepairs: candidates?.ruleIdRepairs ?? [],
+  }
+  if (options.reuse) {
+    // 검증 작업 수는 bundle(anchor 파일마다 하나) + isolated다. 근거 때문에 bundle이 비어 사라지는 것까지 센다.
+    const tasksOf = entries => buildBundles(entries).length + entries.filter(entry => entry.route === 'isolated').length
+    const byId = new Map(without.map(entry => [entry.candidateId, entry]))
+    counts.reuse = {
+      context: options.reuse.context ? 'used' : options.reuse.state ?? 'none',
+      crossFileEvidence: decided.filter(entry => entry.crossFileEvidence).length,
+      newlyEligible: decided.filter(entry => entry.eligibility === 'VERIFY' && byId.get(entry.candidateId)?.eligibility === 'SKIP-VERIFY').length,
+      movedToIsolated: decided.filter(entry => entry.route === 'isolated' && byId.get(entry.candidateId)?.route === 'bundle').length,
+      verificationTasksAdded: tasksOf(decided) - tasksOf(without),
+    }
   }
 
   return { candidates: decided, bundles: buildBundles(decided), counts }
@@ -762,8 +871,11 @@ async function main() {
       : `경고: 리뷰 도중 대상이 바뀌었다(${target.drift.join('·')}) — ${target.reason === 'start-worktree-dirty' ? '시작 때 작업 트리가 깨끗하지 않아' : `시작 때의 HEAD ${target.start.head}를 찾을 수 없어`} 그때의 파일을 다시 읽을 수 없다. 위치 대조는 지금 트리를 읽고, 위치 불일치는 대상 변경 때문일 수 있다\n`)
   }
   const readers = gitReaders(mergeBase, { pinnedHead: target?.readFrom === 'start-head' ? target.start.head : null })
+  const reuse = locationsOnly ? null : reuseContextOf(events, start)
+  if (reuse?.warning) process.stderr.write(`경고: ${reuse.warning}\n`)
   const result = prepareVerification(candidates, collectBlobs(candidates, readers), {
     locationsOnly, exhaustive: verifyMode === 'exhaustive', linkPrefixes: [...namespaces.values()].flat(),
+    ...(reuse ? { reuse } : {}),
   })
   if (collected) result.collected = collected
   if (target) result.target = target
@@ -968,6 +1080,43 @@ export function collectResultFiles({ events, sourceNames, pathOf, read, notReque
  * `.timing` 안인지 본다. `--run`의 구분자 검사만으로는 부족하다 — Windows에서
  * `D:evil`은 구분자가 없는데도 다른 드라이브로 풀린다.
  */
+/**
+ * 이 실행의 기존 구현 검색 결과(C-6C)를 읽는다. 검색을 예정하지 않은 실행이면 `null`이다.
+ *
+ * 끝(`reuse.done`)이 가리키는 결과 파일만 쓴다. 그 파일의 실행 ID·검색 ID·HEAD가 이 실행과 다르면 쓰지 않는다 —
+ * 다른 실행·다른 시도의 원문을 근거로 붙이면, 검증자는 이 변경이 아닌 코드와 견준다. 현재 파일로 대신하지도 않는다.
+ */
+export function reuseContextOf(events, start) {
+  if (!reuseState(events).required) return null
+  // 05가 받은 것만 근거다 — 05를 띄운 순간의 상태로 읽는다. 상한에 풀려 05가 나간 뒤에 끝난 검색의 원문을 붙이면
+  // producer가 보지 않은 근거로 검증하게 된다(C-6C)
+  const five = lastReuseModuleStart(events)
+  const state = five ? reuseStateBefore(events, five) : reuseState(events)
+  if (state.state !== 'done') {
+    return five
+      ? { context: null, state: 'not-given-to-05', warning: `05는 검색 결과를 받지 못하고 돌았다 — 05를 띄울 때 검색은 ${state.state}였다. cross-file-evidence를 붙이지 않는다` }
+      : { context: null, state: state.state, warning: `기존 구현 검색이 끝나지 않았다(${state.state}) — cross-file-evidence를 붙이지 않는다` }
+  }
+  if (!['complete', 'partial'].includes(state.status) || typeof state.done.out !== 'string') return { context: null, state: `search-${state.status ?? 'unknown'}` }
+  let bytes
+  let doc
+  try {
+    bytes = readFileSync(state.done.out)
+    doc = JSON.parse(decodeText(bytes))
+  } catch (error) {
+    return { context: null, state: 'unreadable', warning: `기존 구현 검색 결과를 읽지 못했다: ${state.done.out} — ${error.message}` }
+  }
+  // 05가 받은 원문과 같은 바이트인지 — 검색이 끝을 남길 때 기록한 해시와 견준다. 실행·검색 ID가 같아도 원문이 바뀌었을 수 있다
+  const actualSha256 = createHash('sha256').update(bytes).digest('hex')
+  if (typeof state.done.outSha256 === 'string' && actualSha256 !== state.done.outSha256) {
+    return { context: null, state: 'mismatch', warning: `기존 구현 검색 결과의 해시(${actualSha256.slice(0, 12)})가 검색이 기록한 해시(${state.done.outSha256.slice(0, 12)})와 다르다 — 검색 뒤에 바뀐 파일이다. 근거로 쓰지 않는다` }
+  }
+  for (const [key, value] of Object.entries({ runId: start.runId, searchId: state.searchId, head: start.head })) {
+    if (value !== undefined && doc?.[key] !== value) return { context: null, state: 'mismatch', warning: `기존 구현 검색 결과의 ${key}(${JSON.stringify(doc?.[key] ?? null)})가 이 실행(${JSON.stringify(value)})과 다르다 — 근거로 쓰지 않는다` }
+  }
+  return { context: doc, path: state.done.out }
+}
+
 export function verifyDirOf(dir, run) {
   const timing = resolve(dir, '.timing')
   const path = resolve(timing, `${run}.verify`)

@@ -1,6 +1,7 @@
 import * as nodeFs from 'node:fs'
 
 import { writeTextAtomic } from './atomic-write.mjs'
+import { REUSE_STATUSES, lastReuseModuleStart, reuseState, reuseStateBefore } from './reuse-state.mjs'
 
 import { codeSpan, dispositionOf, escapeProse } from '../render-findings.mjs'
 import { COMPARISONS, METHODS, OUTCOMES } from './evidence.mjs'
@@ -35,7 +36,7 @@ const MODULE_STATES = ['ok', 'failed', 'missing', 'skipped', 'unknown']
 const MISSING_REASONS = ['no-record', 'status-outside-list', 'not-collected', 'halted']
 const DISPOSITIONS = ['upheld', 'rejected', 'scope-open', 'not-eligible', 'verification-disabled', 'verification-unavailable']
 const DRIFT_FIELDS = ['head', 'worktree', 'rulesDigest']
-const INPUT_ROLES = ['timeline', 'routed', 'verdicts', 'result', 'evidence', 'execution', 'previous', 'rechecks', 'intent']
+const INPUT_ROLES = ['timeline', 'routed', 'verdicts', 'result', 'evidence', 'execution', 'previous', 'rechecks', 'intent', 'reuse-context']
 const VERIFICATION_STATES = ['ran', 'disabled']
 
 const SHA256 = /^sha256:[0-9a-f]{64}$/
@@ -276,7 +277,48 @@ function evidenceSummary(assessed) {
  *
  * 그릴 재료가 모자라면 던진다. 모자란 채로 만든 스냅숏은 "지적 0건"이나 "완료"처럼 읽힌다.
  */
-export function buildSnapshot({ name, events, catalog, routed, verdicts, verificationState, openQuestionsBySource, inputs, current, now, evidence = new Map(), ruleDocs, rechecks = new Map() }) {
+/**
+ * 기존 구현 검색(C-6C)의 요약. 시작이 검색을 예정한 실행에만 있다 — 예전 실행에 이 기능이 돌았다고 추정하지 않는다.
+ *
+ * 상태는 작업 대장·기록 검사와 같은 정의(`reuseState`)로, 대상별 상태 수는 검색 스크립트가 남긴 끝(`reuse.done`)에서,
+ * 생략 수는 그 결과 파일에서, 늘어난 검증 작업은 검증 준비의 수(routed `counts.reuse`)에서 가져온다. 결과 파일이 다른
+ * 시도의 것이면 생략 수를 싣지 않는다.
+ */
+function reuseSummaryOf(events, { context, routedReuse, now }) {
+  const state = reuseState(events, { now: Date.parse(now) })
+  if (!state.required) return null
+  const doc = context && context.searchId === state.searchId && Array.isArray(context.targets) ? context : null
+  const omitted = doc ? doc.targets.reduce((sum, target) => ({
+    candidates: sum.candidates + (target.limits?.omittedCandidates ?? 0), hits: sum.hits + (target.limits?.omittedHits ?? 0),
+    quotes: sum.quotes + (target.limits?.truncatedQuotes ?? 0),
+  }), { candidates: 0, hits: 0, quotes: 0 }) : null
+  // 끝나지 않은 검색은 계획·시작까지 갔는지를 함께 싣는다. 계획이 없던 검색도 상한 뒤에는 timed-out으로 풀리는데,
+  // 그것을 "기다렸다"로만 그리면 검색이 돌지 않았다는 사실이 숨는다.
+  const notStarted = !state.planned ? '검색 계획(`reuse.planned`)이 없다' : !state.started ? '계획했지만 시작하지 않았다(`reuse.start` 없음)' : null
+  const reason = state.done?.reason ?? notStarted ?? state.reason
+  // 결과가 있어도 05가 받았는지는 따로다 — 상한에 풀려 05가 먼저 나갔으면 그 05는 근거 없이 돌았다
+  const usable = one => one.state === 'done' && ['complete', 'partial'].includes(one.status)
+  const five = usable(state) ? lastReuseModuleStart(events) : null
+  const atDispatch = five ? reuseStateBefore(events, five) : null
+  return {
+    state: state.state,
+    ...(state.state !== 'done' ? { started: Boolean(state.started) } : {}),
+    ...(state.searchId ? { searchId: state.searchId } : {}),
+    ...(state.status ? { status: state.status } : {}),
+    ...(reason ? { reason } : {}),
+    ...(state.done && isObject(state.done.targets) ? { targets: state.done.targets } : {}),
+    ...(atDispatch ? { givenTo05: usable(atDispatch) && atDispatch.searchId === state.searchId } : {}),
+    ...(omitted ? { omitted } : {}),
+    ...(isObject(routedReuse) ? {
+      verification: {
+        crossFileEvidence: routedReuse.crossFileEvidence ?? 0, newlyEligible: routedReuse.newlyEligible ?? 0,
+        movedToIsolated: routedReuse.movedToIsolated ?? 0, verificationTasksAdded: routedReuse.verificationTasksAdded ?? 0,
+      },
+    } : {}),
+  }
+}
+
+export function buildSnapshot({ name, events, catalog, routed, verdicts, verificationState, openQuestionsBySource, inputs, current, now, evidence = new Map(), ruleDocs, rechecks = new Map(), reuseContext = null }) {
   const start = events.find(event => event?.phase === 'run.start')
   if (!start) throw new Error('타임라인에 run.start가 없다 — 실행 식별 없이 스냅숏을 만들지 않는다')
   if (!nonEmpty(start.runId)) {
@@ -349,6 +391,7 @@ export function buildSnapshot({ name, events, catalog, routed, verdicts, verific
   }
 
   const comparison = routed.previous ? comparisonOf(routed.previous, findings, rechecks, start.runId) : null
+  const reuse = reuseSummaryOf(events, { context: reuseContext, routedReuse: routed.counts?.reuse, now })
 
   const recorded = { head: start.head, worktree: start.worktree, rulesDigest: start.rulesDigest }
   const drift = DRIFT_FIELDS
@@ -378,6 +421,8 @@ export function buildSnapshot({ name, events, catalog, routed, verdicts, verific
       repoRoot: start.repoRoot ?? null,
       branch: start.branch,
       base: start.base,
+      // 기준 ref의 끝 commit. preflight가 정한 순간에 잰 실행에만 있다 — 나중에 ref를 다시 읽어 채우지 않는다.
+      ...(OBJECT_ID.test(String(start.baseHead)) ? { baseHead: start.baseHead } : {}),
       mergeBase: start.mergeBase,
       head: start.head,
       worktree: start.worktree,
@@ -391,6 +436,7 @@ export function buildSnapshot({ name, events, catalog, routed, verdicts, verific
     scope: { modules: states, counts },
     dispatch,
     verification: { state: verificationState },
+    ...(reuse ? { reuse } : {}),
     findings,
     ...(comparison ? { comparison } : {}),
     openQuestions,
@@ -428,6 +474,7 @@ export function snapshotProblems(snapshot) {
   else {
     if (!OBJECT_ID.test(String(target.head))) problems.push('target.head가 commit id가 아니다')
     if (!OBJECT_ID.test(String(target.mergeBase))) problems.push('target.mergeBase가 commit id가 아니다')
+    if ('baseHead' in target && !OBJECT_ID.test(String(target.baseHead))) problems.push('target.baseHead가 commit id가 아니다')
     if (target.worktree !== 'clean' && !SHA256.test(String(target.worktree))) problems.push('target.worktree가 clean도 sha256:<hex>도 아니다')
     if (!count(target.dirtyFiles)) problems.push('target.dirtyFiles가 0 이상의 정수가 아니다')
     else if ((target.worktree === 'clean') !== (target.dirtyFiles === 0)) problems.push('target.worktree와 target.dirtyFiles가 서로 맞지 않는다')
@@ -442,6 +489,20 @@ export function snapshotProblems(snapshot) {
     }
   }
 
+  if ('reuse' in snapshot) {
+    const reuse = snapshot.reuse
+    if (!isObject(reuse) || !REUSE_SNAPSHOT_STATES.includes(reuse.state)) problems.push(`reuse.state가 ${REUSE_SNAPSHOT_STATES.join('·')} 중 하나가 아니다`)
+    else {
+      if ('status' in reuse && !REUSE_STATUSES.includes(reuse.status)) problems.push('reuse.status가 닫힌 목록 밖이다')
+      if ((reuse.state === 'done') === ('started' in reuse) || ('started' in reuse && typeof reuse.started !== 'boolean')) problems.push('reuse.started는 끝나지 않은 검색에만 있는 참·거짓이다')
+      if ('givenTo05' in reuse && typeof reuse.givenTo05 !== 'boolean') problems.push('reuse.givenTo05는 참·거짓이다')
+      for (const key of ['targets', 'omitted', 'verification']) {
+        if (key in reuse && (!isObject(reuse[key]) || !Object.values(reuse[key]).every(value => count(value) || (key === 'verification' && Number.isInteger(value))))) {
+          problems.push(`reuse.${key}이 수의 묶음이 아니다`)
+        }
+      }
+    }
+  }
   if (!Array.isArray(snapshot.drift)) problems.push('drift가 배열이 아니다')
   else {
     for (const entry of snapshot.drift) {
@@ -689,7 +750,7 @@ export function renderSnapshotMarkdown(snapshot) {
 
   const { target, run } = snapshot
   const worktree = target.worktree === 'clean' ? 'clean' : `커밋하지 않은 변경 ${target.dirtyFiles}개 (${codeSpan(target.worktree.slice(0, 19))}…)`
-  lines.push('', `검토 대상: HEAD ${codeSpan(short(target.head))} · 작업 트리 ${worktree} · base ${codeSpan(target.base)} (merge-base ${codeSpan(short(target.mergeBase))}) · 실행 ID ${codeSpan(run.runId)}`)
+  lines.push('', `검토 대상: HEAD ${codeSpan(short(target.head))} · 작업 트리 ${worktree} · base ${codeSpan(target.base)} (${'baseHead' in target ? `끝 ${codeSpan(short(target.baseHead))}` : '끝 SHA 미기록'} · merge-base ${codeSpan(short(target.mergeBase))}) · 실행 ID ${codeSpan(run.runId)}`)
   // base가 앞서 나가 같은 파일을 바꿨으면 도구 결과를 읽는 법이 달라진다(C-6). 리뷰 diff에는 보이지 않는 사실이라 여기서 적는다.
   if (target.baseAhead > 0 && target.baseOverlapCount > 0) {
     const shown = target.baseOverlap.slice(0, 5).map(codeSpan).join(', ')
@@ -698,10 +759,42 @@ export function renderSnapshotMarkdown(snapshot) {
   } else if (target.baseAhead > 0) {
     lines.push('', `base ${codeSpan(target.base)}이 merge-base 뒤로 ${target.baseAhead}커밋 앞서 있다 — 이 브랜치가 바꾼 파일은 건드리지 않았다.`)
   }
+  if (snapshot.reuse) lines.push('', reuseLine(snapshot.reuse, target, snapshot.verification?.state))
   if (snapshot.drift.length) {
     const changes = snapshot.drift.map(entry => `${entry.field} ${codeSpan(short(entry.recorded))} → ${codeSpan(short(entry.current))}`).join(' · ')
     lines.push('', `**검토 도중 대상이 바뀌었다** — ${changes}. 이 실행의 결과는 한 시점의 코드에 대한 것이 아니다.`)
   }
   lines.push('', `출처: \`review-snapshot.mjs\` · ${codeSpan(`.timing/${run.name}.snapshot.json`)}`)
   return lines.join('\n')
+}
+
+const REUSE_SNAPSHOT_STATES = ['done', 'lost', 'timed-out', 'running', 'planned', 'unplanned']
+const REUSE_STATUS_TEXT = [['complete', '완료'], ['partial', '부분 완료'], ['failed', '실패']]
+
+/** 기존 구현 검색 줄. 수와 문장은 기록에서 나온다 — 오케스트레이터가 다시 쓰지 않는다. */
+function reuseLine(reuse, target, verificationState) {
+  const unanswered = '05는 검색 근거 없이 돌았다.'
+  if (reuse.state === 'done' && reuse.status === 'not-applicable') return '**기존 구현 검색** — 검색 대상이 없다. 리뷰 파일마다 제외 사유를 남겼다.'
+  if (reuse.state === 'done' && reuse.status === 'failed') return `**기존 구현 검색이 실패했다**${reuse.reason ? ` (${reuse.reason})` : ''}. ${unanswered}`
+  if (reuse.state !== 'done') {
+    const why = reuse.reason ?? (reuse.state === 'running' ? '검색이 아직 돌고 있다' : reuse.state)
+    return `**기존 구현 검색이 ${reuse.started ? '끝나지 않았다' : '돌지 않았다'}** — ${why}. ${unanswered}`
+  }
+  const targets = reuse.targets ?? {}
+  const total = Object.values(targets).reduce((sum, value) => sum + value, 0)
+  const parts = REUSE_STATUS_TEXT.filter(([key]) => targets[key]).map(([key, text]) => `${text} ${targets[key]}`).join(' · ')
+  const omittedParts = reuse.omitted ? [
+    reuse.omitted.candidates ? `생략한 후보 ${reuse.omitted.candidates}개` : null,
+    reuse.omitted.hits ? `hit ${reuse.omitted.hits}개` : null,
+    reuse.omitted.quotes ? `잘린 원문 ${reuse.omitted.quotes}개` : null,
+  ].filter(Boolean) : []
+  const omitted = omittedParts.length ? ` (상한으로 ${omittedParts.join(' · ')})` : ''
+  const where = `HEAD ${codeSpan(short(target.head))}${'baseHead' in target && target.baseHead !== target.mergeBase ? ` · base 끝 ${codeSpan(short(target.baseHead))}` : ''}`
+  // 검증을 끈 실행은 그 지적을 검증하지 않았다 — 보냈다고 쓰지 않는다(C-6B)
+  const verification = !reuse.verification?.crossFileEvidence ? ''
+    : verificationState === 'disabled'
+      ? ` 다른 파일과 견준 05-7 지적 ${reuse.verification.crossFileEvidence}개 — 검증을 끈 실행이라 검증하지 않았다.`
+      : ` 다른 파일과 견준 05-7 지적 ${reuse.verification.crossFileEvidence}개를 검증으로 보냈다(검증 작업 ${reuse.verification.verificationTasksAdded >= 0 ? '+' : ''}${reuse.verification.verificationTasksAdded}).`
+  const missed = reuse.givenTo05 === false ? ' 다만 05는 이 결과가 나오기 전에 돌아 검색 근거 없이 리뷰했다.' : ''
+  return `**기존 구현 검색** — 검색 대상 ${total}개 중 ${parts || '0'}${omitted}. ${where}에서 찾았다.${missed}${verification}`
 }

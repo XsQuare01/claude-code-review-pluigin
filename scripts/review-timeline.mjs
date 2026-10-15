@@ -25,12 +25,14 @@
 // 파일은 `<dir>/.timing/<run>.jsonl`이고 **append 전용**이다. 이미 쓴 줄은
 // 고치지 않는다 — 고치면 죽은 실행의 마지막 줄이 무엇이었는지 믿을 수 없다.
 
+import { createHash } from 'node:crypto'
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs'
-import { basename, dirname, extname, join, resolve } from 'node:path'
+import { basename, dirname, extname, isAbsolute, join, resolve } from 'node:path'
 
 import { writeOutFile } from './lib/atomic-write.mjs'
 import { withFileLock } from './lib/file-lock.mjs'
-import { readTextFile } from './lib/read-text.mjs'
+import { readJsonFile, readTextFile } from './lib/read-text.mjs'
+import { REUSE_MODULE, REUSE_STATUSES, reuseState, reuseStateBefore } from './lib/reuse-state.mjs'
 import { moduleOutcomes } from './lib/run-record.mjs'
 import { CANCEL_REASONS, HALT_REASONS, STAGES, endState } from './lib/task-ledger.mjs'
 import { runNameProblem } from './lib/run-name.mjs'
@@ -97,6 +99,12 @@ const timingDir = join(dir, '.timing')
 const path = join(timingDir, `${run}.jsonl`)
 
 /** 이미 쓴 줄을 읽는다. 깨진 줄은 세지 않되 조용히 버리지도 않는다. */
+/** 받침이 있으면 `이`, 없으면 `가` — "기존 구현 검색이", "모듈 4개가" */
+const subjectParticle = word => {
+  const code = String(word).charCodeAt(String(word).length - 1) - 0xac00
+  return code >= 0 && code < 11172 && code % 28 !== 0 ? '이' : '가'
+}
+
 const readLines = () => {
   if (!existsSync(path)) return { events: [], malformed: 0 }
   const events = []
@@ -141,11 +149,19 @@ const PHASES = new Map([
     required: ['host', 'rules', 'version', 'branch', 'changedFiles'],
     structured: ['baseOverlap', 'dependencyFiles'],
     allowed: ['candidates', 'workflow', 'mergeBase', 'os', 'runId', 'base', 'baseSource', 'prNumber', 'prBase', 'head', 'worktree', 'dirtyFiles', 'repo', 'repoRoot', 'rulesDigest', 'correctness',
-      'maxTasks', 'maxDurationSec', 'staleAfterSec', 'continues', 'previousSnapshot', 'previousRunId', 'previousSha256', 'baseAhead', 'baseOverlapCount'],
+      'maxTasks', 'maxDurationSec', 'staleAfterSec', 'continues', 'previousSnapshot', 'previousRunId', 'previousSha256', 'baseAhead', 'baseOverlapCount',
+      // `baseHead`: 기준 ref의 끝 commit(정한 순간). `reuseSearch`: full이 기존 구현 검색을 예정했는지(C-6C).
+      'baseHead', 'reuseSearch'],
   }],
   // 한도에 닿아 멈춘 실행을 이어 갈 때 새 한도 구간을 연다(C-12). 대상이 그대로인지 확인한 값을 함께 남긴다.
   ['run.resume', { required: [], structured: [], allowed: ['maxTasks', 'maxDurationSec', 'staleAfterSec', 'head', 'worktree'] }],
   ['scope.done', { required: ['files', 'excluded'], structured: [], allowed: [] }],
+  // 기존 구현 검색(C-6C). 디스패치와 함께 돌므로 `script.*`를 쓰지 않는다 — `--check`가 `script.done`의 수를 검증
+  // 집계로, `script.*`를 디스패치 뒤 단계로 읽는다. `reuse.planned`는 첫 디스패치 전에 예정을 등록하고(검색 ID를
+  // 정한다), `reuse.start`·`reuse.done`은 검색 스크립트가 직접 남긴다. 오케스트레이터가 끝을 만들어 채우지 않는다.
+  ['reuse.planned', { required: ['searchId', 'scopeSha256', 'plan'], structured: [], allowed: ['runId', 'head', 'baseHead', 'waitSec'] }],
+  ['reuse.start', { required: ['searchId', 'plan'], structured: [], allowed: ['planSha256'] }],
+  ['reuse.done', { required: ['searchId', 'status'], structured: ['targets'], allowed: ['reason', 'out', 'outSha256', 'planSha256', 'durationSec'] }],
   ['modules.planned', { required: ['candidates', 'applied'], structured: ['skipped', 'unknown'], allowed: [] }],
   ['dispatch.start', { required: ['modules', 'inflight'], structured: [], allowed: [] }],
   ['module.start', { required: ['module', 'attempt'], structured: [], allowed: ['taskId', 'retryOf', 'claim'] }],
@@ -225,10 +241,12 @@ const undeclaredKeys = (phase, data) => {
  * `failureClass`와 같은 이유로 줄은 거부하지 않는다. 경고하고 `--check`가 짚는다.
  */
 const CLOSED_VALUES = new Map([
+  ['run.start', { reuseSearch: ['planned'] }],
   ['module.done', { status: ['ok', 'failed'], cancelReason: CANCEL_REASONS }],
   ['verify.done', { status: ['ok', 'failed'], cancelReason: CANCEL_REASONS }],
   ['task.bind', { stage: STAGES }],
   ['dispatch.halt', { reason: HALT_REASONS }],
+  ['reuse.done', { status: REUSE_STATUSES }],
 ])
 
 const outsideClosedValues = (phase, data) => Object.entries(CLOSED_VALUES.get(phase) ?? {})
@@ -648,6 +666,13 @@ if (has('check')) {
     const running = toolRuns(events).runs
       .filter(one => one.from !== null)
       .map(one => ({ from: one.from, to: one.to ?? Math.max(lastSeen, one.from) }))
+    // 기존 구현 검색(C-6C)도 같다. 끝을 남기지 못한 검색은 마지막 줄까지 돈 것으로 센다.
+    const searches = events
+      .filter(event => event?.phase === 'reuse.start')
+      .map(begin => {
+        const end = events.find(event => event?.phase === 'reuse.done' && event.searchId === begin.searchId && msOf(event) >= msOf(begin))
+        return { from: msOf(begin), to: end ? msOf(end) : Math.max(lastSeen, msOf(begin)) }
+      })
     const overlap = (list, from, to) => list.filter(one => one.from < to && one.to > from).length
     const gaps = []
     for (let at = 1; at < events.length; at += 1) {
@@ -662,14 +687,15 @@ if (has('check')) {
         to: events[at].phase,
         modules: overlap(spans, from, to),
         tools: overlap(running, from, to),
+        search: overlap(searches, from, to) > 0,
       })
     }
     gaps.sort((a, b) => b.sec - a.sec)
     const shown = gaps.filter((gap, at) => at === 0 || gap.share >= 10).slice(0, 3)
     shown.forEach((gap, at) => {
-      const busy = [gap.modules && `모듈 ${gap.modules}개`, gap.tools && `도구 ${gap.tools}개`].filter(Boolean)
+      const busy = [gap.modules && `모듈 ${gap.modules}개`, gap.tools && `도구 ${gap.tools}개`, gap.search && '기존 구현 검색'].filter(Boolean)
       notes.push(`${at === 0 ? '가장 긴 무기록 구간' : `그 다음 ${at + 1}위`} ${gap.sec}s (전체의 ${gap.share}%): \`${gap.from}\` → \`${gap.to}\` — ${
-        busy.length ? `${busy.join('와 ')}가 그 사이 돌고 있었다` : '돌고 있던 것이 기록에 없다'}`)
+        busy.length ? `${busy.join('와 ')}${subjectParticle(busy.at(-1))} 그 사이 돌고 있었다` : '돌고 있던 것이 기록에 없다'}`)
     })
   }
 
@@ -884,6 +910,57 @@ if (has('check')) {
     if (doubled.size) problems.push(`같은 검증 작업·시도가 두 번 끝났다: ${[...doubled].join(', ')}`)
   }
 
+  // 기존 구현 검색(C-6C). 시작이 검색을 예정한 실행만 본다 — 그 필드가 없는 예전 기록에 미실행을 묻지 않는다.
+  // 상태는 작업 대장과 같은 정의(`reuseState`)로 읽는다.
+  {
+    const reuse = reuseState(events)
+    if (reuse.required) {
+      const startLine = events.find(event => event?.phase === 'run.start')
+      if (!reuse.planned) {
+        problems.push('기존 구현 검색을 예정한 실행인데 `reuse.planned`가 없다 — 검색을 계획했지만 실행하지 않았다(C-6C)')
+      } else if (!reuse.started) {
+        problems.push(`기존 구현 검색(${reuse.searchId})을 계획했지만 실행하지 않았다 — \`reuse.start\`가 없다(C-6C)`)
+      } else if (!reuse.done) {
+        if (reuse.wrapperEnd) notes.push(`기존 구현 검색(${reuse.searchId})이 끝을 남기지 못하고 끝났다 — 감싼 review-tool의 \`tool.done\`(seq ${reuse.wrapperEnd.seq})만 있다. 리포트에 미완료로 적는다`)
+        else problems.push(`시작한 검색(${reuse.searchId})의 끝이 없다 — \`reuse.done\`도, 감싼 review-tool의 \`tool.done\`도 없다`)
+      }
+      const known = new Set(events.filter(event => event?.phase === 'reuse.planned').map(event => event.searchId))
+      const strays = events.filter(event => (event?.phase === 'reuse.start' || event?.phase === 'reuse.done') && !known.has(event.searchId))
+      if (strays.length) problems.push(`계획하지 않은 검색의 줄이 있다: ${strays.map(event => `\`${event.phase}\`(seq ${event.seq}, ${event.searchId})`).join(', ')} — 시도는 \`reuse.planned\`가 정한 searchId로만 잇는다`)
+      // 끝이 가리키는 결과 파일이 이 실행·이 시도의 것인지 본다. 다른 실행의 결과를 정상 근거로 쓰지 않는다.
+      if (reuse.done && typeof reuse.done.out === 'string' && reuse.done.out) {
+        const resultPath = isAbsolute(reuse.done.out) ? reuse.done.out : resolve(dir, reuse.done.out)
+        let doc = null
+        try {
+          doc = readJsonFile(resultPath)
+        } catch (error) {
+          problems.push(`검색 결과 파일을 읽지 못했다: ${reuse.done.out} — ${error.message}`)
+        }
+        // 검색이 끝을 남길 때 기록한 해시와 같은 바이트인지 — 실행·검색 ID가 같아도 검색 뒤에 원문이 바뀌었을 수 있다
+        if (doc && typeof reuse.done.outSha256 === 'string') {
+          const actual = createHash('sha256').update(readFileSync(resultPath)).digest('hex')
+          if (actual !== reuse.done.outSha256) problems.push(`검색 결과 파일의 해시(${actual.slice(0, 12)})가 기록(${reuse.done.outSha256.slice(0, 12)})과 다르다 — 검색 뒤에 바뀐 파일이다`)
+        }
+        if (doc) {
+          const expected = {
+            runId: startLine?.runId, searchId: reuse.searchId, status: reuse.done.status, head: startLine?.head,
+            baseHead: startLine?.baseHead, planSha256: reuse.started.planSha256,
+          }
+          for (const [key, value] of Object.entries(expected)) {
+            if (value === undefined || value === null) continue
+            if (doc[key] !== value) problems.push(`검색 결과 파일의 ${key}(${JSON.stringify(doc[key] ?? null)})가 기록(${JSON.stringify(value)})과 다르다 — 다른 실행·다른 시도의 결과다`)
+          }
+        }
+      }
+      // 05는 검색이 풀린 뒤(끝·유실·시간 초과)에 띄운다. 그 전에 띄우면 검색 후보 없이 돈 05다. 시도마다 띄운 순간의
+      // 기록으로 판단한다 — 그 뒤에 늦게 온 끝이나 다시 등록한 검색으로 판단하면 정상으로 돈 05를 위반으로 짚는다.
+      const early = events.find(event => event?.phase === 'module.start' && event.module === REUSE_MODULE && !reuseStateBefore(events, event).released)
+      if (early) {
+        problems.push(`\`${REUSE_MODULE}\`가 기존 구현 검색이 풀리기 전에 시작했다(seq ${early.seq}) — 05는 검색의 끝·유실·시간 초과 뒤에 띄운다(C-6C)`)
+      }
+    }
+  }
+
   if (malformed) notes.push(`읽지 못한 줄 ${malformed}개`)
 
   const out = []
@@ -1032,6 +1109,30 @@ if (has('summary')) {
         return `\`${one.name}\` ${Math.round((one.to - one.from) / 1000)}s(exit ${one.exit ?? '?'})`
       }
       out.push('', `**도구** ${runs.map(describe).join(' · ')}`)
+    }
+  }
+
+  // 기존 구현 검색(C-6C)의 시간. 검색은 다른 모듈과 겹쳐 돌므로 단계 시간을 더하면 지연이 부풀려진다 —
+  // 첫 디스패치까지, 검색 경과, 05가 검색을 기다린 시간(첫 디스패치→검색 해제), 전체를 따로 낸다.
+  // 검색을 예정하지 않은 예전 기록에는 이 줄이 없다.
+  {
+    const reuse = reuseState(events)
+    if (reuse.required) {
+      const ms = event => Date.parse(event.at)
+      const secondsOf = value => `${Math.round(value / 1000)}s`
+      const runStart = events.find(event => event?.phase === 'run.start')
+      const firstDispatch = events.find(event => event?.phase === 'dispatch.start' || event?.phase === 'module.start')
+      const searchEnd = reuse.done ?? reuse.wrapperEnd
+      const search = !reuse.started ? `검색 시작 기록 없음(${reuse.state})`
+        : searchEnd ? `검색 ${secondsOf(ms(searchEnd) - ms(reuse.started))}(${reuse.done ? reuse.status : reuse.state})`
+          : `검색 끝 기록 없음(${reuse.state})`
+      const waited = !firstDispatch ? '05 대기 미측정(디스패치 기록 없음)'
+        : reuse.released ? `05 대기 ${secondsOf(Math.max(0, Date.parse(reuse.releasedAt) - ms(firstDispatch)))}(첫 디스패치→검색 해제)`
+          : '05 대기 중(검색이 아직 풀리지 않았다)'
+      out.push('', `**기존 구현 검색** ${[
+        firstDispatch ? `첫 디스패치까지 ${secondsOf(ms(firstDispatch) - ms(runStart))}` : '첫 디스패치 기록 없음',
+        search, waited, `전체 ${secondsOf(ms(events.at(-1)) - ms(runStart))}`,
+      ].join(' · ')} — 검색은 모듈과 겹쳐 돌므로 더하지 않는다`)
     }
   }
 
