@@ -95,10 +95,12 @@ test('대상별 상태를 세고, 전체 상태를 정한다 — 대상이 없�
 // 대상 자신은 후보가 아니다. anchor가 구현의 몇 줄만 가리켜도, 그 바로 옆 줄의 hit가 만든 구간은 anchor와 겹쳐 대상
 // 자신을 다시 인용한다 — 평가 fixture에서 그렇게 to-display-path.ts:3-6이 자기 후보로 남았다. 같은 파일의 다른 구현은
 // 남는다: anchor에서 떨어진 hit는 후보이고, 그 구간이 anchor까지 뻗으면 anchor 앞에서 자른다.
+// 검색 범위(paths)를 지키는 가짜 git — '.'은 전체, 그 밖은 그 디렉터리 아래만
+const inScope = (path, paths) => !paths?.length || paths.some(scope => scope === '.' || path === scope || path.startsWith(`${scope}/`))
 const fakeGit = files => ({
-  grep: (rev, text) => ({
+  grep: (rev, text, paths) => ({
     ok: true,
-    out: Object.entries(files).flatMap(([path, body]) => body.split('\n').map((line, at) => (line.includes(text) ? `${rev}:${path}\0${at + 1}\0${line}` : null)).filter(Boolean)).join('\n'),
+    out: Object.entries(files).filter(([path]) => inScope(path, paths)).flatMap(([path, body]) => body.split('\n').map((line, at) => (line.includes(text) ? `${rev}:${path}\0${at + 1}\0${line}` : null)).filter(Boolean)).join('\n'),
   }),
   show: (rev, path) => (rev === 'h'.repeat(40) ? files[path] ?? null : null),
 })
@@ -120,4 +122,20 @@ test('anchor 앞의 같은 파일 구현은 남기되, 그 구간을 anchor 앞�
   const files = { 'src/b/new.ts': ["const h = (x: string) => x.split('/').join('/')", '', '', '', 'export const k = (y: string) =>', "  y.split('/').join('/')"].join('\n') }
   const result = searchIn(files, { path: 'src/b/new.ts', startLine: 5, endLine: 6, quote: "export const k = (y: string) =>\n  y.split('/').join('/')" }, [".split('/')"])
   assert.deepEqual(result.candidates.map(found => [found.path, found.startLine, found.endLine]), [['src/b/new.ts', 1, 4]])
+})
+
+// 기존 구현(A)은 대개 다른 곳(shared·다른 기능)에 있다. 함수 이름 같은 검색어가 같은 기능 폴더의 호출자에 맞았다고
+// 다른 검색어의 저장소 전체 검색을 건너뛰면, 기능이 찾으려던 A를 놓치고 complete로 끝난다(평가 fixture에서 재현).
+test('가까운 곳에 hit가 있어도 저장소 전체를 찾는다 — 호출자 hit가 다른 곳의 기존 구현을 가리지 않는다', () => {
+  const files = {
+    'src/features/fb/lib/to-display.ts': ['export const toDisplayPath = (input: string) =>', "  input.split('/').filter(Boolean).join('/')"].join('\n'),
+    'src/features/fb/ui/row.tsx': ["import { toDisplayPath } from '../lib/to-display'", '', '', '', '', 'export const Row = ({ p }) => <span>{toDisplayPath(p)}</span>'].join('\n'),
+    'src/shared/lib/norm.ts': ['export function norm(raw: string) {', "  return raw.split('/').filter(Boolean).join('/')", '}'].join('\n'),
+  }
+  const result = searchIn(files, { path: 'src/features/fb/lib/to-display.ts', startLine: 1, endLine: 2, quote: "export const toDisplayPath = (input: string) =>\n  input.split('/').filter(Boolean).join('/')" }, ['toDisplayPath', ".split('/')"])
+  assert.equal(result.status, 'complete')
+  assert.ok(result.candidates.some(found => found.path === 'src/shared/lib/norm.ts'), JSON.stringify(result.candidates.map(found => found.path)))
+  // 같은 hit를 두 범위에서 두 번 세지 않는다 — 대상 자신 1(가까운 곳·전체 양쪽에 든다) + norm.ts 1
+  const split = result.queries.find(query => query.text === ".split('/')")
+  assert.equal(split.hits, 2)
 })

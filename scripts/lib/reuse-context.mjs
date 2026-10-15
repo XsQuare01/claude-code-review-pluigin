@@ -256,11 +256,11 @@ const truncateBytes = (lines, maxBytes) => {
 /**
  * 계획의 대상 하나를 검색해 후보를 모은다.
  *
- * - 검색어는 고정 문자열이다(`-F`). 경로를 주지 않은 검색어는 anchor 근처에서 먼저 찾고, 그 대상의 후보가 하나도
- *   없을 때만 저장소 전체로 넓힌다 — 넓혀도 검색어는 변경에서 나온 단서뿐이다(00-3)
+ * - 검색어는 고정 문자열이다(`-F`). 경로를 주지 않은 검색어는 anchor 근처와 저장소 전체를 모두 찾는다(근처를
+ *   먼저 모은다) — 넓혀도 검색어는 변경에서 나온 단서뿐이다(00-3)
  * - HEAD를 먼저, base가 merge-base 뒤로 앞서 나갔으면 그 끝(baseHead)에서도 찾는다. 같은 원문은 하나로 묶고 출처를
  *   모두 남긴다. base에만 있는 구현은 `onlyInBase`로 표시한다 — 병합 결과를 보기 전에는 공존으로 확정하지 않는다
- * - 대상 자신(같은 파일·anchor 범위의 hit)은 뺀다. 같은 파일의 다른 구현은 남긴다
+ * - 대상 자신(같은 파일·anchor와 앞뒤 linesBefore줄의 hit)은 뺀다. 같은 파일의 떨어진 구현은 남긴다
  * - HEAD 후보는 merge-base에도 같은 원문이 있었는지(`existedAtMergeBase`)를 적는다 — 없으면 이번 변경이 함께 더한 것이다
  * - 테스트·mock 경로의 후보는 `kind: test`로 production 후보와 가른다
  */
@@ -287,10 +287,13 @@ export function searchTarget(target, { git, head, mergeBase, baseHead, limits, d
     }
   }
   for (const query of target.queries) {
-    const scopes = query.paths?.length ? [query.paths] : [[nearbyScope(anchor.path)], ['.']]
+    // 경로를 정하지 않은 검색어는 가까운 곳과 저장소 전체를 모두 찾는다(가까운 곳을 먼저). 가까운 곳에 hit가 있다고
+    // 넓히지 않으면, 함수 이름이 같은 기능 폴더의 호출자에 맞는 것만으로 다른 곳의 기존 구현을 놓친다
+    const nearby = nearbyScope(anchor.path)
+    const scopes = query.paths?.length ? [query.paths] : nearby === '.' ? [['.']] : [[nearby], ['.']]
     const record = { text: query.text, ...(query.paths ? { paths: query.paths } : {}), searched: [], hits: 0 }
-    for (const [at, paths] of scopes.entries()) {
-      if (at > 0 && byFile.size > 0) break
+    const seen = new Set()
+    for (const paths of scopes) {
       if (Date.now() > deadline) {
         reached.add('time')
         break
@@ -303,7 +306,13 @@ export function searchTarget(target, { git, head, mergeBase, baseHead, limits, d
           continue
         }
         grepsDone += 1
-        let hits = parseGrepOutput(out.out, rev)
+        // 두 범위에 함께 든 hit는 한 번만 센다 — 저장소 전체는 가까운 곳을 포함한다
+        let hits = parseGrepOutput(out.out, rev).filter(hit => {
+          const key = `${sourceRef}\0${hit.path}\0${hit.line}`
+          if (seen.has(key)) return false
+          seen.add(key)
+          return true
+        })
         if (hits.length > limits.hitsPerQuery) {
           omittedHits += hits.length - limits.hitsPerQuery
           reached.add('hits')
