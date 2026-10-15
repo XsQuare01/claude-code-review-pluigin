@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
 import {
-  anchorProblems, candidateWindows, changedRanges, overallStatus, parseGrepOutput, planProblems, summarizeTargets,
+  REUSE_LIMITS, anchorProblems, candidateWindows, changedRanges, overallStatus, parseGrepOutput, planProblems, searchTarget, summarizeTargets,
 } from '../scripts/lib/reuse-context.mjs'
 
 // 기존 구현 검색의 순수한 부분을 고정한다 — 계획 검사, diff의 새 쪽 범위, git grep 출력, 후보 구간, 상태 집계.
@@ -90,4 +90,34 @@ test('대상별 상태를 세고, 전체 상태를 정한다 — 대상이 없�
   assert.equal(overallStatus([], { planOk: true }), 'not-applicable')
   assert.equal(overallStatus([], { planOk: false }), 'failed')
   assert.equal(overallStatus([{ status: 'failed' }, { status: 'failed' }], { planOk: true }), 'failed')
+})
+
+// 대상 자신은 후보가 아니다. anchor가 구현의 몇 줄만 가리켜도, 그 바로 옆 줄의 hit가 만든 구간은 anchor와 겹쳐 대상
+// 자신을 다시 인용한다 — 평가 fixture에서 그렇게 to-display-path.ts:3-6이 자기 후보로 남았다. 같은 파일의 다른 구현은
+// 남는다: anchor에서 떨어진 hit는 후보이고, 그 구간이 anchor까지 뻗으면 anchor 앞에서 자른다.
+const fakeGit = files => ({
+  grep: (rev, text) => ({
+    ok: true,
+    out: Object.entries(files).flatMap(([path, body]) => body.split('\n').map((line, at) => (line.includes(text) ? `${rev}:${path}\0${at + 1}\0${line}` : null)).filter(Boolean)).join('\n'),
+  }),
+  show: (rev, path) => (rev === 'h'.repeat(40) ? files[path] ?? null : null),
+})
+const searchIn = (files, anchor, texts) => searchTarget(
+  { targetId: 't1', anchor, purpose: 'p', queries: texts.map(text => ({ text })) },
+  { git: fakeGit(files), head: 'h'.repeat(40), mergeBase: 'm'.repeat(40), baseHead: null, limits: REUSE_LIMITS, deadline: Date.now() + 60000, budget: { remaining: 40 } },
+)
+
+test('대상 자신은 후보가 아니다 — anchor 옆 줄의 hit도 같은 구현이다. 같은 파일의 떨어진 구현은 남는다', () => {
+  const files = {
+    'src/a/new.ts': ['// c', 'export const f = (input: string) =>', '  input', "    .split('/')", '    .filter(s => s.length > 0)', "    .join('/')", '', 'export const g = (raw: string) =>', '  raw', "    .split('/')", '    .filter(Boolean)', "    .join('/')"].join('\n'),
+    'src/shared/norm.ts': ['export function norm(raw: string) {', '  return raw', "    .split('/')", '    .filter(Boolean)', "    .join('/')", '}'].join('\n'),
+  }
+  const result = searchIn(files, { path: 'src/a/new.ts', startLine: 4, endLine: 5, quote: "    .split('/')\n    .filter(s => s.length > 0)" }, [".split('/')", ".join('/')"])
+  assert.deepEqual(result.candidates.map(found => [found.path, found.startLine, found.endLine]).sort(), [['src/a/new.ts', 7, 12], ['src/shared/norm.ts', 1, 6]])
+})
+
+test('anchor 앞의 같은 파일 구현은 남기되, 그 구간을 anchor 앞에서 자른다', () => {
+  const files = { 'src/b/new.ts': ["const h = (x: string) => x.split('/').join('/')", '', '', '', 'export const k = (y: string) =>', "  y.split('/').join('/')"].join('\n') }
+  const result = searchIn(files, { path: 'src/b/new.ts', startLine: 5, endLine: 6, quote: "export const k = (y: string) =>\n  y.split('/').join('/')" }, [".split('/')"])
+  assert.deepEqual(result.candidates.map(found => [found.path, found.startLine, found.endLine]), [['src/b/new.ts', 1, 4]])
 })

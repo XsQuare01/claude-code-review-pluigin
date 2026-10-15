@@ -273,9 +273,13 @@ export function searchTarget(target, { git, head, mergeBase, baseHead, limits, d
   const queries = []
   let omittedHits = 0
   let grepsDone = 0
+  // 대상 자신 — anchor와 그 앞뒤 `linesBefore`줄의 hit다. anchor가 구현의 몇 줄만 가리켜도 바로 옆 줄은 같은 구현이고,
+  // 그 hit의 구간은 anchor와 겹쳐 대상 자신을 다시 인용한다. 그보다 떨어진 같은 파일의 hit는 다른 구현의 후보다.
+  const isSelf = (sourceRef, hit) => sourceRef === 'head' && hit.path === anchor.path
+    && hit.line >= anchor.startLine - limits.linesBefore && hit.line <= anchor.endLine + limits.linesBefore
   const collect = (rev, sourceRef, hits, text) => {
     for (const hit of hits) {
-      if (sourceRef === 'head' && hit.path === anchor.path && hit.line >= anchor.startLine && hit.line <= anchor.endLine) continue
+      if (isSelf(sourceRef, hit)) continue
       const key = `${sourceRef}\0${hit.path}`
       if (!byFile.has(key)) byFile.set(key, { rev, sourceRef, path: hit.path, lines: new Set(), clues: new Set() })
       byFile.get(key).lines.add(hit.line)
@@ -321,7 +325,10 @@ export function searchTarget(target, { git, head, mergeBase, baseHead, limits, d
       continue
     }
     const lines = linesOf(text)
-    for (const window of candidateWindows([...file.lines], lines.length, limits)) {
+    const sameAsAnchor = file.sourceRef === 'head' && file.path === anchor.path
+    for (const raw of candidateWindows([...file.lines], lines.length, limits)) {
+      // anchor 앞의 같은 파일 구현은 그 구간이 anchor까지 뻗으면 anchor 앞에서 자른다 — 대상 자신을 인용하지 않는다
+      const window = sameAsAnchor && raw.start < anchor.startLine && raw.end >= anchor.startLine ? { ...raw, end: anchor.startLine - 1 } : raw
       const sliced = truncateBytes(lines.slice(window.start - 1, window.end), limits.quoteBytes)
       const quote = sliced.lines.join('\n')
       found.push({
