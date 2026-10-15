@@ -707,3 +707,59 @@ test('envelope이 candidatesFromResults → prepareVerification → renderFindin
   const md = renderFinding(decided[0], { label: '유지', vocabulary })
   assert.match(md, /^출처 패스: 01-fsd, 11-styling$/m)
 })
+
+// ------------------------------------------- 기존 구현 검색 근거(cross-file-evidence, C-6C)
+//
+// 다른 파일의 기존 구현과 견준 05-7 지적은 anchor 파일만으로 판정할 수 없다. 영향 낮음·확신 높음이라 검증을 건너뛰던
+// 지적도 검증 대상으로, bundle이던 지적은 isolated로 보낸다. 검색 후보가 있다는 것만으로 승격하지 않는다 — 지적이
+// 그 후보(다른 파일)를 실제로 가리킬 때만이다.
+
+const REUSE_CONTEXT = {
+  schemaVersion: 1, runId: 'r-1', searchId: 's1', head: 'h'.repeat(40), status: 'complete',
+  targets: [{
+    targetId: 't1', anchor: { path: 'src/hooks/use-camera.ts', startLine: 1, endLine: 3, quote: 'const a = 1\nif (pending) return\nconst b = 2' }, status: 'complete',
+    candidates: [{ candidateId: 't1.c1', path: 'src/shared/camera-state.ts', startLine: 4, endLine: 6, quote: 'export const isPending = state =>\n  state.pending', sha256: 'x'.repeat(64), sourceRef: 'head', rev: 'h'.repeat(40), kind: 'production', existedAtMergeBase: true }],
+  }],
+}
+const dup = extra => ({
+  candidateId: 'd1', ruleId: '05-7', impact: 'low', confidence: 'high',
+  location: { kind: 'verified', path: 'src/hooks/use-camera.ts', line: 2, quote: 'if (pending) return' },
+  content: { title: '대기 판정 중복', body: '`shared/camera-state.ts`의 isPending과 같은 판정을 다시 구현했다', evidence: 'src/shared/camera-state.ts:4' },
+  ...extra,
+})
+
+test('다른 파일의 기존 구현을 가리킨 05-7 지적은 cross-file-evidence로 검증 대상·isolated가 되고, 근거 원문을 싣는다', () => {
+  const result = prepareVerification([dup()], blobs, { reuse: { context: REUSE_CONTEXT } })
+  const entry = result.candidates[0]
+  assert.deepEqual([entry.eligibility, entry.route, entry.reasons.includes('cross-file-evidence')], ['VERIFY', 'isolated', true])
+  assert.deepEqual(entry.crossFileEvidence.map(one => [one.targetId, one.candidateId, one.path, one.startLine, one.endLine, one.rev]),
+    [['t1', 't1.c1', 'src/shared/camera-state.ts', 4, 6, 'h'.repeat(40)]])
+  assert.equal(entry.crossFileEvidence[0].quote, REUSE_CONTEXT.targets[0].candidates[0].quote)
+  assert.deepEqual(result.counts.reuse, { context: 'used', crossFileEvidence: 1, newlyEligible: 1, movedToIsolated: 0, verificationTasksAdded: 1 })
+})
+
+test('검색 후보가 있다는 것만으로 승격하지 않는다 — 다른 파일을 가리키지 않은 05-7, 다른 규칙, anchor와 겹치지 않는 위치', () => {
+  const sameFile = dup({ candidateId: 'd2', content: { title: '중복', body: '같은 파일 안에서 두 번 판정한다' } })
+  const otherRule = dup({ candidateId: 'd3', ruleId: '06-2' })
+  const away = dup({ candidateId: 'd4', location: { kind: 'verified', path: 'src/wide.ts', line: 1, quote: 'first' } })
+  const result = prepareVerification([sameFile, otherRule, away], blobs, { reuse: { context: REUSE_CONTEXT } })
+  for (const entry of result.candidates) {
+    assert.equal('crossFileEvidence' in entry, false, entry.candidateId)
+    assert.equal(entry.reasons.includes('cross-file-evidence'), false, entry.candidateId)
+  }
+  assert.deepEqual(result.counts.reuse, { context: 'used', crossFileEvidence: 0, newlyEligible: 0, movedToIsolated: 0, verificationTasksAdded: 0 })
+})
+
+test('이미 검증 대상이던 bundle 지적은 isolated로 옮기고, 비어서 사라진 bundle까지 작업 수에 반영한다', () => {
+  const high = dup({ candidateId: 'd5', impact: 'high', category: 'user-malfunction' })
+  const result = prepareVerification([high], blobs, { reuse: { context: REUSE_CONTEXT } })
+  assert.equal(result.candidates[0].route, 'isolated')
+  // 전에는 bundle 1개, 지금은 isolated 1개 — 작업 수는 그대로다
+  assert.deepEqual(result.counts.reuse, { context: 'used', crossFileEvidence: 1, newlyEligible: 0, movedToIsolated: 1, verificationTasksAdded: 0 })
+})
+
+test('검색 근거를 주지 않은 준비에는 reuse 수가 없다', () => {
+  const result = prepareVerification([dup()], blobs)
+  assert.equal('reuse' in result.counts, false)
+  assert.equal(result.candidates[0].eligibility, 'SKIP-VERIFY')
+})

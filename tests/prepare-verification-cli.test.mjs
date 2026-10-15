@@ -849,3 +849,55 @@ test('synthesis를 producer로 쓰는 워크플로우에서는 10-principles도 
   assert.equal(out.status, 0, out.stderr)
   assert.deepEqual(JSON.parse(out.stdout).collected.sources, ['10-principles'])
 })
+
+// ── 기존 구현 검색 근거(C-6C) ─────────────────────────────────────────────
+// --collect는 기록의 reuse.done이 가리키는 결과 파일을 읽어, 다른 파일의 기존 구현과 견준 05-7 지적에 그 원문을 붙인다.
+// 다른 실행의 결과 파일이면 쓰지 않는다 — 현재 파일로 대신하지도 않는다.
+const reuseRun = (t, contextOverrides = {}) => {
+  const dir = mkdtempSync(join(tmpdir(), 'prep-reuse-'))
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  mkdirSync(join(dir, '.timing'), { recursive: true })
+  const head = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim()
+  const contextPath = join(dir, '.timing', `${RUN}.reuse-context.json`)
+  const lines = [
+    { phase: 'run.start', host: 'test', rules: 'review-rules', version: 'v', branch: 'b', changedFiles: 1, candidates: 20, runId: 'r-1', head, reuseSearch: 'planned' },
+    { phase: 'reuse.planned', searchId: 's1', scopeSha256: 'h', plan: 'p' },
+    { phase: 'reuse.start', searchId: 's1', plan: 'p' },
+    { phase: 'reuse.done', searchId: 's1', status: 'complete', out: contextPath },
+    { phase: 'module.done', module: '05-structure', attempt: 1, status: 'ok' },
+  ]
+  writeFileSync(join(dir, '.timing', `${RUN}.jsonl`), `${lines.map((event, at) => JSON.stringify({ at: '2026-10-15T00:00:00.000Z', seq: at + 1, ...event })).join('\n')}\n`, 'utf8')
+  writeFileSync(contextPath, JSON.stringify({
+    schemaVersion: 1, kind: 'reuse-context', runId: 'r-1', searchId: 's1', head, status: 'complete',
+    targets: [{ targetId: 't1', anchor: { path: 'README.md', startLine: 1, endLine: 1, quote: '# React Code Review Plugin' }, status: 'complete',
+      candidates: [{ candidateId: 't1.c1', path: 'scripts/lib/read-text.mjs', startLine: 1, endLine: 2, quote: "import { readFileSync } from 'node:fs'", sha256: 'x'.repeat(64), sourceRef: 'head', rev: head, kind: 'production', existedAtMergeBase: true }] }],
+    ...contextOverrides,
+  }), 'utf8')
+  const finding = { ...FINDING, ruleId: '05-7', title: '읽기 중복', body: '`lib/read-text.mjs`와 같은 읽기를 다시 구현했다', evidence: 'scripts/lib/read-text.mjs:1' }
+  writeFileSync(join(dir, '.timing', `${RUN}.05-structure.json`), JSON.stringify({ ...RESULT, findings: [finding] }), 'utf8')
+  return dir
+}
+
+test('--collect는 검색 결과의 원문을 다른 파일과 견준 05-7 지적에 붙이고, 그 지적을 isolated로 검증한다', t => {
+  const dir = reuseRun(t)
+  const out = collect(dir)
+  assert.equal(out.status, 0, out.stderr)
+  const routed = JSON.parse(out.stdout)
+  const entry = routed.candidates[0]
+  assert.deepEqual([entry.eligibility, entry.route, entry.reasons.includes('cross-file-evidence')], ['VERIFY', 'isolated', true])
+  assert.equal(entry.crossFileEvidence[0].path, 'scripts/lib/read-text.mjs')
+  assert.deepEqual(routed.counts.reuse, { context: 'used', crossFileEvidence: 1, newlyEligible: 1, movedToIsolated: 0, verificationTasksAdded: 1 })
+  const prompt = readFileSync(routed.verifierTasks.find(task => task.candidateIds.includes(entry.candidateId)).prompt, 'utf8')
+  assert.match(prompt, /### 기존 구현 검색 근거/)
+  assert.match(prompt, /import \{ readFileSync \} from 'node:fs'/)
+})
+
+test('--collect는 다른 실행의 검색 결과를 근거로 쓰지 않는다', t => {
+  const dir = reuseRun(t, { runId: 'r-2' })
+  const out = collect(dir)
+  assert.equal(out.status, 0, out.stderr)
+  assert.match(out.stderr, /기존 구현 검색 결과의 runId/)
+  const routed = JSON.parse(out.stdout)
+  assert.equal('crossFileEvidence' in routed.candidates[0], false)
+  assert.equal(routed.counts.reuse.context, 'mismatch')
+})
