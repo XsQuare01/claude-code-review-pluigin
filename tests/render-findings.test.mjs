@@ -2059,3 +2059,32 @@ test('--collect 출력을 그리면 맨 끝에 실행 ID를 적은 출처 줄을
   // 출처 줄은 그린 섹션 뒤에 덧붙을 뿐 섹션은 그대로다
   assert.ok(collected.stdout.startsWith(withoutId.stdout.replace(/\n+$/, '')))
 })
+
+// 2026-10-15 한 실행이 `--workflow code-review-full`로 그렸다. catalog의 이름은 `full`이라 섹션이 될 모듈이 하나도
+// 없었고, 렌더러는 지적만 규칙 번호로 묶어 `### 06`처럼 이름 없이 그렸다 — 지적 없는 모듈은 섹션째 사라졌다.
+test('catalog에 없는 워크플로우 이름은 섹션을 만들지 않고 거부한다 — 유효한 이름을 보인다', () => {
+  const wrong = loadModuleSections(RULES, 'code-review-full', null)
+  assert.match(wrong.error, /code-review-full.*catalog에 없다/)
+  assert.match(wrong.error, /full/)
+  assert.ok(loadModuleSections(RULES, 'full', null).value.length > 0)
+})
+
+test('--dir·--run이면 기록의 워크플로우와 다른 --workflow를 거부한다', t => {
+  const dir = mkdtempSync(join(tmpdir(), 'render-workflow-'))
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const run = 'code-review-full-feat-x-2026-10-15'
+  const started = spawnSync(process.execPath, [join(ROOT, 'scripts', 'review-timeline.mjs'), '--dir', dir, '--run', run, '--phase', 'run.start', '--data',
+    JSON.stringify({ host: 'test', rules: 'r', version: 'x', branch: 'feat/x', changedFiles: 1, workflow: 'full', runId: 'r-1' })], { encoding: 'utf8' })
+  assert.equal(started.status, 0, started.stderr)
+  const input = join(dir, 'targets.json')
+  writeFileSync(input, JSON.stringify({ candidates: [ok()] }), 'utf8')
+  const render = workflow => spawnSync(process.execPath, [
+    SCRIPT, '--input', input, '--rules', RULES, '--phase-high', 'rollout-shadow', '--phase-low', 'rollout-shadow',
+    '--workflow', workflow, '--verification-state', 'disabled', '--dir', dir, '--run', run,
+  ], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+  const mismatch = render('default')
+  assert.equal(mismatch.status, 2)
+  assert.match(mismatch.stderr, /기록된 워크플로우는 full/)
+  assert.equal(mismatch.stdout, '')
+  assert.equal(render('full').status, 0)
+})

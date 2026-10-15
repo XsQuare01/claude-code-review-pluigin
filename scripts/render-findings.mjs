@@ -913,6 +913,10 @@ export function loadModuleSections(rulesDir, workflow, planned) {
   } catch (error) {
     return { error: `catalog.json을 읽지 못했다: ${error.message}` }
   }
+  // catalog에 없는 이름이면 섹션이 될 모듈이 하나도 없다 — 조용히 규칙 번호만 단 섹션으로 그리지 않고 멈춘다.
+  // 2026-10-15 한 실행이 `code-review-full`로 그려 `### 06`처럼 이름 없는 섹션이 나왔고 지적 없는 모듈은 사라졌다.
+  const known = [...new Set((catalog.modules ?? []).flatMap(module => module.workflows ?? []))].sort()
+  if (!known.includes(workflow)) return { error: `--workflow ${workflow}는 catalog에 없다 — ${known.join(', ')} 중 하나다(전체 리뷰는 full)` }
   const skipped = new Set()
   const plan = readPlanned(planned)
   if (plan.error) return { error: plan.error }
@@ -1425,7 +1429,13 @@ if (process.argv[1] && process.argv[1].endsWith('render-findings.mjs')) {
     if ((dirFlag === undefined) !== (runFlag === undefined)) die('--dir와 --run은 함께 준다 — 실행 계획(modules.planned)을 그 실행의 기록에서 읽는다')
     if (dirFlag === undefined) return flag('planned')
     if (flag('planned') !== undefined) die('--dir·--run을 주면 실행 계획은 기록의 modules.planned에서 읽는다 — --planned를 함께 주지 않는다(두 벌이 갈린 실행이 있었다)')
-    const recorded = readEvents(requireStartedTimeline(dirFlag, runFlag)).filter(event => event?.phase === 'modules.planned').at(-1)
+    const recordedEvents = readEvents(requireStartedTimeline(dirFlag, runFlag))
+    // 워크플로우도 기록이 정본이다 — preflight가 run.start에 남긴 값과 다르면 다른 모듈 목록으로 그리게 된다
+    const recordedWorkflow = recordedEvents.find(event => event?.phase === 'run.start')?.workflow
+    if (typeof recordedWorkflow === 'string' && recordedWorkflow !== workflow) {
+      die(`기록된 워크플로우는 ${recordedWorkflow}다 — --workflow ${workflow}를 받았다. 기록과 같은 이름으로 그린다`)
+    }
+    const recorded = recordedEvents.filter(event => event?.phase === 'modules.planned').at(-1)
     if (!recorded) process.stderr.write('경고: 기록에 modules.planned가 없다 — 건너뛴 모듈 없이 후보 전부를 섹션으로 그린다\n')
     return recorded ?? null
   })()
