@@ -68,7 +68,10 @@ export function planProblems(plan, { scope, runId, head, mergeBase, searchId, sc
   for (const [id, count] of idCount) if (count > 1) problems.push(`targetId ${id}이 ${count}번 나온다`)
 
   const decisionCount = new Map()
+  // 대상을 고른 파일들. 한 대상은 한 파일만 고르고, 고른 파일에 그 대상의 anchor가 있어야 한다 — 덮어쓰면 앞 파일이
+  // 제외 사유도 없이 검색에서 빠진다
   const chosenBy = new Map()
+  const anchorPathOf = new Map((targets ?? []).filter(target => nonEmpty(target?.targetId)).map(target => [target.targetId, target.anchor?.path]))
   for (const decision of decisions ?? []) {
     const path = decision?.path
     if (!nonEmpty(path)) {
@@ -83,8 +86,12 @@ export function planProblems(plan, { scope, runId, head, mergeBase, searchId, sc
       const ids = Array.isArray(decision.targetIds) ? decision.targetIds : []
       if (!ids.length) problems.push(`${path}는 search인데 대상이 없다`)
       for (const id of ids) {
-        if (!idCount.has(id)) problems.push(`${path}가 없는 targetId ${id}를 가리킨다`)
-        else chosenBy.set(id, path)
+        if (!idCount.has(id)) {
+          problems.push(`${path}가 없는 targetId ${id}를 가리킨다`)
+          continue
+        }
+        chosenBy.set(id, [...(chosenBy.get(id) ?? []), path])
+        if (anchorPathOf.get(id) !== path) problems.push(`${path}의 search 결정이 가리킨 ${id}의 anchor(${anchorPathOf.get(id) ?? '없음'})가 이 파일에 없다 — 결정은 그 파일에 anchor를 둔 대상만 가리킨다`)
       }
     } else {
       problems.push(`${path}의 decision은 search나 exclude다(${JSON.stringify(decision.decision ?? null)})`)
@@ -100,9 +107,9 @@ export function planProblems(plan, { scope, runId, head, mergeBase, searchId, sc
     if (!nonEmpty(target?.targetId)) continue
     const id = target.targetId
     const anchor = target.anchor
-    const chosen = chosenBy.get(id)
-    if (!chosen) problems.push(`${id}을 고른 search 결정이 없다`)
-    else if (anchor?.path !== chosen) problems.push(`${id}의 anchor(${anchor?.path ?? '없음'})가 그 대상을 고른 파일의 결정과 맞지 않는다(${chosen})`)
+    const chosen = chosenBy.get(id) ?? []
+    if (!chosen.length) problems.push(`${id}을 고른 search 결정이 없다`)
+    if (chosen.length > 1) problems.push(`${id}을 두 파일 이상이 고른다(${chosen.join(', ')}) — 대상은 anchor가 있는 파일 하나의 것이다`)
     if (!Number.isInteger(anchor?.startLine) || !Number.isInteger(anchor?.endLine) || !nonEmpty(anchor?.quote)) problems.push(`${id}의 anchor에 줄 범위나 인용이 없다`)
     if (!nonEmpty(target.purpose)) problems.push(`${id}의 purpose가 비었다`)
     const queries = Array.isArray(target.queries) ? target.queries : []

@@ -33,7 +33,7 @@ test('결정이 빠지거나 겹치거나 범위 밖이면 검색 전에 거부�
     [plan({ fileDecisions: [{ path: 'src/a.ts', decision: 'search', targetIds: [] }, plan().fileDecisions[1]] }), /src\/a\.ts는 search인데 대상이 없다/],
     [plan({ fileDecisions: [{ path: 'src/a.ts', decision: 'search', targetIds: ['t9'] }, plan().fileDecisions[1]] }), /없는 targetId t9/],
     [plan({ fileDecisions: [{ path: 'src/a.ts', decision: 'maybe' }, plan().fileDecisions[1]] }), /decision은 search나 exclude다/],
-    [plan({ targets: [target({ anchor: { ...target().anchor, path: 'src/b.ts' } })] }), /t1의 anchor\(src\/b\.ts\)가 그 대상을 고른 파일의 결정과 맞지 않는다/],
+    [plan({ targets: [target({ anchor: { ...target().anchor, path: 'src/b.ts' } })] }), /src\/a\.ts의 search 결정이 가리킨 t1의 anchor\(src\/b\.ts\)가 이 파일에 없다/],
     [plan({ targets: [target({ queries: [] })] }), /t1에 검색어가 없다/],
     [plan({ targets: [target({ queries: [{ text: '' }] })] }), /t1의 검색어가 비었다/],
     [plan({ targets: [target(), target()] }), /targetId t1이 2번 나온다/],
@@ -172,4 +172,14 @@ test('한 줄짜리 거대 원문도 바이트 상한에서 자르고, 코드가
   const kinds = Object.fromEntries(result.candidates.map(found => [found.path, found.kind]))
   assert.deepEqual(kinds, { 'src/shared/split.ts': 'production', 'dist/app.min.js': 'other', 'public/logo.svg': 'other', 'docs/notes.md': 'other' })
   assert.equal(result.candidates[0].path, 'src/shared/split.ts', '구현 후보가 먼저다')
+})
+
+// 파일의 search 결정은 그 파일에 anchor가 있는 대상만 가리킨다. 두 파일이 같은 대상을 가리키면 뒤의 결정이 앞을 덮어
+// 앞 파일은 제외 사유도 없이 검색에서 빠졌다.
+test('search 결정이 가리킨 대상의 anchor는 그 파일에 있어야 하고, 한 대상을 두 파일이 고르지 않는다', () => {
+  const both = plan({ fileDecisions: [{ path: 'src/a.ts', decision: 'search', targetIds: ['t1'] }, { path: 'src/b.ts', decision: 'search', targetIds: ['t1'] }],
+    targets: [target({ anchor: { path: 'src/b.ts', startLine: 2, endLine: 3, quote: 'b\nc' } })] })
+  const problems = planProblems(both, CTX)
+  assert.ok(problems.some(problem => /src\/a\.ts.*t1.*anchor/.test(problem)), problems.join(' / '))
+  assert.ok(problems.some(problem => /t1.*두 파일/.test(problem)), problems.join(' / '))
 })
