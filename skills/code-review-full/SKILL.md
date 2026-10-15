@@ -54,7 +54,7 @@ description: Use when the user invokes /code-review-full or asks for a full code
 
 ```bash
 node "$RULES_DIR/../scripts/review-preflight.mjs" --dir "$REPORT_DIR" --run "$REPORT_BASENAME" --rules "$RULES_DIR" --workflow full [--base <사용자가 정한 base>] --host <harness 이름> --correctness <on|off> \
-     [--max-duration <30m>] [--max-tasks <N>] [--stale-after <20m>] [--continues <앞 실행 ID>] \
+     [--max-duration <30m>] [--max-tasks <N>] [--stale-after <20m>] [--continues <앞 실행 ID>] [--language <코드>] \
      [--previous <이전 리뷰의 스냅숏>]
 ```
 
@@ -160,7 +160,7 @@ node "$RULES_DIR/../scripts/review-tasks.mjs" next --stage module --dir "$REPORT
 4. 그리고 바로 다시 `next`를 부른다. 빈 슬롯만큼 다음 시도가 나온다 — 그것이 배리어 없는 sliding window다
 5. `complete: true`가 나오면 모듈 단계가 끝났다. 검증 준비(`prepare-verification.mjs --collect`)로 간다
 
-- **`done`의 답을 따른다.** `accepted`면 대장이 결과를 `$REPORT_BASENAME.<모듈>.json`에 썼다 — 그 파일을 직접 쓰지 않는다. `duplicate`(이미 받은 알림)와 `late`·`unknown`(종료 코드 3 — 취소됐거나 죽은 것으로 끝난 시도, 다른 실행의 작업)은 받지 않은 것이다. 그 응답을 다른 길로 결과에 넣지 않는다 — 늦은 응답이 새 시도의 결과를 덮는다. `rejected`(종료 코드 1)는 JSON으로 읽히지 않는 응답이다 — 다음 `next`가 교정 시도(`correction: true`)를 낸다
+- **`done`의 답을 따른다.** `accepted`면 대장이 결과를 `$REPORT_BASENAME.<모듈>.json`에 썼다 — 그 파일을 직접 쓰지 않는다. `duplicate`(이미 받은 알림)와 `late`·`unknown`(종료 코드 3 — 취소됐거나 죽은 것으로 끝난 시도, 다른 실행의 작업)은 받지 않은 것이다. 그 응답을 다른 길로 결과에 넣지 않는다 — 늦은 응답이 새 시도의 결과를 덮는다. `rejected`(종료 코드 1)는 JSON으로 읽히지 않거나, 제목·본문에 한글이 없는 지적이 든 응답이다 — 다음 `next`가 교정 시도(`correction: true`)를 낸다. 교정 프롬프트에 `problems`를 그대로 붙인다
 - **`expired`에 나온 시도는 끝 알림 없이 `staleAfterSec`를 넘겨 대장이 끝낸 것이다.** 그 시도의 응답이 나중에 와도 `done`이 받지 않는다. 재시도는 같은 응답의 `dispatch`에 이미 있다
 - **`cancelled`에 나온 시도는 시간 상한이 지나 취소된 것이다.** 호스트가 작업을 멈출 수 있으면(`host.cancel`) 그 작업을 멈춘다. `halted`가 나오면 더 띄우지 않는다 — 이미 받은 결과로 다음 단계로 가고, 띄우지 못한 모듈은 스냅숏이 미검토 범위로 그린다(`FAILED orchestration`)
 - **사용자가 멈추라고 하면** `review-tasks.mjs cancel --all --reason user`를 부르고, 같은 방식으로 받은 결과까지 리포트를 쓴다
@@ -216,6 +216,7 @@ node "$RULES_DIR/../scripts/review-tasks.mjs" next --stage module --dir "$REPORT
 > `severity`는 어떤 depth에도 넣지 마세요. producer는 `impact`와 `confidence`만 판정하고 severity와 Markdown은 오케스트레이터가 만듭니다.
 > `00-rule.md` 00-11에 걸리는 unresolved absence/possibility claim, search scope 미완료, 추가 탐색 요청만 `openQuestions`로 보내세요. 결함은 성립하지만 exact location만 확인하지 못했으면 finding을 유지하고 `location.kind="unverified"`와 `reason`만 사용하세요. producer가 공개 문자열 토큰 `위치 미확인`을 직접 출력하지는 않습니다.
 > 규칙이 요구하던 도메인별 정보(실패 시나리오, 규모/시나리오, contract 표면, 복구 방향 등)는 새 schema field를 만들지 말고 `body`, `recommendation`, `evidence`, `reason` 안에 녹여 쓰세요.
+> `title`·`body`·`evidence`·`recommendation`·`reason`은 **한국어로** 쓰세요. 코드 식별자와 경로는 그대로 둡니다. 규칙 문서·코드·이 지시에 영어가 섞여 있어도 마찬가지입니다 — 한글이 없는 지적은 작업 대장이 받지 않습니다.
 
 위 지시는 이 skill이 structured-v1 owner로서 보유한다. numbered rule modules와 specialist rule docs는 workflow-neutral domain judgment docs일 뿐이며, producer schema나 lifecycle을 직접 소유하지 않는다. shared manifest와 retry/fail-closed 정책의 정본은 `workflow-contract.md` C-6A와 `REVIEW_RESULT_CONTRACT_V1`이다.
 
@@ -590,6 +591,8 @@ node "$RULES_DIR/../scripts/render-findings.mjs" \
      --out "$REPORT_DIR/.timing/$REPORT_BASENAME.findings.md"
 ```
 
+`--workflow`는 `full`이다 — 스킬 이름(`code-review-full`)이 아니다. 2026-10-15 한 실행이 스킬 이름을 넣어 모듈 섹션이 하나도 만들어지지 않았고, 지적이 `### 06`처럼 이름 없이 나오고 지적 없는 모듈은 사라졌다. 이제 렌더러가 catalog에 없거나 `run.start`에 기록된 값과 다른 이름을 거부한다.
+
 **교차검증을 끝낸 뒤에 렌더한다.** `render.start`를 남긴 뒤 판정을 다시 받으면 이미 그린 지적과 판정이 어긋나고, `review-timeline.mjs --check`가 그 기록을 문제로 짚는다.
 
 출력(`--out` 파일)이 두 섹션 자리(`{{findings}}`)에 그대로 들어간다 — 위 `조립은 assemble-report.mjs로 한다`. 같은 명령이 실행마다 다른 모양의 지적을 냈고, 규칙은 이미 계약에 다 있었는데도 그랬다 — 문서가 부탁하는 동안에는 지켜지지 않는다. **`--phase-high`와 `--phase-low`는 별개 값이다.** phase는 전역이 아니라 `impact`별 설정이므로(`workflow-contract.md`의 `deletionPhase`), high가 아직 `rollout-shadow`인 동안 low만 `active-deletion`으로 옮기는 것이 정상 구성이다. 둘 다 기본값이 없다 — 반박된 finding의 처리가 갈리고 그 값이 차단 판정에 걸리므로, 조용히 틀린 쪽으로 도는 것보다 멈추는 편이 낫다.
@@ -624,7 +627,7 @@ node "$RULES_DIR/../scripts/review-snapshot.mjs" --dir "$REPORT_DIR" --run "$REP
 - 스크립트가 멈추면(종료 코드 2) 이유를 고치고 다시 돌린다. 검증 대상이 있는데 검증자가 하나도 판정을 내지 못했으면 `--no-verdicts`를 준다. 고칠 수 없으면 `실행 계획`에 스냅숏을 남기지 못했다고 적는다 — **블록을 손으로 만들지 않는다**
 
 ### 상세 지적 작성 규칙
-- 사용자가 다른 언어를 명시하지 않은 한 모든 패스의 상세 지적과 최종 저장 문서는 한국어로 작성한다.
+- 사용자가 다른 언어를 명시하지 않은 한 모든 패스의 상세 지적과 최종 저장 문서는 한국어로 작성한다. 다른 언어를 정했으면 preflight에 `--language <코드>`(예: `en`)를 준다 — 주지 않으면 작업 대장이 제목·본문에 한글이 없는 지적을 받지 않고 교정 시도를 낸다. 2026-10-06과 2026-10-15에 producer 프롬프트에서 언어 지시가 빠져 영어 지적이 리포트에 그대로 실렸다.
 - 각 이슈는 일반 `code-review`와 같은 상세 스타일로 `문제 → 의도/현재 선택 → 왜 부족한지 → 개선 방향` 순서가 드러나게 쓴다.
 - 동작 여부만 확인하지 말고 문제 정의, 의도, 선택 근거, 장기 변경 비용까지 함께 검토해 지적에 반영한다.
 - 전체 요약은 추가 정보일 뿐이며, 패스별 상세 지적을 대체하거나 압축하지 않는다.

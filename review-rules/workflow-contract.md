@@ -271,6 +271,7 @@ baseline이 없을 때 `미측정`으로 적는 것으로 끝내지 않는다. p
 
 - 오케스트레이터는 producer 응답을 받은 즉시 envelope와 필수 필드를 검증한다
 - JSON 파싱 실패, 필수 필드 누락, 금지 필드(`severity`) 포함, 허용되지 않은 location/impact/category 값은 **malformed-output**이다
+- 사용자가 다른 언어를 정하지 않은 실행(`run.start.language`가 없거나 `ko`)에서 제목·본문에 한글이 하나도 없는 지적·열린 질문도 **malformed-output**이다. `/code-review-full`의 작업 대장이 결과를 받을 때 검사한다(`scripts/lib/result-language.mjs`) — 언어 지시는 규칙 문서·에이전트·스킬에 있었지만 문장일 뿐이라, 프롬프트에서 빠진 날 영어 지적이 그대로 실렸다
 - malformed-output이든 legacy/prose 출력이든 **교정 재시도는 한 번만** 한다. 재시도 prompt는 잘못된 점만 짧게 지적하고 같은 계약으로 다시 요구한다
 - 두 번째도 malformed-output이면 그 pass는 **`FAILED malformed-output`으로 종료**한다. 부분 해석이나 추측 보정으로 통과시키지 않는다
 
@@ -1455,7 +1456,7 @@ UTF-16 파일도 읽는다 — PowerShell 5.1의 `Set-Content -Encoding UTF8`은
 
 | `--phase` | 시점 | `--set`/`--data`에 담는 것 |
 |---|---|---|
-| `run.start` | 가장 먼저 | `host`, `rules`(해석된 RULES_DIR), `version`, `branch`, `changedFiles` · 무엇을 리뷰하는지(C-10): `runId`, `base`, `head`, `worktree`, `dirtyFiles`, `repo`, `repoRoot`, `rulesDigest` · 선택 패스를 켰는지: `correctness`(`on`/`off`, 선택 패스가 있는 워크플로우만) · 한도(C-12): `maxTasks`, `maxDurationSec`(준 것만), `staleAfterSec` · (새 실행으로 이어 받았으면) `continues` · (이전 리뷰와 비교하면, C-13) `previousSnapshot`, `previousRunId`, `previousSha256` · base 앞섬(C-6): `baseAhead`(merge-base 뒤 base의 커밋 수), (같은 파일을 바꿨으면) `baseOverlapCount`, `baseOverlap`(20개까지) · (의존성 매니페스트를 바꿨으면) `dependencyFiles` · `baseHead`(base 끝 SHA — 시작할 때 한 번 해석한다. 없으면 "base 끝 SHA 미기록") · (full이면, C-6C) `reuseSearch`(`planned`) — preflight가 쓴다 |
+| `run.start` | 가장 먼저 | `host`, `rules`(해석된 RULES_DIR), `version`, `branch`, `changedFiles` · 무엇을 리뷰하는지(C-10): `runId`, `base`, `head`, `worktree`, `dirtyFiles`, `repo`, `repoRoot`, `rulesDigest` · 선택 패스를 켰는지: `correctness`(`on`/`off`, 선택 패스가 있는 워크플로우만) · 한도(C-12): `maxTasks`, `maxDurationSec`(준 것만), `staleAfterSec` · (새 실행으로 이어 받았으면) `continues` · (이전 리뷰와 비교하면, C-13) `previousSnapshot`, `previousRunId`, `previousSha256` · base 앞섬(C-6): `baseAhead`(merge-base 뒤 base의 커밋 수), (같은 파일을 바꿨으면) `baseOverlapCount`, `baseOverlap`(20개까지) · (의존성 매니페스트를 바꿨으면) `dependencyFiles` · `baseHead`(base 끝 SHA — 시작할 때 한 번 해석한다. 없으면 "base 끝 SHA 미기록") · (full이면, C-6C) `reuseSearch`(`planned`) · (사용자가 다른 언어를 정했으면) `language` — preflight가 쓴다 |
 | `run.resume` | 멈춘 실행을 이어 갈 때 (`review-tasks.mjs resume`이 쓴다) | 새 구간의 `maxTasks`·`maxDurationSec`·`staleAfterSec`, 다시 잰 `head`·`worktree` |
 | `scope.done` | 범위 확정(C-4) — `/code-review-full`은 **preflight가 남긴다**(C-5의 이름 규칙으로 센 수) | `files`, `excluded` |
 | `modules.planned` | 적용 모듈 확정(C-3) | `candidates`, `applied`(적용한 **번호 모듈** 수 — Props·수학·예외·정확성 패스는 세지 않는다. 후보 수를 넘으면 스크립트가 거부한다. 스냅숏의 `적용 N개`는 패스 전부를 센 수라 다르다) · `skipped`, `unknown`(중첩, `--data-file`) |
