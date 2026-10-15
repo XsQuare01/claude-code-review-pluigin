@@ -560,3 +560,16 @@ test('--correctness off의 정상 경로는 그대로다 — 켜지 않은 패�
   assert.equal(snapshot.scope.modules.find(module => module.name === 'correctness').reasonCode, 'not-requested')
   assert.equal(snapshot.status, 'complete')
 })
+
+test('대상에 base 끝 SHA를 남기고 블록에 적는다 — 그 값이 없는 예전 기록은 미기록이라고 적는다', () => {
+  const pinned = buildSnapshot(fixture({ events: [runStart({ baseHead: 'b'.repeat(40) }), ...fixture().events.slice(1)] }))
+  assert.equal(pinned.target.baseHead, 'b'.repeat(40))
+  assert.deepEqual(snapshotProblems(pinned), [])
+  assert.match(renderSnapshotMarkdown(pinned), /base `main` \(끝 `bbbbbbbbbbbb` · merge-base `dddddddddddd`\)/)
+  // 나중에 ref를 다시 읽어 시작 때의 값인 것처럼 채우지 않는다
+  const legacy = buildSnapshot(fixture())
+  assert.equal('baseHead' in legacy.target, false)
+  assert.match(renderSnapshotMarkdown(legacy), /base `main` \(끝 SHA 미기록 · merge-base `dddddddddddd`\)/)
+  const broken = { ...pinned, target: { ...pinned.target, baseHead: 'main' } }
+  assert.ok(snapshotProblems(broken).some(problem => /baseHead/.test(problem)), snapshotProblems(broken).join(' / '))
+})

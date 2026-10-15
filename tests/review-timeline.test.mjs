@@ -2248,3 +2248,12 @@ test('--check는 순번이 겹친 기록을 짚는다 — 잠금 밖에서 쓴 �
   assert.equal(out.status, 1)
   assert.match(out.stdout + out.stderr, /seq가 겹친다\(2\)/)
 })
+
+test('run.start는 base 끝 SHA와 기존 구현 검색 예정을 경고 없이 받고, reuseSearch는 닫힌 목록이다', t => {
+  const base = { host: 'test', rules: 'r', version: 'v', branch: 'b', changedFiles: 2, baseHead: 'a'.repeat(40) }
+  const out = log(freshDir(t), 'run.start', { ...base, reuseSearch: 'planned' })
+  assert.equal(out.status, 0, out.stderr)
+  assert.equal(out.stderr, '')
+  const odd = log(freshDir(t), 'run.start', { ...base, reuseSearch: 'maybe' })
+  assert.match(odd.stderr, /reuseSearch/)
+})

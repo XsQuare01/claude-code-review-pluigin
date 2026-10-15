@@ -141,7 +141,9 @@ const PHASES = new Map([
     required: ['host', 'rules', 'version', 'branch', 'changedFiles'],
     structured: ['baseOverlap', 'dependencyFiles'],
     allowed: ['candidates', 'workflow', 'mergeBase', 'os', 'runId', 'base', 'baseSource', 'prNumber', 'prBase', 'head', 'worktree', 'dirtyFiles', 'repo', 'repoRoot', 'rulesDigest', 'correctness',
-      'maxTasks', 'maxDurationSec', 'staleAfterSec', 'continues', 'previousSnapshot', 'previousRunId', 'previousSha256', 'baseAhead', 'baseOverlapCount'],
+      'maxTasks', 'maxDurationSec', 'staleAfterSec', 'continues', 'previousSnapshot', 'previousRunId', 'previousSha256', 'baseAhead', 'baseOverlapCount',
+      // `baseHead`: 기준 ref의 끝 commit(정한 순간). `reuseSearch`: full이 기존 구현 검색을 예정했는지(C-6C).
+      'baseHead', 'reuseSearch'],
   }],
   // 한도에 닿아 멈춘 실행을 이어 갈 때 새 한도 구간을 연다(C-12). 대상이 그대로인지 확인한 값을 함께 남긴다.
   ['run.resume', { required: [], structured: [], allowed: ['maxTasks', 'maxDurationSec', 'staleAfterSec', 'head', 'worktree'] }],
@@ -225,6 +227,7 @@ const undeclaredKeys = (phase, data) => {
  * `failureClass`와 같은 이유로 줄은 거부하지 않는다. 경고하고 `--check`가 짚는다.
  */
 const CLOSED_VALUES = new Map([
+  ['run.start', { reuseSearch: ['planned'] }],
   ['module.done', { status: ['ok', 'failed'], cancelReason: CANCEL_REASONS }],
   ['verify.done', { status: ['ok', 'failed'], cancelReason: CANCEL_REASONS }],
   ['task.bind', { stage: STAGES }],

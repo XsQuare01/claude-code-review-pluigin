@@ -313,6 +313,8 @@ const logged = (() => {
     mergeBase,
     runId: identity.runId,
     base,
+    // 기준 ref의 끝 commit — 정한 순간의 값이다. 기존 구현 검색과 인용이 이 SHA에 묶인다.
+    ...(chosenBase.baseHead ? { baseHead: chosenBase.baseHead } : {}),
     baseSource: chosenBase.source,
     ...(chosenBase.pr ? { prNumber: chosenBase.pr.number, prBase: chosenBase.pr.baseRefName } : {}),
     head: identity.head,
@@ -321,6 +323,9 @@ const logged = (() => {
     ...(baseMoved ? { baseAhead: baseMoved.ahead } : {}),
     ...(baseMoved?.overlap.length ? { baseOverlapCount: baseMoved.overlap.length, baseOverlap: baseMoved.overlap.slice(0, OVERLAP_RECORDED) } : {}),
     ...(dependencyFiles.length ? { dependencyFiles } : {}),
+    // full은 diff 밖의 기존 구현을 찾아 05에 넘긴다(05-7). 예정이라는 사실을 시작에 남겨, 계획했는데 돌리지 않은
+    // 검색을 기록 검사가 짚게 한다 — 이 필드가 없는 예전 기록은 그 검사를 받지 않는다.
+    ...(workflow === 'full' ? { reuseSearch: 'planned' } : {}),
     // 원격이 없으면 필드를 비워 둔다. 없는 값을 지어 넣지 않는다.
     ...(identity.remote ? { repo: identity.remote } : {}),
     repoRoot: identity.root,
@@ -376,6 +381,7 @@ const out = [
   `변경 파일     ${changed.length}개`,
   `리뷰 파일     ${scope.files.length}개 (제외 ${scope.excluded.length}개 — 테스트·mock, C-5)${logged.ok && !logged.skipped ? ` · 목록 .timing/${run}.scope.json` : ''}`,
   ...(dependencyFiles.length ? [`의존성 변경   ${dependencyFiles.join(', ')} — baseline은 그 트리에 그 트리의 의존성을 설치해 잰다. 지금 트리의 의존성을 같이 쓰면 baseline도 같은 실패를 내 "신규 0"으로 잘못 나온다(C-6)`] : []),
+  ...(workflow === 'full' ? [`기존 구현 검색 예정 — 05를 뺀 모듈을 먼저 띄우고, 그동안 검색 계획을 써 review-reuse.mjs로 후보를 모은다. 05는 검색이 끝난 뒤 띄운다(C-6C)`] : []),
   '',
   `후보 모듈     ${candidates.length}개  ${candidates.map(module => module.id).join(' ')}`,
 ]

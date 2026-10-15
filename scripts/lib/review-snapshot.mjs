@@ -378,6 +378,8 @@ export function buildSnapshot({ name, events, catalog, routed, verdicts, verific
       repoRoot: start.repoRoot ?? null,
       branch: start.branch,
       base: start.base,
+      // 기준 ref의 끝 commit. preflight가 정한 순간에 잰 실행에만 있다 — 나중에 ref를 다시 읽어 채우지 않는다.
+      ...(OBJECT_ID.test(String(start.baseHead)) ? { baseHead: start.baseHead } : {}),
       mergeBase: start.mergeBase,
       head: start.head,
       worktree: start.worktree,
@@ -428,6 +430,7 @@ export function snapshotProblems(snapshot) {
   else {
     if (!OBJECT_ID.test(String(target.head))) problems.push('target.head가 commit id가 아니다')
     if (!OBJECT_ID.test(String(target.mergeBase))) problems.push('target.mergeBase가 commit id가 아니다')
+    if ('baseHead' in target && !OBJECT_ID.test(String(target.baseHead))) problems.push('target.baseHead가 commit id가 아니다')
     if (target.worktree !== 'clean' && !SHA256.test(String(target.worktree))) problems.push('target.worktree가 clean도 sha256:<hex>도 아니다')
     if (!count(target.dirtyFiles)) problems.push('target.dirtyFiles가 0 이상의 정수가 아니다')
     else if ((target.worktree === 'clean') !== (target.dirtyFiles === 0)) problems.push('target.worktree와 target.dirtyFiles가 서로 맞지 않는다')
@@ -689,7 +692,7 @@ export function renderSnapshotMarkdown(snapshot) {
 
   const { target, run } = snapshot
   const worktree = target.worktree === 'clean' ? 'clean' : `커밋하지 않은 변경 ${target.dirtyFiles}개 (${codeSpan(target.worktree.slice(0, 19))}…)`
-  lines.push('', `검토 대상: HEAD ${codeSpan(short(target.head))} · 작업 트리 ${worktree} · base ${codeSpan(target.base)} (merge-base ${codeSpan(short(target.mergeBase))}) · 실행 ID ${codeSpan(run.runId)}`)
+  lines.push('', `검토 대상: HEAD ${codeSpan(short(target.head))} · 작업 트리 ${worktree} · base ${codeSpan(target.base)} (${'baseHead' in target ? `끝 ${codeSpan(short(target.baseHead))}` : '끝 SHA 미기록'} · merge-base ${codeSpan(short(target.mergeBase))}) · 실행 ID ${codeSpan(run.runId)}`)
   // base가 앞서 나가 같은 파일을 바꿨으면 도구 결과를 읽는 법이 달라진다(C-6). 리뷰 diff에는 보이지 않는 사실이라 여기서 적는다.
   if (target.baseAhead > 0 && target.baseOverlapCount > 0) {
     const shown = target.baseOverlap.slice(0, 5).map(codeSpan).join(', ')

@@ -150,3 +150,15 @@ test('--no-pr와 --pr-json은 함께 받지 않는다', t => {
   assert.equal(out.status, 2)
   assert.match(out.stderr, /함께 줄 수 없다/)
 })
+
+// 기존 구현 검색은 base가 앞서 나간 사이의 구현도 본다. ref 이름만 남기면 실행 도중에 다시 해석한 값이 시작 때와
+// 달라질 수 있으므로, 정한 순간의 끝 SHA를 함께 낸다.
+test('기준 ref의 끝 SHA를 baseHead로 함께 낸다', t => {
+  const repo = stacked(t)
+  const path = prFile(repo, { number: 96, baseRefName: 'lower', headRefName: 'upper', state: 'OPEN', url: 'u' })
+  t.after(() => rmSync(path, { force: true }))
+  const chosen = JSON.parse(resolve(repo, '--pr-json', path).stdout)
+  assert.equal(chosen.baseHead, repo.git('rev-parse', 'origin/lower'))
+  const plain = JSON.parse(resolve(repo, '--no-pr').stdout)
+  assert.equal(plain.baseHead, repo.git('rev-parse', 'main'))
+})

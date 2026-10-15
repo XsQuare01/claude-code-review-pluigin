@@ -61,6 +61,7 @@ process.stdout.write(`${JSON.stringify({
   base: chosen.ref,
   baseSource: chosen.source,
   mergeBase: chosen.mergeBase,
+  ...(chosen.baseHead ? { baseHead: chosen.baseHead } : {}),
   changedFiles,
   ...(chosen.pr ? { pr: chosen.pr, stacked: chosen.stacked } : {}),
   notes: chosen.notes,

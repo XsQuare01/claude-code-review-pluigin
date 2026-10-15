@@ -101,7 +101,10 @@ export function readCurrentPr(repo, { prJson, noPr = false } = {}) {
 
 /**
  * 저장소에서 기준을 정하고 merge-base까지 잰다. preflight와 `review-base.mjs`가 같은 값을 낸다.
- * 돌려주는 값은 `resolveReviewBase`의 것에 `mergeBase`를 더한 것이다(못 재면 `error`).
+ * 돌려주는 값은 `resolveReviewBase`의 것에 `mergeBase`와 `baseHead`(그 순간 기준 ref의 끝 commit)를 더한 것이다(못 재면 `error`).
+ *
+ * `baseHead`를 정한 순간에 함께 잰다. ref 이름만 남기면 실행 도중 fetch가 끼었을 때 다시 해석한 값이 시작 때와
+ * 달라진다 — 기존 구현 검색은 base가 merge-base 뒤로 앞서 나간 사이의 구현도 보므로 그 SHA에 묶여야 한다.
  */
 export function reviewBaseOf(repo, { requested, prJson, noPr = false } = {}) {
   const git = gitIn(repo)
@@ -113,7 +116,8 @@ export function reviewBaseOf(repo, { requested, prJson, noPr = false } = {}) {
   if (chosen.error) return chosen
   const mergeBase = git(['merge-base', chosen.ref, 'HEAD'])
   if (!mergeBase) return { ...chosen, error: `base ${JSON.stringify(chosen.ref)}를 HEAD와 맞춰볼 수 없다 — 존재하는 ref를 --base로 넘겨라` }
-  return { ...chosen, mergeBase }
+  const baseHead = git(['rev-parse', '--verify', '--quiet', `${chosen.ref}^{commit}`])
+  return { ...chosen, mergeBase, ...(baseHead ? { baseHead } : {}) }
 }
 
 /**

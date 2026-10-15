@@ -558,3 +558,16 @@ test('base를 따라잡았으면 앞섬이 없다고 적고, 같은 파일을 �
   const [start] = linesOf(apart)
   assert.deepEqual([start.baseAhead, 'baseOverlap' in start, 'dependencyFiles' in start], [2, false, false])
 })
+
+test('run.start에 base 끝 SHA(baseHead)와 기존 구현 검색 예정(reuseSearch)을 남긴다', t => {
+  const repo = behindRepo(t)
+  const dir = freshDir(t)
+  const out = preflightIn(repo, dir, ['--base', 'main'])
+  assert.equal(out.status, 0, out.stderr)
+  const [start] = linesOf(dir)
+  assert.equal(start.baseHead, repo.git('rev-parse', 'main'))
+  // base가 앞서 나간 저장소다 — 끝 SHA는 merge-base와 다르다
+  assert.notEqual(start.baseHead, start.mergeBase)
+  assert.equal(start.reuseSearch, 'planned')
+  assert.match(out.stdout, /기존 구현 검색 +예정 — /)
+})
