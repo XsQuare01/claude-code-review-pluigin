@@ -40,6 +40,7 @@ import {
   foldAttempts, haltOf, isTerminal, parseDuration, planStates, segmentOf, settleDecision, settleRecord, verifyPlan,
   endState, verifyRoundOf, verifyRoundStart,
 } from './lib/task-ledger.mjs'
+import { REUSE_MODULE, reuseState } from './lib/reuse-state.mjs'
 import { checkTaskVerdict, loadVerdictValidator } from './lib/verdicts.mjs'
 import { buildRetryPrompt } from './lib/verifier-tasks.mjs'
 
@@ -308,7 +309,13 @@ const next = () => {
     const { plan } = stage === 'module' ? { plan: modulePlan(events, start) } : verifyPlanOf(events, start, { required: true })
     const fold = foldAttempts(events)
     const now = Date.now()
-    const decision = decideNext({ stage, plan, fold, events, now, inflight })
+    // 05는 기존 구현 검색이 풀릴 때까지(끝·유실·시간 초과) 띄우지 않는다(C-6C). 기다리는 동안 슬롯을 쓰지 않으므로
+    // 다른 모듈은 그대로 나간다. 상태는 기록 검사와 같은 정의(`reuseState`)로 읽는다.
+    const reuse = stage === 'module' ? reuseState(events, { now }) : null
+    const hold = new Map(reuse?.required && !reuse.released && plan.some(entry => entry.task === REUSE_MODULE)
+      ? [[REUSE_MODULE, { reason: `기존 구현 검색(${reuse.searchId ?? '계획 전'})을 기다린다 — 끝(reuse.done)이 오거나 ${reuse.deadline}이 지나면 풀린다`, state: reuse.state, until: reuse.deadline }]]
+      : [])
+    const decision = decideNext({ stage, plan, fold, events, now, inflight, hold })
     const host = hostCapabilities(start.host)
     const byTask = new Map(plan.map(entry => [entry.task, entry]))
     const runId = start.runId ?? run
@@ -333,6 +340,13 @@ const next = () => {
         ...(stage === 'verify' ? { prompt: correction && existsSync(retryPromptOf(entry.prompt)) ? retryPromptOf(entry.prompt) : entry.prompt } : {}),
         ...(one.retryOf ? { retryOf: one.retryOf } : {}),
         ...(correction ? { correction: true } : {}),
+        // 05에 넘길 검색 근거. 끝났으면 결과 파일, 실패·유실·시간 초과면 그 사유 — producer에게 검색이 미완료였다고 알린다
+        ...(one.task === REUSE_MODULE && reuse?.required ? {
+          reuse: {
+            state: reuse.state, searchId: reuse.searchId, ...(reuse.status ? { status: reuse.status } : {}),
+            context: typeof reuse.done?.out === 'string' ? reuse.done.out : null, ...(reuse.reason ? { reason: reuse.reason } : {}),
+          },
+        } : {}),
       }
     })
 
@@ -346,6 +360,9 @@ const next = () => {
         : '시간 상한이 지났다 — 이 호스트는 작업을 멈추지 못한다. 그 결과는 받지 않는다')
     }
     if (decision.expire.length) advice.push('expired의 시도는 응답이 없어 끝냈다 — 그 결과가 나중에 와도 done이 받지 않는다')
+    if (decision.held.length && !claims.length && !decision.running.length) {
+      advice.push('남은 일은 기존 구현 검색을 기다리는 05뿐이다 — review-reuse.mjs wait로 검색이 풀리기를 기다린 뒤 next를 다시 부른다(review-tool --wait는 다른 도구까지 기다리므로 쓰지 않는다)')
+    }
     return {
       code: 0,
       out: {
@@ -356,6 +373,7 @@ const next = () => {
         cancelled: decision.cancel,
         running: decision.running.map(entry => ({ task: entry.task, attempt: entry.attempt, startedAt: entry.startedAt, quietSec: entry.quietSec, ...(entry.hostTaskId ? { hostTaskId: entry.hostTaskId } : {}) })),
         waiting: decision.waiting.map(entry => entry.task),
+        held: decision.held,
         halted: decision.halt ?? decision.halted?.reason ?? null,
         complete: decision.complete,
         budget: decision.budget,

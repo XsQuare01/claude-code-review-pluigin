@@ -461,3 +461,46 @@ test('정상으로 끝난 실행은 run.end 뒤에 이어 가지 않는다', t =
   assert.equal(out.status, 2)
   assert.match(out.stderr, /정상으로 끝난 실행이다/)
 })
+
+// ── 기존 구현 검색(C-6C) ─────────────────────────────────────────────────
+test('검색을 예정한 실행에서 05는 검색이 풀릴 때까지 띄우지 않고, 풀리면 결과 파일과 함께 낸다', t => {
+  const dir = fresh(t)
+  const keep = ['01-fsd', '05-structure', '06-jsx']
+  plant(dir, [startEvent({ reuseSearch: 'planned' }), planned(keep), { phase: 'reuse.planned', searchId: 's1', scopeSha256: 'h', plan: 'p' }])
+  const first = json(next(dir, 'module', ['--inflight', '4']))
+  assert.deepEqual(first.dispatch.map(one => one.task).sort(), ['01-fsd', '06-jsx'])
+  assert.deepEqual(first.held.map(one => one.task), ['05-structure'])
+  assert.match(first.held[0].reason, /기존 구현 검색/)
+  assert.equal(first.complete, false)
+  // 검색이 끝났다 — 결과 파일 자리를 05와 함께 낸다
+  const events = eventsOf(dir).map(({ seq, ...event }) => event)
+  plant(dir, [...events, { phase: 'reuse.start', searchId: 's1', plan: 'p' }, { phase: 'reuse.done', searchId: 's1', status: 'partial', out: '/x/ctx.json', reason: 'limits-or-errors' }])
+  const second = json(next(dir, 'module', ['--inflight', '4']))
+  const five = second.dispatch.find(one => one.task === '05-structure')
+  assert.deepEqual([five.reuse.state, five.reuse.status, five.reuse.context, five.reuse.searchId], ['done', 'partial', '/x/ctx.json', 's1'])
+})
+
+test('남은 일이 검색을 기다리는 05뿐이면 무엇으로 기다릴지 알려 준다', t => {
+  const dir = fresh(t)
+  plant(dir, [startEvent({ reuseSearch: 'planned' }), planned(['05-structure']), { phase: 'reuse.planned', searchId: 's1', scopeSha256: 'h', plan: 'p' }])
+  const out = json(next(dir))
+  assert.deepEqual([out.dispatch.length, out.running.length, out.complete], [0, 0, false])
+  assert.ok((out.advice ?? []).some(line => /review-reuse\.mjs wait/.test(line)), (out.advice ?? []).join(' / '))
+})
+
+test('검색이 끝을 남기지 못해도 기다리는 상한이 지나면 05를 풀고 그 사유를 함께 낸다', t => {
+  const dir = fresh(t)
+  plant(dir, [startEvent({ reuseSearch: 'planned' }), planned(['05-structure']), { at: ago(120), phase: 'reuse.planned', searchId: 's1', scopeSha256: 'h', plan: 'p', waitSec: 60 },
+    { phase: 'reuse.start', searchId: 's1', plan: 'p' }])
+  const out = json(next(dir))
+  const five = out.dispatch.find(one => one.task === '05-structure')
+  assert.deepEqual([five.reuse.state, five.reuse.context], ['timed-out', null])
+  assert.match(five.reuse.reason, /60초/)
+})
+
+test('검색을 예정하지 않은 실행에서는 05를 붙잡지 않는다', t => {
+  const dir = fresh(t)
+  plant(dir, [startEvent(), planned(['05-structure'])])
+  const out = json(next(dir))
+  assert.deepEqual([out.dispatch.map(one => one.task), out.held, 'reuse' in out.dispatch[0]], [['05-structure'], [], false])
+})

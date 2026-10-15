@@ -325,8 +325,12 @@ export const isTerminal = state => TERMINAL.has(state)
  *
  * `halt`는 이번 결정이 디스패치를 멈췄을 때만 이유를 담는다. 이미 멈춘 기록(`halted`)이 있으면
  * 다시 띄우지 않는다.
+ *
+ * `hold`(작업 이름 → `{ reason, … }`)는 아직 띄울 준비가 안 된 작업이다 — 05가 기존 구현 검색을 기다리는
+ * 경우(C-6C). 보류한 작업은 슬롯도 호출 상한도 쓰지 않고, 뒤의 준비된 작업이 먼저 나간다. 보류가 남아 있는
+ * 동안 단계는 끝나지 않는다(`held`에 남는다).
  */
-export function decideNext({ stage, plan, fold, events, now, inflight = DEFAULT_INFLIGHT }) {
+export function decideNext({ stage, plan, fold, events, now, inflight = DEFAULT_INFLIGHT, hold = new Map() }) {
   const budget = budgetOf(events, now)
   if (!budget) throw new Error('타임라인에 run.start가 없다 — 대장은 시작된 실행에서만 쓴다')
   const halted = haltOf(events)
@@ -363,6 +367,7 @@ export function decideNext({ stage, plan, fold, events, now, inflight = DEFAULT_
     let slots = Math.max(0, inflight - stillRunning.length)
     let remaining = budget.remaining
     for (const entry of queued) {
+      if (hold.has(entry.task)) continue
       if (!slots) break
       if (remaining !== null && remaining <= 0) {
         halt = 'max-tasks'
@@ -376,6 +381,7 @@ export function decideNext({ stage, plan, fold, events, now, inflight = DEFAULT_
 
   const stopped = Boolean(halted) || halt !== null
   const waiting = queued.filter(entry => !dispatch.some(one => one.task === entry.task))
+  const held = waiting.filter(entry => hold.has(entry.task)).map(entry => ({ task: entry.task, ...hold.get(entry.task) }))
   // 단계가 끝났다는 것은 더 기다릴 것이 없다는 뜻이다. 멈춘 실행에서는 띄우지 못한 작업이 남아도
   // 끝이다 — 그 작업은 미검토 범위로 남는다.
   const complete = !stillRunning.length && !dispatch.length && (stopped || !waiting.length)
@@ -390,6 +396,7 @@ export function decideNext({ stage, plan, fold, events, now, inflight = DEFAULT_
     states: after,
     running: stillRunning,
     waiting,
+    held,
     complete,
   }
 }

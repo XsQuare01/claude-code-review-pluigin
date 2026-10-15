@@ -7,6 +7,9 @@
 //   review-reuse.mjs search --dir D --run R --search-id S --out <reuse-context 경로> [--plan <계획 경로>] [--repo .]
 //       계획을 검사하고 검색한다. `reuse.start`·`reuse.done`을 스스로 남긴다. 보통 review-tool --detach --name
 //       reuse-search로 감싸 띄운다 — 다른 모듈 리뷰가 그동안 돈다.
+//   review-reuse.mjs wait --dir D --run R [--timeout 초]
+//       검색이 풀릴 때까지(끝·유실·시간 초과) 기다린다. 남은 일이 05뿐일 때 쓴다 — review-tool --wait는 lint·test까지
+//       기다린다. 풀렸으면 0, 자기 상한에 먼저 닿으면 1. 표준 출력은 상태 JSON 하나.
 //
 // 무엇을 찾을지(계획)는 오케스트레이터가 쓴다. 계획 검사는 이 스크립트의 관문이다 — preflight의 scope.json에 있는
 // 모든 파일에 search 또는 사유가 있는 exclude가 하나씩 있어야 하고, 대상의 anchor는 HEAD의 줄·인용과 맞고 이번
@@ -23,6 +26,7 @@ import { readJsonFile, readTextFile } from './lib/read-text.mjs'
 import {
   REUSE_LIMITS, REUSE_SCHEMA_VERSION, anchorProblems, changedRanges, gitReader, overallStatus, planProblems, searchTarget, sha256, summarizeTargets,
 } from './lib/reuse-context.mjs'
+import { reuseState } from './lib/reuse-state.mjs'
 import { readEvents, recordPhase, requireStartedTimeline } from './lib/run-record.mjs'
 
 const die = message => {
@@ -31,8 +35,8 @@ const die = message => {
 }
 
 const [mode, ...rest] = process.argv.slice(2)
-if (mode !== 'register' && mode !== 'search') die('usage: review-reuse.mjs register|search --dir D --run R …')
-const VALUE_FLAGS = new Set(['dir', 'run', 'wait-sec', 'search-id', 'out', 'plan', 'repo', 'max-candidates', 'time-limit'])
+if (!['register', 'search', 'wait'].includes(mode)) die('usage: review-reuse.mjs register|search|wait --dir D --run R …')
+const VALUE_FLAGS = new Set(['dir', 'run', 'wait-sec', 'search-id', 'out', 'plan', 'repo', 'max-candidates', 'time-limit', 'timeout'])
 const values = new Map()
 for (let at = 0; at < rest.length; at += 1) {
   const arg = rest[at]
@@ -49,6 +53,27 @@ for (let at = 0; at < rest.length; at += 1) {
 const dir = values.get('dir')
 const run = values.get('run')
 const sidecar = requireStartedTimeline(dir, run)
+
+if (mode === 'wait') {
+  const limitSec = Number(values.get('timeout') ?? 3600)
+  if (!Number.isFinite(limitSec) || limitSec <= 0) die('--timeout은 양수(초)다')
+  const until = Date.now() + limitSec * 1000
+  const sleep = ms => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
+  for (;;) {
+    const state = reuseState(readEvents(sidecar))
+    const brief = {
+      state: state.state, released: state.released, searchId: state.searchId ?? null, ...(state.status ? { status: state.status } : {}),
+      context: typeof state.done?.out === 'string' ? state.done.out : null, ...(state.releasedAt ? { releasedAt: state.releasedAt } : {}),
+      ...(state.reason ? { reason: state.reason } : {}), ...(state.deadline ? { deadline: state.deadline } : {}),
+    }
+    if (state.released || Date.now() >= until) {
+      process.stdout.write(`${JSON.stringify(brief)}\n`)
+      process.exit(state.released ? 0 : 1)
+    }
+    sleep(Math.min(2000, Math.max(50, until - Date.now())))
+  }
+}
+
 const events = readEvents(sidecar)
 const start = events.find(event => event?.phase === 'run.start')
 if (start?.reuseSearch !== 'planned') die('이 실행은 기존 구현 검색을 예정하지 않았다(run.start.reuseSearch) — preflight가 full 실행에만 남긴다')
