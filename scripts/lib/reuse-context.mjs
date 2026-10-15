@@ -254,7 +254,30 @@ const nearbyScope = path => {
 const truncateBytes = (lines, maxBytes) => {
   let kept = lines
   while (kept.length > 1 && Buffer.byteLength(kept.join('\n'), 'utf8') > maxBytes) kept = kept.slice(0, -1)
+  // 남은 한 줄도 상한을 넘으면(압축된 번들) 글자 경계에서 자른다 — 한 줄은 늘 남긴다고 상한을 건너뛰지 않는다
+  if (kept.length === 1 && Buffer.byteLength(kept[0], 'utf8') > maxBytes) {
+    let cut = ''
+    let size = 0
+    for (const char of kept[0]) {
+      size += Buffer.byteLength(char, 'utf8')
+      if (size > maxBytes) break
+      cut += char
+    }
+    return { lines: [cut], truncated: true }
+  }
   return { lines: kept, truncated: kept.length < lines.length }
+}
+
+// 재사용할 구현이 들어 있을 수 있는 파일. 그 밖(SVG·JSON 데이터·문서·압축된 번들)은 `other`로 가른다
+const SOURCE_EXTENSIONS = new Set([
+  'ts', 'tsx', 'mts', 'cts', 'js', 'jsx', 'mjs', 'cjs', 'vue', 'svelte', 'astro', 'css', 'scss', 'sass', 'less',
+  'py', 'go', 'rs', 'java', 'kt', 'kts', 'swift', 'cs', 'rb', 'php', 'c', 'h', 'cc', 'cpp', 'hpp', 'm', 'mm', 'dart', 'scala', 'sql', 'sh',
+])
+const KIND_ORDER = { production: 0, test: 1, other: 2 }
+const kindOf = path => {
+  if (isExcludedPath(path)) return 'test'
+  const extension = path.includes('.') ? path.slice(path.lastIndexOf('.') + 1).toLowerCase() : ''
+  return SOURCE_EXTENSIONS.has(extension) && !/\.min\.[cm]?js$/i.test(path) ? 'production' : 'other'
 }
 
 /**
@@ -266,7 +289,8 @@ const truncateBytes = (lines, maxBytes) => {
  *   모두 남긴다. base에만 있는 구현은 `onlyInBase`로 표시한다 — 병합 결과를 보기 전에는 공존으로 확정하지 않는다
  * - 대상 자신(같은 파일·anchor와 앞뒤 linesBefore줄의 hit)은 뺀다. 같은 파일의 떨어진 구현은 남긴다
  * - HEAD 후보는 merge-base에도 같은 원문이 있었는지(`existedAtMergeBase`)를 적는다 — 없으면 이번 변경이 함께 더한 것이다
- * - 테스트·mock 경로의 후보는 `kind: test`로 production 후보와 가른다
+ * - 테스트·mock 경로의 후보는 `kind: test`, 코드가 아닌 파일(SVG·JSON 데이터·문서·압축된 번들)은 `kind: other`로
+ *   production 후보와 가르고, production을 먼저 둔다
  */
 export function searchTarget(target, { git, head, mergeBase, baseHead, limits, deadline, budget }) {
   const anchor = target.anchor
@@ -346,7 +370,7 @@ export function searchTarget(target, { git, head, mergeBase, baseHead, limits, d
       const quote = sliced.lines.join('\n')
       found.push({
         sourceRef: file.sourceRef, rev: file.rev, path: file.path, startLine: window.start, endLine: window.start + sliced.lines.length - 1,
-        quote, sha256: sha256(quote), clues: [...file.clues].sort(), hitLines: window.hits, kind: isExcludedPath(file.path) ? 'test' : 'production',
+        quote, sha256: sha256(quote), clues: [...file.clues].sort(), hitLines: window.hits, kind: kindOf(file.path),
         ...(window.truncated || sliced.truncated ? { truncated: true } : {}),
       })
     }
@@ -371,7 +395,7 @@ export function searchTarget(target, { git, head, mergeBase, baseHead, limits, d
     return { ...rest, sourceRef: inHead ? 'head' : 'base', ...(inHead ? { existedAtMergeBase } : { onlyInBase: true }) }
   })
   // production 먼저, hit가 많은 것 먼저
-  candidates.sort((a, b) => (a.kind === b.kind ? 0 : a.kind === 'production' ? -1 : 1) || b.hitLines.length - a.hitLines.length || a.path.localeCompare(b.path) || a.startLine - b.startLine)
+  candidates.sort((a, b) => KIND_ORDER[a.kind] - KIND_ORDER[b.kind] || b.hitLines.length - a.hitLines.length || a.path.localeCompare(b.path) || a.startLine - b.startLine)
   let omittedCandidates = 0
   const cap = Math.min(limits.candidatesPerTarget, Math.max(0, budget.remaining))
   if (candidates.length > cap) {

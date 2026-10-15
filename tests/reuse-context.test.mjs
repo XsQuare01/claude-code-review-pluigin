@@ -153,3 +153,23 @@ test('검색어의 줄바꿈과 저장소 상대 경로가 아닌 검색 경로�
   }
   assert.deepEqual(planProblems(withQuery({ text: 'x', paths: ['src/shared', 'src/한글 폴더'] }), CTX), [])
 })
+
+// 원문 바이트 상한은 한 줄에도 걸린다 — 압축된 번들의 한 줄이 그대로 05 프롬프트에 들어가면 상한이 의미가 없다.
+// 코드가 아닌 파일(SVG·JSON 데이터·문서·압축된 번들)은 재사용할 구현 후보와 가른다.
+test('한 줄짜리 거대 원문도 바이트 상한에서 자르고, 코드가 아닌 파일은 other로 가른다', () => {
+  const huge = `export const bundle=${'x'.repeat(200000)}.split('/')`
+  const files = {
+    'src/feature/new.ts': ["export const f = (s: string) => s.split('/')"].join('\n'),
+    'dist/app.min.js': huge,
+    'public/logo.svg': "<svg><path d=\"a.split('/')\"/></svg>",
+    'docs/notes.md': "경로는 .split('/')로 나눈다",
+    'src/shared/split.ts': ["export const g = (s: string) => s.split('/')"].join('\n'),
+  }
+  const result = searchIn(files, { path: 'src/feature/new.ts', startLine: 1, endLine: 1, quote: "export const f = (s: string) => s.split('/')" }, [".split('/')"])
+  const bundle = result.candidates.find(found => found.path === 'dist/app.min.js')
+  assert.ok(Buffer.byteLength(bundle.quote, 'utf8') <= REUSE_LIMITS.quoteBytes, String(Buffer.byteLength(bundle.quote, 'utf8')))
+  assert.equal(bundle.truncated, true)
+  const kinds = Object.fromEntries(result.candidates.map(found => [found.path, found.kind]))
+  assert.deepEqual(kinds, { 'src/shared/split.ts': 'production', 'dist/app.min.js': 'other', 'public/logo.svg': 'other', 'docs/notes.md': 'other' })
+  assert.equal(result.candidates[0].path, 'src/shared/split.ts', '구현 후보가 먼저다')
+})
