@@ -203,6 +203,7 @@ export function crossFileEvidenceOf(candidate, context) {
         targetId: target.targetId, candidateId: found.candidateId, path: found.path, startLine: found.startLine, endLine: found.endLine,
         rev: found.rev, sourceRef: found.sourceRef, sha256: found.sha256, quote: found.quote, kind: found.kind,
         ...(found.onlyInBase ? { onlyInBase: true } : {}), ...(found.existedAtMergeBase !== undefined ? { existedAtMergeBase: found.existedAtMergeBase } : {}),
+        ...(found.truncated ? { truncated: true } : {}),
       })
     }
   }

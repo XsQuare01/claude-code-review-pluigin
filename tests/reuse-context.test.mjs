@@ -183,3 +183,18 @@ test('search 결정이 가리킨 대상의 anchor는 그 파일에 있어야 하
   assert.ok(problems.some(problem => /src\/a\.ts.*t1.*anchor/.test(problem)), problems.join(' / '))
   assert.ok(problems.some(problem => /t1.*두 파일/.test(problem)), problems.join(' / '))
 })
+
+// 원문을 상한에서 잘랐으면 그 대상은 계획을 다 수행한 것이 아니다 — 잘린 뒤의 코드는 아무도 보지 못했다.
+test('후보 원문을 상한에서 잘랐으면 대상은 partial이고 잘린 원문 수를 남긴다', () => {
+  const long = Array.from({ length: 200 }, (_, at) => `  const v${at} = '${'y'.repeat(300)}'`)
+  const files = {
+    'src/feature/new.ts': "export const f = (s: string) => s.split('/')",
+    'src/shared/split.ts': ["export function g(s: string) {", "  return s.split('/')", ...long, '}'].join('\n'),
+  }
+  const result = searchIn(files, { path: 'src/feature/new.ts', startLine: 1, endLine: 1, quote: "export const f = (s: string) => s.split('/')" }, [".split('/')"])
+  const found = result.candidates.find(one => one.path === 'src/shared/split.ts')
+  assert.equal(found.truncated, true)
+  assert.equal(result.status, 'partial')
+  assert.ok(result.limits.reached.includes('quote'), JSON.stringify(result.limits))
+  assert.equal(result.limits.truncatedQuotes, 1)
+})

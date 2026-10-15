@@ -255,7 +255,7 @@ test('검색 결과 파일을 읽어 생략 수를 싣고, 그 파일을 입력�
   const saved = savedSnapshot(timing)
   assert.equal(saved.error, undefined, saved.error)
   assert.deepEqual([saved.value.reuse.state, saved.value.reuse.status, saved.value.reuse.targets, saved.value.reuse.omitted],
-    ['done', 'partial', { partial: 1 }, { candidates: 4, hits: 0 }])
+    ['done', 'partial', { partial: 1 }, { candidates: 4, hits: 0, quotes: 0 }])
   const input = saved.value.inputs.find(entry => entry.role === 'reuse-context')
   assert.ok(input, JSON.stringify(saved.value.inputs.map(entry => entry.role)))
   assert.equal(join(dir, input.path), contextPath)

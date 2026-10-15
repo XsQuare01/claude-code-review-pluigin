@@ -594,7 +594,7 @@ test('검색이 끝났으면 대상별 상태·생략 수·조사한 commit·늘
   const snapshot = buildSnapshot(fixture({ events: reuseEvents(reuseDone('partial', { targets: { complete: 6, partial: 2 }, reason: 'limits-or-errors' })), routed, reuseContext: reuseDoc }))
   assert.deepEqual(snapshot.reuse, {
     state: 'done', searchId: 's1', status: 'partial', reason: 'limits-or-errors', targets: { complete: 6, partial: 2 },
-    omitted: { candidates: 3, hits: 2 }, verification: { crossFileEvidence: 2, newlyEligible: 1, movedToIsolated: 1, verificationTasksAdded: 1 },
+    omitted: { candidates: 3, hits: 2, quotes: 0 }, verification: { crossFileEvidence: 2, newlyEligible: 1, movedToIsolated: 1, verificationTasksAdded: 1 },
   })
   assert.deepEqual(snapshotProblems(snapshot), [])
   const markdown = renderSnapshotMarkdown(snapshot)
@@ -653,4 +653,11 @@ test('검증을 끈 실행은 다른 파일과 견준 지적을 검증으로 보
   const markdown = renderSnapshotMarkdown(snapshot)
   assert.match(markdown, /다른 파일과 견준 05-7 지적 2개 — 검증을 끈 실행이라 검증하지 않았다\./)
   assert.doesNotMatch(markdown, /검증으로 보냈다/)
+})
+
+test('잘린 원문 수도 생략으로 그린다', () => {
+  const doc = { ...reuseDoc, targets: [{ targetId: 't1', status: 'partial', candidates: [], limits: { reached: ['quote'], truncatedQuotes: 2 } }] }
+  const snapshot = buildSnapshot(fixture({ events: reuseEvents(reuseDone('partial', { targets: { partial: 1 }, reason: 'limits-or-errors' })), reuseContext: doc }))
+  assert.deepEqual(snapshot.reuse.omitted, { candidates: 0, hits: 0, quotes: 2 })
+  assert.match(renderSnapshotMarkdown(snapshot), /검색 대상 1개 중 부분 완료 1 \(상한으로 잘린 원문 2개\)/)
 })

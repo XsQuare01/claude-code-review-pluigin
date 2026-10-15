@@ -794,3 +794,10 @@ test('별칭·확장자 없는 import 경로·유일한 파일 이름·후보 ID
   // 같은 이름의 후보가 둘이면 파일 이름만으로 고르지 않는다
   assert.deepEqual(pointed('index.ts와 같다', ['src/shared/a/index.ts', 'src/shared/b/index.ts']), [])
 })
+
+test('잘린 후보 원문은 잘렸다는 표시와 함께 검증 근거로 간다', () => {
+  const context = contextWith(['src/shared/lib/normalize-path.ts'])
+  context.targets[0].candidates[0].truncated = true
+  const evidence = crossFileEvidenceOf(finding('`shared/lib/normalize-path.ts`를 다시 구현했다'), context)
+  assert.equal(evidence[0].truncated, true)
+})

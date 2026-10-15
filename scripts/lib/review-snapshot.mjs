@@ -290,7 +290,8 @@ function reuseSummaryOf(events, { context, routedReuse, now }) {
   const doc = context && context.searchId === state.searchId && Array.isArray(context.targets) ? context : null
   const omitted = doc ? doc.targets.reduce((sum, target) => ({
     candidates: sum.candidates + (target.limits?.omittedCandidates ?? 0), hits: sum.hits + (target.limits?.omittedHits ?? 0),
-  }), { candidates: 0, hits: 0 }) : null
+    quotes: sum.quotes + (target.limits?.truncatedQuotes ?? 0),
+  }), { candidates: 0, hits: 0, quotes: 0 }) : null
   // 끝나지 않은 검색은 계획·시작까지 갔는지를 함께 싣는다. 계획이 없던 검색도 상한 뒤에는 timed-out으로 풀리는데,
   // 그것을 "기다렸다"로만 그리면 검색이 돌지 않았다는 사실이 숨는다.
   const notStarted = !state.planned ? '검색 계획(`reuse.planned`)이 없다' : !state.started ? '계획했지만 시작하지 않았다(`reuse.start` 없음)' : null
@@ -782,9 +783,12 @@ function reuseLine(reuse, target, verificationState) {
   const targets = reuse.targets ?? {}
   const total = Object.values(targets).reduce((sum, value) => sum + value, 0)
   const parts = REUSE_STATUS_TEXT.filter(([key]) => targets[key]).map(([key, text]) => `${text} ${targets[key]}`).join(' · ')
-  const omitted = reuse.omitted && (reuse.omitted.candidates || reuse.omitted.hits)
-    ? ` (상한으로 생략한 후보 ${reuse.omitted.candidates}개${reuse.omitted.hits ? ` · hit ${reuse.omitted.hits}개` : ''})`
-    : ''
+  const omittedParts = reuse.omitted ? [
+    reuse.omitted.candidates ? `생략한 후보 ${reuse.omitted.candidates}개` : null,
+    reuse.omitted.hits ? `hit ${reuse.omitted.hits}개` : null,
+    reuse.omitted.quotes ? `잘린 원문 ${reuse.omitted.quotes}개` : null,
+  ].filter(Boolean) : []
+  const omitted = omittedParts.length ? ` (상한으로 ${omittedParts.join(' · ')})` : ''
   const where = `HEAD ${codeSpan(short(target.head))}${'baseHead' in target && target.baseHead !== target.mergeBase ? ` · base 끝 ${codeSpan(short(target.baseHead))}` : ''}`
   // 검증을 끈 실행은 그 지적을 검증하지 않았다 — 보냈다고 쓰지 않는다(C-6B)
   const verification = !reuse.verification?.crossFileEvidence ? ''

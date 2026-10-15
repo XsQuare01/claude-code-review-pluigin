@@ -179,7 +179,11 @@ export function buildTaskPrompt({ instructions, task, candidatesById, clauses, m
     for (const candidate of evidenced) {
       for (const found of candidate.crossFileEvidence) {
         const where = `\`${found.path}:${found.startLine}–${found.endLine}\` · \`${String(found.rev ?? '').slice(0, 12)}\``
-        const notes = [found.onlyInBase ? 'base에만 있다 — 병합 결과를 보기 전에는 공존으로 확정하지 않는다' : null, found.existedAtMergeBase === false ? '이번 변경이 함께 더한 구현이다' : null].filter(Boolean)
+        const notes = [
+          found.onlyInBase ? 'base에만 있다 — 병합 결과를 보기 전에는 공존으로 확정하지 않는다' : null,
+          found.existedAtMergeBase === false ? '이번 변경이 함께 더한 구현이다' : null,
+          found.truncated ? '원문을 상한에서 잘랐다 — 잘린 뒤의 코드는 보지 못했다. 그 부분이 같다고 추정하지 않는다' : null,
+        ].filter(Boolean)
         lines.push(`- \`${candidate.candidateId}\` ← ${where}${notes.length ? ` — ${notes.join(' · ')}` : ''}`, '', fenced('text', found.quote ?? ''), '')
       }
     }

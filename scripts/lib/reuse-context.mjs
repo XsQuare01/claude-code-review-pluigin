@@ -412,13 +412,21 @@ export function searchTarget(target, { git, head, mergeBase, baseHead, limits, d
   }
   budget.remaining -= candidates.length
   candidates = candidates.map((candidate, at) => ({ candidateId: `${target.targetId}.c${at + 1}`, ...candidate }))
+  // 원문을 상한에서 잘랐으면 잘린 뒤의 코드는 아무도 보지 못했다 — 계획을 다 수행한 것이 아니다
+  const truncatedQuotes = candidates.filter(candidate => candidate.truncated).length
+  if (truncatedQuotes) reached.add('quote')
 
   // 한 번도 검색하지 못했으면 실패, 일부만 했거나 상한에 닿았으면 부분, 계획을 다 했으면 완료다. 완료는 "같은 구현이
   // 없다"는 보장이 아니다 — 후보 0건도 완료일 수 있다.
   const status = grepsDone === 0 ? 'failed' : errors.length || reached.size ? 'partial' : 'complete'
   return {
     targetId: target.targetId, anchor, purpose: target.purpose, queries, status, candidates,
-    ...(reached.size || omittedHits || omittedCandidates ? { limits: { reached: [...reached].sort(), ...(omittedHits ? { omittedHits } : {}), ...(omittedCandidates ? { omittedCandidates } : {}) } } : {}),
+    ...(reached.size || omittedHits || omittedCandidates ? {
+      limits: {
+        reached: [...reached].sort(), ...(omittedHits ? { omittedHits } : {}), ...(omittedCandidates ? { omittedCandidates } : {}),
+        ...(truncatedQuotes ? { truncatedQuotes } : {}),
+      },
+    } : {}),
     ...(errors.length ? { errors } : {}),
   }
 }
