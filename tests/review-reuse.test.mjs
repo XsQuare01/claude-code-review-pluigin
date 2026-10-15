@@ -192,3 +192,23 @@ test('wait는 검색이 풀릴 때까지만 기다린다 — 끝났으면 바로
   const result = JSON.parse(done.stdout)
   assert.deepEqual([result.state, result.released, result.searchId, result.status, result.context], ['done', true, 's1', 'complete', '/x/ctx.json'])
 })
+
+// 계획의 머리(실행 ID·검색 ID·HEAD·merge-base·scope 해시)는 오케스트레이터가 preflight 출력에서 옮겨 적지 않는다 —
+// register가 낸 planHeader를 그대로 쓴다. 옮겨 적다 한 글자만 틀려도 계획 검사가 검색 전체를 실패로 끝낸다.
+test('register는 계획에 그대로 쓸 머리와 검사할 파일 목록을 낸다', t => {
+  const ctx = setup(t)
+  const register = reuse(ctx, 'register')
+  assert.equal(register.status, 0, register.stderr)
+  const registered = JSON.parse(register.stdout)
+  const start = events(ctx).find(event => event.phase === 'run.start')
+  assert.deepEqual(registered.planHeader, {
+    schemaVersion: 1, runId: start.runId, searchId: registered.searchId, head: start.head, mergeBase: start.mergeBase, scopeSha256: registered.scopeSha256,
+  })
+  assert.deepEqual([...registered.files].sort(), [...scopeOf(ctx).files].sort())
+
+  const { _scopeFiles, ...body } = planFor(ctx, registered)
+  const plan = { ...registered.planHeader, fileDecisions: body.fileDecisions, targets: body.targets }
+  writePlan(registered.plan, plan)
+  const search = reuse(ctx, 'search', '--search-id', registered.searchId, '--out', registered.out, '--repo', ctx.repo)
+  assert.equal(search.status, 0, search.stderr)
+})

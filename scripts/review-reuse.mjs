@@ -113,7 +113,12 @@ if (mode === 'register') {
   } catch (error) {
     die(`reuse.planned를 남기지 못했다 — ${String(error.stderr || error.message).trim()}`)
   }
-  process.stdout.write(`${JSON.stringify({ searchId, plan, scopeSha256: scope.sha256, out: join(timing, `${run}.reuse-context.json`) }, null, 2)}\n`)
+  // 계획의 머리와 결정할 파일 목록을 함께 낸다 — 오케스트레이터가 preflight 출력에서 옮겨 적다 틀리면 계획 검사가
+  // 검색 전체를 실패로 끝낸다. 파일 목록은 scope.json의 files 그대로다(다시 세지 않는다).
+  const planHeader = { schemaVersion: REUSE_SCHEMA_VERSION, runId: start.runId, searchId, head: start.head, mergeBase: start.mergeBase, scopeSha256: scope.sha256 }
+  process.stdout.write(`${JSON.stringify({
+    searchId, plan, scopeSha256: scope.sha256, out: join(timing, `${run}.reuse-context.json`), planHeader, files: scope.value.files ?? [],
+  }, null, 2)}\n`)
   process.exit(0)
 }
 
