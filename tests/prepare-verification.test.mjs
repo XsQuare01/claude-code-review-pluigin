@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { resolve } from 'node:path'
 
-import { buildBundles, candidatesFromLocations, candidatesFromResults, checkLocation, collectBlobs, computeOwnerCollisions, decideEligibility, normalizeForCompare, prepareVerification, resolveWithinRoot, reuseContextOf, routeCandidate, verifyDirOf } from '../scripts/prepare-verification.mjs'
+import { buildBundles, candidatesFromLocations, candidatesFromResults, checkLocation, collectBlobs, computeOwnerCollisions, crossFileEvidenceOf, decideEligibility, normalizeForCompare, prepareVerification, resolveWithinRoot, reuseContextOf, routeCandidate, verifyDirOf } from '../scripts/prepare-verification.mjs'
 import { renderFinding } from '../scripts/render-findings.mjs'
 
 // ------------------------------------------------------------- normalization
@@ -762,4 +762,35 @@ test('05가 띄워질 때 검색이 끝나지 않았으면 늦게 온 결과를 
   const reuse = reuseContextOf(events, start)
   assert.deepEqual([reuse.context, reuse.state], [null, 'not-given-to-05'])
   assert.match(reuse.warning, /05는 검색 결과를 받지 못하고 돌았다/)
+})
+
+// 지적이 후보를 가리키는지는 경로 단위로 본다. 끝 두 조각이 같다고(`lib/index.ts`) 다른 파일을 가리킨 지적에 원문을
+// 붙이거나, `.tsx`를 말한 지적을 `.ts` 후보와 묶지 않는다. 별칭(`@/`)·확장자 없는 import 경로·유일한 파일 이름·
+// 후보 ID(`t1.c2`)로 가리킨 지적은 놓치지 않는다.
+const contextWith = candidates => ({
+  targets: [{
+    targetId: 't1', anchor: { path: 'src/features/fb/lib/to-display.ts', startLine: 1, endLine: 3, quote: 'q' }, status: 'complete',
+    candidates: candidates.map((path, at) => ({ candidateId: `t1.c${at + 1}`, path, startLine: 1, endLine: 2, quote: `// ${path}`, sha256: 'x'.repeat(64), sourceRef: 'head', rev: 'h'.repeat(40), kind: 'production' })),
+  }],
+})
+const finding = body => ({
+  candidateId: 'f1', ruleId: '05-7', impact: 'low', confidence: 'high',
+  location: { kind: 'verified', path: 'src/features/fb/lib/to-display.ts', line: 2, quote: 'x' }, content: { title: '중복', body },
+})
+const pointed = (body, candidates) => crossFileEvidenceOf(finding(body), contextWith(candidates)).map(one => one.path)
+
+test('지적이 가리킨 후보는 경로 단위로 맞춘다 — 끝 조각·확장자만 같은 다른 파일은 아니다', () => {
+  assert.deepEqual(pointed('`src/features/b/lib/index.ts`와 같은 일을 한다', ['src/shared/lib/index.ts']), [])
+  assert.deepEqual(pointed('`src/shared/format.tsx`의 컴포넌트를 다시 만들었다', ['src/shared/format.ts']), [])
+  assert.deepEqual(pointed('`shared/lib/index.ts`를 다시 구현했다', ['src/shared/lib/index.ts']), ['src/shared/lib/index.ts'])
+})
+
+test('별칭·확장자 없는 import 경로·유일한 파일 이름·후보 ID로 가리킨 지적도 찾는다', () => {
+  const candidates = ['src/shared/lib/normalize-path.ts', 'src/entities/file/model/types.ts']
+  assert.deepEqual(pointed("`@/shared/lib/normalize-path`의 normalizePath를 다시 구현했다", candidates), ['src/shared/lib/normalize-path.ts'])
+  assert.deepEqual(pointed('normalize-path.ts에 이미 있다.', candidates), ['src/shared/lib/normalize-path.ts'])
+  assert.deepEqual(pointed('후보 t1.c2와 같은 타입이다', candidates), ['src/entities/file/model/types.ts'])
+  assert.deepEqual(pointed('t1.c20을 참고했다', candidates), [])
+  // 같은 이름의 후보가 둘이면 파일 이름만으로 고르지 않는다
+  assert.deepEqual(pointed('index.ts와 같다', ['src/shared/a/index.ts', 'src/shared/b/index.ts']), [])
 })

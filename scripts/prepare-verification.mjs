@@ -176,7 +176,7 @@ export function relatedAtSameLocation(candidates, prefixes = []) {
  *
  * 지적의 위치가 검색 대상의 anchor와 겹치고, 지적의 글(제목·본문·근거·개선 제안)이 그 대상의 **다른 파일** 후보를
  * 가리킬 때만이다. 검색 후보가 있다는 것만으로 붙이지 않는다 — 같은 파일 안의 중복이나 다른 규칙의 지적까지
- * 검증으로 보내면 비용만 늘고 근거는 없다. 후보는 전체 경로나 끝의 두 조각(`shared/normalize.ts`)으로 가리킨 것을 센다.
+ * 검증으로 보내면 비용만 늘고 근거는 없다. 가리켰는지는 `mentionsCandidate`가 경로 단위로 본다.
  */
 export function crossFileEvidenceOf(candidate, context) {
   if (normalizeRuleId(candidate?.ruleId ?? '').ruleId !== '05-7' || !context || !Array.isArray(context.targets)) return []
@@ -186,16 +186,19 @@ export function crossFileEvidenceOf(candidate, context) {
   const end = location.endLine ?? location.line
   if (!Number.isInteger(start) || !Number.isInteger(end)) return []
   const text = Object.values(candidate.content ?? {}).filter(value => typeof value === 'string').join('\n')
-  const mentions = path => {
-    const tail = path.split('/').slice(-2).join('/')
-    return text.includes(path) || (tail.includes('/') && text.includes(tail))
+  const basenameCount = new Map()
+  for (const found of context.targets.flatMap(target => target?.candidates ?? [])) {
+    if (typeof found?.path !== 'string') continue
+    const name = found.path.split('/').at(-1)
+    basenameCount.set(name, (basenameCount.get(name) ?? 0) + 1)
   }
+  const mentions = found => mentionsCandidate(text, found, { uniqueBasename: basenameCount.get(found.path.split('/').at(-1)) === 1 })
   const evidence = []
   for (const target of context.targets) {
     const anchor = target?.anchor
     if (anchor?.path !== location.path || !(anchor.startLine <= end && start <= anchor.endLine)) continue
     for (const found of target.candidates ?? []) {
-      if (typeof found?.path !== 'string' || found.path === location.path || !mentions(found.path)) continue
+      if (typeof found?.path !== 'string' || found.path === location.path || !mentions(found)) continue
       evidence.push({
         targetId: target.targetId, candidateId: found.candidateId, path: found.path, startLine: found.startLine, endLine: found.endLine,
         rev: found.rev, sourceRef: found.sourceRef, sha256: found.sha256, quote: found.quote, kind: found.kind,
@@ -204,6 +207,50 @@ export function crossFileEvidenceOf(candidate, context) {
     }
   }
   return evidence
+}
+
+const PATH_EXTENSION = /\.([A-Za-z0-9]+)$/
+const splitExtension = path => {
+  const match = path.split('/').at(-1).match(PATH_EXTENSION)
+  return match ? { stem: path.slice(0, -match[0].length), extension: match[1].toLowerCase() } : { stem: path, extension: '' }
+}
+
+/**
+ * 지적의 글이 검색 후보 하나를 가리키는가 — 경로 단위로 본다.
+ *
+ * - 후보 ID(`t1.c2`)를 그대로 쓴 것
+ * - 경로 조각: 별칭(`@/`·`~/`·`./`)과 줄 번호(`:12`·`:12-20`·`#L12`)를 떼고, 두 조각 이상이면 후보 경로의 끝 조각들과
+ *   **조각 단위로** 같아야 한다(`lib/index.ts`는 `src/features/b/lib/index.ts`를 말한 지적과 맞지 않는다). 확장자를
+ *   썼으면 같아야 한다(`.tsx` ≠ `.ts`). import 경로처럼 확장자가 없으면 줄기만 견준다
+ * - 파일 이름 하나: 그 이름의 후보가 하나뿐일 때만
+ * - 공백·한글이 든 경로는 조각으로 끊기므로 전체 경로를 경계와 함께 찾는다
+ */
+export function mentionsCandidate(text, found, { uniqueBasename = false } = {}) {
+  const idPattern = new RegExp(`(^|[^\\w.])${found.candidateId?.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\\w])`)
+  if (typeof found.candidateId === 'string' && found.candidateId && idPattern.test(text)) return true
+  const target = splitExtension(found.path)
+  const targetSegments = target.stem.split('/')
+  // 경로 문자로만 끊는다 — 한국어 조사가 붙어도(`normalize-path.ts에`) 경로만 남는다
+  for (const raw of text.match(/[A-Za-z0-9_./@~-]+(?:[:#][A-Za-z0-9–-]+)?/g) ?? []) {
+    const token = raw
+      .replace(/^(?:@\/|~\/|\.\/)+/, '')
+      .replace(/(?::\d+(?:[-–]\d+)?|#L\d+(?:-L?\d+)?)$/, '')
+      .replace(/[.,:;!?]+$/, '')
+    if (!token) continue
+    const mention = splitExtension(token)
+    if (mention.extension && mention.extension !== target.extension) continue
+    const segments = mention.stem.split('/').filter(Boolean)
+    if (segments.length >= 2) {
+      if (segments.length <= targetSegments.length && segments.every((segment, at) => segment === targetSegments[targetSegments.length - segments.length + at])) return true
+    } else if (segments.length === 1 && mention.extension && uniqueBasename && segments[0] === targetSegments.at(-1)) {
+      return true
+    }
+  }
+  if (/[^A-Za-z0-9_./@~-]/.test(found.path)) {
+    const at = text.indexOf(found.path)
+    if (at !== -1 && !/[\w./-]/.test(text[at - 1] ?? '') && !/[\w.-]/.test(text[at + found.path.length] ?? '')) return true
+  }
+  return false
 }
 
 function eligibilityReasons({ candidate, locationCheck, ownerCollision, crossFileEvidence }) {
