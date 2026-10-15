@@ -381,3 +381,17 @@ test('보류한 작업은 슬롯과 호출을 쓰지 않고 뒤의 준비된 작
   run.deliver({ hostTaskId: released.dispatch[0].hostTaskId, task: '05-structure', attempt: 1 })
   assert.equal(run.next({ inflight: 2 }).complete, true)
 })
+
+// 더 띄울 수 없는 실행은 검색이 풀리기를 기다리지 않는다 — 호출 예산이 바닥났으면 잡아 둔 05가 남아 있어도 한도로
+// 멈춘다(C-12). 그러지 않으면 보고를 쓸 수 있는 실행이 검색 해제까지 끝나지 않는다.
+test('호출 예산이 바닥났으면 잡아 둔 작업만 남아도 max-tasks로 멈추고 단계를 끝낸다', () => {
+  const plan = ['01-fsd', '05-structure'].map(task => ({ task, kind: 'module' }))
+  const run = new FakeRun({ plan, limits: { maxTasks: 1 } })
+  const hold = new Map([['05-structure', { reason: '기존 구현 검색을 기다린다' }]])
+  const first = run.next({ inflight: 2, hold })
+  // 01을 띄우면 예산이 0이다 — 잡아 둔 05는 더 띄울 수 없으므로 이 자리에서 멈춘다(잡아 두지 않은 작업과 같은 시점)
+  assert.deepEqual([first.dispatch.map(one => one.task), first.halt], [['01-fsd'], 'max-tasks'])
+  run.deliver({ hostTaskId: first.dispatch[0].hostTaskId, task: '01-fsd', attempt: 1 })
+  const after = run.next({ inflight: 2, hold })
+  assert.deepEqual([after.halted?.reason, after.complete, after.dispatch.length], ['max-tasks', true, 0])
+})

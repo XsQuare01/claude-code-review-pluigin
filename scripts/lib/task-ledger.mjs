@@ -367,7 +367,15 @@ export function decideNext({ stage, plan, fold, events, now, inflight = DEFAULT_
     let slots = Math.max(0, inflight - stillRunning.length)
     let remaining = budget.remaining
     for (const entry of queued) {
-      if (hold.has(entry.task)) continue
+      if (hold.has(entry.task)) {
+        // 잡아 둔 작업도 남은 작업이다 — 예산이 바닥났으면 검색 해제를 기다리지 않고 한도로 멈춘다(C-12). 슬롯은 쓰지 않으므로
+        // 슬롯이 비기를 기다릴 이유도 없다
+        if (remaining !== null && remaining <= 0) {
+          halt = 'max-tasks'
+          break
+        }
+        continue
+      }
       if (!slots) break
       if (remaining !== null && remaining <= 0) {
         halt = 'max-tasks'
