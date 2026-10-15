@@ -102,7 +102,7 @@ test('예정을 등록하고, BOM이 붙은 계획으로 diff 밖의 기존 구�
   const start = events(ctx).find(event => event.phase === 'run.start')
   assert.deepEqual([context.runId, context.searchId, context.head, context.baseHead, context.status], [start.runId, registered.searchId, start.head, ctx.git('rev-parse', 'main'), 'complete'])
   const [t1, t2] = context.targets
-  // 근처(src/features)에서 못 찾았으니 저장소 전체로 넓혔다 — 검색어는 그대로
+  // 근처(src/features)와 저장소 전체를 모두 찾는다 — 검색어는 그대로
   assert.deepEqual(t1.queries[0].searched, [['src/features'], ['.']])
   const byPath = new Map(t1.candidates.map(candidate => [candidate.path, candidate]))
   assert.equal(byPath.has('src/features/parser/new-parser.ts'), false, '대상 자신은 후보가 아니다')

@@ -378,6 +378,7 @@ export function searchTarget(target, { git, head, mergeBase, baseHead, limits, d
       found.push({
         sourceRef: file.sourceRef, rev: file.rev, path: file.path, startLine: window.start, endLine: window.start + sliced.lines.length - 1,
         quote, sha256: sha256(quote), clues: [...file.clues].sort(), hitLines: window.hits, kind: kindOf(file.path),
+        hitTexts: window.hits.map(line => (lines[line - 1] ?? '').trim()),
         ...(window.truncated || sliced.truncated ? { truncated: true } : {}),
       })
     }
@@ -390,17 +391,45 @@ export function searchTarget(target, { git, head, mergeBase, baseHead, limits, d
     if (seen) {
       seen.sourceRefs = [...new Set([...seen.sourceRefs, candidate.sourceRef])]
       seen.clues = [...new Set([...seen.clues, ...candidate.clues])].sort()
+      // 위치는 HEAD의 것을 쓴다 — base가 먼저 모였어도 줄 번호는 HEAD 기준이어야 한다
+      if (seen.sourceRef === 'base' && candidate.sourceRef === 'head') Object.assign(seen, { sourceRef: 'head', rev: candidate.rev, startLine: candidate.startLine, endLine: candidate.endLine, hitLines: candidate.hitLines })
     } else {
       merged.set(key, { ...candidate, sourceRefs: [candidate.sourceRef] })
     }
   }
-  let candidates = [...merged.values()].map(candidate => {
-    const { sourceRef, ...rest } = candidate
-    const inHead = candidate.sourceRefs.includes('head')
-    const base = git.show(mergeBase, candidate.path)
-    const existedAtMergeBase = typeof base === 'string' && normalizeForCompare(base).includes(normalizeForCompare(candidate.quote))
-    return { ...rest, sourceRef: inHead ? 'head' : 'base', ...(inHead ? { existedAtMergeBase } : { onlyInBase: true }) }
-  })
+  // 출처는 후보 창 전체가 아니라 hit 줄로 정한다 — 옆 줄만 바뀐 기존 함수를 "새로 더한 구현"이나 "base에만 있는 구현"으로
+  // 단정하지 않는다. 확실하지 않으면 표시를 남기지 않는다(미확정)
+  const headEntries = [...merged.values()].filter(candidate => candidate.sourceRefs.includes('head'))
+  const resolved = []
+  // base 후보를 먼저 정리한다 — HEAD에 같은 구현이 있으면 그 HEAD 후보에 base 출처를 더해야 하므로
+  const ordered = [...merged.values()].sort((a, b) => Number(a.sourceRefs.includes('head')) - Number(b.sourceRefs.includes('head')))
+  for (const candidate of ordered) {
+    if (candidate.sourceRefs.includes('head')) {
+      // merge-base→HEAD에서 바뀐 줄인가. hit 줄이 모두 그대로면 있던 구현, 모두 바뀌었으면 이번 변경이 더한 구현
+      const diff = typeof git.diff === 'function' ? git.diff(mergeBase, head, candidate.path) : null
+      const ranges = diff?.ok ? changedRanges(diff.out) : null
+      const changed = ranges ? candidate.hitLines.filter(line => ranges.some(range => line >= range.start && line <= range.end)).length : null
+      const existedAtMergeBase = changed === null ? undefined : changed === 0 ? true : changed === candidate.hitLines.length ? false : undefined
+      resolved.push({ ...candidate, sourceRef: 'head', ...(existedAtMergeBase !== undefined ? { existedAtMergeBase } : {}) })
+      continue
+    }
+    // base에서만 모인 후보 — 그 hit 줄이 HEAD에도 모두 있으면 같은 구현이 HEAD에 있다(창만 다르다)
+    const headText = git.show(head, candidate.path)
+    const headLines = typeof headText === 'string' ? new Set(linesOf(headText).map(line => line.trim())) : null
+    const present = headLines ? candidate.hitTexts.filter(text => headLines.has(text)).length : 0
+    if (present === candidate.hitTexts.length && present > 0) {
+      const twin = headEntries.find(entry => entry.path === candidate.path)
+      if (twin) {
+        twin.sourceRefs = [...new Set([...twin.sourceRefs, 'base'])]
+        twin.clues = [...new Set([...twin.clues, ...candidate.clues])].sort()
+        continue
+      }
+      resolved.push({ ...candidate, sourceRef: 'base' })
+      continue
+    }
+    resolved.push({ ...candidate, sourceRef: 'base', ...(present === 0 ? { onlyInBase: true } : {}) })
+  }
+  let candidates = resolved.map(({ hitTexts, ...candidate }) => candidate)
   // production 먼저, hit가 많은 것 먼저
   candidates.sort((a, b) => KIND_ORDER[a.kind] - KIND_ORDER[b.kind] || b.hitLines.length - a.hitLines.length || a.path.localeCompare(b.path) || a.startLine - b.startLine)
   let omittedCandidates = 0

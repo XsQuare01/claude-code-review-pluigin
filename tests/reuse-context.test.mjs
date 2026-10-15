@@ -198,3 +198,61 @@ test('후보 원문을 상한에서 잘랐으면 대상은 partial이고 잘린 
   assert.ok(result.limits.reached.includes('quote'), JSON.stringify(result.limits))
   assert.equal(result.limits.truncatedQuotes, 1)
 })
+
+// 구현이 merge-base에 있었는지, base에만 있는지는 후보 창 전체가 아니라 hit 줄로 판단한다. 기존 함수는 그대로 두고 옆
+// 상수만 바뀌었는데 창 전체를 견주면 "이번 변경이 추가한 구현", "base에만 있다"가 된다 — 검증자에게 틀린 사실이 간다.
+const HEAD = 'h'.repeat(40)
+const MERGE_BASE = 'm'.repeat(40)
+const BASE_TIP = 'b'.repeat(40)
+const treesGit = (trees, diffs = {}) => ({
+  grep: (rev, text, paths) => ({
+    ok: true,
+    out: Object.entries(trees[rev] ?? {}).filter(([path]) => inScope(path, paths)).flatMap(([path, body]) => body.split('\n').map((line, at) => (line.includes(text) ? `${rev}:${path}\0${at + 1}\0${line}` : null)).filter(Boolean)).join('\n'),
+  }),
+  show: (rev, path) => trees[rev]?.[path] ?? null,
+  diff: (from, to, path) => (diffs[`${from}..${to}:${path}`] !== undefined ? { ok: true, out: diffs[`${from}..${to}:${path}`] } : { ok: true, out: '' }),
+})
+const util = limit => [`export const LIMIT = ${limit}`, '', 'export function norm(s: string) {', "  return s.split('/').join('/')", '}'].join('\n')
+const anchorFile = "export const f = (s: string) => s.split('/').join('/')"
+const searchTrees = (trees, diffs) => searchTarget(
+  { targetId: 't1', anchor: { path: 'src/feature/new.ts', startLine: 1, endLine: 1, quote: anchorFile }, purpose: 'p', queries: [{ text: ".split('/')" }] },
+  { git: treesGit(trees, diffs), head: HEAD, mergeBase: MERGE_BASE, baseHead: BASE_TIP, limits: REUSE_LIMITS, deadline: Date.now() + 60000, budget: { remaining: 40 } },
+)
+
+test('옆 줄만 바뀐 기존 함수는 merge-base에 있던 구현이고, base의 같은 함수는 base에만 있는 것이 아니다', () => {
+  const result = searchTrees({
+    [MERGE_BASE]: { 'src/shared/util.ts': util(1) },
+    [HEAD]: { 'src/shared/util.ts': util(2), 'src/feature/new.ts': anchorFile },
+    [BASE_TIP]: { 'src/shared/util.ts': util(3) },
+  }, { [`${MERGE_BASE}..${HEAD}:src/shared/util.ts`]: '@@ -1 +1 @@\n-export const LIMIT = 1\n+export const LIMIT = 2' })
+  const util2 = result.candidates.filter(found => found.path === 'src/shared/util.ts')
+  assert.equal(util2.length, 1, JSON.stringify(util2.map(found => [found.sourceRef, found.onlyInBase])))
+  assert.deepEqual([util2[0].sourceRef, util2[0].existedAtMergeBase, 'onlyInBase' in util2[0]], ['head', true, false])
+  assert.deepEqual(util2[0].sourceRefs.sort(), ['base', 'head'])
+})
+
+test('이번 변경이 hit 줄을 더했으면 existedAtMergeBase는 false, 섞였으면 남기지 않는다(미확정)', () => {
+  const added = ['export function a(s: string) {', "  return s.split('/').join('/')", '}'].join('\n')
+  const mixed = ["const x = s.split('/')", "const y = t.split('/')"].join('\n')
+  const result = searchTrees({
+    [MERGE_BASE]: { 'src/shared/mixed.ts': "const x = s.split('/')\nconst y = 0" },
+    [HEAD]: { 'src/shared/added.ts': added, 'src/shared/mixed.ts': mixed, 'src/feature/new.ts': anchorFile },
+    [BASE_TIP]: {},
+  }, {
+    [`${MERGE_BASE}..${HEAD}:src/shared/added.ts`]: '@@ -0,0 +1,3 @@\n+a\n+b\n+c',
+    [`${MERGE_BASE}..${HEAD}:src/shared/mixed.ts`]: '@@ -2 +2 @@\n-const y = 0\n+const y = t',
+  })
+  const byPath = Object.fromEntries(result.candidates.map(found => [found.path, found]))
+  assert.equal(byPath['src/shared/added.ts'].existedAtMergeBase, false)
+  assert.equal('existedAtMergeBase' in byPath['src/shared/mixed.ts'], false)
+})
+
+test('HEAD에 없는 base의 구현만 base에만 있다고 적는다', () => {
+  const result = searchTrees({
+    [MERGE_BASE]: {},
+    [HEAD]: { 'src/feature/new.ts': anchorFile },
+    [BASE_TIP]: { 'src/shared/extra.ts': util(9) },
+  })
+  const extra = result.candidates.find(found => found.path === 'src/shared/extra.ts')
+  assert.deepEqual([extra.sourceRef, extra.onlyInBase], ['base', true])
+})
