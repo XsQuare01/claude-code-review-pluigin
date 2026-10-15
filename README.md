@@ -456,6 +456,19 @@ A rule module sees only the diff. When a change re-implements something the repo
 
 This release adds the mechanism and its tests only. Whether it finds more real duplicates, and at what cost in time and tokens, has not been measured with a model: `evals/cases/reuse-duplicate` is ready for that comparison, which the user runs. `/code-review` and `/code-review-commit` are unchanged until then.
 
+## Stop when the reviewer agent is missing (2.26.5)
+
+On 2026-10-15 two `/code-review-full` runs went through OpenCode 2.0.29, which failed to load the host plugin that registers `react-code-review-plugin:rule-module-reviewer`. Neither run could launch a reviewer, and both reports still said `검토 상태: 완료`.
+
+- One run followed the C-6 fallback that let the orchestrator review on its own. It read the change with four general exploration agents, wrote every module's result itself, then "verified" its own findings — 12 of 13 upheld. Thirteen of its 15 locations failed the location check, one quoting a line that exists nowhere in the repository.
+- The other launched no sub-agent at all. It wrote an empty result for 18 of 22 passes and handed each to the task ledger as a finished module, so the report listed them as "지적 없음".
+
+Both came from the same rule: when the reviewer agent could not be launched, the contract offered a way to carry on without it. That rule is gone.
+
+- **The review stops instead.** If the host has no reviewer agent, a dispatch fails as an unknown agent, or the runtime cannot restrict the agent's tools, the orchestrator does not review by itself, does not substitute another agent, and does not write results or verdicts. It tells the user what could not be launched and where to look (the host's plugin and agent configuration).
+- **`/code-review-full` records the stop.** `review-tasks.mjs cancel --all --reason agent-unavailable` halts dispatch (before the first dispatch it records only the halt). A run with no results writes no report and ends with `run.end` (`verdict=not-reviewed`); a run stopped midway writes a partial report whose snapshot block opens with "리뷰 에이전트가 없어 리뷰를 멈췄다" and lists the unreviewed modules as not reviewed rather than as clean. Preflight's output reminds the orchestrator to check the agent list before the first dispatch.
+- **It is checked, not just written.** `validate-rules.mjs` fails any skill that dispatches producers without the stop instruction (default deny), so the rule cannot quietly drop out of one workflow.
+
 ## Applicability metadata
 
 `review-rules/catalog.json` records **when** a module applies — required profile (FSD, Tailwind, RSC, Electron, TanStack Query, server code, contract provider), minimum React version, which workflows load it, and which individual rules carry a narrower gate than their module. The Markdown modules stay canonical for **what** a rule says; the catalog never generates documentation and never restates rule text.
@@ -496,7 +509,7 @@ Every workflow is **read-only by default** (`review-rules/00-rule.md` 00-9). Rev
 
 If the user asks for a read-only review, says not to modify files, or wants a text-only answer, that request outranks every other rule — including report generation. No file is written and the result is returned in the response.
 
-Read-only is enforced by tools, not by the prompt (`workflow-contract.md` C-6). In every workflow, the sub-agent that produces findings runs as `agents/rule-module-reviewer.md`, which has only `Read`, `Grep` and `Glob`: it receives the diff from the orchestrator and cannot edit files or run a shell. Lint, tests and scripts run in the orchestrator. `scripts/validate-rules.mjs` fails a skill that dispatches a sub-agent without naming such an agent.
+Read-only is enforced by tools, not by the prompt (`workflow-contract.md` C-6). In every workflow, the sub-agent that produces findings runs as `agents/rule-module-reviewer.md`, which has only `Read`, `Grep` and `Glob`: it receives the diff from the orchestrator and cannot edit files or run a shell. Lint, tests and scripts run in the orchestrator. `scripts/validate-rules.mjs` fails a skill that dispatches a sub-agent without naming such an agent. If the host cannot launch that agent — it is not registered, or the host cannot restrict its tools — the review stops rather than letting the orchestrator review on its own, and `validate-rules` also fails a skill that dispatches producers without saying so.
 
 ## Rule directory resolution
 
