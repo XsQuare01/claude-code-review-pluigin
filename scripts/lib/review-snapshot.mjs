@@ -758,7 +758,7 @@ export function renderSnapshotMarkdown(snapshot) {
   } else if (target.baseAhead > 0) {
     lines.push('', `base ${codeSpan(target.base)}이 merge-base 뒤로 ${target.baseAhead}커밋 앞서 있다 — 이 브랜치가 바꾼 파일은 건드리지 않았다.`)
   }
-  if (snapshot.reuse) lines.push('', reuseLine(snapshot.reuse, target))
+  if (snapshot.reuse) lines.push('', reuseLine(snapshot.reuse, target, snapshot.verification?.state))
   if (snapshot.drift.length) {
     const changes = snapshot.drift.map(entry => `${entry.field} ${codeSpan(short(entry.recorded))} → ${codeSpan(short(entry.current))}`).join(' · ')
     lines.push('', `**검토 도중 대상이 바뀌었다** — ${changes}. 이 실행의 결과는 한 시점의 코드에 대한 것이 아니다.`)
@@ -771,7 +771,7 @@ const REUSE_SNAPSHOT_STATES = ['done', 'lost', 'timed-out', 'running', 'planned'
 const REUSE_STATUS_TEXT = [['complete', '완료'], ['partial', '부분 완료'], ['failed', '실패']]
 
 /** 기존 구현 검색 줄. 수와 문장은 기록에서 나온다 — 오케스트레이터가 다시 쓰지 않는다. */
-function reuseLine(reuse, target) {
+function reuseLine(reuse, target, verificationState) {
   const unanswered = '05는 검색 근거 없이 돌았다.'
   if (reuse.state === 'done' && reuse.status === 'not-applicable') return '**기존 구현 검색** — 검색 대상이 없다. 리뷰 파일마다 제외 사유를 남겼다.'
   if (reuse.state === 'done' && reuse.status === 'failed') return `**기존 구현 검색이 실패했다**${reuse.reason ? ` (${reuse.reason})` : ''}. ${unanswered}`
@@ -786,9 +786,11 @@ function reuseLine(reuse, target) {
     ? ` (상한으로 생략한 후보 ${reuse.omitted.candidates}개${reuse.omitted.hits ? ` · hit ${reuse.omitted.hits}개` : ''})`
     : ''
   const where = `HEAD ${codeSpan(short(target.head))}${'baseHead' in target && target.baseHead !== target.mergeBase ? ` · base 끝 ${codeSpan(short(target.baseHead))}` : ''}`
-  const verification = reuse.verification?.crossFileEvidence
-    ? ` 다른 파일과 견준 05-7 지적 ${reuse.verification.crossFileEvidence}개를 검증으로 보냈다(검증 작업 ${reuse.verification.verificationTasksAdded >= 0 ? '+' : ''}${reuse.verification.verificationTasksAdded}).`
-    : ''
+  // 검증을 끈 실행은 그 지적을 검증하지 않았다 — 보냈다고 쓰지 않는다(C-6B)
+  const verification = !reuse.verification?.crossFileEvidence ? ''
+    : verificationState === 'disabled'
+      ? ` 다른 파일과 견준 05-7 지적 ${reuse.verification.crossFileEvidence}개 — 검증을 끈 실행이라 검증하지 않았다.`
+      : ` 다른 파일과 견준 05-7 지적 ${reuse.verification.crossFileEvidence}개를 검증으로 보냈다(검증 작업 ${reuse.verification.verificationTasksAdded >= 0 ? '+' : ''}${reuse.verification.verificationTasksAdded}).`
   const missed = reuse.givenTo05 === false ? ' 다만 05는 이 결과가 나오기 전에 돌아 검색 근거 없이 리뷰했다.' : ''
   return `**기존 구현 검색** — 검색 대상 ${total}개 중 ${parts || '0'}${omitted}. ${where}에서 찾았다.${missed}${verification}`
 }

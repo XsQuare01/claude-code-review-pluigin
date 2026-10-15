@@ -646,3 +646,11 @@ test('05가 검색이 끝나기 전에 돌았으면 검색 줄이 그 사실을 
   assert.equal(inTime.reuse.givenTo05, true)
   assert.doesNotMatch(renderSnapshotMarkdown(inTime), /받지 못했다|근거 없이 리뷰했다/)
 })
+
+test('검증을 끈 실행은 다른 파일과 견준 지적을 검증으로 보냈다고 쓰지 않는다', () => {
+  const routed = { ...fixture().routed, counts: { reuse: { context: 'used', crossFileEvidence: 2, newlyEligible: 1, movedToIsolated: 1, verificationTasksAdded: 1 } } }
+  const snapshot = buildSnapshot(fixture({ events: reuseEvents(reuseDone('complete', { targets: { complete: 2 } })), routed, verdicts: new Map(), verificationState: 'disabled' }))
+  const markdown = renderSnapshotMarkdown(snapshot)
+  assert.match(markdown, /다른 파일과 견준 05-7 지적 2개 — 검증을 끈 실행이라 검증하지 않았다\./)
+  assert.doesNotMatch(markdown, /검증으로 보냈다/)
+})
