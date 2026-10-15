@@ -177,16 +177,17 @@ node "$RULES_DIR/../scripts/review-tasks.mjs" next --stage module --dir "$REPORT
    - `fileDecisions`: `files`의 **모든 파일에 정확히 하나** — 새 동작을 구현한 파일은 `{ "path", "decision": "search", "targetIds": [...] }`, 문구만 바꿨거나 삭제만 한 파일은 `{ "path", "decision": "exclude", "reason": "<확인한 사유>" }`. 다시 세지 않는다 — `files`가 정본이다
    - `targets`: 대상마다 `targetId`, `anchor`(`path`·`startLine`·`endLine`·`quote` — **diff가 추가하거나 바꾼** 구현의 줄을 실제로 읽어 그대로 인용한다. 되도록 그 구현 전체를 덮는다 — 스크립트는 anchor와 앞뒤 3줄만 대상 자신으로 빼므로, 몇 줄만 가리키면 같은 구현의 나머지가 후보로 돌아온다), `purpose`(새 구현이 하는 일 한 문장), `queries`(`{ "text": "<한 줄짜리 고정 문자열>", "paths": ["<선택 — 이 범위만 찾는다. 저장소 기준 `/` 경로>"] }` — `paths`를 주면 그 범위만 찾고, 주지 않으면 가까운 곳과 저장소 전체를 모두 찾는다). 검색어는 함수 이름만이 아니라 입력 타입·호출하는 API·주요 필드·오류 코드·도메인 용어·특징적인 조건식을 섞는다. 단서는 그 anchor의 변경에서 나온 것만 쓴다 — 저장소를 훑는 검색어를 더하지 않는다
    - 검색할 것이 없으면 `targets`를 빈 배열로 두고 파일마다 제외 사유를 적는다 — 그것이 `not-applicable`이다
-2. **검색을 띄운다** — 기다리지 않는다:
+2. **계획을 검사한다** — `node "$RULES_DIR/../scripts/review-reuse.mjs" check --dir "$REPORT_DIR" --run "$REPORT_BASENAME" --search-id <searchId> --repo <대상 저장소>`. 검색과 같은 관문을 기록 없이 돌린다. `ok: false`면 `problems`대로 계획을 고쳐 다시 검사한다 — 통과한 뒤에 띄운다. 검색은 띄워 두고 돌아오므로, 띄운 뒤에 계획이 틀린 것을 알면 그때는 05가 이미 풀려 있다
+3. **검색을 띄운다** — 기다리지 않는다:
 
    ```bash
    node "$RULES_DIR/../scripts/review-tool.mjs" --dir "$REPORT_DIR" --run "$REPORT_BASENAME" --detach --name reuse-search -- \
         node "$RULES_DIR/../scripts/review-reuse.mjs" search --dir "$REPORT_DIR" --run "$REPORT_BASENAME" --search-id <searchId> --out <out> --repo <대상 저장소>
    ```
 
-   검색 스크립트가 `reuse.start`·`reuse.done`을 스스로 남긴다. **`reuse.done`을 직접 남기지 않는다** — 프로세스가 끝을 남기지 못했으면 대장이 감싼 `tool.done`으로 유실(`lost`)을 알아채고 `05`를 푼다. 계획 검사에 걸리면(종료 코드 2 — 파일 결정이 빠짐, anchor 인용이 HEAD와 다름 등) 검색은 `failed`로 끝났다. 그 시도를 고쳐 다시 돌리려면 `register`부터 다시 한다(새 `searchId`). 고치지 않으면 `05`는 검색 근거 없이 돈다
-3. **`05`가 나오면** 그 항목의 `reuse`를 본다. `reuse.context`가 있고 `status`가 `complete`·`partial`이면 그 파일을 읽어 내용을 **고치거나 요약하지 않고** `05` 프롬프트의 `기존 구현 검색 결과` 자리에 JSON 코드 블록으로 싣는다. `not-applicable`이면 검색 대상이 없었다고, 그 밖(`failed`·`lost`·`timed-out`)이면 검색 근거 없이 리뷰한다고 적는다. 어느 경우든 `05`의 다른 규칙은 그대로 판정한다
-4. 검색 대상이 있는데 `05`가 적용 목록(3a(2))에서 빠졌으면 그 판정을 다시 확인한다
+   검색 스크립트가 `reuse.start`·`reuse.done`을 스스로 남긴다. **`reuse.done`을 직접 남기지 않는다** — 프로세스가 끝을 남기지 못했으면 대장이 감싼 `tool.done`으로 유실(`lost`)을 알아채고 `05`를 푼다. 띄운 뒤에 `failed`로 끝났으면(계획 검사·git 실패) 다시 등록하지 않는다 — 05는 이미 풀렸고 검색 근거 없이 돈다. 스냅숏이 그렇게 그린다
+4. **`05`가 나오면** 그 항목의 `reuse`를 본다. `reuse.context`가 있고 `status`가 `complete`·`partial`이면 그 파일을 읽어 내용을 **고치거나 요약하지 않고** `05` 프롬프트의 `기존 구현 검색 결과` 자리에 JSON 코드 블록으로 싣는다. `not-applicable`이면 검색 대상이 없었다고, 그 밖(`failed`·`lost`·`timed-out`)이면 검색 근거 없이 리뷰한다고 적는다. 어느 경우든 `05`의 다른 규칙은 그대로 판정한다
+5. 검색 대상이 있는데 `05`가 적용 목록(3a(2))에서 빠졌으면 그 판정을 다시 확인한다
 
 검색 상태와 수는 스냅숏이 기록에서 그리고(`결과 스냅숏`), 시간은 `--summary`가 따로 낸다 — 직접 세거나 문장을 다시 쓰지 않는다.
 

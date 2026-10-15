@@ -212,3 +212,23 @@ test('register는 계획에 그대로 쓸 머리와 검사할 파일 목록을 �
   const search = reuse(ctx, 'search', '--search-id', registered.searchId, '--out', registered.out, '--repo', ctx.repo)
   assert.equal(search.status, 0, search.stderr)
 })
+
+// 검색은 띄워 두고 돌아오므로 계획이 틀린 것을 05가 풀린 뒤에야 안다. check는 같은 관문을 기록 없이 먼저 돌린다 —
+// 고친 뒤 띄우면 05가 근거 없이 나가는 일이 줄어든다.
+test('check는 검색과 같은 관문을 기록 없이 돌리고, 통과해야 0으로 끝난다', t => {
+  const ctx = setup(t)
+  const registered = JSON.parse(reuse(ctx, 'register').stdout)
+  const plan = planFor(ctx, registered, { decisions: [{ path: 'src/features/parser/new-parser.ts', decision: 'search', targetIds: ['t1'] }] })
+  writePlan(registered.plan, { ...plan, targets: plan.targets.slice(0, 1) })
+  const bad = reuse(ctx, 'check', '--search-id', registered.searchId, '--repo', ctx.repo)
+  assert.equal(bad.status, 2)
+  const verdict = JSON.parse(bad.stdout)
+  assert.equal(verdict.ok, false)
+  assert.ok(verdict.problems.some(problem => /설정 파일\.ts에 결정이 없다/.test(problem)), verdict.problems.join(' / '))
+  assert.deepEqual(events(ctx).filter(event => /^reuse\.(start|done)$/.test(event.phase)), [], 'check는 기록을 남기지 않는다')
+
+  writePlan(registered.plan, planFor(ctx, registered))
+  const good = reuse(ctx, 'check', '--search-id', registered.searchId, '--repo', ctx.repo)
+  assert.equal(good.status, 0, good.stdout + good.stderr)
+  assert.deepEqual(JSON.parse(good.stdout), { ok: true, problems: [] })
+})

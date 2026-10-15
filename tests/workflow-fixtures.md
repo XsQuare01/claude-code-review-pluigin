@@ -1257,7 +1257,7 @@ These scenarios pin the behaviour that `review-rules/workflow-contract.md` promi
         "C-6C"
       ],
       "scenario": "The reuse plan has no decision for one file listed in scope.json, or a target anchor quote does not match the line at HEAD",
-      "expected": "review-reuse.mjs search collects no candidates, records reuse.done with status failed and reason plan-invalid, and exits 2; the snapshot draws that the search failed and that 05 ran without search evidence, and the orchestrator does not rewrite the plan into an empty successful result"
+      "expected": "review-reuse.mjs check reports the same problems without recording anything, so the orchestrator fixes the plan before launching the search; if a search is launched with such a plan anyway, review-reuse.mjs search collects no candidates, records reuse.done with status failed and reason plan-invalid, and exits 2; the snapshot draws that the search failed and that 05 ran without search evidence, and the orchestrator does not rewrite the plan into an empty successful result"
     },
     {
       "id": 157,

@@ -4,6 +4,9 @@
 // Usage:
 //   review-reuse.mjs register --dir D --run R [--wait-sec 1800]
 //       첫 디스패치 전에 검색을 예정한다. 검색 ID를 정해 `reuse.planned`에 남기고, 계획 파일을 쓸 자리와 함께 낸다.
+//   review-reuse.mjs check --dir D --run R --search-id S [--plan <계획 경로>] [--repo .]
+//       search와 같은 계획 검사를 기록 없이 돌린다. 띄우기 전에 부른다 — 검색은 띄워 두고 돌아오므로, 계획이 틀린 것을
+//       05가 풀린 뒤에야 알게 된다. 통과하면 0, 아니면 2. 표준 출력은 { ok, problems } 하나.
 //   review-reuse.mjs search --dir D --run R --search-id S --out <reuse-context 경로> [--plan <계획 경로>] [--repo .]
 //       계획을 검사하고 검색한다. `reuse.start`·`reuse.done`을 스스로 남긴다. 보통 review-tool --detach --name
 //       reuse-search로 감싸 띄운다 — 다른 모듈 리뷰가 그동안 돈다.
@@ -35,7 +38,7 @@ const die = message => {
 }
 
 const [mode, ...rest] = process.argv.slice(2)
-if (!['register', 'search', 'wait'].includes(mode)) die('usage: review-reuse.mjs register|search|wait --dir D --run R …')
+if (!['register', 'check', 'search', 'wait'].includes(mode)) die('usage: review-reuse.mjs register|check|search|wait --dir D --run R …')
 const VALUE_FLAGS = new Set(['dir', 'run', 'wait-sec', 'search-id', 'out', 'plan', 'repo', 'max-candidates', 'time-limit', 'timeout'])
 const values = new Map()
 for (let at = 0; at < rest.length; at += 1) {
@@ -122,13 +125,50 @@ if (mode === 'register') {
   process.exit(0)
 }
 
-// ── search ────────────────────────────────────────────────────────────────
+// ── check · search ───────────────────────────────────────────────────────
 const searchId = values.get('search-id')
 const outPath = values.get('out')
-if (!searchId || !outPath) die('search에는 --search-id와 --out이 필요하다')
+if (!searchId) die(`${mode}에는 --search-id가 필요하다`)
+if (mode === 'search' && !outPath) die('search에는 --out이 필요하다')
 const planned = events.filter(event => event?.phase === 'reuse.planned').at(-1)
 if (!planned || planned.searchId !== searchId) die(`등록되지 않은 검색 ID다(${searchId}) — 지금 시도는 ${planned?.searchId ?? '없음'}이다. register가 낸 ID로 부른다`)
 const planPath = values.get('plan') ?? planned.plan
+
+/**
+ * 계획 검사 — search의 관문이고, check는 같은 검사를 띄우기 전에 한다. 기록을 남기지 않는다.
+ * 통과하면 `{ plan, repoGit }`, 아니면 `{ reason, problems }`.
+ */
+function checkPlan() {
+  const scope = readScope()
+  if (scope.error) return { reason: 'scope-unreadable', problems: [scope.error] }
+  let plan
+  try {
+    plan = readJsonFile(planPath)
+  } catch (error) {
+    return { reason: 'plan-unreadable', problems: [`계획을 읽지 못했다: ${planPath} — ${error.message}`] }
+  }
+  const root = gitReader(values.get('repo') ?? process.cwd()).root()
+  if (!root) return { reason: 'git-failed', problems: ['저장소를 읽지 못했다(--repo)'] }
+  const repoGit = gitReader(root)
+  const problems = planProblems(plan, { scope: scope.value, runId: start.runId, head: start.head, mergeBase: start.mergeBase, searchId, scopeSha256: planned.scopeSha256 })
+  if (scope.sha256 !== planned.scopeSha256) problems.push('scope.json이 예정을 등록한 뒤 바뀌었다')
+  if (!problems.length) {
+    for (const target of plan.targets) {
+      const headText = repoGit.show(start.head, target.anchor.path)
+      const diff = repoGit.diff(start.mergeBase, start.head, target.anchor.path)
+      problems.push(...anchorProblems(target, { headText, ranges: diff.ok ? changedRanges(diff.out) : [] }))
+      if (!diff.ok) problems.push(`${target.targetId}의 변경 범위를 읽지 못했다 — ${diff.error}`)
+    }
+  }
+  return problems.length ? { reason: 'plan-invalid', problems } : { plan, repoGit }
+}
+
+if (mode === 'check') {
+  const checked = checkPlan()
+  const problems = checked.problems ?? []
+  process.stdout.write(`${JSON.stringify({ ok: !problems.length, problems })}\n`)
+  process.exit(problems.length ? 2 : 0)
+}
 const startedAt = Date.now()
 const planSha256 = existsSync(planPath) ? sha256(readFileSync(planPath)) : null
 try {
@@ -177,30 +217,9 @@ const fail = (reason, problems) => {
   finish({ ...base, status: 'failed', reason, problems, targets: [] }, 2)
 }
 
-const scope = readScope()
-if (scope.error) fail('scope-unreadable', [scope.error])
-let plan
-try {
-  plan = readJsonFile(planPath)
-} catch (error) {
-  fail('plan-unreadable', [`계획을 읽지 못했다: ${planPath} — ${error.message}`])
-}
-
-const git = gitReader(values.get('repo') ?? process.cwd())
-const root = git.root()
-if (!root) fail('git-failed', ['저장소를 읽지 못했다(--repo)'])
-const repoGit = gitReader(root)
-const problems = planProblems(plan, { scope: scope.value, runId: start.runId, head: start.head, mergeBase: start.mergeBase, searchId, scopeSha256: planned.scopeSha256 })
-if (scope.sha256 !== planned.scopeSha256) problems.push('scope.json이 예정을 등록한 뒤 바뀌었다')
-if (!problems.length) {
-  for (const target of plan.targets) {
-    const headText = repoGit.show(start.head, target.anchor.path)
-    const diff = repoGit.diff(start.mergeBase, start.head, target.anchor.path)
-    problems.push(...anchorProblems(target, { headText, ranges: diff.ok ? changedRanges(diff.out) : [] }))
-    if (!diff.ok) problems.push(`${target.targetId}의 변경 범위를 읽지 못했다 — ${diff.error}`)
-  }
-}
-if (problems.length) fail('plan-invalid', problems)
+const checked = checkPlan()
+if (checked.problems) fail(checked.reason, checked.problems)
+const { plan, repoGit } = checked
 
 const deadline = startedAt + limits.timeLimitSec * 1000
 const budget = { remaining: limits.candidatesTotal }
