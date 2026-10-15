@@ -34,6 +34,7 @@ import { writeTextAtomic } from './lib/atomic-write.mjs'
 import { durationLimitScope, hostCapabilities } from './lib/hosts.mjs'
 import { moduleScope, plannedModules } from './lib/review-snapshot.mjs'
 import { readJsonFile, readTextFile } from './lib/read-text.mjs'
+import { resultLanguageProblems } from './lib/result-language.mjs'
 import { readEvents, recordPhase, requireStartedTimeline } from './lib/run-record.mjs'
 import { currentTarget, runOutputs } from './lib/run-identity.mjs'
 import {
@@ -481,10 +482,16 @@ const done = () => {
     let problems = null
     let retryPrompt
     if (target.stage === 'module') {
+      let parsed
       try {
-        JSON.parse(text)
+        parsed = JSON.parse(text)
       } catch (error) {
         problems = [`JSON으로 읽지 못했다: ${error.message} — 코드펜스나 서문 없이 JSON 객체 하나만 돌려준다`]
+      }
+      // 한국어가 아닌 지적은 받지 않는다 — 교정 시도로 다시 받는다(00-rule, run.start.language)
+      if (!problems) {
+        const language = resultLanguageProblems(parsed, { language: start.language })
+        if (language.length) problems = language
       }
     } else {
       const routed = readRouted({ required: true })

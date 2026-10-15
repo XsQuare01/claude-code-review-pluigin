@@ -573,3 +573,15 @@ test('run.start에 base 끝 SHA(baseHead)와 기존 구현 검색 예정(reuseSe
   // 리뷰 에이전트가 없으면 멈춘다(C-6) — 첫 명령의 출력에서 알린다
   assert.match(out.stdout, /리뷰 에이전트 +첫 디스패치 전에 .*react-code-review-plugin:rule-module-reviewer.*cancel --all --reason agent-unavailable/)
 })
+
+test('사용자가 다른 언어를 요청하면 --language로 run.start에 남긴다 — 기본(한국어)은 남기지 않는다', t => {
+  const repo = behindRepo(t)
+  const plain = freshDir(t)
+  assert.equal(preflightIn(repo, plain, ['--base', 'main']).status, 0)
+  assert.equal('language' in linesOf(plain)[0], false)
+  const english = freshDir(t)
+  const out = preflightIn(repo, english, ['--base', 'main', '--language', 'en'])
+  assert.equal(out.status, 0, out.stderr)
+  assert.equal(linesOf(english)[0].language, 'en')
+  assert.equal(preflightIn(repo, freshDir(t), ['--base', 'main', '--language', 'english!']).status, 2)
+})

@@ -59,7 +59,7 @@ const die = message => {
   process.exit(2)
 }
 
-const VALUE_FLAGS = new Set(['dir', 'run', 'rules', 'workflow', 'base', 'host', 'repo', 'correctness', 'max-duration', 'max-tasks', 'stale-after', 'continues', 'previous', 'pr-json'])
+const VALUE_FLAGS = new Set(['dir', 'run', 'rules', 'workflow', 'base', 'host', 'repo', 'correctness', 'max-duration', 'max-tasks', 'stale-after', 'continues', 'previous', 'pr-json', 'language'])
 const BOOL_FLAGS = new Set(['dry-run', 'no-pr'])
 {
   const argv = process.argv.slice(2)
@@ -104,6 +104,10 @@ const repo = flag('repo', process.cwd())
 // 추가 비용을 확인하기 전까지 명시적으로 켜서 쓴다(#88). 켰는지를 여기서 기록해야, 결과가
 // 없는 것이 "켜지 않았다"인지 "켰는데 실패했다"인지 뒤의 스크립트가 가를 수 있다.
 const correctness = flag('correctness', 'off')
+// 리뷰 결과의 언어. 사용자가 다른 언어를 정했을 때만 준다 — 주지 않으면 한국어이고 기록에 남기지 않는다(00-rule).
+// 작업 대장은 이 값이 ko가 아니면 지적의 한국어 검사를 하지 않는다
+const language = flag('language')
+if (language !== undefined && !/^[a-z]{2,3}(-[A-Za-z0-9]{2,8})?$/.test(language)) die(`--language는 언어 코드다(예: en, ja, zh-CN) — 받은 값: ${language}`)
 if (!['on', 'off'].includes(correctness)) die(`--correctness는 on 또는 off다 (받은 값: ${JSON.stringify(correctness)})`)
 
 // 한도(C-12). 주지 않으면 한도가 없다 — 없는 한도를 기본값으로 지어 넣으면 사용자가 정하지 않은
@@ -333,6 +337,8 @@ const logged = (() => {
     // 선택 패스가 있는 워크플로우만 남긴다. 없는 워크플로우에 `off`를 적으면 "끌 수 있었는데
     // 껐다"로 읽힌다.
     ...(optional.some(module => module.id === 'correctness') ? { correctness } : {}),
+    // 사용자가 정한 리뷰 언어 — 정하지 않았으면(한국어) 남기지 않는다
+    ...(language !== undefined && language !== 'ko' ? { language } : {}),
     ...(maxTasks !== null ? { maxTasks } : {}),
     ...(maxDurationSec !== null ? { maxDurationSec } : {}),
     staleAfterSec,

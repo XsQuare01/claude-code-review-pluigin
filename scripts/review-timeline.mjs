@@ -151,7 +151,8 @@ const PHASES = new Map([
     allowed: ['candidates', 'workflow', 'mergeBase', 'os', 'runId', 'base', 'baseSource', 'prNumber', 'prBase', 'head', 'worktree', 'dirtyFiles', 'repo', 'repoRoot', 'rulesDigest', 'correctness',
       'maxTasks', 'maxDurationSec', 'staleAfterSec', 'continues', 'previousSnapshot', 'previousRunId', 'previousSha256', 'baseAhead', 'baseOverlapCount',
       // `baseHead`: 기준 ref의 끝 commit(정한 순간). `reuseSearch`: full이 기존 구현 검색을 예정했는지(C-6C).
-      'baseHead', 'reuseSearch'],
+      // `language`: 사용자가 정한 리뷰 언어(정하지 않으면 없다 — 한국어)
+      'baseHead', 'reuseSearch', 'language'],
   }],
   // 한도에 닿아 멈춘 실행을 이어 갈 때 새 한도 구간을 연다(C-12). 대상이 그대로인지 확인한 값을 함께 남긴다.
   ['run.resume', { required: [], structured: [], allowed: ['maxTasks', 'maxDurationSec', 'staleAfterSec', 'head', 'worktree'] }],

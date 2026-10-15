@@ -526,3 +526,22 @@ test('cancel --all --reason agent-unavailable은 리뷰 에이전트가 없어 �
   // 대장이 정하는 사유는 손으로 줄 수 없다
   assert.equal(tasks(fresh(t), 'cancel', '--all', '--reason', 'max-tasks').status, 2)
 })
+
+test('제목·본문에 한글이 없는 결과는 받지 않고 교정 시도를 낸다 — 다른 언어를 요청한 실행은 받는다', t => {
+  const english = JSON.stringify({ schemaVersion: 1, findings: [{ ruleId: '13-4', title: 'The block layout API hides a contract', body: 'It relies on flex-1.', impact: 'low', confidence: 'high', location: { kind: 'unverified', reason: 'r' } }], openQuestions: [] })
+  const dir = fresh(t)
+  plant(dir, [startEvent(), planned(['01-fsd'])])
+  const [claim] = json(next(dir)).dispatch
+  writeFileSync(claim.resultPath, english, 'utf8')
+  const rejected = tasks(dir, 'done', '--task', '01-fsd', '--attempt', '1', '--status', 'ok')
+  assert.equal(rejected.status, 1)
+  assert.equal(json(rejected).outcome, 'rejected')
+  assert.match(json(rejected).problems.join(' '), /한국어/)
+  assert.equal(json(next(dir)).dispatch[0].correction, true)
+
+  const other = fresh(t)
+  plant(other, [startEvent({ language: 'en' }), planned(['01-fsd'])])
+  const [claimEn] = json(next(other)).dispatch
+  writeFileSync(claimEn.resultPath, english, 'utf8')
+  assert.equal(tasks(other, 'done', '--task', '01-fsd', '--attempt', '1', '--status', 'ok').status, 0)
+})
