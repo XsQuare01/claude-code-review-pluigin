@@ -222,12 +222,20 @@ export function overallStatus(targets, { planOk }) {
 /**
  * 저장소의 git을 인자 배열로만 부른다. 셸 문자열을 조립하지 않는다 — 검색어에 따옴표·괄호가 들어도 그대로 넘어간다.
  * grep의 종료 코드 1은 "찾지 못했다"이지 실패가 아니다. 그 밖의 실패는 사유와 함께 돌려준다.
+ * `timeoutMs`를 주면 그 시간이 지나면 git을 끊는다 — 검색의 시간 상한이 git 호출 하나에 막히지 않게(`timedOut`).
  */
 export function gitReader(repo) {
-  const run = (args, { noMatchIsEmpty = false } = {}) => {
+  const run = (args, { noMatchIsEmpty = false, timeoutMs } = {}) => {
     try {
-      return { ok: true, out: execFileSync('git', args, { cwd: repo, encoding: 'utf8', maxBuffer: 256 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true }) }
+      return {
+        ok: true,
+        out: execFileSync('git', args, {
+          cwd: repo, encoding: 'utf8', maxBuffer: 256 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true,
+          ...(Number.isFinite(timeoutMs) ? { timeout: Math.max(1, Math.round(timeoutMs)), killSignal: 'SIGKILL' } : {}),
+        }),
+      }
     } catch (error) {
+      if (error.code === 'ETIMEDOUT' || (Number.isFinite(timeoutMs) && error.signal)) return { ok: false, timedOut: true, error: `시간 상한(${Math.round(timeoutMs)}ms)에 끊었다` }
       if (noMatchIsEmpty && error.status === 1 && !String(error.stderr ?? '').trim()) return { ok: true, out: '' }
       return { ok: false, error: String(error.stderr || error.message).trim().split('\n')[0] || 'git 실패' }
     }
@@ -238,16 +246,17 @@ export function gitReader(repo) {
       const out = run(['rev-parse', '--show-toplevel'])
       return out.ok ? out.out.trim() : null
     },
-    show(rev, path) {
+    show(rev, path, { timeoutMs } = {}) {
       const key = `${rev}\0${path}`
       if (!shown.has(key)) {
-        const out = run(['show', `${rev}:${path}`])
+        const out = run(['show', `${rev}:${path}`], { timeoutMs })
+        if (out.timedOut) return null
         shown.set(key, out.ok ? out.out : null)
       }
       return shown.get(key)
     },
-    grep: (rev, text, paths) => run(['grep', '-n', '-z', '-F', '-I', '--full-name', '-e', text, rev, '--', ...(paths?.length ? paths : ['.'])], { noMatchIsEmpty: true }),
-    diff: (from, to, path) => run(['diff', '-U0', '--no-color', '--no-ext-diff', from, to, '--', path]),
+    grep: (rev, text, paths, { timeoutMs } = {}) => run(['grep', '-n', '-z', '-F', '-I', '--full-name', '-e', text, rev, '--', ...(paths?.length ? paths : ['.'])], { noMatchIsEmpty: true, timeoutMs }),
+    diff: (from, to, path, { timeoutMs } = {}) => run(['diff', '-U0', '--no-color', '--no-ext-diff', from, to, '--', path], { timeoutMs }),
   }
 }
 
@@ -299,11 +308,18 @@ const kindOf = path => {
  * - 테스트·mock 경로의 후보는 `kind: test`, 코드가 아닌 파일(SVG·JSON 데이터·문서·압축된 번들)은 `kind: other`로
  *   production 후보와 가르고, production을 먼저 둔다
  */
-export function searchTarget(target, { git, head, mergeBase, baseHead, limits, deadline, budget }) {
+export function searchTarget(target, { git, head, mergeBase, baseHead, limits, deadline, budget, clock = Date.now }) {
   const anchor = target.anchor
   const revs = [{ rev: head, sourceRef: 'head' }, ...(baseHead && baseHead !== mergeBase && baseHead !== head ? [{ rev: baseHead, sourceRef: 'base' }] : [])]
   const errors = []
   const reached = new Set()
+  // 시간 상한은 실제 실행을 막는다 — git 호출마다 남은 시간만 주고, 상한이 지나면 더 읽지 않는다
+  const remaining = () => deadline - clock()
+  const outOfTime = () => {
+    if (remaining() > 0) return false
+    reached.add('time')
+    return true
+  }
   const byFile = new Map()
   const queries = []
   let omittedHits = 0
@@ -329,13 +345,12 @@ export function searchTarget(target, { git, head, mergeBase, baseHead, limits, d
     const record = { text: query.text, ...(query.paths ? { paths: query.paths } : {}), searched: [], hits: 0 }
     const seen = new Set()
     for (const paths of scopes) {
-      if (Date.now() > deadline) {
-        reached.add('time')
-        break
-      }
+      if (outOfTime()) break
       record.searched.push(paths)
       for (const { rev, sourceRef } of revs) {
-        const out = git.grep(rev, query.text, paths)
+        if (outOfTime()) break
+        const out = git.grep(rev, query.text, paths, { timeoutMs: remaining() })
+        if (out.timedOut) reached.add('time')
         if (!out.ok) {
           errors.push(`검색어 ${JSON.stringify(query.text)}(${sourceRef}) — ${out.error}`)
           continue
@@ -363,7 +378,8 @@ export function searchTarget(target, { git, head, mergeBase, baseHead, limits, d
   // 후보 구간과 원문 — 같은 commit에서 읽는다
   const found = []
   for (const file of byFile.values()) {
-    const text = git.show(file.rev, file.path)
+    if (outOfTime()) break
+    const text = git.show(file.rev, file.path, { timeoutMs: remaining() })
     if (typeof text !== 'string') {
       errors.push(`${file.path}(${file.sourceRef})를 읽지 못했다`)
       continue
@@ -406,7 +422,8 @@ export function searchTarget(target, { git, head, mergeBase, baseHead, limits, d
   for (const candidate of ordered) {
     if (candidate.sourceRefs.includes('head')) {
       // merge-base→HEAD에서 바뀐 줄인가. hit 줄이 모두 그대로면 있던 구현, 모두 바뀌었으면 이번 변경이 더한 구현
-      const diff = typeof git.diff === 'function' ? git.diff(mergeBase, head, candidate.path) : null
+      // 상한이 지났으면 출처를 판정하지 않는다(미확정) — 더 읽지 않는다
+      const diff = typeof git.diff === 'function' && remaining() > 0 ? git.diff(mergeBase, head, candidate.path, { timeoutMs: remaining() }) : null
       const ranges = diff?.ok ? changedRanges(diff.out) : null
       const changed = ranges ? candidate.hitLines.filter(line => ranges.some(range => line >= range.start && line <= range.end)).length : null
       const existedAtMergeBase = changed === null ? undefined : changed === 0 ? true : changed === candidate.hitLines.length ? false : undefined
@@ -414,7 +431,7 @@ export function searchTarget(target, { git, head, mergeBase, baseHead, limits, d
       continue
     }
     // base에서만 모인 후보 — 그 hit 줄이 HEAD에도 모두 있으면 같은 구현이 HEAD에 있다(창만 다르다)
-    const headText = git.show(head, candidate.path)
+    const headText = remaining() > 0 ? git.show(head, candidate.path, { timeoutMs: remaining() }) : null
     const headLines = typeof headText === 'string' ? new Set(linesOf(headText).map(line => line.trim())) : null
     const present = headLines ? candidate.hitTexts.filter(text => headLines.has(text)).length : 0
     if (present === candidate.hitTexts.length && present > 0) {

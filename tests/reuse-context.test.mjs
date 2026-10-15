@@ -1,8 +1,10 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { dirname } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 import {
-  REUSE_LIMITS, anchorProblems, candidateWindows, changedRanges, overallStatus, parseGrepOutput, planProblems, searchTarget, summarizeTargets,
+  REUSE_LIMITS, anchorProblems, gitReader, candidateWindows, changedRanges, overallStatus, parseGrepOutput, planProblems, searchTarget, summarizeTargets,
 } from '../scripts/lib/reuse-context.mjs'
 
 // 기존 구현 검색의 순수한 부분을 고정한다 — 계획 검사, diff의 새 쪽 범위, git grep 출력, 후보 구간, 상태 집계.
@@ -255,4 +257,41 @@ test('HEAD에 없는 base의 구현만 base에만 있다고 적는다', () => {
   })
   const extra = result.candidates.find(found => found.path === 'src/shared/extra.ts')
   assert.deepEqual([extra.sourceRef, extra.onlyInBase], ['base', true])
+})
+
+// 시간 상한은 실제 실행을 막아야 한다. git 호출은 남은 시간만 쓰고, 상한이 지난 뒤에는 원문 수집도 하지 않는다 —
+// 마지막 검색 도중 상한을 넘기고도 원문을 다 모아 complete로 끝나면 상한이 없는 것과 같다.
+test('검색 도중 시간 상한을 넘기면 원문을 더 읽지 않고 partial로 끝난다 — git에는 남은 시간만 준다', () => {
+  let now = 0
+  const timeouts = []
+  const shown = []
+  const files = { 'src/feature/new.ts': anchorFile, 'src/shared/a.ts': "export const a = (s: string) => s.split('/')" }
+  const git = {
+    grep: (rev, text, paths, options = {}) => {
+      timeouts.push(options.timeoutMs)
+      now += 60
+      return fakeGit(files).grep(rev, text, paths)
+    },
+    show: (rev, path, options = {}) => {
+      shown.push(path)
+      return files[path] ?? null
+    },
+  }
+  const result = searchTarget(
+    { targetId: 't1', anchor: { path: 'src/feature/new.ts', startLine: 1, endLine: 1, quote: anchorFile }, purpose: 'p', queries: [{ text: ".split('/')" }] },
+    { git, head: HEAD, mergeBase: MERGE_BASE, baseHead: null, limits: REUSE_LIMITS, deadline: 100, budget: { remaining: 40 }, clock: () => now },
+  )
+  assert.deepEqual(timeouts, [100, 40], '남은 시간만 준다')
+  assert.equal(result.status, 'partial')
+  assert.ok(result.limits.reached.includes('time'), JSON.stringify(result.limits))
+  assert.deepEqual(shown, [], '상한이 지난 뒤에는 원문을 읽지 않는다')
+})
+
+test('git 호출은 받은 시간이 지나면 끊기고 timedOut으로 알린다', () => {
+  const git = gitReader(dirname(dirname(fileURLToPath(import.meta.url))))
+  // 저장소 어디에도 없는 문자열 — 이 파일에 글자 그대로 두면 커밋한 뒤 이 파일에 맞는다
+  const missing = ['no', 'such', 'text', Date.now().toString(36)].join('-')
+  assert.deepEqual(git.grep('HEAD', missing, ['.']), { ok: true, out: '' })
+  const cut = git.grep('HEAD', missing, ['.'], { timeoutMs: 1 })
+  assert.deepEqual([cut.ok, cut.timedOut], [false, true])
 })
