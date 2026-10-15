@@ -186,13 +186,14 @@ export function crossFileEvidenceOf(candidate, context) {
   const end = location.endLine ?? location.line
   if (!Number.isInteger(start) || !Number.isInteger(end)) return []
   const text = Object.values(candidate.content ?? {}).filter(value => typeof value === 'string').join('\n')
-  const basenameCount = new Map()
+  // 파일 이름이 모호한지는 서로 다른 전체 경로 수로 본다 — 같은 기존 구현이 여러 대상에서 나와도 한 파일이다
+  const pathsByBasename = new Map()
   for (const found of context.targets.flatMap(target => target?.candidates ?? [])) {
     if (typeof found?.path !== 'string') continue
     const name = found.path.split('/').at(-1)
-    basenameCount.set(name, (basenameCount.get(name) ?? 0) + 1)
+    pathsByBasename.set(name, (pathsByBasename.get(name) ?? new Set()).add(found.path))
   }
-  const mentions = found => mentionsCandidate(text, found, { uniqueBasename: basenameCount.get(found.path.split('/').at(-1)) === 1 })
+  const mentions = found => mentionsCandidate(text, found, { uniqueBasename: pathsByBasename.get(found.path.split('/').at(-1))?.size === 1 })
   const evidence = []
   for (const target of context.targets) {
     const anchor = target?.anchor

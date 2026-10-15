@@ -828,3 +828,12 @@ test('결과 파일이 검색이 기록한 해시와 다르면 근거로 쓰지 
     rmSync(dir, { recursive: true, force: true })
   }
 })
+
+// 같은 기존 구현이 두 검색 대상에서 나와도 같은 파일이다 — 파일 이름이 모호한지는 서로 다른 전체 경로 수로 본다.
+test('같은 후보 경로가 여러 대상에 나와도 파일 이름 하나로 가리킨 지적을 놓치지 않는다', () => {
+  const context = contextWith(['src/shared/normalize.ts'])
+  context.targets.push({ ...context.targets[0], targetId: 't2', candidates: context.targets[0].candidates.map(found => ({ ...found, candidateId: 't2.c1' })) })
+  const evidence = crossFileEvidenceOf(finding('normalize.ts에 같은 구현이 있다'), context)
+  assert.ok(evidence.length > 0)
+  assert.ok(evidence.every(one => one.path === 'src/shared/normalize.ts'))
+})
