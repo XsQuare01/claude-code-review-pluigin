@@ -32,6 +32,8 @@ export const REUSE_LIMITS = Object.freeze({
 })
 
 const nonEmpty = value => typeof value === 'string' && value.trim() !== ''
+// 저장소 안의 `/` 상대 경로. Windows 역슬래시는 git pathspec에서 아무것도 찾지 못하고, `:`로 시작하면 pathspec 마법이다
+const isRepoRelative = path => !/[\\]/.test(path) && !path.startsWith('/') && !path.startsWith(':') && !/^[A-Za-z]:/.test(path) && !path.split('/').includes('..')
 export const sha256 = text => createHash('sha256').update(text).digest('hex')
 
 /**
@@ -107,9 +109,11 @@ export function planProblems(plan, { scope, runId, head, mergeBase, searchId, sc
     if (!queries.length) problems.push(`${id}에 검색어가 없다`)
     for (const query of queries) {
       if (!nonEmpty(query?.text)) problems.push(`${id}의 검색어가 비었다`)
+      // git grep -F는 검색어의 줄마다 따로 찾는다 — 끝의 줄바꿈 하나가 빈 패턴이 되어 모든 줄에 맞는다
+      else if (/[\r\n]/.test(query.text)) problems.push(`${id}의 검색어에 줄바꿈이 있다 — 한 줄짜리 고정 문자열로 나눠 적는다`)
       const paths = query?.paths
-      if (paths !== undefined && (!Array.isArray(paths) || !paths.every(nonEmpty) || paths.some(path => path.split(/[\\/]/).includes('..')))) {
-        problems.push(`${id}의 검색 경로가 저장소 안의 경로 목록이 아니다`)
+      if (paths !== undefined && (!Array.isArray(paths) || !paths.every(nonEmpty) || !paths.every(isRepoRelative))) {
+        problems.push(`${id}의 검색 경로가 저장소 안의 \`/\` 상대 경로 목록이 아니다(역슬래시·절대 경로·드라이브·\`:\`로 시작하는 pathspec·\`..\` 금지)`)
       }
     }
   }

@@ -139,3 +139,17 @@ test('가까운 곳에 hit가 있어도 저장소 전체를 찾는다 — 호출
   const split = result.queries.find(query => query.text === ".split('/')")
   assert.equal(split.hits, 2)
 })
+
+// git grep -F는 검색어의 줄마다 따로 찾는다 — 끝에 줄바꿈이 붙으면 빈 패턴이 모든 줄에 맞는다. 검색 경로는 저장소 안의
+// `/` 상대 경로다 — Windows의 `scripts\lib`는 아무것도 찾지 못한 채 complete가 되고, `:(top)` 같은 pathspec 마법은
+// 범위를 바꾼다.
+test('검색어의 줄바꿈과 저장소 상대 경로가 아닌 검색 경로를 거부한다', () => {
+  const withQuery = query => plan({ targets: [target({ queries: [query] })] })
+  for (const text of ['REUSE_LIMITS\n', 'A\nB', 'A\r\nB']) {
+    assert.ok(planProblems(withQuery({ text }), CTX).some(problem => /줄바꿈/.test(problem)), JSON.stringify(text))
+  }
+  for (const path of ['scripts\\lib', '/abs/path', 'C:/repo/src', ':(top)src', ':/src', '../src']) {
+    assert.ok(planProblems(withQuery({ text: 'x', paths: [path] }), CTX).some(problem => /검색 경로/.test(problem)), path)
+  }
+  assert.deepEqual(planProblems(withQuery({ text: 'x', paths: ['src/shared', 'src/한글 폴더'] }), CTX), [])
+})

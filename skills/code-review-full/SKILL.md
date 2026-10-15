@@ -175,7 +175,7 @@ node "$RULES_DIR/../scripts/review-tasks.mjs" next --stage module --dir "$REPORT
 
 1. **계획을 쓴다** — `register`가 낸 `plan` 자리에, `planHeader`를 그대로 머리로 두고 두 목록을 더한 JSON 하나다. 파일 쓰기 도구로 쓴다(셸 리다이렉트·PowerShell 변수를 거치지 않는다).
    - `fileDecisions`: `files`의 **모든 파일에 정확히 하나** — 새 동작을 구현한 파일은 `{ "path", "decision": "search", "targetIds": [...] }`, 문구만 바꿨거나 삭제만 한 파일은 `{ "path", "decision": "exclude", "reason": "<확인한 사유>" }`. 다시 세지 않는다 — `files`가 정본이다
-   - `targets`: 대상마다 `targetId`, `anchor`(`path`·`startLine`·`endLine`·`quote` — **diff가 추가하거나 바꾼** 구현의 줄을 실제로 읽어 그대로 인용한다. 되도록 그 구현 전체를 덮는다 — 스크립트는 anchor와 앞뒤 3줄만 대상 자신으로 빼므로, 몇 줄만 가리키면 같은 구현의 나머지가 후보로 돌아온다), `purpose`(새 구현이 하는 일 한 문장), `queries`(`{ "text": "<고정 문자열>", "paths": ["<선택 — 먼저 볼 디렉터리>"] }`). 검색어는 함수 이름만이 아니라 입력 타입·호출하는 API·주요 필드·오류 코드·도메인 용어·특징적인 조건식을 섞는다. 단서는 그 anchor의 변경에서 나온 것만 쓴다 — 저장소를 훑는 검색어를 더하지 않는다
+   - `targets`: 대상마다 `targetId`, `anchor`(`path`·`startLine`·`endLine`·`quote` — **diff가 추가하거나 바꾼** 구현의 줄을 실제로 읽어 그대로 인용한다. 되도록 그 구현 전체를 덮는다 — 스크립트는 anchor와 앞뒤 3줄만 대상 자신으로 빼므로, 몇 줄만 가리키면 같은 구현의 나머지가 후보로 돌아온다), `purpose`(새 구현이 하는 일 한 문장), `queries`(`{ "text": "<한 줄짜리 고정 문자열>", "paths": ["<선택 — 이 범위만 찾는다. 저장소 기준 `/` 경로>"] }` — `paths`를 주면 그 범위만 찾고, 주지 않으면 가까운 곳과 저장소 전체를 모두 찾는다). 검색어는 함수 이름만이 아니라 입력 타입·호출하는 API·주요 필드·오류 코드·도메인 용어·특징적인 조건식을 섞는다. 단서는 그 anchor의 변경에서 나온 것만 쓴다 — 저장소를 훑는 검색어를 더하지 않는다
    - 검색할 것이 없으면 `targets`를 빈 배열로 두고 파일마다 제외 사유를 적는다 — 그것이 `not-applicable`이다
 2. **검색을 띄운다** — 기다리지 않는다:
 
