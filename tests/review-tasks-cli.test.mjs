@@ -504,3 +504,25 @@ test('검색을 예정하지 않은 실행에서는 05를 붙잡지 않는다', 
   const out = json(next(dir))
   assert.deepEqual([out.dispatch.map(one => one.task), out.held, 'reuse' in out.dispatch[0]], [['05-structure'], [], false])
 })
+
+// 리뷰 에이전트를 띄울 수 없으면 리뷰를 멈춘다(C-6). 띄우기 전에 알았으면 시도 없이, 띄운 뒤에 알았으면 돌던 시도를
+// 그 사유로 끝내고 디스패치를 멈춘다. 결과를 직접 써서 '지적 없음'으로 끝내지 않는다.
+test('cancel --all --reason agent-unavailable은 리뷰 에이전트가 없어 멈춘 것을 남긴다 — 띄우기 전이든 뒤든', t => {
+  const before = fresh(t)
+  plant(before, [startEvent(), planned(['01-fsd', '02-type'])])
+  const early = tasks(before, 'cancel', '--all', '--reason', 'agent-unavailable')
+  assert.equal(early.status, 0, early.stderr)
+  assert.deepEqual(json(early).cancelled, [])
+  const halt = eventsOf(before).find(event => event.phase === 'dispatch.halt')
+  assert.equal(halt.reason, 'agent-unavailable')
+  const decision = json(next(before))
+  assert.deepEqual([decision.dispatch, decision.halted, decision.complete], [[], 'agent-unavailable', true])
+
+  const after = fresh(t)
+  plant(after, [startEvent(), planned(['01-fsd', '02-type', '04-state'])])
+  next(after)
+  assert.equal(tasks(after, 'cancel', '--all', '--reason', 'agent-unavailable').status, 0)
+  assert.ok(eventsOf(after).filter(event => event.phase === 'module.done').every(event => event.cancelReason === 'agent-unavailable'))
+  // 대장이 정하는 사유는 손으로 줄 수 없다
+  assert.equal(tasks(fresh(t), 'cancel', '--all', '--reason', 'max-tasks').status, 2)
+})

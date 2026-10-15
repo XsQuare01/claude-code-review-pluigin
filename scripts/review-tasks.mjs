@@ -18,7 +18,8 @@
 //   review-tasks.mjs next   --dir D --run R --stage module|verify [--rules RULES_DIR] [--targets routed.json] [--inflight 4]
 //   review-tasks.mjs bind   --dir D --run R --task T --attempt N --host-task ID
 //   review-tasks.mjs done   --dir D --run R (--host-task ID | --task T --attempt N) --status ok|failed [--failure-class C] [--result 파일] [--note 사유]
-//   review-tasks.mjs cancel --dir D --run R (--task T | --all) --reason user
+//   review-tasks.mjs cancel --dir D --run R (--task T | --all) --reason user|agent-unavailable
+//       agent-unavailable: 리뷰 에이전트를 띄울 수 없어 리뷰를 멈춘다(C-6) — 띄우기 전이면 시도 없이 디스패치만 멈춘다
 //   review-tasks.mjs status --dir D --run R [--rules RULES_DIR] [--targets routed.json] [--json]
 //   review-tasks.mjs resume --dir D --run R [--repo .] [--max-tasks N] [--max-duration 30m] [--stale-after 20m]
 //
@@ -36,7 +37,7 @@ import { readJsonFile, readTextFile } from './lib/read-text.mjs'
 import { readEvents, recordPhase, requireStartedTimeline } from './lib/run-record.mjs'
 import { currentTarget, runOutputs } from './lib/run-identity.mjs'
 import {
-  CANCEL_REASONS, DEFAULT_INFLIGHT, MAX_ATTEMPTS, STAGES, attemptsOf, budgetOf, claimOf, decideNext, decisionRecords,
+  CANCEL_REASONS, DEFAULT_INFLIGHT, MANUAL_CANCEL_REASONS, MAX_ATTEMPTS, STAGES, attemptsOf, budgetOf, claimOf, decideNext, decisionRecords,
   foldAttempts, haltOf, isTerminal, parseDuration, planStates, segmentOf, settleDecision, settleRecord, verifyPlan,
   endState, verifyRoundOf, verifyRoundStart,
 } from './lib/task-ledger.mjs'
@@ -531,7 +532,9 @@ const done = () => {
 
 const cancel = () => {
   const reason = flag('reason')
-  if (reason !== 'user') throw new LedgerError(`cancel의 --reason은 user다 — ${CANCEL_REASONS.filter(one => one !== 'user').join(', ')}는 next가 정한다`)
+  if (!MANUAL_CANCEL_REASONS.includes(reason)) {
+    throw new LedgerError(`cancel의 --reason은 ${MANUAL_CANCEL_REASONS.join(' 또는 ')}다 — ${CANCEL_REASONS.filter(one => !MANUAL_CANCEL_REASONS.includes(one)).join(', ')}는 next가 정한다`)
+  }
   const task = flag('task')
   const all = switches.has('all')
   if (Boolean(task) === all) throw new LedgerError('cancel에는 --task <이름> 또는 --all 중 하나를 준다')
@@ -544,10 +547,10 @@ const cancel = () => {
       if (!all && name !== task) continue
       const last = [...attempts.values()].sort((left, right) => left.attempt - right.attempt).at(-1)
       if (!last || last.settled) continue
-      settle(stage, name, last.attempt, { status: 'failed', failureClass: 'cancelled', cancelReason: 'user', taskId: last.hostTaskId ?? undefined })
+      settle(stage, name, last.attempt, { status: 'failed', failureClass: 'cancelled', cancelReason: reason, taskId: last.hostTaskId ?? undefined })
       cancelled.push({ stage, task: name, attempt: last.attempt, ...(last.hostTaskId ? { hostTaskId: last.hostTaskId } : {}) })
     }
-    if (all && !haltOf(events)) record('dispatch.halt', { reason: 'user', running: 0 })
+    if (all && !haltOf(events)) record('dispatch.halt', { reason, running: 0 })
     if (!all && !cancelled.length) throw new LedgerError(`${task}에는 돌고 있는 시도가 없다`, 3)
     const host = hostCapabilities(startOf(events).host)
     return {

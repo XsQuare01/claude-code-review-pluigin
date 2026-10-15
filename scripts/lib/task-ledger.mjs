@@ -32,8 +32,11 @@ export const DEFAULT_INFLIGHT = 4
 /** 끝을 받지 못한 채 이만큼 지나면 죽은 작업으로 본다. 모듈 하나가 평균 4~5분 걸린 실측의 네 배쯤이다. */
 export const DEFAULT_STALE_AFTER_SEC = 1200
 
-export const HALT_REASONS = ['max-duration', 'max-tasks', 'user']
-export const CANCEL_REASONS = ['max-duration', 'user']
+// `agent-unavailable`: 리뷰 에이전트를 띄울 수 없어 오케스트레이터가 멈췄다(C-6)
+export const HALT_REASONS = ['max-duration', 'max-tasks', 'user', 'agent-unavailable']
+export const CANCEL_REASONS = ['max-duration', 'user', 'agent-unavailable']
+// cancel에 손으로 줄 수 있는 사유. 한도 사유는 next가 정한다
+export const MANUAL_CANCEL_REASONS = ['user', 'agent-unavailable']
 
 // 호스트에서 결과를 얻지 못한 실패다. 결과가 왔지만 계약을 어긴 것(`malformed-output`)과 가른다 —
 // 앞의 것은 런타임이나 동시 실행이 원인이고, 뒤의 것은 응답이 원인이다.
