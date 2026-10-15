@@ -1,7 +1,7 @@
 import * as nodeFs from 'node:fs'
 
 import { writeTextAtomic } from './atomic-write.mjs'
-import { REUSE_STATUSES, reuseState } from './reuse-state.mjs'
+import { REUSE_STATUSES, lastReuseModuleStart, reuseState, reuseStateBefore } from './reuse-state.mjs'
 
 import { codeSpan, dispositionOf, escapeProse } from '../render-findings.mjs'
 import { COMPARISONS, METHODS, OUTCOMES } from './evidence.mjs'
@@ -295,6 +295,10 @@ function reuseSummaryOf(events, { context, routedReuse, now }) {
   // 그것을 "기다렸다"로만 그리면 검색이 돌지 않았다는 사실이 숨는다.
   const notStarted = !state.planned ? '검색 계획(`reuse.planned`)이 없다' : !state.started ? '계획했지만 시작하지 않았다(`reuse.start` 없음)' : null
   const reason = state.done?.reason ?? notStarted ?? state.reason
+  // 결과가 있어도 05가 받았는지는 따로다 — 상한에 풀려 05가 먼저 나갔으면 그 05는 근거 없이 돌았다
+  const usable = one => one.state === 'done' && ['complete', 'partial'].includes(one.status)
+  const five = usable(state) ? lastReuseModuleStart(events) : null
+  const atDispatch = five ? reuseStateBefore(events, five) : null
   return {
     state: state.state,
     ...(state.state !== 'done' ? { started: Boolean(state.started) } : {}),
@@ -302,6 +306,7 @@ function reuseSummaryOf(events, { context, routedReuse, now }) {
     ...(state.status ? { status: state.status } : {}),
     ...(reason ? { reason } : {}),
     ...(state.done && isObject(state.done.targets) ? { targets: state.done.targets } : {}),
+    ...(atDispatch ? { givenTo05: usable(atDispatch) && atDispatch.searchId === state.searchId } : {}),
     ...(omitted ? { omitted } : {}),
     ...(isObject(routedReuse) ? {
       verification: {
@@ -489,6 +494,7 @@ export function snapshotProblems(snapshot) {
     else {
       if ('status' in reuse && !REUSE_STATUSES.includes(reuse.status)) problems.push('reuse.status가 닫힌 목록 밖이다')
       if ((reuse.state === 'done') === ('started' in reuse) || ('started' in reuse && typeof reuse.started !== 'boolean')) problems.push('reuse.started는 끝나지 않은 검색에만 있는 참·거짓이다')
+      if ('givenTo05' in reuse && typeof reuse.givenTo05 !== 'boolean') problems.push('reuse.givenTo05는 참·거짓이다')
       for (const key of ['targets', 'omitted', 'verification']) {
         if (key in reuse && (!isObject(reuse[key]) || !Object.values(reuse[key]).every(value => count(value) || (key === 'verification' && Number.isInteger(value))))) {
           problems.push(`reuse.${key}이 수의 묶음이 아니다`)
@@ -783,5 +789,6 @@ function reuseLine(reuse, target) {
   const verification = reuse.verification?.crossFileEvidence
     ? ` 다른 파일과 견준 05-7 지적 ${reuse.verification.crossFileEvidence}개를 검증으로 보냈다(검증 작업 ${reuse.verification.verificationTasksAdded >= 0 ? '+' : ''}${reuse.verification.verificationTasksAdded}).`
     : ''
-  return `**기존 구현 검색** — 검색 대상 ${total}개 중 ${parts || '0'}${omitted}. ${where}에서 찾았다.${verification}`
+  const missed = reuse.givenTo05 === false ? ' 다만 05는 이 결과가 나오기 전에 돌아 검색 근거 없이 리뷰했다.' : ''
+  return `**기존 구현 검색** — 검색 대상 ${total}개 중 ${parts || '0'}${omitted}. ${where}에서 찾았다.${missed}${verification}`
 }

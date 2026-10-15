@@ -2377,3 +2377,23 @@ test('--summary는 시작하지 않은 검색의 경과를 재지 않고, 예전
   plant(legacy, numbered([reuseStart({ reuseSearch: undefined }), reuseLine(20, 'module.start', { module: '05-structure', attempt: 1 }), reuseLine(90, 'module.done', { module: '05-structure', attempt: 1, status: 'ok' })]))
   assert.doesNotMatch(summary(legacy).stdout, /기존 구현 검색/)
 })
+
+// 정상으로 돈 05를 위반으로 짚지 않는다 — 상한 뒤에 늦게 온 끝, 실패한 검색 뒤 05가 나간 다음의 재등록, 끝 없이 매달린
+// 검색(감싼 review-tool은 상한보다 늦게 끝난다). 05는 띄운 순간의 기록으로 판단한다.
+test('--check는 05를 띄운 순간에 풀려 있었으면 짚지 않는다 — 늦은 끝·재등록·매달린 검색', t => {
+  const cases = [
+    [reuseStart(), reuseLine(5, 'reuse.planned', { searchId: 's1', scopeSha256: 'h', plan: 'p', waitSec: 60 }), reuseLine(6, 'reuse.start', { searchId: 's1', plan: 'p' }),
+      reuseLine(66, 'module.start', { module: '05-structure', attempt: 1 }), reuseLine(200, 'reuse.done', { searchId: 's1', status: 'complete' })],
+    [reuseStart(), reuseLine(5, 'reuse.planned', { searchId: 's1', scopeSha256: 'h', plan: 'p' }), reuseLine(6, 'reuse.start', { searchId: 's1', plan: 'p' }),
+      reuseLine(9, 'reuse.done', { searchId: 's1', status: 'failed', reason: 'plan-invalid' }), reuseLine(10, 'module.start', { module: '05-structure', attempt: 1 }),
+      reuseLine(20, 'reuse.planned', { searchId: 's2', scopeSha256: 'h', plan: 'p' }), reuseLine(21, 'reuse.start', { searchId: 's2', plan: 'p' }), reuseLine(50, 'reuse.done', { searchId: 's2', status: 'complete' })],
+    [reuseStart(), reuseLine(5, 'reuse.planned', { searchId: 's1', scopeSha256: 'h', plan: 'p', waitSec: 60 }), reuseLine(6, 'tool.start', { name: 'reuse-search', callId: 'c' }),
+      reuseLine(7, 'reuse.start', { searchId: 's1', plan: 'p' }), reuseLine(70, 'module.start', { module: '05-structure', attempt: 1 }),
+      reuseLine(1806, 'tool.done', { name: 'reuse-search', exit: null, treeSha: 'x', callId: 'c' })],
+  ]
+  for (const events of cases) {
+    const dir = freshDir(t)
+    plant(dir, numbered(events))
+    assert.doesNotMatch(check(dir).stdout, /풀리기 전에 시작했다/)
+  }
+})

@@ -8,7 +8,7 @@ import { writeTextAtomic } from './lib/atomic-write.mjs'
 import { markedBlock } from './lib/contract-blocks.mjs'
 import { intentBlock, intentProblems } from './lib/intent.mjs'
 import { readJsonFile, readTextFile } from './lib/read-text.mjs'
-import { reuseState } from './lib/reuse-state.mjs'
+import { lastReuseModuleStart, reuseState, reuseStateBefore } from './lib/reuse-state.mjs'
 import { CURRENT_STATUSES, countBy, enclosingSymbol, identityPending, linkFindings, pathChanges, recheckable } from './lib/review-compare.mjs'
 import { parseSnapshot } from './lib/review-snapshot.mjs'
 import { currentTarget, ruleDocDigests, rulesDigest, runOutputs } from './lib/run-identity.mjs'
@@ -1038,9 +1038,16 @@ export function collectResultFiles({ events, sourceNames, pathOf, read, notReque
  * 다른 실행·다른 시도의 원문을 근거로 붙이면, 검증자는 이 변경이 아닌 코드와 견준다. 현재 파일로 대신하지도 않는다.
  */
 export function reuseContextOf(events, start) {
-  const state = reuseState(events)
-  if (!state.required) return null
-  if (state.state !== 'done') return { context: null, state: state.state, warning: `기존 구현 검색이 끝나지 않았다(${state.state}) — cross-file-evidence를 붙이지 않는다` }
+  if (!reuseState(events).required) return null
+  // 05가 받은 것만 근거다 — 05를 띄운 순간의 상태로 읽는다. 상한에 풀려 05가 나간 뒤에 끝난 검색의 원문을 붙이면
+  // producer가 보지 않은 근거로 검증하게 된다(C-6C)
+  const five = lastReuseModuleStart(events)
+  const state = five ? reuseStateBefore(events, five) : reuseState(events)
+  if (state.state !== 'done') {
+    return five
+      ? { context: null, state: 'not-given-to-05', warning: `05는 검색 결과를 받지 못하고 돌았다 — 05를 띄울 때 검색은 ${state.state}였다. cross-file-evidence를 붙이지 않는다` }
+      : { context: null, state: state.state, warning: `기존 구현 검색이 끝나지 않았다(${state.state}) — cross-file-evidence를 붙이지 않는다` }
+  }
   if (!['complete', 'partial'].includes(state.status) || typeof state.done.out !== 'string') return { context: null, state: `search-${state.status ?? 'unknown'}` }
   let doc
   try {

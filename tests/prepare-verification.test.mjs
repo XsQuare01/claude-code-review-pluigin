@@ -2,20 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { resolve } from 'node:path'
 
-import {
-  normalizeForCompare,
-  checkLocation,
-  computeOwnerCollisions,
-  decideEligibility,
-  routeCandidate,
-  buildBundles,
-  prepareVerification,
-  candidatesFromResults,
-  collectBlobs,
-  resolveWithinRoot,
-  candidatesFromLocations,
-  verifyDirOf,
-} from '../scripts/prepare-verification.mjs'
+import { buildBundles, candidatesFromLocations, candidatesFromResults, checkLocation, collectBlobs, computeOwnerCollisions, decideEligibility, normalizeForCompare, prepareVerification, resolveWithinRoot, reuseContextOf, routeCandidate, verifyDirOf } from '../scripts/prepare-verification.mjs'
 import { renderFinding } from '../scripts/render-findings.mjs'
 
 // ------------------------------------------------------------- normalization
@@ -762,4 +749,17 @@ test('검색 근거를 주지 않은 준비에는 reuse 수가 없다', () => {
   const result = prepareVerification([dup()], blobs)
   assert.equal('reuse' in result.counts, false)
   assert.equal(result.candidates[0].eligibility, 'SKIP-VERIFY')
+})
+
+// 05가 받은 것만 근거다. 상한에 풀려 05가 나간 뒤에 검색이 끝났으면 05는 그 결과를 보지 못했다 — 그 원문을 05-7 지적의
+// 검증 근거로 붙이면 producer가 보지 않은 근거로 검증하게 된다.
+test('05가 띄워질 때 검색이 끝나지 않았으면 늦게 온 결과를 근거로 쓰지 않는다', () => {
+  const at = sec => new Date(Date.UTC(2026, 9, 15) + sec * 1000).toISOString()
+  const start = { at: at(0), phase: 'run.start', runId: 'r-1', head: 'h'.repeat(40), reuseSearch: 'planned' }
+  const events = [start, { at: at(5), phase: 'reuse.planned', searchId: 's1', scopeSha256: 'x', plan: 'p', waitSec: 60 },
+    { at: at(6), phase: 'reuse.start', searchId: 's1', plan: 'p' }, { at: at(70), phase: 'module.start', module: '05-structure', attempt: 1 },
+    { at: at(200), phase: 'reuse.done', searchId: 's1', status: 'complete', out: 'no-such-file.json' }]
+  const reuse = reuseContextOf(events, start)
+  assert.deepEqual([reuse.context, reuse.state], [null, 'not-given-to-05'])
+  assert.match(reuse.warning, /05는 검색 결과를 받지 못하고 돌았다/)
 })

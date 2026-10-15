@@ -49,8 +49,27 @@ export function reuseState(events, { now = Date.now() } = {}) {
   const clockFrom = Date.parse(planned?.at ?? firstDispatch?.at ?? start.at)
   const deadline = clockFrom + waitSec * 1000
   const base = { required: true, searchId, planned, started, done, wrapperEnd, waitSec, deadline: new Date(deadline).toISOString() }
-  if (done) return { ...base, state: 'done', released: true, releasedAt: done.at, status: done.status ?? null }
-  if (wrapperEnd) return { ...base, state: 'lost', released: true, releasedAt: wrapperEnd.at, reason: '검색 프로세스가 끝(reuse.done)을 남기지 못하고 끝났다' }
+  // 풀린 시각은 가장 먼저 온 사건이다 — 상한이 먼저 지났으면 대장은 그때 05를 풀었다. 늦게 온 끝이 그 시각을 미루지 않는다
+  const releasedAt = event => (Date.parse(event.at) > deadline ? new Date(deadline).toISOString() : event.at)
+  if (done) return { ...base, state: 'done', released: true, releasedAt: releasedAt(wrapperEnd && Date.parse(wrapperEnd.at) < Date.parse(done.at) ? wrapperEnd : done), status: done.status ?? null }
+  if (wrapperEnd) return { ...base, state: 'lost', released: true, releasedAt: releasedAt(wrapperEnd), reason: '검색 프로세스가 끝(reuse.done)을 남기지 못하고 끝났다' }
   if (now >= deadline) return { ...base, state: 'timed-out', released: true, releasedAt: new Date(deadline).toISOString(), reason: `검색을 ${waitSec}초 기다렸다` }
   return { ...base, state: !planned ? 'unplanned' : started ? 'running' : 'planned', released: false }
+}
+
+/**
+ * 어떤 줄(보통 05의 `module.start`)을 남긴 순간의 상태 — 그 줄 앞의 기록을 그 줄의 시각으로 읽는다.
+ *
+ * 작업 대장은 띄우기 직전의 기록으로 05를 풀었다. 그 뒤에 늦게 온 끝이나 다시 등록한 검색은 05가 무엇을 받고
+ * 돌았는지를 바꾸지 않는다 — 기록 끝의 상태로 05를 판단하면 정상으로 돈 05를 위반으로 짚고, 05가 받지 못한 근거를
+ * 받은 것처럼 쓴다.
+ */
+export function reuseStateBefore(events, event) {
+  const at = events.indexOf(event)
+  return reuseState(at === -1 ? events : events.slice(0, at), { now: Date.parse(event.at) })
+}
+
+/** 05가 마지막으로 띄워진 줄. 결과로 쓰는 것은 대개 마지막 시도다. 없으면 `null`. */
+export function lastReuseModuleStart(events) {
+  return events.filter(event => event?.phase === 'module.start' && event.module === REUSE_MODULE).at(-1) ?? null
 }

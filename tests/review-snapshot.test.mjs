@@ -634,3 +634,15 @@ test('계획이나 시작이 없던 검색은 상한 뒤에 풀렸어도 "돌지
   assert.equal(running.reuse.started, true)
   assert.match(renderSnapshotMarkdown(running), /\*\*기존 구현 검색이 끝나지 않았다\*\* — 검색이 아직 돌고 있다\./)
 })
+
+test('05가 검색이 끝나기 전에 돌았으면 검색 줄이 그 사실을 적는다 — 결과가 있어도 05는 받지 못했다', () => {
+  const tail = [{ at: '2026-10-06T00:01:05.000Z', phase: 'reuse.start', searchId: 's1', plan: 'p' }]
+  const fiveAt = at => ({ at, phase: 'module.start', module: '05-structure', attempt: 1 })
+  const doneAt = at => ({ at, phase: 'reuse.done', searchId: 's1', status: 'complete', targets: { complete: 2 } })
+  const late = buildSnapshot(fixture({ events: reuseEvents([...tail, fiveAt('2026-10-06T00:40:00.000Z'), doneAt('2026-10-06T00:50:00.000Z')]) }))
+  assert.deepEqual([late.reuse.state, late.reuse.givenTo05], ['done', false])
+  assert.match(renderSnapshotMarkdown(late), /검색 대상 2개 중 완료 2\. .*에서 찾았다\. 다만 05는 이 결과가 나오기 전에 돌아 검색 근거 없이 리뷰했다\./)
+  const inTime = buildSnapshot(fixture({ events: reuseEvents([...tail, doneAt('2026-10-06T00:20:00.000Z'), fiveAt('2026-10-06T00:21:00.000Z')]) }))
+  assert.equal(inTime.reuse.givenTo05, true)
+  assert.doesNotMatch(renderSnapshotMarkdown(inTime), /받지 못했다|근거 없이 리뷰했다/)
+})

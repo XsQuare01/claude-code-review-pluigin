@@ -31,7 +31,7 @@ import { basename, dirname, extname, isAbsolute, join, resolve } from 'node:path
 import { writeOutFile } from './lib/atomic-write.mjs'
 import { withFileLock } from './lib/file-lock.mjs'
 import { readJsonFile, readTextFile } from './lib/read-text.mjs'
-import { REUSE_MODULE, REUSE_STATUSES, reuseState } from './lib/reuse-state.mjs'
+import { REUSE_MODULE, REUSE_STATUSES, reuseState, reuseStateBefore } from './lib/reuse-state.mjs'
 import { moduleOutcomes } from './lib/run-record.mjs'
 import { CANCEL_REASONS, HALT_REASONS, STAGES, endState } from './lib/task-ledger.mjs'
 import { runNameProblem } from './lib/run-name.mjs'
@@ -946,13 +946,11 @@ if (has('check')) {
           }
         }
       }
-      // 05는 검색이 풀린 뒤(끝·유실·시간 초과)에 띄운다. 그 전에 띄우면 검색 후보 없이 돈 05다.
-      const fiveStarted = events.find(event => event?.phase === 'module.start' && event.module === REUSE_MODULE)
-      if (fiveStarted) {
-        const releasedAt = reuse.releasedAt ? Date.parse(reuse.releasedAt) : Infinity
-        if (Date.parse(fiveStarted.at) < releasedAt) {
-          problems.push(`\`${REUSE_MODULE}\`가 기존 구현 검색이 풀리기 전에 시작했다(seq ${fiveStarted.seq}) — 05는 검색의 끝·유실·시간 초과 뒤에 띄운다(C-6C)`)
-        }
+      // 05는 검색이 풀린 뒤(끝·유실·시간 초과)에 띄운다. 그 전에 띄우면 검색 후보 없이 돈 05다. 시도마다 띄운 순간의
+      // 기록으로 판단한다 — 그 뒤에 늦게 온 끝이나 다시 등록한 검색으로 판단하면 정상으로 돈 05를 위반으로 짚는다.
+      const early = events.find(event => event?.phase === 'module.start' && event.module === REUSE_MODULE && !reuseStateBefore(events, event).released)
+      if (early) {
+        problems.push(`\`${REUSE_MODULE}\`가 기존 구현 검색이 풀리기 전에 시작했다(seq ${early.seq}) — 05는 검색의 끝·유실·시간 초과 뒤에 띄운다(C-6C)`)
       }
     }
   }

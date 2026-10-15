@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { DEFAULT_REUSE_WAIT_SEC, REUSE_MODULE, reuseState } from '../scripts/lib/reuse-state.mjs'
+import { DEFAULT_REUSE_WAIT_SEC, REUSE_MODULE, reuseState, reuseStateBefore } from '../scripts/lib/reuse-state.mjs'
 
 // 기존 구현 검색의 상태를 기록에서 읽는다. 작업 대장은 이 값으로 05를 붙잡거나 풀고, 기록 검사는 이 값으로 05가
 // 너무 일찍 시작했는지 본다 — 두 곳이 같은 기록을 다르게 읽지 않도록 정의는 하나다.
@@ -59,4 +59,24 @@ test('앞 시도의 끝은 새 시도를 풀지 않는다 — 시도는 searchId
     ev(20, 'reuse.planned', { searchId: 's2', scopeSha256: 'h', plan: 'p' }), ev(21, 'reuse.start', { searchId: 's2', plan: 'p' })]
   const state = reuseState(events, { now: Date.parse(at(30)) })
   assert.deepEqual([state.searchId, state.state, state.released], ['s2', 'running', false])
+})
+
+// 풀린 시각은 가장 먼저 온 사건이다. 상한이 먼저 지났으면 작업 대장은 그때 05를 풀었다 — 그 뒤에 온 끝(reuse.done)이나
+// 감싼 review-tool의 끝은 풀린 시각을 뒤로 미루지 않는다. 미루면 정상으로 돈 05가 "풀리기 전에 시작했다"로 짚힌다.
+test('상한 뒤에 끝이 와도 풀린 시각은 상한이다', () => {
+  const planned = ev(5, 'reuse.planned', { searchId: 's1', scopeSha256: 'h', plan: 'p', waitSec: 60 })
+  const late = reuseState([start(), planned, ev(30, 'reuse.start', { searchId: 's1', plan: 'p' }), ev(200, 'reuse.done', { searchId: 's1', status: 'complete' })], { now: Date.parse(at(300)) })
+  assert.deepEqual([late.state, late.releasedAt], ['done', at(65)])
+  const lost = reuseState([start(), planned, ev(30, 'reuse.start', { searchId: 's1', plan: 'p' }), ev(1900, 'tool.done', { name: 'reuse-search', exit: null, treeSha: 'x', callId: 'c' })], { now: Date.parse(at(2000)) })
+  assert.deepEqual([lost.state, lost.releasedAt], ['lost', at(65)])
+})
+
+// 05를 띄운 순간의 상태 — 그 뒤의 기록(다시 등록한 검색, 늦게 온 끝)은 05가 무엇을 받고 돌았는지를 바꾸지 않는다.
+test('05를 띄운 순간의 상태는 그 줄 앞의 기록과 그 시각으로 읽는다', () => {
+  const events = [start(), ev(5, 'reuse.planned', { searchId: 's1', scopeSha256: 'h', plan: 'p' }), ev(6, 'reuse.start', { searchId: 's1', plan: 'p' }),
+    ev(9, 'reuse.done', { searchId: 's1', status: 'failed', reason: 'plan-invalid' }), ev(10, 'module.start', { module: REUSE_MODULE, attempt: 1 }),
+    ev(20, 'reuse.planned', { searchId: 's2', scopeSha256: 'h', plan: 'p' }), ev(21, 'reuse.start', { searchId: 's2', plan: 'p' }), ev(50, 'reuse.done', { searchId: 's2', status: 'complete' })]
+  const atDispatch = reuseStateBefore(events, events[4])
+  assert.deepEqual([atDispatch.searchId, atDispatch.state, atDispatch.status, atDispatch.released], ['s1', 'done', 'failed', true])
+  assert.equal(reuseState(events, { now: Date.parse(at(60)) }).searchId, 's2')
 })
