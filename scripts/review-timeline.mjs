@@ -26,11 +26,12 @@
 // 고치지 않는다 — 고치면 죽은 실행의 마지막 줄이 무엇이었는지 믿을 수 없다.
 
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs'
-import { basename, dirname, extname, join, resolve } from 'node:path'
+import { basename, dirname, extname, isAbsolute, join, resolve } from 'node:path'
 
 import { writeOutFile } from './lib/atomic-write.mjs'
 import { withFileLock } from './lib/file-lock.mjs'
-import { readTextFile } from './lib/read-text.mjs'
+import { readJsonFile, readTextFile } from './lib/read-text.mjs'
+import { REUSE_MODULE, REUSE_STATUSES, reuseState } from './lib/reuse-state.mjs'
 import { moduleOutcomes } from './lib/run-record.mjs'
 import { CANCEL_REASONS, HALT_REASONS, STAGES, endState } from './lib/task-ledger.mjs'
 import { runNameProblem } from './lib/run-name.mjs'
@@ -148,6 +149,12 @@ const PHASES = new Map([
   // 한도에 닿아 멈춘 실행을 이어 갈 때 새 한도 구간을 연다(C-12). 대상이 그대로인지 확인한 값을 함께 남긴다.
   ['run.resume', { required: [], structured: [], allowed: ['maxTasks', 'maxDurationSec', 'staleAfterSec', 'head', 'worktree'] }],
   ['scope.done', { required: ['files', 'excluded'], structured: [], allowed: [] }],
+  // 기존 구현 검색(C-6C). 디스패치와 함께 돌므로 `script.*`를 쓰지 않는다 — `--check`가 `script.done`의 수를 검증
+  // 집계로, `script.*`를 디스패치 뒤 단계로 읽는다. `reuse.planned`는 첫 디스패치 전에 예정을 등록하고(검색 ID를
+  // 정한다), `reuse.start`·`reuse.done`은 검색 스크립트가 직접 남긴다. 오케스트레이터가 끝을 만들어 채우지 않는다.
+  ['reuse.planned', { required: ['searchId', 'scopeSha256', 'plan'], structured: [], allowed: ['runId', 'head', 'baseHead', 'waitSec'] }],
+  ['reuse.start', { required: ['searchId', 'plan'], structured: [], allowed: ['planSha256'] }],
+  ['reuse.done', { required: ['searchId', 'status'], structured: ['targets'], allowed: ['reason', 'out', 'outSha256', 'planSha256', 'durationSec'] }],
   ['modules.planned', { required: ['candidates', 'applied'], structured: ['skipped', 'unknown'], allowed: [] }],
   ['dispatch.start', { required: ['modules', 'inflight'], structured: [], allowed: [] }],
   ['module.start', { required: ['module', 'attempt'], structured: [], allowed: ['taskId', 'retryOf', 'claim'] }],
@@ -232,6 +239,7 @@ const CLOSED_VALUES = new Map([
   ['verify.done', { status: ['ok', 'failed'], cancelReason: CANCEL_REASONS }],
   ['task.bind', { stage: STAGES }],
   ['dispatch.halt', { reason: HALT_REASONS }],
+  ['reuse.done', { status: REUSE_STATUSES }],
 ])
 
 const outsideClosedValues = (phase, data) => Object.entries(CLOSED_VALUES.get(phase) ?? {})
@@ -885,6 +893,54 @@ if (has('check')) {
     }
     if (twice.size) problems.push(`같은 검증 작업·시도가 두 번 시작됐다: ${[...twice].join(', ')}`)
     if (doubled.size) problems.push(`같은 검증 작업·시도가 두 번 끝났다: ${[...doubled].join(', ')}`)
+  }
+
+  // 기존 구현 검색(C-6C). 시작이 검색을 예정한 실행만 본다 — 그 필드가 없는 예전 기록에 미실행을 묻지 않는다.
+  // 상태는 작업 대장과 같은 정의(`reuseState`)로 읽는다.
+  {
+    const reuse = reuseState(events)
+    if (reuse.required) {
+      const startLine = events.find(event => event?.phase === 'run.start')
+      if (!reuse.planned) {
+        problems.push('기존 구현 검색을 예정한 실행인데 `reuse.planned`가 없다 — 검색을 계획했지만 실행하지 않았다(C-6C)')
+      } else if (!reuse.started) {
+        problems.push(`기존 구현 검색(${reuse.searchId})을 계획했지만 실행하지 않았다 — \`reuse.start\`가 없다(C-6C)`)
+      } else if (!reuse.done) {
+        if (reuse.wrapperEnd) notes.push(`기존 구현 검색(${reuse.searchId})이 끝을 남기지 못하고 끝났다 — 감싼 review-tool의 \`tool.done\`(seq ${reuse.wrapperEnd.seq})만 있다. 리포트에 미완료로 적는다`)
+        else problems.push(`시작한 검색(${reuse.searchId})의 끝이 없다 — \`reuse.done\`도, 감싼 review-tool의 \`tool.done\`도 없다`)
+      }
+      const known = new Set(events.filter(event => event?.phase === 'reuse.planned').map(event => event.searchId))
+      const strays = events.filter(event => (event?.phase === 'reuse.start' || event?.phase === 'reuse.done') && !known.has(event.searchId))
+      if (strays.length) problems.push(`계획하지 않은 검색의 줄이 있다: ${strays.map(event => `\`${event.phase}\`(seq ${event.seq}, ${event.searchId})`).join(', ')} — 시도는 \`reuse.planned\`가 정한 searchId로만 잇는다`)
+      // 끝이 가리키는 결과 파일이 이 실행·이 시도의 것인지 본다. 다른 실행의 결과를 정상 근거로 쓰지 않는다.
+      if (reuse.done && typeof reuse.done.out === 'string' && reuse.done.out) {
+        const resultPath = isAbsolute(reuse.done.out) ? reuse.done.out : resolve(dir, reuse.done.out)
+        let doc = null
+        try {
+          doc = readJsonFile(resultPath)
+        } catch (error) {
+          problems.push(`검색 결과 파일을 읽지 못했다: ${reuse.done.out} — ${error.message}`)
+        }
+        if (doc) {
+          const expected = {
+            runId: startLine?.runId, searchId: reuse.searchId, status: reuse.done.status, head: startLine?.head,
+            baseHead: startLine?.baseHead, planSha256: reuse.started.planSha256,
+          }
+          for (const [key, value] of Object.entries(expected)) {
+            if (value === undefined || value === null) continue
+            if (doc[key] !== value) problems.push(`검색 결과 파일의 ${key}(${JSON.stringify(doc[key] ?? null)})가 기록(${JSON.stringify(value)})과 다르다 — 다른 실행·다른 시도의 결과다`)
+          }
+        }
+      }
+      // 05는 검색이 풀린 뒤(끝·유실·시간 초과)에 띄운다. 그 전에 띄우면 검색 후보 없이 돈 05다.
+      const fiveStarted = events.find(event => event?.phase === 'module.start' && event.module === REUSE_MODULE)
+      if (fiveStarted) {
+        const releasedAt = reuse.releasedAt ? Date.parse(reuse.releasedAt) : Infinity
+        if (Date.parse(fiveStarted.at) < releasedAt) {
+          problems.push(`\`${REUSE_MODULE}\`가 기존 구현 검색이 풀리기 전에 시작했다(seq ${fiveStarted.seq}) — 05는 검색의 끝·유실·시간 초과 뒤에 띄운다(C-6C)`)
+        }
+      }
+    }
   }
 
   if (malformed) notes.push(`읽지 못한 줄 ${malformed}개`)

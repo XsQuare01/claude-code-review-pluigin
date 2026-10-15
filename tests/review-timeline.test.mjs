@@ -2257,3 +2257,78 @@ test('run.start는 base 끝 SHA와 기존 구현 검색 예정을 경고 없이 
   const odd = log(freshDir(t), 'run.start', { ...base, reuseSearch: 'maybe' })
   assert.match(odd.stderr, /reuseSearch/)
 })
+
+// ── 기존 구현 검색(C-6C)의 기록 ─────────────────────────────────────────────
+// 검색은 디스패치와 함께 돈다. 기존 script.start·script.done을 쓰면 --check가 검증 집계와 디스패치 뒤 순서를 그 줄로
+// 읽어 의미가 바뀐다 — 그래서 전용 단계(reuse.planned·reuse.start·reuse.done)로 남긴다.
+const reuseAt = sec => new Date(Date.UTC(2026, 9, 15, 0, 0, 0) + sec * 1000).toISOString()
+const reuseStart = extra => ({ at: reuseAt(0), seq: 1, sinceStartSec: 0, phase: 'run.start', host: 'test', rules: 'r', version: 'v', branch: 'b', changedFiles: 1, runId: 'r-1', head: 'a'.repeat(40), reuseSearch: 'planned', ...extra })
+const reuseLine = (sec, phase, data = {}) => ({ at: reuseAt(sec), sinceStartSec: sec, phase, ...data })
+const numbered = events => events.map((event, at) => ({ ...event, seq: at + 1 }))
+const reuseProblems = out => (out.stdout + out.stderr).split('\n').filter(line => /검색|reuse|05-structure/.test(line))
+
+test('reuse 단계는 표에 있고, reuse.done의 status는 닫힌 목록이다', t => {
+  const dir = freshDir(t)
+  assert.equal(log(dir, 'run.start', { host: 'test', rules: 'r', version: 'v', branch: 'b', changedFiles: 1, reuseSearch: 'planned' }).status, 0)
+  const planned = log(dir, 'reuse.planned', { searchId: 's1', scopeSha256: 'h', plan: '.timing/x.reuse-plan.json', runId: 'r-1', head: 'a'.repeat(40), baseHead: 'b'.repeat(40), waitSec: 900 })
+  assert.equal(planned.stderr, '')
+  assert.equal(log(dir, 'reuse.start', { searchId: 's1', plan: 'p', planSha256: 'c'.repeat(64) }).stderr, '')
+  assert.equal(log(dir, 'reuse.done', { searchId: 's1', status: 'partial', reason: 'candidate-limit', targets: { complete: 6, partial: 2 }, out: 'o', outSha256: 'd'.repeat(64), durationSec: 12 }).stderr, '')
+  const odd = log(dir, 'reuse.done', { searchId: 's1', status: 'ok' })
+  assert.match(odd.stderr, /status/)
+})
+
+test('--check는 검색을 예정했는데 계획·시작·끝이 빠진 실행을 짚는다', t => {
+  const cases = [
+    [[reuseStart()], /`reuse\.planned`가 없다/],
+    [[reuseStart(), reuseLine(5, 'reuse.planned', { searchId: 's1', scopeSha256: 'h', plan: 'p' })], /계획했지만 실행하지 않았다/],
+    [[reuseStart(), reuseLine(5, 'reuse.planned', { searchId: 's1', scopeSha256: 'h', plan: 'p' }), reuseLine(6, 'reuse.start', { searchId: 's1', plan: 'p' })], /시작한 검색\(s1\)의 끝이 없다/],
+  ]
+  for (const [events, pattern] of cases) {
+    const dir = freshDir(t)
+    plant(dir, numbered(events))
+    const out = check(dir)
+    assert.equal(out.status, 1)
+    assert.match(out.stdout, pattern)
+  }
+})
+
+test('--check는 끝을 남기지 못한 검색을 위반이 아니라 미완료로 알린다 — 감싼 review-tool은 끝났다', t => {
+  const dir = freshDir(t)
+  plant(dir, numbered([reuseStart(), reuseLine(5, 'reuse.planned', { searchId: 's1', scopeSha256: 'h', plan: 'p' }), reuseLine(6, 'tool.start', { name: 'reuse-search', callId: 'c' }),
+    reuseLine(7, 'reuse.start', { searchId: 's1', plan: 'p' }), reuseLine(9, 'tool.done', { name: 'reuse-search', exit: 1, treeSha: 'x', callId: 'c' })]))
+  const out = check(dir)
+  assert.doesNotMatch(out.stdout, /  - .*검색\(s1\)의 끝이 없다/)
+  assert.match(out.stdout, /  · .*검색\(s1\)이 끝을 남기지 못하고 끝났다/)
+})
+
+test('--check는 검색의 끝과 결과 파일이 다른 실행·시도·상태를 가리키면 짚는다', t => {
+  const dir = freshDir(t)
+  const out = join(dir, '.timing', 'x.reuse-context.json')
+  plant(dir, numbered([reuseStart(), reuseLine(5, 'reuse.planned', { searchId: 's1', scopeSha256: 'h', plan: 'p' }), reuseLine(6, 'reuse.start', { searchId: 's1', plan: 'p', planSha256: 'c'.repeat(64) }),
+    reuseLine(9, 'reuse.done', { searchId: 's1', status: 'complete', out })]))
+  writeFileSync(out, JSON.stringify({ schemaVersion: 1, runId: 'r-2', searchId: 's0', status: 'partial', head: 'a'.repeat(40), planSha256: 'e'.repeat(64) }), 'utf8')
+  const result = check(dir)
+  assert.equal(result.status, 1)
+  for (const field of ['runId', 'searchId', 'status', 'planSha256']) assert.match(result.stdout, new RegExp(`검색 결과 파일의 ${field}`))
+  // 맞는 파일이면 짚지 않는다
+  writeFileSync(out, JSON.stringify({ schemaVersion: 1, runId: 'r-1', searchId: 's1', status: 'complete', head: 'a'.repeat(40), planSha256: 'c'.repeat(64) }), 'utf8')
+  assert.doesNotMatch(check(dir).stdout, /검색 결과 파일의/)
+})
+
+test('--check는 05가 검색이 풀리기 전에 시작했으면 짚는다', t => {
+  const early = freshDir(t)
+  plant(early, numbered([reuseStart(), reuseLine(5, 'reuse.planned', { searchId: 's1', scopeSha256: 'h', plan: 'p' }), reuseLine(6, 'reuse.start', { searchId: 's1', plan: 'p' }),
+    reuseLine(8, 'module.start', { module: '05-structure', attempt: 1 }), reuseLine(9, 'reuse.done', { searchId: 's1', status: 'complete' })]))
+  assert.match(check(early).stdout, /`05-structure`가 기존 구현 검색이 풀리기 전에 시작했다/)
+  const after = freshDir(t)
+  plant(after, numbered([reuseStart(), reuseLine(5, 'reuse.planned', { searchId: 's1', scopeSha256: 'h', plan: 'p' }), reuseLine(6, 'reuse.start', { searchId: 's1', plan: 'p' }),
+    reuseLine(9, 'reuse.done', { searchId: 's1', status: 'failed', reason: 'git-grep-failed' }), reuseLine(10, 'module.start', { module: '05-structure', attempt: 1 })]))
+  assert.doesNotMatch(check(after).stdout, /풀리기 전에 시작했다/)
+})
+
+test('--check는 검색을 예정하지 않은 예전 기록에 검색 미실행을 묻지 않는다', t => {
+  const dir = freshDir(t)
+  plant(dir, numbered([reuseStart({ reuseSearch: undefined }), reuseLine(8, 'module.start', { module: '05-structure', attempt: 1 })]))
+  assert.deepEqual(reuseProblems(check(dir)), [])
+})
