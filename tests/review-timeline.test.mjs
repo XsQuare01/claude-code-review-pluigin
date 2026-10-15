@@ -2339,3 +2339,41 @@ test('--check의 무기록 구간은 검색이 도는 동안을 비었다고 하
     reuseLine(300, 'reuse.done', { searchId: 's1', status: 'complete' })]))
   assert.match(check(dir).stdout, /가장 긴 무기록 구간 294s .*`reuse\.start` → `reuse\.done` — 기존 구현 검색이 그 사이 돌고 있었다/)
 })
+
+// 검색은 다른 모듈과 겹쳐 돈다. 단계 시간을 더해 전체 지연으로 읽지 않도록 --summary가 네 값을 따로 낸다:
+// 첫 디스패치까지, 검색 경과, 05가 검색을 기다린 시간(첫 디스패치→검색 해제), 전체.
+test('--summary는 첫 디스패치까지·검색 경과·05 대기·전체를 따로 낸다', t => {
+  const dir = freshDir(t)
+  plant(dir, numbered([reuseStart(),
+    reuseLine(5, 'reuse.planned', { searchId: 's1', scopeSha256: 'h', plan: 'p' }),
+    reuseLine(20, 'module.start', { module: '04-state', attempt: 1 }),
+    reuseLine(21, 'tool.start', { name: 'reuse-search', callId: 'c' }),
+    reuseLine(22, 'reuse.start', { searchId: 's1', plan: 'p' }),
+    reuseLine(142, 'reuse.done', { searchId: 's1', status: 'complete', targets: { complete: 2 }, durationSec: 120 }),
+    reuseLine(143, 'tool.done', { name: 'reuse-search', exit: 0, treeSha: 'x', callId: 'c' }),
+    reuseLine(143, 'module.start', { module: '05-structure', attempt: 1 }),
+    reuseLine(200, 'module.done', { module: '04-state', attempt: 1, status: 'ok' }),
+    reuseLine(300, 'module.done', { module: '05-structure', attempt: 1, status: 'ok' }),
+    reuseLine(400, 'run.end', { verdict: 'x' }),
+  ]))
+  const out = summary(dir)
+  assert.equal(out.status, 0, out.stderr)
+  assert.match(out.stdout, /\*\*기존 구현 검색\*\* 첫 디스패치까지 20s · 검색 120s\(complete\) · 05 대기 122s\(첫 디스패치→검색 해제\) · 전체 400s — 검색은 모듈과 겹쳐 돌므로 더하지 않는다/)
+})
+
+test('--summary는 시작하지 않은 검색의 경과를 재지 않고, 예전 기록에는 검색 줄을 내지 않는다', t => {
+  const unstarted = freshDir(t)
+  plant(unstarted, numbered([reuseStart(),
+    reuseLine(5, 'reuse.planned', { searchId: 's1', scopeSha256: 'h', plan: 'p', waitSec: 60 }),
+    reuseLine(20, 'module.start', { module: '05-structure', attempt: 1 }),
+    reuseLine(70, 'module.start', { module: '05-structure', attempt: 1 }),
+    reuseLine(90, 'module.done', { module: '05-structure', attempt: 1, status: 'ok' }),
+  ]))
+  const out = summary(unstarted)
+  assert.equal(out.status, 0, out.stderr)
+  assert.match(out.stdout, /\*\*기존 구현 검색\*\* 첫 디스패치까지 20s · 검색 시작 기록 없음\(timed-out\) · 05 대기 45s\(첫 디스패치→검색 해제\) · 전체 90s/)
+
+  const legacy = freshDir(t)
+  plant(legacy, numbered([reuseStart({ reuseSearch: undefined }), reuseLine(20, 'module.start', { module: '05-structure', attempt: 1 }), reuseLine(90, 'module.done', { module: '05-structure', attempt: 1, status: 'ok' })]))
+  assert.doesNotMatch(summary(legacy).stdout, /기존 구현 검색/)
+})

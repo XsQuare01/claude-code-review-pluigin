@@ -1108,6 +1108,30 @@ if (has('summary')) {
     }
   }
 
+  // 기존 구현 검색(C-6C)의 시간. 검색은 다른 모듈과 겹쳐 돌므로 단계 시간을 더하면 지연이 부풀려진다 —
+  // 첫 디스패치까지, 검색 경과, 05가 검색을 기다린 시간(첫 디스패치→검색 해제), 전체를 따로 낸다.
+  // 검색을 예정하지 않은 예전 기록에는 이 줄이 없다.
+  {
+    const reuse = reuseState(events)
+    if (reuse.required) {
+      const ms = event => Date.parse(event.at)
+      const secondsOf = value => `${Math.round(value / 1000)}s`
+      const runStart = events.find(event => event?.phase === 'run.start')
+      const firstDispatch = events.find(event => event?.phase === 'dispatch.start' || event?.phase === 'module.start')
+      const searchEnd = reuse.done ?? reuse.wrapperEnd
+      const search = !reuse.started ? `검색 시작 기록 없음(${reuse.state})`
+        : searchEnd ? `검색 ${secondsOf(ms(searchEnd) - ms(reuse.started))}(${reuse.done ? reuse.status : reuse.state})`
+          : `검색 끝 기록 없음(${reuse.state})`
+      const waited = !firstDispatch ? '05 대기 미측정(디스패치 기록 없음)'
+        : reuse.released ? `05 대기 ${secondsOf(Math.max(0, Date.parse(reuse.releasedAt) - ms(firstDispatch)))}(첫 디스패치→검색 해제)`
+          : '05 대기 중(검색이 아직 풀리지 않았다)'
+      out.push('', `**기존 구현 검색** ${[
+        firstDispatch ? `첫 디스패치까지 ${secondsOf(ms(firstDispatch) - ms(runStart))}` : '첫 디스패치 기록 없음',
+        search, waited, `전체 ${secondsOf(ms(events.at(-1)) - ms(runStart))}`,
+      ].join(' · ')} — 검색은 모듈과 겹쳐 돌므로 더하지 않는다`)
+    }
+  }
+
   // 사용량. 표 상세 칸에만 두면 긴 JSON 사이에 묻혀 아무도 안 읽으므로 따로 낸다.
   //
   // 이 블록은 "숫자를 보여주는" 것이 아니라 **무엇을 근거로 그 숫자를 말하는지**를
