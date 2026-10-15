@@ -801,3 +801,30 @@ test('잘린 후보 원문은 잘렸다는 표시와 함께 검증 근거로 간
   const evidence = crossFileEvidenceOf(finding('`shared/lib/normalize-path.ts`를 다시 구현했다'), context)
   assert.equal(evidence[0].truncated, true)
 })
+
+// 05가 받은 원문과 검증자가 받는 원문은 같은 바이트여야 한다. 검색이 끝난 뒤 결과 파일의 원문만 바뀌면(실행·검색 ID·HEAD는
+// 그대로) 기록한 해시(outSha256)와 달라진다 — 그 파일을 근거로 쓰지 않는다.
+test('결과 파일이 검색이 기록한 해시와 다르면 근거로 쓰지 않는다', async () => {
+  const { mkdtempSync, writeFileSync, rmSync } = await import('node:fs')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const { createHash } = await import('node:crypto')
+  const dir = mkdtempSync(join(tmpdir(), 'reuse-hash-'))
+  try {
+    const out = join(dir, 'ctx.json')
+    const original = `${JSON.stringify({ runId: 'r-1', searchId: 's1', head: 'h'.repeat(40), targets: [] })}\n`
+    writeFileSync(out, original, 'utf8')
+    const outSha256 = createHash('sha256').update(original).digest('hex')
+    const at = sec => new Date(Date.UTC(2026, 9, 15) + sec * 1000).toISOString()
+    const start = { at: at(0), phase: 'run.start', runId: 'r-1', head: 'h'.repeat(40), reuseSearch: 'planned' }
+    const events = [start, { at: at(5), phase: 'reuse.planned', searchId: 's1', scopeSha256: 'x', plan: 'p' },
+      { at: at(6), phase: 'reuse.start', searchId: 's1', plan: 'p' }, { at: at(9), phase: 'reuse.done', searchId: 's1', status: 'complete', out, outSha256 }]
+    assert.equal(reuseContextOf(events, start).context.searchId, 's1')
+    writeFileSync(out, `${JSON.stringify({ runId: 'r-1', searchId: 's1', head: 'h'.repeat(40), targets: [{ targetId: 't9' }] })}\n`, 'utf8')
+    const changed = reuseContextOf(events, start)
+    assert.deepEqual([changed.context, changed.state], [null, 'mismatch'])
+    assert.match(changed.warning, /해시/)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})

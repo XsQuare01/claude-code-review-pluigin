@@ -7,7 +7,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import { writeTextAtomic } from './lib/atomic-write.mjs'
 import { markedBlock } from './lib/contract-blocks.mjs'
 import { intentBlock, intentProblems } from './lib/intent.mjs'
-import { readJsonFile, readTextFile } from './lib/read-text.mjs'
+import { decodeText, readJsonFile, readTextFile } from './lib/read-text.mjs'
 import { lastReuseModuleStart, reuseState, reuseStateBefore } from './lib/reuse-state.mjs'
 import { CURRENT_STATUSES, countBy, enclosingSymbol, identityPending, linkFindings, pathChanges, recheckable } from './lib/review-compare.mjs'
 import { parseSnapshot } from './lib/review-snapshot.mjs'
@@ -1097,11 +1097,18 @@ export function reuseContextOf(events, start) {
       : { context: null, state: state.state, warning: `기존 구현 검색이 끝나지 않았다(${state.state}) — cross-file-evidence를 붙이지 않는다` }
   }
   if (!['complete', 'partial'].includes(state.status) || typeof state.done.out !== 'string') return { context: null, state: `search-${state.status ?? 'unknown'}` }
+  let bytes
   let doc
   try {
-    doc = readJsonFile(state.done.out)
+    bytes = readFileSync(state.done.out)
+    doc = JSON.parse(decodeText(bytes))
   } catch (error) {
     return { context: null, state: 'unreadable', warning: `기존 구현 검색 결과를 읽지 못했다: ${state.done.out} — ${error.message}` }
+  }
+  // 05가 받은 원문과 같은 바이트인지 — 검색이 끝을 남길 때 기록한 해시와 견준다. 실행·검색 ID가 같아도 원문이 바뀌었을 수 있다
+  const actualSha256 = createHash('sha256').update(bytes).digest('hex')
+  if (typeof state.done.outSha256 === 'string' && actualSha256 !== state.done.outSha256) {
+    return { context: null, state: 'mismatch', warning: `기존 구현 검색 결과의 해시(${actualSha256.slice(0, 12)})가 검색이 기록한 해시(${state.done.outSha256.slice(0, 12)})와 다르다 — 검색 뒤에 바뀐 파일이다. 근거로 쓰지 않는다` }
   }
   for (const [key, value] of Object.entries({ runId: start.runId, searchId: state.searchId, head: start.head })) {
     if (value !== undefined && doc?.[key] !== value) return { context: null, state: 'mismatch', warning: `기존 구현 검색 결과의 ${key}(${JSON.stringify(doc?.[key] ?? null)})가 이 실행(${JSON.stringify(value)})과 다르다 — 근거로 쓰지 않는다` }

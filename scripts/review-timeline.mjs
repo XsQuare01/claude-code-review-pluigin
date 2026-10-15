@@ -25,6 +25,7 @@
 // 파일은 `<dir>/.timing/<run>.jsonl`이고 **append 전용**이다. 이미 쓴 줄은
 // 고치지 않는다 — 고치면 죽은 실행의 마지막 줄이 무엇이었는지 믿을 수 없다.
 
+import { createHash } from 'node:crypto'
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs'
 import { basename, dirname, extname, isAbsolute, join, resolve } from 'node:path'
 
@@ -934,6 +935,11 @@ if (has('check')) {
           doc = readJsonFile(resultPath)
         } catch (error) {
           problems.push(`검색 결과 파일을 읽지 못했다: ${reuse.done.out} — ${error.message}`)
+        }
+        // 검색이 끝을 남길 때 기록한 해시와 같은 바이트인지 — 실행·검색 ID가 같아도 검색 뒤에 원문이 바뀌었을 수 있다
+        if (doc && typeof reuse.done.outSha256 === 'string') {
+          const actual = createHash('sha256').update(readFileSync(resultPath)).digest('hex')
+          if (actual !== reuse.done.outSha256) problems.push(`검색 결과 파일의 해시(${actual.slice(0, 12)})가 기록(${reuse.done.outSha256.slice(0, 12)})과 다르다 — 검색 뒤에 바뀐 파일이다`)
         }
         if (doc) {
           const expected = {

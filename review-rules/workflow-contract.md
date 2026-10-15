@@ -685,7 +685,8 @@ anchor로 연결된다 — 연결이 없는 검색어나 전체 파일 읽기를
 ### 검증
 
 `prepare-verification.mjs`가 기록의 `reuse.done`이 가리키는 결과 파일을 읽는다. 그 파일의 `runId`·`searchId`·`head`가
-이 실행과 다르면 쓰지 않고 경고한다 — 지금 파일로 대신하지도 않는다.
+이 실행과 다르거나, 파일의 해시가 검색이 끝을 남길 때 기록한
+`outSha256`과 다르면(검색 뒤에 원문이 바뀐 파일) 쓰지 않고 경고한다 — 지금 파일로 대신하지도 않는다.
 
 **`cross-file-evidence`** — `05-7` 지적이고, 그 위치가 검색 대상의 anchor와 겹치며, 지적의 글(제목·본문·근거·
 개선 제안)이 그 대상의 **다른 파일** 후보를 가리킬 때 붙는 파생 사유다. 가리켰는지는 경로 단위로 본다 — 후보 ID(`t1.c2`),
@@ -719,7 +720,7 @@ anchor로 연결된다 — 연결이 없는 검색어나 전체 파일 읽기를
 
 **`--check`가 짚는 것(C-9).** 검색을 예정했는데 `reuse.planned`가 없거나, 계획했는데 `reuse.start`가 없거나, 시작한
 검색의 끝이 없으면 짚는다 — 감싼 `review-tool`이 끝났으면 위반이 아니라 미완료 알림이다. 끝과 결과 파일의
-`runId`·`searchId`·`status`·`head`·`baseHead`·계획 해시가 어긋나거나, 지금 시도가 아닌 `searchId`의 기록이 있거나,
+`runId`·`searchId`·`status`·`head`·`baseHead`·계획 해시·파일 해시(`outSha256`)가 어긋나거나, 지금 시도가 아닌 `searchId`의 기록이 있거나,
 `05`가 검색이 풀리기 전에 시작했으면 짚는다. `reuseSearch`가 없는 예전 기록에는 묻지 않는다.
 
 ## REVIEW_RESULT_CONTRACT_V1

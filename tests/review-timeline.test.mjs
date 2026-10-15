@@ -1,6 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawn, spawnSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -2396,4 +2397,17 @@ test('--check는 05를 띄운 순간에 풀려 있었으면 짚지 않는다 —
     plant(dir, numbered(events))
     assert.doesNotMatch(check(dir).stdout, /풀리기 전에 시작했다/)
   }
+})
+
+test('--check는 검색 결과 파일이 검색이 기록한 해시와 다르면 짚는다 — 검색 뒤에 바뀐 파일이다', t => {
+  const dir = freshDir(t)
+  const out = join(dir, '.timing', 'x.reuse-context.json')
+  const body = JSON.stringify({ schemaVersion: 1, runId: 'r-1', searchId: 's1', status: 'complete', head: 'a'.repeat(40) })
+  const outSha256 = createHash('sha256').update(body).digest('hex')
+  plant(dir, numbered([reuseStart(), reuseLine(5, 'reuse.planned', { searchId: 's1', scopeSha256: 'h', plan: 'p' }), reuseLine(6, 'reuse.start', { searchId: 's1', plan: 'p' }),
+    reuseLine(9, 'reuse.done', { searchId: 's1', status: 'complete', out, outSha256 })]))
+  writeFileSync(out, body, 'utf8')
+  assert.doesNotMatch(check(dir).stdout, /검색 결과 파일의 해시/)
+  writeFileSync(out, body.replace('"status"', '"extra":1,"status"'), 'utf8')
+  assert.match(check(dir).stdout, /검색 결과 파일의 해시\([0-9a-f]{12}\)가 기록\([0-9a-f]{12}\)과 다르다/)
 })
