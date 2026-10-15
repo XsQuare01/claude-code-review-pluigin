@@ -69,7 +69,7 @@ C-9의 `run.start`를 이 스크립트가 쓴다. 동시에 `리뷰 기준`과 `
 **리뷰 도중 대상이 바뀌어도 범위를 바꾸지 않는다(C-10).** 리뷰하는 동안 같은 작업 폴더에서 커밋·stage·브랜치 전환이 일어나도, 이 실행이 리뷰하는 것은 preflight가 잰 대상이다. 바뀐 것을 사용자에게 알리되 범위를 다시 정하지 않고, 사용자의 답 없이 고른 것을 사용자의 결정처럼 적지 않는다 — 2026-10-06 실행은 stage된 파일 넷을 보고 사용자에게 물었다가, 답이 오기 전에 호스트의 자동 계속 지시를 받아 스스로 고르고 리포트에 "요청에 따라"라고 적었다. 그 대신 이렇게 된다.
 - `prepare-verification.mjs`가 그 사실을 알아채고, 시작 때 작업 트리가 깨끗했으면 위치 대조를 **시작한 HEAD**로 한다. 검증자 프롬프트에도 "지금 파일에만 있는 코드를 반박 근거로 쓰지 않는다"가 들어간다. 시작 때 작업 트리가 깨끗하지 않았으면 그때의 파일은 다시 읽을 수 없다 — 위치 불일치가 대상 변경 때문일 수 있다고 출력에 남는다
 - 스냅숏이 `검토 도중 대상이 바뀌었다`를 그리고, `판정`에 그 줄을 옮긴다(아래 `결과 스냅숏`)
-- 사용자가 멈추라고 하면 `review-tasks.mjs cancel --all --reason user`(아래 `작업 대장으로 띄우고 받는다`)로 멈춘다. 바뀐 코드는 끝난 뒤 새 `--run`으로 다시 리뷰한다
+- 사용자가 멈추라고 하면 `review-tasks.mjs cancel --all --reason user`(아래 `작업 대장으로 띄우고 받는다`)로 멈춘다. 리뷰 에이전트가 없어서 멈출 때는 `--reason agent-unavailable`이다(아래 `리뷰 에이전트가 없으면 멈춘다`). 바뀐 코드는 끝난 뒤 새 `--run`으로 다시 리뷰한다
 
 리뷰하는 동안 같은 폴더에서 다른 작업을 할 거라면, 리뷰는 전용 worktree에서 돌린다.
 
@@ -221,6 +221,15 @@ node "$RULES_DIR/../scripts/review-tasks.mjs" next --stage module --dir "$REPORT
 
 **아래 producer는 전부 `subagent_type=react-code-review-plugin:rule-module-reviewer`로 띄운다.** 지적을 만드는 자리는 모두 쓰기 도구 없이 돈다(C-6). numbered module이든 특수 패스든 하는 일이 같다 — 규칙 문서 하나를 받아 diff를 판정하고 구조화된 결과를 돌려준다.
 
+**리뷰 에이전트가 없으면 멈춘다(C-6).** 첫 `next`를 부르기 전에 작업 도구의 에이전트 목록에서 `react-code-review-plugin:rule-module-reviewer`를 찾는다(preflight의 `리뷰 에이전트` 줄). 목록에 없거나, 띄운 작업이 알 수 없는 에이전트로 실패하거나, 런타임이 그 도구를 제한하지 못하면 이렇게 한다. 검증자와 synthesis도 같은 에이전트이므로 그 단계에서 알게 돼도 같다.
+
+1. `node "$RULES_DIR/../scripts/review-tasks.mjs" cancel --all --reason agent-unavailable --dir "$REPORT_DIR" --run "$REPORT_BASENAME"`으로 디스패치를 멈춘다. 돌던 시도는 그 사유로 끝나고 기록에 남는다
+2. **결과 파일·검증 판정·synthesis를 직접 쓰지 않는다.** 오케스트레이터가 직접 읽어 리뷰하거나 `explore`·`general`·`build` 같은 다른 에이전트로 대신하지 않는다. `review-tasks.mjs done`에 직접 만든 결과를 넘기지 않는다
+3. 받은 결과가 하나도 없으면 리포트를 쓰지 않고 `review-timeline.mjs --phase run.end --set verdict=not-reviewed`로 기록을 닫는다 — 리뷰하지 않은 실행의 리포트는 지적 없음으로 읽힌다. 받은 결과가 있으면 멈춘 실행(`halted`)처럼 부분 보고를 쓴다. 스냅숏이 첫 줄에 `리뷰 에이전트가 없어 리뷰를 멈췄다`를 그린다
+4. 사용자에게 무엇을 띄울 수 없었는지와 확인할 곳을 알린다 — 호스트의 플러그인·에이전트 설정. OpenCode는 이 플러그인의 스킬만 설치하므로, 에이전트는 호스트 설정이나 호스트 플러그인이 등록해야 한다
+
+2026-10-15 OpenCode 2.0.29가 이 에이전트를 등록하던 호스트 플러그인을 불러오지 못했을 때 두 실행이 이 지시 없이 돌았다. 한 실행은 `explore` 에이전트 넷과 함께 혼자 리뷰하고 스스로 검증해 "교차검증 유지 12건"을 냈다. 다른 실행은 18개 모듈에 빈 결과를 써서 `done`을 불러 "지적 없음"으로 보고했다. 둘 다 리포트에는 `검토 상태: 완료`로 나왔다.
+
 **스킬은 싣지 않는다(`load_skills=[]`).** producer만이 아니라 **이 스킬이 띄우는 sub-agent 전부**(검증자·synthesis 포함)가 그렇다. 호스트의 작업 도구가 스킬 목록을 받더라도(OpenCode의 `task`) 이 스킬(`code-review-full`)이나 다른 스킬을 넣지 않는다 — sub-agent의 지시는 프롬프트와 에이전트 정의에 있고, 이 스킬은 오케스트레이터의 지시다. 2026-10-12 실행은 `load_skills=['react-code-review-plugin:code-review-full']`로 띄워 첫 웨이브 넷이 `Skills not found`로 즉시 실패했다(`skill-injection-invalid`). 같은 날 다른 실행은 context 압축 뒤 리포트 조립을 맡긴 작업에 이 스킬을 실어 같은 오류로 실패했다 — 압축 뒤에도 이 규칙은 그대로다.
 
 ```
@@ -283,7 +292,7 @@ task(
 
   **`general`로 띄우지 않는다.** 만능 에이전트는 편집 도구와 셸을 가지고 있어, 프롬프트에 읽기 전용이라고 적어도 실제로 파일을 고칠 수 있다 — 실제로 그렇게 사고가 났다. `rule-module-reviewer`는 `Read`·`Grep`·`Glob`만 가진다(C-6).
 
-  이 에이전트가 셸 없이 일할 수 있는 이유는 3a(3)에 있다. diff를 스스로 뜨지 않고 받아 쓰며, **삭제된 파일의 옛 내용도 그 diff의 `-` 줄에 전부 들어 있다.** 런타임이 도구 제한을 지원하지 않으면 C-6의 대체 경로를 따른다.
+  이 에이전트가 셸 없이 일할 수 있는 이유는 3a(3)에 있다. diff를 스스로 뜨지 않고 받아 쓰며, **삭제된 파일의 옛 내용도 그 diff의 `-` 줄에 전부 들어 있다.** 런타임이 도구 제한을 지원하지 않으면 위 `리뷰 에이전트가 없으면 멈춘다`대로 멈춘다.
 - 적용 대상 모듈마다 별도의 sub-agent 하나를 반드시 유지한다. in-flight 상한은 정확히 4이며, fast review, generic summary, 또는 다른 모듈이 누락된 숫자 모듈을 대체할 수 없다. 특히 `01-fsd.md`와 `20-deletion-regression.md`는 다른 architecture/deletion-regression 요약으로 대체하지 않는다.
 - 각 모듈 상태는 `PENDING → DISPATCHED → COMPLETED or fresh retry → FAILED_ORCHESTRATION` 순서로 간다. 기록은 작업 대장이 `queued → running → succeeded | failed | unavailable | cancelled`로 남긴다(C-12).
   **이 이름은 실행 타임라인에 쓰지 않는다.** `module.done`의 `status`는 `ok`/`failed` 둘뿐이다(C-9) — `COMPLETED`는 `ok`, `FAILED_ORCHESTRATION`은 `failed`로 적는다. 2026-09-30 실행이 `module.done` 22줄 전부에 `COMPLETED`를 적었고, `--check`는 그 실행을 "성공 0 · 실패 19"로 읽었다.

@@ -84,7 +84,7 @@ ls "$RULES_DIR"/[0-9]*.md
 
 상세하고 exhaustive한 모듈별 multi-pass coverage가 필요하면 이 single-commit workflow를 확장하지 말고, 커밋 patch 범위를 명시한 별도 수동 리뷰로 분리한다.
 
-**producer는 `subagent_type="react-code-review-plugin:rule-module-reviewer"`로 띄운다(C-6).** 이 에이전트는 `Read`·`Grep`·`Glob`만 가진다 — 쓰기 도구도 셸도 없어서, 프롬프트에 읽기 전용이라고 적는 것과 달리 **실제로 고칠 수 없다.** `general` 같은 만능 에이전트나 셸을 가진 `correctness-reviewer`로 띄우지 않는다. 런타임이 sub-agent의 도구를 제한하지 못하면(이 에이전트를 설치하지 않는 호스트 포함) C-6의 대체 경로 — 격리된 사본에서 실행하거나 producer 없이 오케스트레이터가 직접 리뷰 — 를 따르고, 그 사실을 리포트 `실행 계획`에 적는다.
+**producer는 `subagent_type="react-code-review-plugin:rule-module-reviewer"`로 띄운다(C-6).** 이 에이전트는 `Read`·`Grep`·`Glob`만 가진다 — 쓰기 도구도 셸도 없어서, 프롬프트에 읽기 전용이라고 적는 것과 달리 **실제로 고칠 수 없다.** `general` 같은 만능 에이전트나 셸을 가진 `correctness-reviewer`로 띄우지 않는다. **리뷰 에이전트가 없으면 멈춘다(C-6).** 호스트에 이 에이전트가 없거나(작업 도구의 에이전트 목록에 없다, 띄우면 알 수 없는 에이전트로 실패한다) 런타임이 그 도구를 제한하지 못하면 리뷰하지 않는다 — 오케스트레이터가 직접 리뷰하거나 다른 에이전트(`explore`·`general`·`build` 등)로 대신하지 않고, 결과를 직접 쓰지 않는다. 리포트를 쓰지 않고, 무엇을 띄울 수 없었는지와 확인할 곳(호스트의 플러그인·에이전트 설정)을 사용자에게 알린다. 리뷰하지 않은 실행의 리포트는 지적 없음으로 읽힌다.
 
 ```
 task(
@@ -176,7 +176,7 @@ bounded 단일 통합 pass 완료 후:
 
 ## 실행 계획
 
-커밋 patch 기준, bounded pass 성공/실패 상태, `SKIPPED`/`UNKNOWN` 사유를 적는다. producer의 도구를 제한하지 못해 C-6 대체 경로로 돌았으면 그 사실과 택한 경로를 적는다.
+커밋 patch 기준, bounded pass 성공/실패 상태, `SKIPPED`/`UNKNOWN` 사유를 적는다.
 
 ## 상세 지적
 

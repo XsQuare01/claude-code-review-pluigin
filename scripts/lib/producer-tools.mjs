@@ -127,6 +127,20 @@ const checkTaskCalls = (where, text) => {
   return problems
 }
 
+// 리뷰 에이전트를 띄울 수 없을 때의 지시(C-6). 이 문장이 없는 스킬은 그때 무엇을 할지 정하지 않은 것이다 —
+// 2026-10-15 OpenCode 2.0.29에서 그 빈자리를 한 실행은 혼자 리뷰하고 스스로 검증해서, 다른 실행은 빈 결과로 채웠다.
+export const STOP_WITHOUT_REVIEWER = '리뷰 에이전트가 없으면 멈춘다'
+
+/**
+ * producer를 띄우는 스킬이 리뷰 에이전트가 없을 때 멈춘다고 적었는지 본다(C-6). 기본 거부 — 띄우는 정황이 있는데
+ * 그 문장이 없으면 실패다. 띄우지 않는 스킬은 묻지 않는다.
+ */
+export const checkStopsWithoutReviewer = ({ where, text }) => {
+  const dispatches = extractTaskCalls(text).length > 0 || extractDispatchTargets(text).length > 0 || dispatchSignals(text).length > 0
+  if (!dispatches || String(text).includes(STOP_WITHOUT_REVIEWER)) return []
+  return [`${where}: dispatches producers but does not say what to do when the reviewer agent is unavailable — C-6, default deny: add "${STOP_WITHOUT_REVIEWER}" with the stop procedure`]
+}
+
 /**
  * 스킬이 띄우는 producer가 파일을 쓸 수 있는지 판정한다.
  *

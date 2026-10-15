@@ -127,14 +127,22 @@ node "$RULES_DIR/../scripts/review-base.mjs" --repo .   # 사용자가 base를 �
 - 도구 이름은 런타임마다 다르므로 **능력 기준**으로 읽는다: producer는 "쓰기 도구 없음",
   오케스트레이터는 셸을 유지한다(diff 수집·스크립트·타임라인). 지적을 만드는 쪽과
   도구를 쓰는 쪽을 분리하는 것이 이 조항의 요점이다
-- 런타임이 producer의 도구를 제한할 수 없으면, 그 실행은 **격리된 사본에서** 하거나
-  producer를 띄우지 않고 오케스트레이터가 직접 읽어 리뷰한다. 제한할 수 없다는 사실을
-  리포트에 적는다
+- **리뷰 에이전트가 없으면 멈춘다.** 호스트에 `react-code-review-plugin:rule-module-reviewer`가 없거나(작업 도구의
+  에이전트 목록에 없다, 띄우면 알 수 없는 에이전트로 실패한다) 런타임이 producer의 도구를 제한할 수 없으면 리뷰하지
+  않는다. 오케스트레이터가 직접 읽어 리뷰하지 않고, 다른 에이전트(`explore`·`general`·`build` 등)로 대신하지 않으며,
+  모듈 결과·검증 판정·synthesis를 직접 쓰지 않는다. full은 `review-tasks.mjs cancel --all --reason agent-unavailable`로
+  디스패치를 멈춰 기록에 남기고, 받은 결과가 없으면 리포트를 쓰지 않고 `run.end`(`verdict=not-reviewed`)로 닫는다.
+  사용자에게 무엇을 띄울 수 없었는지와 확인할 호스트 설정을 알린다. 이 지시는 producer를 띄우는 모든 스킬에 있어야
+  하고 `validate-rules.mjs`가 기본 거부로 검사한다(`checkStopsWithoutReviewer`)
+  - 예전에는 이때 격리된 사본에서 돌리거나 오케스트레이터가 직접 리뷰하는 대체 경로를 두었다. 2026-10-15 OpenCode
+    2.0.29가 이 에이전트를 등록하던 호스트 플러그인을 불러오지 못했을 때, 한 실행은 그 경로대로 혼자 리뷰하고
+    스스로 검증해 "교차검증 유지 12건"을 냈고, 다른 실행은 18개 모듈에 빈 결과를 써 "지적 없음"으로 보고했다. 둘 다
+    `검토 상태: 완료`였다 — 모듈마다 따로 보고 독립적으로 검증한다는 리뷰의 전제가 사라진 결과가 완료로 읽혔다
 - **일곱 워크플로우의 producer를 모두 `rule-module-reviewer`(`Read`·`Grep`·`Glob`)로 띄운다.**
   `full`만이 아니다 — `default`·`commit`·`fast`·`props`·`math`·`exception`도 각자의
   `task(` 호출에서 이 에이전트를 지목한다(#70). 지목이 도구 제한이 되는 것은 호스트가 그
-  에이전트를 아는 경우뿐이다. 에이전트를 설치하지 않는 호스트(OpenCode는 스킬만 설치한다)는
-  도구를 제한할 수 없는 런타임이므로 위의 대체 경로를 따른다
+  에이전트를 아는 경우뿐이다. 호스트가 그 에이전트를 모르면 위대로 멈춘다 — OpenCode는 이 플러그인의 스킬만
+  설치하므로, 에이전트는 호스트 설정이나 호스트 플러그인이 등록해야 한다
 - 이 요구는 `validate-rules.mjs`가 **기본 거부**로 검사한다(`scripts/lib/producer-tools.mjs`).
   스킬에 dispatch 정황(`task(`, `run_in_background`, `subagent_type`)이 있으면 `task(` 호출마다
   prompt 앞에서 제한된 에이전트를 지목해야 하고, 지목을 읽지 못하면 통과가 아니라 실패다.
@@ -1456,7 +1464,7 @@ UTF-16 파일도 읽는다 — PowerShell 5.1의 `Set-Content -Encoding UTF8`은
 | `module.done` | **모듈 하나가 끝날 때마다** (full은 작업 대장이 결과 파일을 쓴 뒤) | `module`, `attempt`, `status`(**`ok`/`failed`만** — SKILL의 상태 이름 `COMPLETED`가 아니다), `findings`, `failureClass`, `taskId`, (있으면) `tokensIn`·`tokensOut` · 대장이 받으면 `resultSha256` · 취소면 `cancelReason`(`max-duration`/`user`) |
 | `verify.start` / `verify.done` | 검증 작업의 시도 하나를 띄우기 전 / 끝을 받을 때 (작업 대장이 쓴다 — C-12) | `task`(routed의 작업 이름), `attempt`, `kind`, `claim`, `round` / `task`, `attempt`, `status`(`ok`/`failed`), `failureClass`, `taskId`, `resultSha256`, `cancelReason` |
 | `task.bind` | 띄운 시도에 호스트 작업 ID를 묶을 때 — 다시 남기면 살아 있다는 확인 (작업 대장) | `stage`(`module`/`verify`), `task`, `attempt`, `taskId` |
-| `dispatch.halt` | 한도나 사용자가 디스패치를 멈췄을 때 (작업 대장) | `reason`(`max-tasks`/`max-duration`/`user`), `stage`, `queuedTasks`(띄우지 못한 작업), `running` |
+| `dispatch.halt` | 한도나 사용자가 디스패치를 멈췄을 때, 리뷰 에이전트가 없을 때 (작업 대장) | `reason`(`max-tasks`/`max-duration`/`user`/`agent-unavailable`), `stage`, `queuedTasks`(띄우지 못한 작업), `running` |
 | `dispatch.end` | 전부 수집 후 (full은 작업 대장이 모듈 단계가 끝났을 때 쓴다) | `terminalOk`, `terminalFailed`(최종 모듈 단위) · `attemptsTotal`, `attemptsFailed`(시도 단위) — **이 넷은 스크립트가 `module.done`에서 센다.** 넘기지 않아도 되고, 넘긴 값이 기록과 다르면 경고하고 센 값을 남긴다 · `attemptFailureClasses`(중첩, `--data-file`), (있으면) `tokensIn`·`tokensOut` |
 | `script.start` | `prepare-verification.mjs` 진입 직후 (스크립트가 직접 남긴다) | `script` |
 | `script.done` | `prepare-verification.mjs` 실행 후 | `ran`, `counts`(중첩, 스크립트가 직접 남긴다 — 검색을 예정한 실행이면 `counts.reuse`, C-6C) |
@@ -2104,7 +2112,7 @@ C-9에서 시작 기록을 모델이 출력을 필요로 하는 자리로 옮긴
 | `next --stage module\|verify` | 띄워도 되는 시도를 정하고, **띄우기 전에** 그 시도의 시작(`module.start`·`verify.start`)을 남긴다. 시도마다 결과를 쓸 자리(`resultPath`)와, 검증이면 프롬프트 경로를 준다. 죽은 시도를 끝내고, 한도를 지키고, 모듈 단계의 `dispatch.start`·`dispatch.end`도 남긴다 |
 | `bind` | 띄운 시도에 호스트의 작업 ID를 묶는다(`task.bind`). 다시 부르면 그 작업이 아직 살아 있다는 확인이다 |
 | `done` | 끝 알림 하나를 받는다. 받으면 결과를 정해진 자리에 쓰고 끝(`module.done`·`verify.done`)을 남긴다 |
-| `cancel --task\|--all --reason user` | 사용자가 멈춘 시도를 취소로 끝낸다. `--all`은 디스패치도 멈춘다 |
+| `cancel --task\|--all --reason user\|agent-unavailable` | 사용자가 멈춘 시도, 또는 리뷰 에이전트가 없어 멈춘 실행(C-6)의 시도를 취소로 끝낸다. `--all`은 디스패치도 멈춘다 — 띄우기 전이면 시도 없이 멈춤만 남는다 |
 | `status [--json]` | 단계마다 상태별 수, 돌고 있는 시도와 소식 없는 시간, 멈춘 이유, 한도. JSON과 사람용 요약은 같은 계산에서 나온다 |
 | `resume` | 대상이 그대로인지 보고 이어 간다(아래 `재개`) |
 
