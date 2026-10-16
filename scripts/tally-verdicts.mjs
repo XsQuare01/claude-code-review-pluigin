@@ -23,13 +23,14 @@
 // 파일로 받는 이유는 `prepare-verification.mjs --input`과 같다 — 산문과 코드 인용이
 // 든 payload를 셸 인용부호 하나에 넣는 구조는 깨지는 쪽이 정상이다.
 
+import { createHash } from 'node:crypto'
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { lastPhase, logPhase, readEvents, requireStartedTimeline } from './lib/run-record.mjs'
 import { readTextFile } from './lib/read-text.mjs'
-import { MAX_ATTEMPTS, attemptsOf, budgetOf, foldAttempts, haltOf, isTerminal, segmentOf, taskState } from './lib/task-ledger.mjs'
+import { MAX_ATTEMPTS, acceptedResultProblem, attemptsOf, budgetOf, foldAttempts, haltOf, isTerminal, segmentOf, taskState } from './lib/task-ledger.mjs'
 import { checkTaskVerdict, collectVerdicts, loadVerdictValidator } from './lib/verdicts.mjs'
 import { buildRetryPrompt } from './lib/verifier-tasks.mjs'
 
@@ -156,6 +157,13 @@ const tasksOf = plan => [
   ...Object.entries(plan?.promotions ?? {}).map(([candidateId, task]) => ({ ...task, candidateIds: [candidateId], promotion: true })),
 ]
 const retryPathOf = task => task.prompt.replace(/\.md$/, '.retry.md')
+
+const readAcceptedVerdict = task => {
+  const raw = readTextFile(task.verdict)
+  const problem = acceptedResultProblem(readEvents(sidecar), 'verify', task.taskId, createHash('sha256').update(raw).digest('hex'))
+  if (problem) die(problem)
+  return raw
+}
 
 /**
  * 작업별 판정 파일을 계약과 요청에 맞춰 본다.
@@ -287,7 +295,7 @@ const collectFromTasks = plan => {
 
   const read = task => {
     if (!existsSync(task.verdict)) return { absent: true }
-    const { payload, problems } = checkTaskVerdict(readFileSync(task.verdict, 'utf8'), task.candidateIds, validate)
+    const { payload, problems } = checkTaskVerdict(readAcceptedVerdict(task), task.candidateIds, validate)
     // 교정 뒤에도 계약을 어긴 판정은 세지 않는다(C-6A: 두 번째 malformed-output은
     // 확정 실패다). 그 후보는 판정 없음으로 남고, 차단은 C-6B대로 fail-open이다.
     if (problems) {
@@ -348,7 +356,7 @@ const collectRechecks = plan => {
       missing.push(task.taskId)
       continue
     }
-    const { payload, problems } = checkTaskVerdict(readFileSync(task.verdict, 'utf8'), task.candidateIds, validate)
+    const { payload, problems } = checkTaskVerdict(readAcceptedVerdict(task), task.candidateIds, validate)
     if (problems) malformed.push(task.taskId)
     else {
       payloads.push(payload)

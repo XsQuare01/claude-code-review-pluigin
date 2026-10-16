@@ -474,6 +474,12 @@ const done = () => {
       return { code: 0, out: { outcome: 'recorded', task: target.task, attempt: target.attempt, status, failureClass } }
     }
 
+    if (!target.boundTaskId || target.boundTaskId !== hostTaskId) {
+      return { code: 3, out: { outcome: 'unbound', task: target.task, attempt: target.attempt,
+        reason: 'task.bind로 실제 호스트 작업 ID를 먼저 연결해야 성공 결과를 받는다. 리뷰 에이전트가 없으면 cancel --all --reason agent-unavailable로 멈춘다',
+        note: '결과 파일을 정본으로 복사하지 않았고 성공 기록도 남기지 않았다' } }
+    }
+
     const sha = sha256(text)
     // 이 시도까지 쓴 횟수. 취소된 시도는 세지 않는다(C-12) — 교정 차례가 남았는지가 여기서 갈린다.
     const spent = attemptsOf(fold, target.stage, target.task).filter(one => one.settled?.failureClass !== 'cancelled').length

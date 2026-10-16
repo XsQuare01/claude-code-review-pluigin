@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url'
 
 import { parseSnapshot } from '../scripts/lib/review-snapshot.mjs'
 import { deletionBasis } from '../scripts/render-findings.mjs'
+import { writeAcceptedResult } from './helpers/accepted-result.mjs'
 
 // full의 정확성 패스(#88 PR 1)를 실제 스크립트 순서대로 끝까지 돌린다 —
 // preflight → 결과 파일·module.done → prepare-verification --collect → 검증자 판정 →
@@ -117,9 +118,9 @@ const startRun = (t, { correctness }) => {
 }
 
 /** producer 결과를 받는 즉시 파일로 남기고 module.done을 쓰는 오케스트레이터 몫을 흉내 낸다. */
-const finishModule = ({ timing, log }, name, findings, extra = {}) => {
-  writeFileSync(join(timing, `${RUN}.${name}.json`), JSON.stringify({ schemaVersion: 1, findings, openQuestions: [] }))
-  log({ phase: 'module.done', module: name, attempt: 1, status: 'ok', ...extra })
+const finishModule = ({ timing, log }, name, findings) => {
+  writeAcceptedResult({ log, path: join(timing, `${RUN}.${name}.json`), stage: 'module', task: name,
+    payload: { schemaVersion: 1, findings, openQuestions: [] } })
 }
 
 const collect = run => {
@@ -131,10 +132,10 @@ const collect = run => {
 }
 
 /** 검증자 작업마다 이 파일이 정한 판정을 그 작업의 verdict 자리에 쓴다. */
-const answerVerifiers = routed => {
+const answerVerifiers = (routed, log) => {
   for (const task of routed.verifierTasks) {
     const verdicts = task.candidateIds.map(candidateId => ({ candidateId, ...VERDICTS[candidateId] }))
-    writeFileSync(task.verdict, JSON.stringify({ schemaVersion: 1, verdicts }))
+    writeAcceptedResult({ log, path: task.verdict, stage: 'verify', task: task.taskId, payload: { schemaVersion: 1, verdicts } })
   }
 }
 
@@ -194,7 +195,7 @@ test('세 반례가 수집·검증·렌더·스냅숏까지 출처와 두 축을
     assert.doesNotMatch(prompt, /^#{2,4} CR-\d+\./m)
   }
 
-  answerVerifiers(routed)
+  answerVerifiers(routed, run.log)
   const tally = node(run.repo, 'tally-verdicts.mjs', ['--dir', run.dir, '--run', RUN, '--rules', RULES, '--collect', '--targets', routedPath])
   assert.equal(tally.status, 0, tally.stderr)
 
@@ -227,7 +228,7 @@ test('active-deletion에서 반박된 CR 지적은 지워지고, 그 사실이 �
   for (const name of ALWAYS) finishModule(run, name, name === '04-state' ? [RULE_SAME_LINE] : [])
   finishModule(run, 'correctness', [DELETED_GUARD, UNCHANGED_CALLER, REFUTED_BY_GUARD])
   const { routed, routedPath } = collect(run)
-  answerVerifiers(routed)
+  answerVerifiers(routed, run.log)
   assert.equal(node(run.repo, 'tally-verdicts.mjs', ['--dir', run.dir, '--run', RUN, '--rules', RULES, '--collect', '--targets', routedPath]).status, 0)
   const rendered = render(run, routedPath, { phase: 'active-deletion', approval: writeApproval(run) })
   assert.equal(rendered.status, 0, rendered.stderr)
@@ -304,7 +305,7 @@ test('재현 근거가 수집·렌더·스냅숏까지 이어지고, 지적의 �
   finishModule(run, 'correctness', [DELETED_GUARD, UNCHANGED_CALLER, REFUTED_BY_GUARD])
   const { routed, routedPath } = collect(run)
   assert.equal(routed.collected.runId, readFileSync(join(run.timing, `${RUN}.jsonl`), 'utf8').split('\n').map(line => line && JSON.parse(line)).find(event => event?.phase === 'run.start').runId)
-  answerVerifiers(routed)
+  answerVerifiers(routed, run.log)
   assert.equal(node(run.repo, 'tally-verdicts.mjs', ['--dir', run.dir, '--run', RUN, '--rules', RULES, '--collect', '--targets', routedPath]).status, 0)
 
   const evidence = args => node(run.repo, 'review-evidence.mjs', args)

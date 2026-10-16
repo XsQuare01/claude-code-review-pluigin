@@ -21,5 +21,9 @@ test('코드 식별자가 섞여도 한국어 문장이면 통과하고, 다른 
   const english = { schemaVersion: 1, findings: [finding('Title', 'Body')], openQuestions: [] }
   assert.deepEqual(resultLanguageProblems(english, { language: 'en' }), [])
   assert.equal(resultLanguageProblems(english, { language: 'ko' }).length, 1)
+  for (const language of ['ko-KR', 'ko-kr', 'kor', 'kor-KR']) {
+    assert.equal(resultLanguageProblems(english, { language }).length, 1, language)
+    assert.deepEqual(resultLanguageProblems(korean, { language }), [], language)
+  }
   assert.deepEqual(resultLanguageProblems({ schemaVersion: 1, findings: [], openQuestions: [] }), [])
 })

@@ -10,10 +10,10 @@
 const HANGUL = /[\u3131-\u318e\uac00-\ud7a3]/
 
 /**
- * 한국어가 아닌 지적·열린 질문을 짚는다. `language`가 `ko`가 아니면(사용자가 다른 언어를 요청한 실행) 묻지 않는다.
+ * 한국어가 아닌 지적·열린 질문을 짚는다. 한국어 locale(`ko-KR` 등)도 같은 검사를 받는다.
  */
 export function resultLanguageProblems(result, { language } = {}) {
-  if (typeof language === 'string' && language !== 'ko') return []
+  if (typeof language === 'string' && !['ko', 'kor'].includes(language.toLowerCase().split('-')[0])) return []
   const problems = []
   const check = (list, name) => {
     if (!Array.isArray(list)) return

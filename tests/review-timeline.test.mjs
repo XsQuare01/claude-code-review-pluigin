@@ -36,6 +36,44 @@ const summary = dir => spawnSync(process.execPath, [
 const linesOf = dir => readFileSync(join(dir, '.timing', `${RUN}.jsonl`), 'utf8')
   .split('\n').filter(Boolean).map(line => JSON.parse(line))
 
+test('에이전트 부재로 검토하지 않고 끝낸 실행은 디스패치·검색 미실행을 오류로 읽지 않는다', t => {
+  for (const plannedSearch of [false, true]) {
+    const dir = freshDir(t)
+    log(dir, 'run.start', { host: 'test', rules: 'r', version: 'v', branch: 'b', changedFiles: 1, candidates: 20, reuseSearch: 'planned' })
+    if (plannedSearch) log(dir, 'reuse.planned', { searchId: 'search-1', plan: 'plan.json', scopeSha256: 'a'.repeat(64) })
+    log(dir, 'dispatch.halt', { reason: 'agent-unavailable', stage: 'module', queuedTasks: [], running: 0 })
+    const before = spawnSync(process.execPath, [SCRIPT, '--dir', dir, '--run', RUN, '--check', '--before-end'], { encoding: 'utf8' })
+    assert.equal(before.status, 0, before.stdout + before.stderr)
+    log(dir, 'run.end', { verdict: 'not-reviewed' })
+    const checked = check(dir)
+    assert.equal(checked.status, 0, checked.stdout + checked.stderr)
+    assert.match(checked.stdout, /검색도 실행하지 않았다/)
+    // 이어 간 구간에서도 다시 에이전트가 없으면 미검토다. 앞 구간의 halt를 재사용하지 않는다.
+    log(dir, 'run.resume', {})
+    log(dir, 'dispatch.halt', { reason: 'agent-unavailable', stage: 'module', queuedTasks: [], running: 0 })
+    log(dir, 'run.end', { verdict: 'not-reviewed' })
+    const resumed = check(dir)
+    assert.equal(resumed.status, 0, resumed.stdout + resumed.stderr)
+  }
+})
+
+test('성공 결과나 리포트가 있는 실행을 not-reviewed로 숨기지 못한다', t => {
+  for (const event of [
+    ['module.done', { module: '01-fsd', attempt: 1, status: 'ok' }],
+    ['render.start', { findings: 0 }],
+  ]) {
+    const dir = freshDir(t)
+    log(dir, 'run.start', { candidates: 20, reuseSearch: 'planned' })
+    log(dir, ...event)
+    log(dir, 'dispatch.halt', { reason: 'agent-unavailable', stage: 'module', queuedTasks: [], running: 0 })
+    log(dir, 'run.end', { verdict: 'not-reviewed' })
+    const checked = check(dir)
+    assert.equal(checked.status, 1)
+    assert.match(checked.stdout, /not-reviewed는/)
+    assert.match(checked.stdout, /reuse.planned/)
+  }
+})
+
 // 미리 만든 타임라인을 심는다. 경과 시간을 재려면 실제로 기다릴 수 없다.
 const plant = (dir, events) => {
   mkdirSync(join(dir, '.timing'), { recursive: true })

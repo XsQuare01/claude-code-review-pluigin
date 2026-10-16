@@ -123,7 +123,7 @@ export function foldAttempts(events) {
     if (!attempts.has(attempt)) {
       attempts.set(attempt, {
         stage, task, attempt, startedAt: null, claim: null, kind: null,
-        hostTaskId: null, lastSeenAt: null, settled: null, starts: 0, settles: 0,
+        hostTaskId: null, boundTaskId: null, lastSeenAt: null, settled: null, starts: 0, settles: 0,
       })
     }
     return attempts.get(attempt)
@@ -154,6 +154,8 @@ export function foldAttempts(events) {
     if (what === 'bind') {
       if (event.taskId !== undefined && event.taskId !== null) {
         record.hostTaskId = String(event.taskId)
+        // done의 taskId로 되살린 연결과 구별한다. 시작 뒤, 결과를 받기 전에 묶은 ID만 증거다.
+        if (record.starts && !record.settled) record.boundTaskId = String(event.taskId)
         hosts.set(record.hostTaskId, record)
       }
       if (Number.isFinite(at)) record.lastSeenAt = Math.max(record.lastSeenAt ?? at, at)
@@ -173,6 +175,35 @@ export function foldAttempts(events) {
     }
   })
   return { tasks, hosts }
+}
+
+/** 새 full 실행과 대장이 발급한 claim의 성공 기록은 앞선 bind와 일치해야 한다. 예전 수기 기록은 그대로 읽는다. */
+export function resultBindingProblems(events) {
+  const required = events.find(event => event?.phase === 'run.start')?.resultBinding === 'required'
+  return events.flatMap((event, at) => {
+    const stage = event?.phase === 'module.done' ? 'module' : event?.phase === 'verify.done' ? 'verify' : null
+    if (!stage || event.status !== 'ok') return []
+    const task = stage === 'module' ? event.module : event.task
+    const record = foldAttempts(events.slice(0, at)).tasks.get(taskKey(stage, task))?.get(event.attempt)
+    if (!required && !record?.claim) return []
+    if (record?.boundTaskId && record.boundTaskId === event.taskId) return []
+    return [{ stage, task, attempt: event.attempt, reason: `${stage}/${task}#${event.attempt}의 성공 결과에 앞선 task.bind가 없거나 taskId가 다르다 — 호스트 작업을 연결하지 않은 결과는 검토 완료가 아니다` }]
+  })
+}
+
+/** 파일만 놓거나 done 줄을 직접 써서 수집 경로로 우회하지 못하게 한다. */
+export function acceptedResultProblem(events, stage, task, resultSha256) {
+  const record = attemptsOf(foldAttempts(events), stage, task).at(-1)
+  const required = events.find(event => event?.phase === 'run.start')?.resultBinding === 'required'
+  if (!required && !record?.claim) return null
+  const prefix = `${stage}/${task}`
+  if (!record?.boundTaskId || record.settled?.status !== 'ok') return `${prefix}: task.bind와 성공한 done이 없는 결과 파일은 수집하지 않는다`
+  const since = stage === 'verify' ? verifyRoundStart(events) : -1
+  const relevant = since < 0 ? events : [events.find(event => event?.phase === 'run.start'), ...events.slice(since)]
+  const unbound = resultBindingProblems(relevant).find(problem => problem.stage === stage && problem.task === task && problem.attempt === record.attempt)
+  if (unbound) return unbound.reason
+  if (!record.settled.resultSha256 || record.settled.resultSha256 !== resultSha256) return `${prefix}: 결과 파일이 done에서 받은 내용의 해시와 다르거나 해시가 없다`
+  return null
 }
 
 /** 작업 하나의 시도들 — 번호 순. */

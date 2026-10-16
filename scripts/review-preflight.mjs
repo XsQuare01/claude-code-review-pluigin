@@ -329,7 +329,7 @@ const logged = (() => {
     ...(dependencyFiles.length ? { dependencyFiles } : {}),
     // full은 diff 밖의 기존 구현을 찾아 05에 넘긴다(05-7). 예정이라는 사실을 시작에 남겨, 계획했는데 돌리지 않은
     // 검색을 기록 검사가 짚게 한다 — 이 필드가 없는 예전 기록은 그 검사를 받지 않는다.
-    ...(workflow === 'full' ? { reuseSearch: 'planned' } : {}),
+    ...(workflow === 'full' ? { reuseSearch: 'planned', resultBinding: 'required' } : {}),
     // 원격이 없으면 필드를 비워 둔다. 없는 값을 지어 넣지 않는다.
     ...(identity.remote ? { repo: identity.remote } : {}),
     repoRoot: identity.root,

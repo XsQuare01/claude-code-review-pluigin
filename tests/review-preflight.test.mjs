@@ -569,6 +569,7 @@ test('run.start에 base 끝 SHA(baseHead)와 기존 구현 검색 예정(reuseSe
   // base가 앞서 나간 저장소다 — 끝 SHA는 merge-base와 다르다
   assert.notEqual(start.baseHead, start.mergeBase)
   assert.equal(start.reuseSearch, 'planned')
+  assert.equal(start.resultBinding, 'required')
   assert.match(out.stdout, /기존 구현 검색 +예정 — /)
   // 리뷰 에이전트가 없으면 멈춘다(C-6) — 첫 명령의 출력에서 알린다
   assert.match(out.stdout, /리뷰 에이전트 +첫 디스패치 전에 .*react-code-review-plugin:rule-module-reviewer.*cancel --all --reason agent-unavailable/)

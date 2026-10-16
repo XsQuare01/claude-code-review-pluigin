@@ -1,10 +1,11 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { writeAcceptedResult } from './helpers/accepted-result.mjs'
 
 // 교차검증 결과를 모델이 손으로 세지 않게 한다.
 //
@@ -286,6 +287,33 @@ const verifyTasks = dir => {
 
 const collectTally = (dir, extra) => spawnSync(process.execPath, [SCRIPT, '--dir', dir, '--run', RUN, '--collect', ...extra],
   { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+
+test('새 full 실행은 연결·성공 기록 없는 판정 파일을 집계하지 않는다', t => {
+  const dir = started(t)
+  const sidecar = join(dir, '.timing', `${RUN}.jsonl`)
+  const events = timelineOf(dir)
+  events[0].resultBinding = 'required'
+  writeFileSync(sidecar, events.map(event => JSON.stringify(event)).join('\n') + '\n', 'utf8')
+  const { routedPath, answer } = verifyTasks(dir)
+  answer('bundle-1', verdict('04-3#1', 'upheld'))
+  const rejected = collectTally(dir, ['--targets', routedPath])
+  assert.equal(rejected.status, 2)
+  assert.match(rejected.stderr, /task.bind/)
+  assert.equal(timelineOf(dir).some(event => event.phase === 'crossverify.end'), false)
+  const task = JSON.parse(readFileSync(routedPath, 'utf8')).verifierTasks[0]
+  writeAcceptedResult({
+    log: event => appendFileSync(sidecar, JSON.stringify({ at: new Date().toISOString(), ...event }) + '\n'),
+    path: task.verdict, stage: 'verify', task: task.taskId,
+    payload: { schemaVersion: 1, verdicts: [verdict('04-3#1', 'upheld')] },
+  })
+  const accepted = collectTally(dir, ['--targets', routedPath])
+  assert.equal(accepted.status, 0, accepted.stderr)
+  assert.equal(JSON.parse(accepted.stdout).upheld, 1)
+  answer('bundle-1', verdict('04-3#1', 'rejected'))
+  const changed = collectTally(dir, ['--targets', routedPath])
+  assert.equal(changed.status, 2)
+  assert.match(changed.stderr, /해시/)
+})
 
 test('--collect는 작업별 판정 파일을 bundle → isolated → 승격 순서로 모은다', t => {
   const dir = started(t)

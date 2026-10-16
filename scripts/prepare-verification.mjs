@@ -13,6 +13,7 @@ import { CURRENT_STATUSES, countBy, enclosingSymbol, identityPending, linkFindin
 import { parseSnapshot } from './lib/review-snapshot.mjs'
 import { currentTarget, ruleDocDigests, rulesDigest, runOutputs } from './lib/run-identity.mjs'
 import { logPhase, moduleOutcomes, readEvents, requireStartedTimeline } from './lib/run-record.mjs'
+import { acceptedResultProblem } from './lib/task-ledger.mjs'
 import {
   buildIdentityPrompt, buildRecheckPrompt, buildTaskPrompt, claimOf, docPathForRule, extractClause, instructionsWithManifest, planVerifierTasks,
 } from './lib/verifier-tasks.mjs'
@@ -1054,6 +1055,11 @@ export function collectResultFiles({ events, sourceNames, pathOf, read, notReque
     }
     if (raw === undefined) {
       problems.push(`${name}는 module.done이 ok인데 결과 파일이 없다: ${path}`)
+      continue
+    }
+    const provenance = acceptedResultProblem(events, 'module', name, createHash('sha256').update(raw).digest('hex'))
+    if (provenance) {
+      problems.push(provenance)
       continue
     }
     if (outcome.resultSha256 !== undefined && createHash('sha256').update(raw).digest('hex') !== outcome.resultSha256) {

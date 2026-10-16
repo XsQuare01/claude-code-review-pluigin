@@ -34,7 +34,7 @@ import { withFileLock } from './lib/file-lock.mjs'
 import { readJsonFile, readTextFile } from './lib/read-text.mjs'
 import { REUSE_MODULE, REUSE_STATUSES, reuseState, reuseStateBefore } from './lib/reuse-state.mjs'
 import { moduleOutcomes } from './lib/run-record.mjs'
-import { CANCEL_REASONS, HALT_REASONS, STAGES, endState } from './lib/task-ledger.mjs'
+import { CANCEL_REASONS, HALT_REASONS, STAGES, endState, haltOf, resultBindingProblems } from './lib/task-ledger.mjs'
 import { runNameProblem } from './lib/run-name.mjs'
 
 const die = message => {
@@ -152,7 +152,7 @@ const PHASES = new Map([
       'maxTasks', 'maxDurationSec', 'staleAfterSec', 'continues', 'previousSnapshot', 'previousRunId', 'previousSha256', 'baseAhead', 'baseOverlapCount',
       // `baseHead`: 기준 ref의 끝 commit(정한 순간). `reuseSearch`: full이 기존 구현 검색을 예정했는지(C-6C).
       // `language`: 사용자가 정한 리뷰 언어(정하지 않으면 없다 — 한국어)
-      'baseHead', 'reuseSearch', 'language'],
+      'baseHead', 'reuseSearch', 'language', 'resultBinding'],
   }],
   // 한도에 닿아 멈춘 실행을 이어 갈 때 새 한도 구간을 연다(C-12). 대상이 그대로인지 확인한 값을 함께 남긴다.
   ['run.resume', { required: [], structured: [], allowed: ['maxTasks', 'maxDurationSec', 'staleAfterSec', 'head', 'worktree'] }],
@@ -625,6 +625,16 @@ if (has('check')) {
   // 빠뜨렸다고 부르면 경보가 늘 울리고, 늘 울리는 경보는 신호가 아니다.
   // 계획 줄이 없을 때만 `run.start`의 후보 수로 물러선다.
   const DISPATCH_EVIDENCE = ['dispatch.start', 'module.start', 'module.done', 'dispatch.end']
+  // 에이전트 부재로 시작 전에 멈춘 실행은 디스패치·검색을 하지 않은 것이 정상이다.
+  // 성공 결과나 렌더가 있는 실행을 not-reviewed로 숨기는 데에는 이 예외를 쓰지 못한다.
+  const stoppedWithoutReview = haltOf(events)?.reason === 'agent-unavailable'
+    && !events.some(event => ['module.done', 'verify.done'].includes(event.phase) && event.status === 'ok')
+    && !events.some(event => ['render.start', 'render.wrote'].includes(event.phase))
+    && (beforeEnd || events.at(-1)?.verdict === 'not-reviewed')
+  if (events.at(-1)?.verdict === 'not-reviewed' && !stoppedWithoutReview) {
+    problems.push('not-reviewed는 리뷰 에이전트 부재로 결과 없이 멈춘 실행에만 쓴다 — 성공 결과·리포트가 있으면 부분 보고로 남긴다')
+  }
+  problems.push(...resultBindingProblems(events).map(problem => problem.reason))
   const POST_DISPATCH = ['script.start', 'script.done', 'crossverify.start', 'crossverify.end', 'render.start', 'render.wrote', 'run.end']
   const candidates = events.find(event => event.phase === 'run.start')?.candidates
   const plannedAny = events.some(event => event.phase === 'modules.planned')
@@ -633,7 +643,7 @@ if (has('check')) {
     ? (Number.isInteger(applied) ? applied > 0 : someCandidates)
     : someCandidates
   const reachedAfter = events.find(event => POST_DISPATCH.includes(event.phase))
-  if (expectedFanOut && reachedAfter && !events.some(event => DISPATCH_EVIDENCE.includes(event.phase))) {
+  if (expectedFanOut && reachedAfter && !stoppedWithoutReview && !events.some(event => DISPATCH_EVIDENCE.includes(event.phase))) {
     problems.push(`디스패치 기록이 한 줄도 없다: \`${DISPATCH_EVIDENCE.join('`/`')}\` 중 아무것도 없이 \`${reachedAfter.phase}\`(seq ${reachedAfter.seq})까지 갔다. 모듈이 언제 몇 개 돌았는지가 기록에 없으므로 그 사이 시간은 귀속 불가다`)
   }
 
@@ -917,7 +927,9 @@ if (has('check')) {
     const reuse = reuseState(events)
     if (reuse.required) {
       const startLine = events.find(event => event?.phase === 'run.start')
-      if (!reuse.planned) {
+      if (stoppedWithoutReview && !reuse.started) {
+        notes.push('리뷰 에이전트 부재로 기존 구현 검색도 실행하지 않았다 — 검토하지 않은 범위다')
+      } else if (!reuse.planned) {
         problems.push('기존 구현 검색을 예정한 실행인데 `reuse.planned`가 없다 — 검색을 계획했지만 실행하지 않았다(C-6C)')
       } else if (!reuse.started) {
         problems.push(`기존 구현 검색(${reuse.searchId})을 계획했지만 실행하지 않았다 — \`reuse.start\`가 없다(C-6C)`)
