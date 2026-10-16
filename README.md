@@ -475,6 +475,16 @@ Three more `/code-review-full` runs on the same day, after OpenCode was rolled b
 - **The renderer refuses an unknown workflow name.** One run called `render-findings.mjs --workflow code-review-full` (the skill name). No catalog module belongs to that workflow, so every section heading came out as a bare number (`### 06`) and modules without findings disappeared from the report. The renderer now stops on a workflow name the catalog does not know, and with `--dir`/`--run` it refuses a name that differs from the one preflight recorded in `run.start`.
 
 
+## Report corrections (2.26.6)
+
+Successful task results now require a preceding host-task binding. New full runs also check the binding and accepted content hash during collection, including verifier results; a result file or a manually written success event alone cannot complete a module. This checks the run record, not the existence or identity of an agent through a host API.
+
+An agent-unavailable run ending as `not-reviewed` passes the timeline check without pretending to have dispatched reviewers or run a search. Successful results or a rendered report cannot use that exemption. Korean locales such as `ko-KR` receive the same language check as `ko`.
+
+Reports show rebuttal evidence beside the original claim and count upheld, rejected-but-retained, and unverified high-impact candidates separately. The deletion rollout policy is unchanged. Rule 08-3 treats equal duplicated constants as low impact unless a current failing path is established; 13-7 leaves props grouping to P-3. Verifier instructions check the claimed consequence as well as the pattern violation.
+
+Validation uses automated tests and replay of saved outputs. Actual model accuracy, false positives and cost have not been remeasured; this is a PATCH, not a claim of measured review-quality improvement.
+
 ## Applicability metadata
 
 `review-rules/catalog.json` records **when** a module applies — required profile (FSD, Tailwind, RSC, Electron, TanStack Query, server code, contract provider), minimum React version, which workflows load it, and which individual rules carry a narrower gate than their module. The Markdown modules stay canonical for **what** a rule says; the catalog never generates documentation and never restates rule text.
