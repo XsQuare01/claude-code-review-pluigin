@@ -844,7 +844,8 @@ test('기준이 맞는 승인이면 지우고, 상세 지적 맨 위에 삭제 �
     approval: approvalFor(['high']), phases: ['active-deletion', 'rollout-shadow'],
   })
   assert.equal(out.status, 0, out.stderr)
-  assert.ok(out.stdout.startsWith('## 상세 지적\n\n삭제 단계: 영향 높음 `active-deletion` (승인 홍길동 · 2026-10-01 · isolated·bundle 경로) · 영향 낮음 `rollout-shadow` — 반박돼 이 절에서 지운 지적의 흔적은 `미해결 / 후속 확인`에 있다\n\n### 01 '), out.stdout.slice(0, 300))
+  assert.ok(out.stdout.startsWith('## 상세 지적\n\n삭제 단계: 영향 높음 `active-deletion` (승인 홍길동 · 2026-10-01 · isolated·bundle 경로) · 영향 낮음 `rollout-shadow` — 반박돼 이 절에서 지운 지적의 흔적은 `미해결 / 후속 확인`에 있다\n\n**지적 집계**'), out.stdout.slice(0, 300))
+  assert.match(out.stdout, /^### 01 /m)
   assert.doesNotMatch(out.stdout, /지적 04-3 1/, 'guard-exists 반박은 지워져야 한다')
   assert.match(out.stderr, /04-3 \(src\/a\.ts\): guard-exists/)
   // 결함을 인정한 반박은 승인이 있어도 지우지 않는다(#45)
@@ -912,11 +913,12 @@ test('--print-deletion-basis는 승인 파일에 적을 지금의 기준을 JSON
   assert.match(printed.basis.verifierPromptSha256, /^[0-9a-f]{64}$/)
 })
 
-test('둘 다 rollout-shadow면 삭제 단계 줄이 없다 — 이 기능 전의 출력과 같다', () => {
+test('둘 다 rollout-shadow면 삭제 단계 줄 없이 집계와 모듈을 그린다', () => {
   const guard = rejectedHigh('04-3#1', { kind: 'guard-exists' })
   const out = renderGated({ candidates: [guard.candidate], verdicts: [guard.verdict], phases: ['rollout-shadow', 'rollout-shadow'] })
   assert.equal(out.status, 0, out.stderr)
-  assert.ok(out.stdout.startsWith('## 상세 지적\n\n### 01 '), out.stdout.slice(0, 200))
+  assert.ok(out.stdout.startsWith('## 상세 지적\n\n**지적 집계**'), out.stdout.slice(0, 200))
+  assert.match(out.stdout, /^### 01 /m)
   assert.doesNotMatch(out.stdout, /삭제 단계/)
 })
 
@@ -1104,7 +1106,8 @@ test('needs-context finding은 상세 지적에서 빠지고 이동 목록으로
     { high: 'active-deletion', low: 'active-deletion' }, vocab,
     [{ kind: 'module', id: '04', title: '상태와 Effect' }], 'ran')
   assert.doesNotMatch(markdown, /범위 미확정 지적/, '상세 지적 본문에 그대로 남아있다')
-  assert.doesNotMatch(markdown, /범위 미확정/, '라벨을 단 채로 상세 지적에 남아있다')
+  assert.doesNotMatch(markdown, /교차검증: `범위 미확정`/, '라벨을 단 채로 상세 지적에 남아있다')
+  assert.match(markdown, /상세 표시 0건 \+ 범위 미확정 1건/)
   assert.deepEqual(movedToOpenQuestions, [{
     id: '04-3#1', ruleId: '04-3', title: '범위 미확정 지적',
     reason: '호출자를 diff 밖에서 확인해야 한다',
@@ -1523,6 +1526,10 @@ test('두 섹션 전문을 낸다 — golden', () => {
 
   assert.equal(render(candidates, verdicts, { high: 'rollout-shadow', low: 'rollout-shadow' }, vocab, SECTIONS, 'ran').markdown, [
     '## 상세 지적',
+    '',
+    '**지적 집계** — 후보 4건 = 상세 표시 4건 + 범위 미확정 0건 + 승인된 삭제 0건.',
+    '**높은 영향의 차단 후보** — 검증 유지 1건 · 반박 후 정책상 유지 0건 · 검증 판정 없음/대상 아님/꺼짐 0건. 유지 판정은 영향도를 재판정한 결과가 아니다.',
+    '건수는 지적 수다. 관련 지적은 같은 위치의 다른 주장일 수 있으며, 독립된 결함 수나 중복 제거 결과를 뜻하지 않는다.',
     '',
     '### 04 상태와 Effect',
     '',
