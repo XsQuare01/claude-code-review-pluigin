@@ -539,12 +539,12 @@ const locationLine = candidate => {
  * 이 되므로, 줄 머리에 대조하지 않았다고 적는다. 판정에 위치가 없으면(계약 위반) 빈 칸 대신
  * 그 사실을 적는다.
  */
-const verifierLocationLine = location => {
+const verifierLocationLine = (location, label = '검증자가 짚은 위치') => {
   if (!location || (location.kind !== 'verified' && location.kind !== 'deleted')) {
-    return '검증자가 짚은 위치: 판정에 위치가 없다'
+    return `${label}: 판정에 위치가 없다`
   }
   const quote = typeof location.quote === 'string' && location.quote ? ` — ${codeSpan(location.quote)}` : ''
-  return `검증자가 짚은 위치(대조하지 않음): ${anchorText(location)}${quote}`
+  return `${label}(대조하지 않음): ${anchorText(location)}${quote}`
 }
 
 /**
@@ -585,7 +585,7 @@ const SLOTS = [
  * 이어붙이는 방식이면 다음 사람이 실수로 다시 합칠 수 있지만, 배열 + `\n`
  * join은 슬롯을 합칠 방법 자체가 없다.
  */
-export function renderFinding(candidate, { label, vocabulary, related = [], evidence = [], lineage = candidate.lineage, disposition, verifierLocation }) {
+export function renderFinding(candidate, { label, vocabulary, related = [], evidence = [], lineage = candidate.lineage, disposition, verifierLocation, rebuttal }) {
   const severity = severityOf(candidate.impact, candidate.confidence)
   // category는 계약상 impact가 high일 때만 존재한다(low는 category 자체를
   // 금지한다) — 그래도 candidate.category를 한 번 더 확인해 방어적으로 둔다.
@@ -621,6 +621,12 @@ export function renderFinding(candidate, { label, vocabulary, related = [], evid
     // 그 반박인데 위치가 빠진 판정이다 — 그때는 없다는 사실을 적는다.
     ...(verifierLocation !== undefined ? [verifierLocationLine(verifierLocation)] : []),
     ...slots,
+    ...(rebuttal ? [
+      `반박 근거: ${rebuttal.evidence ? escapeProse(rebuttal.evidence) : '검증자가 근거를 남기지 않았다'}`,
+      ...(rebuttal.note ? [`반박 설명: ${escapeProse(rebuttal.note)}`] : []),
+      ...(rebuttal.location ? [verifierLocationLine(rebuttal.location, '반박 위치')] : []),
+      '이 지적은 검증자가 반박했다. 남아 있는 등급은 원 지적의 등급이며, 유지 판정의 근거가 아니다.',
+    ] : []),
     // 이 지적을 어떻게 확인했는가(C-11). 슬롯 뒤에 둔다 — 슬롯은 producer의 주장이고, 이 줄은
     // 오케스트레이터가 남긴 확인 기록이다. 등급·축·교차검증은 바꾸지 않는다.
     ...evidence,
@@ -913,6 +919,10 @@ export function loadModuleSections(rulesDir, workflow, planned) {
   } catch (error) {
     return { error: `catalog.json을 읽지 못했다: ${error.message}` }
   }
+  // catalog에 없는 이름이면 섹션이 될 모듈이 하나도 없다 — 조용히 규칙 번호만 단 섹션으로 그리지 않고 멈춘다.
+  // 2026-10-15 한 실행이 `code-review-full`로 그려 `### 06`처럼 이름 없는 섹션이 나왔고 지적 없는 모듈은 사라졌다.
+  const known = [...new Set((catalog.modules ?? []).flatMap(module => module.workflows ?? []))].sort()
+  if (!known.includes(workflow)) return { error: `--workflow ${workflow}는 catalog에 없다 — ${known.join(', ')} 중 하나다(전체 리뷰는 full)` }
   const skipped = new Set()
   const plan = readPlanned(planned)
   if (plan.error) return { error: plan.error }
@@ -1195,6 +1205,10 @@ export function render(candidates, verdictByCandidateId, phaseByImpact, vocabula
       // 이전 리뷰와의 관계(C-13)는 같은 결함인지 물은 판정과 이 지적의 최종 판정을 함께 본다.
       lineage: candidate.lineage ? finalizeCurrent(candidate.lineage, options.rechecks?.get(candidate.lineage.previousRef)) : undefined,
       disposition,
+      rebuttal: disposition === 'rejected' ? {
+        evidence: verdict.evidence, note: verdict.rebuttalNote,
+        location: verdict.rebuttalKind === 'location-wrong' ? undefined : verdict.rebuttalLocation,
+      } : undefined,
       // 결함은 인정하고 위치만 틀렸다는 반박 — 검증자가 본 자리를 함께 그린다. 축 줄의 라벨과
       // 같은 disposition에서 정한다(검증 대상이 아니었던 후보의 판정은 보지 않는다).
       verifierLocation: disposition === 'rejected' && verdict.rebuttalKind === 'location-wrong'
@@ -1204,12 +1218,31 @@ export function render(candidates, verdictByCandidateId, phaseByImpact, vocabula
   }
 
   const lines = ['## 상세 지적', '']
-  // 지울 수 있는 phase가 켜졌거나 승인이 무효가 됐으면 이 절 맨 위에 한 줄로 적는다(C-6B).
-  // 교차검증 축이 없는 워크플로우(세 번째 상태)에는 phase가 의미가 없으므로 내지 않는다.
   const phaseLine = verificationState === 'ran' || verificationState === 'disabled'
     ? deletionPhaseLine(phaseByImpact, options.deletionGate)
     : null
   if (phaseLine) lines.push(phaseLine, '')
+  const reviewCounts = {
+    candidates: candidates.length, displayed: labelled.length, open: movedToOpenQuestions.length,
+    removed: activeDeletionRemovals.high.length + activeDeletionRemovals.lowCount,
+    highUpheld: 0, highRejected: 0, highUnverified: 0,
+  }
+  for (const { candidate } of labelled) {
+    if (candidate.impact !== 'high') continue
+    const disposition = verificationState === 'ran' || verificationState === 'disabled'
+      ? dispositionOf(candidate, verdictByCandidateId.get(candidate.candidateId), verificationState) : 'not-eligible'
+    if (disposition === 'upheld') reviewCounts.highUpheld += 1
+    else if (disposition === 'rejected') reviewCounts.highRejected += 1
+    else reviewCounts.highUnverified += 1
+  }
+  if (verificationState === 'ran' || verificationState === 'disabled') {
+    lines.push(
+      `**지적 집계** — 후보 ${reviewCounts.candidates}건 = 상세 표시 ${reviewCounts.displayed}건 + 범위 미확정 ${reviewCounts.open}건 + 승인된 삭제 ${reviewCounts.removed}건.`,
+      `**높은 영향의 차단 후보** — 검증 유지 ${reviewCounts.highUpheld}건 · 반박 후 정책상 유지 ${reviewCounts.highRejected}건 · 검증 판정 없음/대상 아님/꺼짐 ${reviewCounts.highUnverified}건. 유지 판정은 영향도를 재판정한 결과가 아니다.`,
+      '건수는 지적 수다. 관련 지적은 같은 위치의 다른 주장일 수 있으며, 독립된 결함 수나 중복 제거 결과를 뜻하지 않는다.',
+      '',
+    )
+  }
   const titleById = new Map(moduleSections.map(section => [section.id, section.title]))
   const sectionById = new Map(moduleSections.map(section => [section.id, section]))
   // 섹션에 없는 모듈에서 지적이 오면 그 모듈도 낸다. 조용히 버리면 지적이
@@ -1293,7 +1326,7 @@ export function render(candidates, verdictByCandidateId, phaseByImpact, vocabula
     removedHigh: activeDeletionRemovals.high.length,
     removedLow: activeDeletionRemovals.lowCount,
   })
-  return { markdown: lines.join('\n'), movedToOpenQuestions, activeDeletionRemovals }
+  return { markdown: lines.join('\n'), movedToOpenQuestions, activeDeletionRemovals, reviewCounts }
 }
 
 /**
@@ -1425,7 +1458,13 @@ if (process.argv[1] && process.argv[1].endsWith('render-findings.mjs')) {
     if ((dirFlag === undefined) !== (runFlag === undefined)) die('--dir와 --run은 함께 준다 — 실행 계획(modules.planned)을 그 실행의 기록에서 읽는다')
     if (dirFlag === undefined) return flag('planned')
     if (flag('planned') !== undefined) die('--dir·--run을 주면 실행 계획은 기록의 modules.planned에서 읽는다 — --planned를 함께 주지 않는다(두 벌이 갈린 실행이 있었다)')
-    const recorded = readEvents(requireStartedTimeline(dirFlag, runFlag)).filter(event => event?.phase === 'modules.planned').at(-1)
+    const recordedEvents = readEvents(requireStartedTimeline(dirFlag, runFlag))
+    // 워크플로우도 기록이 정본이다 — preflight가 run.start에 남긴 값과 다르면 다른 모듈 목록으로 그리게 된다
+    const recordedWorkflow = recordedEvents.find(event => event?.phase === 'run.start')?.workflow
+    if (typeof recordedWorkflow === 'string' && recordedWorkflow !== workflow) {
+      die(`기록된 워크플로우는 ${recordedWorkflow}다 — --workflow ${workflow}를 받았다. 기록과 같은 이름으로 그린다`)
+    }
+    const recorded = recordedEvents.filter(event => event?.phase === 'modules.planned').at(-1)
     if (!recorded) process.stderr.write('경고: 기록에 modules.planned가 없다 — 건너뛴 모듈 없이 후보 전부를 섹션으로 그린다\n')
     return recorded ?? null
   })()
@@ -1484,6 +1523,8 @@ if (process.argv[1] && process.argv[1].endsWith('render-findings.mjs')) {
         disposition: verdict.disposition,
         rebuttalKind: verdict.rebuttal?.kind,
         rebuttalLocation: verdict.rebuttal?.location,
+        rebuttalNote: verdict.rebuttal?.note,
+        evidence: verdict.evidence,
         reason: verdict.reason,
       })
     }

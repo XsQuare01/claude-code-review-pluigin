@@ -59,7 +59,7 @@ const die = message => {
   process.exit(2)
 }
 
-const VALUE_FLAGS = new Set(['dir', 'run', 'rules', 'workflow', 'base', 'host', 'repo', 'correctness', 'max-duration', 'max-tasks', 'stale-after', 'continues', 'previous', 'pr-json'])
+const VALUE_FLAGS = new Set(['dir', 'run', 'rules', 'workflow', 'base', 'host', 'repo', 'correctness', 'max-duration', 'max-tasks', 'stale-after', 'continues', 'previous', 'pr-json', 'language'])
 const BOOL_FLAGS = new Set(['dry-run', 'no-pr'])
 {
   const argv = process.argv.slice(2)
@@ -104,6 +104,10 @@ const repo = flag('repo', process.cwd())
 // 추가 비용을 확인하기 전까지 명시적으로 켜서 쓴다(#88). 켰는지를 여기서 기록해야, 결과가
 // 없는 것이 "켜지 않았다"인지 "켰는데 실패했다"인지 뒤의 스크립트가 가를 수 있다.
 const correctness = flag('correctness', 'off')
+// 리뷰 결과의 언어. 사용자가 다른 언어를 정했을 때만 준다 — 주지 않으면 한국어이고 기록에 남기지 않는다(00-rule).
+// 작업 대장은 이 값이 ko가 아니면 지적의 한국어 검사를 하지 않는다
+const language = flag('language')
+if (language !== undefined && !/^[a-z]{2,3}(-[A-Za-z0-9]{2,8})?$/.test(language)) die(`--language는 언어 코드다(예: en, ja, zh-CN) — 받은 값: ${language}`)
 if (!['on', 'off'].includes(correctness)) die(`--correctness는 on 또는 off다 (받은 값: ${JSON.stringify(correctness)})`)
 
 // 한도(C-12). 주지 않으면 한도가 없다 — 없는 한도를 기본값으로 지어 넣으면 사용자가 정하지 않은
@@ -325,7 +329,7 @@ const logged = (() => {
     ...(dependencyFiles.length ? { dependencyFiles } : {}),
     // full은 diff 밖의 기존 구현을 찾아 05에 넘긴다(05-7). 예정이라는 사실을 시작에 남겨, 계획했는데 돌리지 않은
     // 검색을 기록 검사가 짚게 한다 — 이 필드가 없는 예전 기록은 그 검사를 받지 않는다.
-    ...(workflow === 'full' ? { reuseSearch: 'planned' } : {}),
+    ...(workflow === 'full' ? { reuseSearch: 'planned', resultBinding: 'required' } : {}),
     // 원격이 없으면 필드를 비워 둔다. 없는 값을 지어 넣지 않는다.
     ...(identity.remote ? { repo: identity.remote } : {}),
     repoRoot: identity.root,
@@ -333,6 +337,8 @@ const logged = (() => {
     // 선택 패스가 있는 워크플로우만 남긴다. 없는 워크플로우에 `off`를 적으면 "끌 수 있었는데
     // 껐다"로 읽힌다.
     ...(optional.some(module => module.id === 'correctness') ? { correctness } : {}),
+    // 사용자가 정한 리뷰 언어 — 정하지 않았으면(한국어) 남기지 않는다
+    ...(language !== undefined && language !== 'ko' ? { language } : {}),
     ...(maxTasks !== null ? { maxTasks } : {}),
     ...(maxDurationSec !== null ? { maxDurationSec } : {}),
     staleAfterSec,
@@ -382,6 +388,7 @@ const out = [
   `리뷰 파일     ${scope.files.length}개 (제외 ${scope.excluded.length}개 — 테스트·mock, C-5)${logged.ok && !logged.skipped ? ` · 목록 .timing/${run}.scope.json` : ''}`,
   ...(dependencyFiles.length ? [`의존성 변경   ${dependencyFiles.join(', ')} — baseline은 그 트리에 그 트리의 의존성을 설치해 잰다. 지금 트리의 의존성을 같이 쓰면 baseline도 같은 실패를 내 "신규 0"으로 잘못 나온다(C-6)`] : []),
   ...(workflow === 'full' ? [`기존 구현 검색 예정 — 05를 뺀 모듈을 먼저 띄우고, 그동안 검색 계획을 써 review-reuse.mjs로 후보를 모은다. 05는 검색이 끝난 뒤 띄운다(C-6C)`] : []),
+  `리뷰 에이전트  첫 디스패치 전에 작업 도구의 에이전트 목록에서 react-code-review-plugin:rule-module-reviewer를 찾는다. 없으면 리뷰하지 않고 review-tasks.mjs cancel --all --reason agent-unavailable로 멈춘다 — 직접 리뷰하거나 다른 에이전트로 대신하지 않는다(C-6)`,
   '',
   `후보 모듈     ${candidates.length}개  ${candidates.map(module => module.id).join(' ')}`,
 ]

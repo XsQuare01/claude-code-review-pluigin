@@ -127,14 +127,22 @@ node "$RULES_DIR/../scripts/review-base.mjs" --repo .   # 사용자가 base를 �
 - 도구 이름은 런타임마다 다르므로 **능력 기준**으로 읽는다: producer는 "쓰기 도구 없음",
   오케스트레이터는 셸을 유지한다(diff 수집·스크립트·타임라인). 지적을 만드는 쪽과
   도구를 쓰는 쪽을 분리하는 것이 이 조항의 요점이다
-- 런타임이 producer의 도구를 제한할 수 없으면, 그 실행은 **격리된 사본에서** 하거나
-  producer를 띄우지 않고 오케스트레이터가 직접 읽어 리뷰한다. 제한할 수 없다는 사실을
-  리포트에 적는다
+- **리뷰 에이전트가 없으면 멈춘다.** 호스트에 `react-code-review-plugin:rule-module-reviewer`가 없거나(작업 도구의
+  에이전트 목록에 없다, 띄우면 알 수 없는 에이전트로 실패한다) 런타임이 producer의 도구를 제한할 수 없으면 리뷰하지
+  않는다. 오케스트레이터가 직접 읽어 리뷰하지 않고, 다른 에이전트(`explore`·`general`·`build` 등)로 대신하지 않으며,
+  모듈 결과·검증 판정·synthesis를 직접 쓰지 않는다. full은 `review-tasks.mjs cancel --all --reason agent-unavailable`로
+  디스패치를 멈춰 기록에 남기고, 받은 결과가 없으면 리포트를 쓰지 않고 `run.end`(`verdict=not-reviewed`)로 닫는다.
+  사용자에게 무엇을 띄울 수 없었는지와 확인할 호스트 설정을 알린다. 이 지시는 producer를 띄우는 모든 스킬에 있어야
+  하고 `validate-rules.mjs`가 기본 거부로 검사한다(`checkStopsWithoutReviewer`)
+  - 예전에는 이때 격리된 사본에서 돌리거나 오케스트레이터가 직접 리뷰하는 대체 경로를 두었다. 2026-10-15 OpenCode
+    2.0.29가 이 에이전트를 등록하던 호스트 플러그인을 불러오지 못했을 때, 한 실행은 그 경로대로 혼자 리뷰하고
+    스스로 검증해 "교차검증 유지 12건"을 냈고, 다른 실행은 18개 모듈에 빈 결과를 써 "지적 없음"으로 보고했다. 둘 다
+    `검토 상태: 완료`였다 — 모듈마다 따로 보고 독립적으로 검증한다는 리뷰의 전제가 사라진 결과가 완료로 읽혔다
 - **일곱 워크플로우의 producer를 모두 `rule-module-reviewer`(`Read`·`Grep`·`Glob`)로 띄운다.**
   `full`만이 아니다 — `default`·`commit`·`fast`·`props`·`math`·`exception`도 각자의
   `task(` 호출에서 이 에이전트를 지목한다(#70). 지목이 도구 제한이 되는 것은 호스트가 그
-  에이전트를 아는 경우뿐이다. 에이전트를 설치하지 않는 호스트(OpenCode는 스킬만 설치한다)는
-  도구를 제한할 수 없는 런타임이므로 위의 대체 경로를 따른다
+  에이전트를 아는 경우뿐이다. 호스트가 그 에이전트를 모르면 위대로 멈춘다 — OpenCode는 이 플러그인의 스킬만
+  설치하므로, 에이전트는 호스트 설정이나 호스트 플러그인이 등록해야 한다
 - 이 요구는 `validate-rules.mjs`가 **기본 거부**로 검사한다(`scripts/lib/producer-tools.mjs`).
   스킬에 dispatch 정황(`task(`, `run_in_background`, `subagent_type`)이 있으면 `task(` 호출마다
   prompt 앞에서 제한된 에이전트를 지목해야 하고, 지목을 읽지 못하면 통과가 아니라 실패다.
@@ -263,6 +271,7 @@ baseline이 없을 때 `미측정`으로 적는 것으로 끝내지 않는다. p
 
 - 오케스트레이터는 producer 응답을 받은 즉시 envelope와 필수 필드를 검증한다
 - JSON 파싱 실패, 필수 필드 누락, 금지 필드(`severity`) 포함, 허용되지 않은 location/impact/category 값은 **malformed-output**이다
+- 사용자가 다른 언어를 정하지 않은 실행(`run.start.language`가 없거나 `ko`)에서 제목·본문에 한글이 하나도 없는 지적·열린 질문도 **malformed-output**이다. `/code-review-full`의 작업 대장이 결과를 받을 때 검사한다(`scripts/lib/result-language.mjs`) — 언어 지시는 규칙 문서·에이전트·스킬에 있었지만 문장일 뿐이라, 프롬프트에서 빠진 날 영어 지적이 그대로 실렸다
 - malformed-output이든 legacy/prose 출력이든 **교정 재시도는 한 번만** 한다. 재시도 prompt는 잘못된 점만 짧게 지적하고 같은 계약으로 다시 요구한다
 - 두 번째도 malformed-output이면 그 pass는 **`FAILED malformed-output`으로 종료**한다. 부분 해석이나 추측 보정으로 통과시키지 않는다
 
@@ -407,6 +416,8 @@ verifier가 반환하는 값과 오케스트레이터가 부여하는 값을 구
 | `active-deletion` | 제외 — 삭제를 허용하는 kind로, 승인이 잰 경로에서 반박된 것만 (`반박 kind별 결말`·`승인 파일`) | 차단하지 않음 (active에 없으므로) |
 
 **`rollout-shadow`에서도 high-impact가 차단한다는 것이 이 phase의 핵심이다.** 관찰 기간을 무방비 기간으로 만들지 않는다. 삭제했다면 어떤 차단이 풀렸을지의 가상 결과는 audit에만 기록한다.
+
+**정책상 남은 차단과 검증 유지 건수를 합쳐 "확인된 결함"이라고 쓰지 않는다.** 렌더러는 상세 지적 앞에 후보·표시·범위 미확정·삭제 수를 직접 세고, 높은 영향의 차단 후보를 `검증 유지`·`반박 후 정책상 유지`·`검증 판정 없음/대상 아님/꺼짐`으로 나눈다. 반박된 지적 아래에는 검증자의 `evidence`·`rebuttal.note`·반박 위치를 함께 그린다. 그 위치는 별도 위치 대조를 거치지 않았다고 표시한다. 원래 등급은 유지하지만 검증자가 그 등급까지 인정한 것으로 읽지 않는다. 건수는 지적 수이며, 관련 위치가 겹친다고 독립 결함 수나 중복 제거 수를 만들어 내지 않는다.
 
 **`active-deletion`은 플래그 하나로 켜지지 않는다.** 한때 이 phase를 막는 것은 "기본은 `rollout-shadow`"라는 이 절의 문장뿐이었고, 렌더러는 `--phase-low active-deletion` 한 단어를 그대로 받았다(#47). 지금은 `render-findings.mjs`가 `--phase-high`·`--phase-low` 중 하나라도 `active-deletion`이면 `--deletion-approval <승인 파일>`을 요구하고, 없으면 멈춘다(exit 2). **플러그인은 승인 파일을 싣고 오지 않는다** — 전환은 아래 조건을 사람이 잰 기록으로만 한다(`승인 파일`). 두 플래그에는 여전히 기본값이 없고, full SKILL의 명령 틀은 둘 다 `rollout-shadow`로 적는다.
 
@@ -1447,7 +1458,7 @@ UTF-16 파일도 읽는다 — PowerShell 5.1의 `Set-Content -Encoding UTF8`은
 
 | `--phase` | 시점 | `--set`/`--data`에 담는 것 |
 |---|---|---|
-| `run.start` | 가장 먼저 | `host`, `rules`(해석된 RULES_DIR), `version`, `branch`, `changedFiles` · 무엇을 리뷰하는지(C-10): `runId`, `base`, `head`, `worktree`, `dirtyFiles`, `repo`, `repoRoot`, `rulesDigest` · 선택 패스를 켰는지: `correctness`(`on`/`off`, 선택 패스가 있는 워크플로우만) · 한도(C-12): `maxTasks`, `maxDurationSec`(준 것만), `staleAfterSec` · (새 실행으로 이어 받았으면) `continues` · (이전 리뷰와 비교하면, C-13) `previousSnapshot`, `previousRunId`, `previousSha256` · base 앞섬(C-6): `baseAhead`(merge-base 뒤 base의 커밋 수), (같은 파일을 바꿨으면) `baseOverlapCount`, `baseOverlap`(20개까지) · (의존성 매니페스트를 바꿨으면) `dependencyFiles` · `baseHead`(base 끝 SHA — 시작할 때 한 번 해석한다. 없으면 "base 끝 SHA 미기록") · (full이면, C-6C) `reuseSearch`(`planned`) — preflight가 쓴다 |
+| `run.start` | 가장 먼저 | `host`, `rules`(해석된 RULES_DIR), `version`, `branch`, `changedFiles` · 무엇을 리뷰하는지(C-10): `runId`, `base`, `head`, `worktree`, `dirtyFiles`, `repo`, `repoRoot`, `rulesDigest` · 선택 패스를 켰는지: `correctness`(`on`/`off`, 선택 패스가 있는 워크플로우만) · 한도(C-12): `maxTasks`, `maxDurationSec`(준 것만), `staleAfterSec` · (새 실행으로 이어 받았으면) `continues` · (이전 리뷰와 비교하면, C-13) `previousSnapshot`, `previousRunId`, `previousSha256` · base 앞섬(C-6): `baseAhead`(merge-base 뒤 base의 커밋 수), (같은 파일을 바꿨으면) `baseOverlapCount`, `baseOverlap`(20개까지) · (의존성 매니페스트를 바꿨으면) `dependencyFiles` · `baseHead`(base 끝 SHA — 시작할 때 한 번 해석한다. 없으면 "base 끝 SHA 미기록") · (full이면, C-6C) `reuseSearch`(`planned`) · (사용자가 다른 언어를 정했으면) `language` — preflight가 쓴다 |
 | `run.resume` | 멈춘 실행을 이어 갈 때 (`review-tasks.mjs resume`이 쓴다) | 새 구간의 `maxTasks`·`maxDurationSec`·`staleAfterSec`, 다시 잰 `head`·`worktree` |
 | `scope.done` | 범위 확정(C-4) — `/code-review-full`은 **preflight가 남긴다**(C-5의 이름 규칙으로 센 수) | `files`, `excluded` |
 | `modules.planned` | 적용 모듈 확정(C-3) | `candidates`, `applied`(적용한 **번호 모듈** 수 — Props·수학·예외·정확성 패스는 세지 않는다. 후보 수를 넘으면 스크립트가 거부한다. 스냅숏의 `적용 N개`는 패스 전부를 센 수라 다르다) · `skipped`, `unknown`(중첩, `--data-file`) |
@@ -1456,7 +1467,7 @@ UTF-16 파일도 읽는다 — PowerShell 5.1의 `Set-Content -Encoding UTF8`은
 | `module.done` | **모듈 하나가 끝날 때마다** (full은 작업 대장이 결과 파일을 쓴 뒤) | `module`, `attempt`, `status`(**`ok`/`failed`만** — SKILL의 상태 이름 `COMPLETED`가 아니다), `findings`, `failureClass`, `taskId`, (있으면) `tokensIn`·`tokensOut` · 대장이 받으면 `resultSha256` · 취소면 `cancelReason`(`max-duration`/`user`) |
 | `verify.start` / `verify.done` | 검증 작업의 시도 하나를 띄우기 전 / 끝을 받을 때 (작업 대장이 쓴다 — C-12) | `task`(routed의 작업 이름), `attempt`, `kind`, `claim`, `round` / `task`, `attempt`, `status`(`ok`/`failed`), `failureClass`, `taskId`, `resultSha256`, `cancelReason` |
 | `task.bind` | 띄운 시도에 호스트 작업 ID를 묶을 때 — 다시 남기면 살아 있다는 확인 (작업 대장) | `stage`(`module`/`verify`), `task`, `attempt`, `taskId` |
-| `dispatch.halt` | 한도나 사용자가 디스패치를 멈췄을 때 (작업 대장) | `reason`(`max-tasks`/`max-duration`/`user`), `stage`, `queuedTasks`(띄우지 못한 작업), `running` |
+| `dispatch.halt` | 한도나 사용자가 디스패치를 멈췄을 때, 리뷰 에이전트가 없을 때 (작업 대장) | `reason`(`max-tasks`/`max-duration`/`user`/`agent-unavailable`), `stage`, `queuedTasks`(띄우지 못한 작업), `running` |
 | `dispatch.end` | 전부 수집 후 (full은 작업 대장이 모듈 단계가 끝났을 때 쓴다) | `terminalOk`, `terminalFailed`(최종 모듈 단위) · `attemptsTotal`, `attemptsFailed`(시도 단위) — **이 넷은 스크립트가 `module.done`에서 센다.** 넘기지 않아도 되고, 넘긴 값이 기록과 다르면 경고하고 센 값을 남긴다 · `attemptFailureClasses`(중첩, `--data-file`), (있으면) `tokensIn`·`tokensOut` |
 | `script.start` | `prepare-verification.mjs` 진입 직후 (스크립트가 직접 남긴다) | `script` |
 | `script.done` | `prepare-verification.mjs` 실행 후 | `ran`, `counts`(중첩, 스크립트가 직접 남긴다 — 검색을 예정한 실행이면 `counts.reuse`, C-6C) |
@@ -2104,7 +2115,7 @@ C-9에서 시작 기록을 모델이 출력을 필요로 하는 자리로 옮긴
 | `next --stage module\|verify` | 띄워도 되는 시도를 정하고, **띄우기 전에** 그 시도의 시작(`module.start`·`verify.start`)을 남긴다. 시도마다 결과를 쓸 자리(`resultPath`)와, 검증이면 프롬프트 경로를 준다. 죽은 시도를 끝내고, 한도를 지키고, 모듈 단계의 `dispatch.start`·`dispatch.end`도 남긴다 |
 | `bind` | 띄운 시도에 호스트의 작업 ID를 묶는다(`task.bind`). 다시 부르면 그 작업이 아직 살아 있다는 확인이다 |
 | `done` | 끝 알림 하나를 받는다. 받으면 결과를 정해진 자리에 쓰고 끝(`module.done`·`verify.done`)을 남긴다 |
-| `cancel --task\|--all --reason user` | 사용자가 멈춘 시도를 취소로 끝낸다. `--all`은 디스패치도 멈춘다 |
+| `cancel --task\|--all --reason user\|agent-unavailable` | 사용자가 멈춘 시도, 또는 리뷰 에이전트가 없어 멈춘 실행(C-6)의 시도를 취소로 끝낸다. `--all`은 디스패치도 멈춘다 — 띄우기 전이면 시도 없이 멈춤만 남는다 |
 | `status [--json]` | 단계마다 상태별 수, 돌고 있는 시도와 소식 없는 시간, 멈춘 이유, 한도. JSON과 사람용 요약은 같은 계산에서 나온다 |
 | `resume` | 대상이 그대로인지 보고 이어 간다(아래 `재개`) |
 
@@ -2121,8 +2132,13 @@ C-9에서 시작 기록을 모델이 출력을 필요로 하는 자리로 옮긴
 - 이 실행에 묶이지 않은 호스트 작업이나 띄운 적 없는 작업(`unknown`)도 받지 않는다 — 다른 실행이
   띄운 작업의 응답이 이 실행의 결과가 되지 않는다
 - 호스트 작업 ID로 알리면 어느 시도인지는 오케스트레이터의 기억이 아니라 호스트의 알림이 정한다
+- 성공 결과는 시작 뒤·끝 전에 `task.bind`로 호스트 ID를 연결한 시도만 받는다. `--task`·`--attempt`로 부르더라도 같고, 연결이 없으면 `unbound`(종료 코드 3)로 거부한다. 시작 실패는 연결 없이 `--status failed`로 남길 수 있다
 - 받은 내용의 sha256을 끝 줄(`resultSha256`)에 남긴다. `prepare-verification.mjs --collect`는 결과
   파일이 그 해시와 다르면 모으지 않는다 — 대장이 받은 뒤에 파일이 바뀐 것이다
+
+새 full 실행의 preflight는 `run.start.resultBinding: required`를 남긴다. 결과·판정 수집도 앞선 연결·성공 기록·내용 해시를 요구하고, 타임라인 `--check`는 연결 없이 적은 성공 기록을 짚는다. 필드가 없는 예전 수기 기록은 소급 거부하지 않지만, 대장이 발급한 `claim`이 있으면 같은 연결 검사를 한다. 이 연결은 **기록의 일관성 검사**다. 호스트 API로 작업의 실재나 에이전트 종류를 인증하는 기능은 아니므로 ID를 지어 넣거나 다른 에이전트로 대신하는 것은 여전히 금지다.
+
+에이전트 부재로 성공 결과·렌더 없이 멈춘 `not-reviewed` 실행은 디스패치·미시작 검색 누락을 오류로 읽지 않는다. 이미 시작한 검색의 끝 기록은 여전히 검사하고, 성공 결과나 리포트가 있으면 `not-reviewed`로 끝낼 수 없다.
 
 **받은 결과가 계약에 맞지 않으면 실패로 끝낸다(종료 코드 1).** 모듈 결과는 JSON으로 읽히는지,
 검증 판정은 `REVIEW_VERDICT_CONTRACT_V1`과 요청한 후보 집합에 맞는지를 `tally-verdicts.mjs`와 같은

@@ -661,3 +661,20 @@ test('잘린 원문 수도 생략으로 그린다', () => {
   assert.deepEqual(snapshot.reuse.omitted, { candidates: 0, hits: 0, quotes: 2 })
   assert.match(renderSnapshotMarkdown(snapshot), /검색 대상 1개 중 부분 완료 1 \(상한으로 잘린 원문 2개\)/)
 })
+
+test('리뷰 에이전트가 없어 멈춘 실행은 검토하지 않았다고 그린다 — 지적 없음이 아니다', () => {
+  const snapshot = buildSnapshot(fixture({
+    events: [
+      runStart(),
+      planned([{ module: 'math', reasonCode: 'no-linear-algebra', reason: '행렬 연산이 없다' }]),
+      { at: '2026-10-06T00:02:00.000Z', phase: 'dispatch.halt', reason: 'agent-unavailable', running: 0 },
+    ],
+    routed: { candidates: [], collected: { sources: [], excludedFailed: [] } },
+    verdicts: new Map(),
+  }))
+  assert.deepEqual(snapshotProblems(snapshot), [])
+  assert.notEqual(snapshot.status, 'complete')
+  const block = renderSnapshotMarkdown(snapshot)
+  assert.match(block, /\*\*리뷰 에이전트가 없어 리뷰를 멈췄다\*\* — 호스트에서 `react-code-review-plugin:rule-module-reviewer`를 띄울 수 없었다/)
+  assert.match(block, /\| `exception` \| 결과 없음 \| 디스패치를 멈춰 띄우지 않았다 \(리뷰 에이전트가 없다\) \|/)
+})

@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url'
 import {
   WRITE_TOOLS,
   checkProducerWriteAccess,
+  checkStopsWithoutReviewer,
   dispatchSignals,
   extractDispatchTargets,
   extractTaskCalls,
@@ -222,5 +223,24 @@ test('dispatch하는 모든 SKILL.md가 제한된 에이전트를 지목하고 �
   // 일곱 워크플로우가 모두 producer를 띄운다. 하나라도 빠지면 그 스킬은 검사받지 않은 것이다.
   for (const expected of ['code-review', 'code-review-commit', 'code-review-exception', 'code-review-fast', 'code-review-full', 'code-review-math', 'code-review-props']) {
     assert.ok(dispatching.includes(expected), `skills/${expected}/SKILL.md was not checked as a dispatching skill`)
+  }
+})
+
+// 리뷰 에이전트를 띄울 수 없으면 멈춘다(C-6). 2026-10-15 OpenCode 2.0.29가 그 에이전트를 등록하는 플러그인을
+// 불러오지 못했을 때, 한 실행은 혼자 리뷰하고 스스로 검증했고 다른 실행은 18개 모듈에 빈 결과를 써 '지적 없음'으로
+// 보고했다. 그 지시가 스킬에 없으면 검사가 실패한다 — 문장으로만 지키는 규칙으로 두지 않는다.
+test('producer를 띄우는 스킬은 리뷰 에이전트가 없으면 멈춘다고 적어야 한다 — 기본 거부', () => {
+  const dispatching = 'task(\n  subagent_type="react-code-review-plugin:rule-module-reviewer",\n  prompt="x"\n)'
+  assert.equal(checkStopsWithoutReviewer({ where: 'skills/x/SKILL.md', text: dispatching }).length, 1)
+  assert.match(checkStopsWithoutReviewer({ where: 'skills/x/SKILL.md', text: dispatching })[0], /리뷰 에이전트가 없으면 멈춘다/)
+  assert.deepEqual(checkStopsWithoutReviewer({ where: 'skills/x/SKILL.md', text: `${dispatching}\n리뷰 에이전트가 없으면 멈춘다` }), [])
+  assert.deepEqual(checkStopsWithoutReviewer({ where: 'skills/x/SKILL.md', text: '디스패치하지 않는 스킬' }), [])
+})
+
+test('실제 스킬은 모두 리뷰 에이전트가 없으면 멈춘다고 적는다', () => {
+  for (const dir of readdirSync(join(ROOT, 'skills'))) {
+    const path = join(ROOT, 'skills', dir, 'SKILL.md')
+    if (!existsSync(path)) continue
+    assert.deepEqual(checkStopsWithoutReviewer({ where: `skills/${dir}/SKILL.md`, text: readFileSync(path, 'utf8') }), [], dir)
   }
 })

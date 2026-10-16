@@ -9,7 +9,7 @@
 // No dependencies. Run: node scripts/validate-rules.mjs
 
 import { readFileSync, readdirSync, existsSync } from 'node:fs'
-import { checkProducerWriteAccess, parseAgentTools } from './lib/producer-tools.mjs'
+import { checkProducerWriteAccess, checkStopsWithoutReviewer, parseAgentTools } from './lib/producer-tools.mjs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { validateEffectiveCommonContext } from './lib/effective-common-context-validator.mjs'
@@ -835,7 +835,11 @@ const agentFiles = existsSync(AGENTS) ? readdirSync(AGENTS).filter(f => f.endsWi
 
   for (const dir of skillDirs) {
     const where = `skills/${dir}/SKILL.md`
-    for (const problem of checkProducerWriteAccess({ where, text: read(join(SKILLS, dir, 'SKILL.md')), agents })) {
+    const text = read(join(SKILLS, dir, 'SKILL.md'))
+    for (const problem of checkProducerWriteAccess({ where, text, agents })) {
+      fail('agent', problem)
+    }
+    for (const problem of checkStopsWithoutReviewer({ where, text })) {
       fail('agent', problem)
     }
   }

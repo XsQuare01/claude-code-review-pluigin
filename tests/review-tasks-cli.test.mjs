@@ -56,6 +56,11 @@ const json = out => {
   return JSON.parse(out.stdout)
 }
 const next = (dir, stage = 'module', extra = []) => tasks(dir, 'next', '--stage', stage, '--rules', RULES, ...extra)
+// 응답을 내는 가짜 호스트도 작업 ID를 먼저 연결한다. 미연결 거부 테스트는 tasks를 직접 호출한다.
+const receive = (dir, task, attempt, ...extra) => {
+  assert.equal(tasks(dir, 'bind', '--task', task, '--attempt', String(attempt), '--host-task', `host-${task}-${attempt}`).status, 0)
+  return tasks(dir, 'done', '--task', task, '--attempt', String(attempt), '--status', 'ok', ...extra)
+}
 
 const gitRepo = t => {
   const repo = mkdtempSync(join(tmpdir(), 'review-tasks-repo-'))
@@ -72,6 +77,21 @@ const gitRepo = t => {
 }
 
 const RESULT = JSON.stringify({ schemaVersion: 1, findings: [], openQuestions: [] })
+
+test('호스트 작업을 연결하지 않은 빈 결과로 모듈을 완료할 수 없다', t => {
+  const dir = fresh(t)
+  plant(dir, [startEvent({ resultBinding: 'required' }), planned(['01-fsd'])])
+  const [claim] = json(next(dir)).dispatch
+  writeFileSync(claim.resultPath, RESULT, 'utf8')
+  const unbound = tasks(dir, 'done', '--task', claim.task, '--attempt', '1', '--status', 'ok')
+  assert.equal(unbound.status, 3)
+  assert.equal(json(unbound).outcome, 'unbound')
+  assert.equal(eventsOf(dir).some(event => event.phase === 'module.done'), false)
+  assert.equal(existsSync(join(dir, '.timing', `${RUN}.01-fsd.json`)), false)
+  assert.equal(json(next(dir)).complete, false)
+  assert.equal(receive(dir, claim.task, 1).status, 0)
+  assert.equal(json(next(dir)).complete, true)
+})
 
 test('next는 띄울 시도를 띄우기 전에 기록하고, 다른 프로세스가 다시 물어도 같은 시도를 내주지 않는다', t => {
   const dir = fresh(t)
@@ -138,7 +158,7 @@ test('JSON이 아닌 결과는 쓰지 않고 실패로 기록하며, next가 교
   plant(dir, [startEvent(), planned(['01-fsd'])])
   const [claim] = json(next(dir)).dispatch
   writeFileSync(claim.resultPath, '결과입니다:\n```json\n{}\n```', 'utf8')
-  const rejected = tasks(dir, 'done', '--task', '01-fsd', '--attempt', '1', '--status', 'ok')
+  const rejected = receive(dir, '01-fsd', 1)
   assert.equal(rejected.status, 1)
   assert.equal(json(rejected).outcome, 'rejected')
   assert.equal(existsSync(join(dir, '.timing', `${RUN}.01-fsd.json`)), false)
@@ -201,7 +221,7 @@ test('호출 한도를 다 쓰면 멈추고, resume으로 새 구간을 열어�
   assert.equal(first.halted, 'max-tasks')
   writeFileSync(first.dispatch[0].resultPath, RESULT, 'utf8')
   // 멈춘 뒤에도 이미 띄운 시도의 결과는 받는다.
-  assert.equal(tasks(dir, 'done', '--task', '01-fsd', '--attempt', '1', '--status', 'ok').status, 0)
+  assert.equal(receive(dir, '01-fsd', 1).status, 0)
   assert.deepEqual(json(next(dir)).dispatch, [])
 
   const resumed = tasks(dir, 'resume', '--repo', repo, '--max-tasks', '3', '--rules', RULES)
@@ -312,13 +332,23 @@ const verifySetup = t => {
   return { dir, routed }
 }
 
+test('검증자도 호스트 작업을 연결하지 않으면 판정을 성공으로 받지 않는다', t => {
+  const { dir, routed } = verifySetup(t)
+  const [claim] = json(next(dir, 'verify')).dispatch
+  writeFileSync(claim.resultPath, JSON.stringify({ schemaVersion: 1, verdicts: [verdict('04-3#1', 'upheld')] }), 'utf8')
+  const out = tasks(dir, 'done', '--task', claim.task, '--attempt', '1', '--status', 'ok')
+  assert.equal(out.status, 3)
+  assert.equal(json(out).outcome, 'unbound')
+  assert.equal(existsSync(routed.verifierTasks[0].verdict), false)
+})
+
 test('검증 단계: 계약에 맞는 판정만 판정 자리에 쓰고, bundle의 needs-context는 승격 작업을 낸다', t => {
   const { dir, routed } = verifySetup(t)
   const first = json(next(dir, 'verify'))
   assert.deepEqual(first.dispatch.map(one => one.label), ['bundle-1#1', 'isolated-02-1-1#1'])
   assert.equal(first.dispatch[0].prompt, routed.verifierTasks[0].prompt)
   writeFileSync(first.dispatch[0].resultPath, JSON.stringify({ schemaVersion: 1, verdicts: [verdict('04-3#1', 'needs-context')] }), 'utf8')
-  const accepted = tasks(dir, 'done', '--task', 'bundle-1', '--attempt', '1', '--status', 'ok', '--rules', RULES)
+  const accepted = receive(dir, 'bundle-1', 1, '--rules', RULES)
   assert.equal(accepted.status, 0, accepted.stderr)
   assert.ok(existsSync(routed.verifierTasks[0].verdict))
   const promoted = json(next(dir, 'verify'))
@@ -331,20 +361,20 @@ test('검증 단계: 교정까지 계약을 어긴 작업은 끝나고, --valida
   const first = json(next(dir, 'verify'))
   const broken = JSON.stringify({ schemaVersion: 1, verdicts: [{ candidateId: '02-1#1', disposition: 'confirmed' }] })
   writeFileSync(first.dispatch[1].resultPath, broken, 'utf8')
-  const rejected = tasks(dir, 'done', '--task', 'isolated-02-1-1', '--attempt', '1', '--status', 'ok', '--rules', RULES)
+  const rejected = receive(dir, 'isolated-02-1-1', 1, '--rules', RULES)
   assert.equal(rejected.status, 1)
   const retryPrompt = json(rejected).retryPrompt
   assert.ok(existsSync(retryPrompt))
   assert.equal(existsSync(routed.verifierTasks[1].verdict), false)
 
   writeFileSync(first.dispatch[0].resultPath, JSON.stringify({ schemaVersion: 1, verdicts: [verdict('04-3#1', 'upheld')] }), 'utf8')
-  tasks(dir, 'done', '--task', 'bundle-1', '--attempt', '1', '--status', 'ok', '--rules', RULES)
+  receive(dir, 'bundle-1', 1, '--rules', RULES)
   const correction = json(next(dir, 'verify')).dispatch
   assert.deepEqual(correction.map(one => one.label), ['isolated-02-1-1#2'])
   assert.equal(correction[0].prompt, retryPrompt)
   assert.equal(correction[0].correction, true)
   writeFileSync(correction[0].resultPath, broken, 'utf8')
-  const again = tasks(dir, 'done', '--task', 'isolated-02-1-1', '--attempt', '2', '--status', 'ok', '--rules', RULES)
+  const again = receive(dir, 'isolated-02-1-1', 2, '--rules', RULES)
   assert.equal(again.status, 1)
   assert.match(json(again).note, /시도를 다 썼다/)
   assert.equal(json(next(dir, 'verify')).complete, true)
@@ -429,7 +459,7 @@ test('멈춘 실행은 부분 리포트와 run.end를 남긴 뒤에도 다른 �
   const first = json(next(dir))
   assert.equal(first.halted, 'max-tasks')
   writeFileSync(first.dispatch[0].resultPath, RESULT, 'utf8')
-  assert.equal(tasks(dir, 'done', '--task', '01-fsd', '--attempt', '1', '--status', 'ok').status, 0)
+  assert.equal(receive(dir, '01-fsd', 1).status, 0)
   // 확보한 결과로 부분 리포트를 쓰고 실행을 닫는다(SKILL의 리포팅 절차)
   for (const event of [
     { phase: 'render.start', findings: 0 },
@@ -455,7 +485,7 @@ test('정상으로 끝난 실행은 run.end 뒤에 이어 가지 않는다', t =
   plant(dir, [startEvent({ head: target.head, worktree: target.worktree }), planned(['01-fsd'])])
   const [claim] = json(next(dir)).dispatch
   writeFileSync(claim.resultPath, RESULT, 'utf8')
-  tasks(dir, 'done', '--task', '01-fsd', '--attempt', '1', '--status', 'ok')
+  receive(dir, '01-fsd', 1)
   append(dir, { phase: 'run.end', verdict: 'PASS' })
   const out = tasks(dir, 'resume', '--repo', repo, '--max-tasks', '5', '--rules', RULES)
   assert.equal(out.status, 2)
@@ -503,4 +533,45 @@ test('검색을 예정하지 않은 실행에서는 05를 붙잡지 않는다', 
   plant(dir, [startEvent(), planned(['05-structure'])])
   const out = json(next(dir))
   assert.deepEqual([out.dispatch.map(one => one.task), out.held, 'reuse' in out.dispatch[0]], [['05-structure'], [], false])
+})
+
+// 리뷰 에이전트를 띄울 수 없으면 리뷰를 멈춘다(C-6). 띄우기 전에 알았으면 시도 없이, 띄운 뒤에 알았으면 돌던 시도를
+// 그 사유로 끝내고 디스패치를 멈춘다. 결과를 직접 써서 '지적 없음'으로 끝내지 않는다.
+test('cancel --all --reason agent-unavailable은 리뷰 에이전트가 없어 멈춘 것을 남긴다 — 띄우기 전이든 뒤든', t => {
+  const before = fresh(t)
+  plant(before, [startEvent(), planned(['01-fsd', '02-type'])])
+  const early = tasks(before, 'cancel', '--all', '--reason', 'agent-unavailable')
+  assert.equal(early.status, 0, early.stderr)
+  assert.deepEqual(json(early).cancelled, [])
+  const halt = eventsOf(before).find(event => event.phase === 'dispatch.halt')
+  assert.equal(halt.reason, 'agent-unavailable')
+  const decision = json(next(before))
+  assert.deepEqual([decision.dispatch, decision.halted, decision.complete], [[], 'agent-unavailable', true])
+
+  const after = fresh(t)
+  plant(after, [startEvent(), planned(['01-fsd', '02-type', '04-state'])])
+  next(after)
+  assert.equal(tasks(after, 'cancel', '--all', '--reason', 'agent-unavailable').status, 0)
+  assert.ok(eventsOf(after).filter(event => event.phase === 'module.done').every(event => event.cancelReason === 'agent-unavailable'))
+  // 대장이 정하는 사유는 손으로 줄 수 없다
+  assert.equal(tasks(fresh(t), 'cancel', '--all', '--reason', 'max-tasks').status, 2)
+})
+
+test('제목·본문에 한글이 없는 결과는 받지 않고 교정 시도를 낸다 — 다른 언어를 요청한 실행은 받는다', t => {
+  const english = JSON.stringify({ schemaVersion: 1, findings: [{ ruleId: '13-4', title: 'The block layout API hides a contract', body: 'It relies on flex-1.', impact: 'low', confidence: 'high', location: { kind: 'unverified', reason: 'r' } }], openQuestions: [] })
+  const dir = fresh(t)
+  plant(dir, [startEvent(), planned(['01-fsd'])])
+  const [claim] = json(next(dir)).dispatch
+  writeFileSync(claim.resultPath, english, 'utf8')
+  const rejected = receive(dir, '01-fsd', 1)
+  assert.equal(rejected.status, 1)
+  assert.equal(json(rejected).outcome, 'rejected')
+  assert.match(json(rejected).problems.join(' '), /한국어/)
+  assert.equal(json(next(dir)).dispatch[0].correction, true)
+
+  const other = fresh(t)
+  plant(other, [startEvent({ language: 'en' }), planned(['01-fsd'])])
+  const [claimEn] = json(next(other)).dispatch
+  writeFileSync(claimEn.resultPath, english, 'utf8')
+  assert.equal(receive(other, '01-fsd', 1).status, 0)
 })

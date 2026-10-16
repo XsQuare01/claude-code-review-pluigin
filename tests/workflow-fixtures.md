@@ -1301,6 +1301,32 @@ These scenarios pin the behaviour that `review-rules/workflow-contract.md` promi
       ],
       "scenario": "The 05 producer reads a file outside the diff that it found through a symbol the changed code calls",
       "expected": "This is allowed as a targeted search: the finding location stays on the changed implementation and the other file is cited only as evidence; the producer does not report other problems in the file it read, and does not read files that no clue from the change points to"
+    },
+    {
+      "id": 162,
+      "clauses": [
+        "C-6",
+        "C-12"
+      ],
+      "scenario": "On the host the orchestrator runs on, react-code-review-plugin:rule-module-reviewer is not in the task tool agent list (the host plugin that registers it failed to load), or a dispatch fails as an unknown agent",
+      "expected": "The review stops: the orchestrator calls review-tasks.mjs cancel --all --reason agent-unavailable, does not review the change itself, does not dispatch explore, general or build agents in its place, and writes no module result or verdict; with no results it writes no report and ends the record with run.end verdict=not-reviewed, and it tells the user which agent could not be launched and to check the host plugin and agent configuration"
+    },
+    {
+      "id": 163,
+      "clauses": [
+        "C-6A",
+        "C-12"
+      ],
+      "scenario": "The orchestrator writes its own short producer prompt without the Korean-language line, and the 13-dx producer returns findings whose titles and bodies are entirely in English",
+      "expected": "review-tasks.mjs done rejects the result as malformed-output with a problem naming the finding and asking for Korean, so next issues a correction attempt; the English text never reaches the report. A run started with preflight --language en accepts the same result"
+    },
+    {
+      "id": 164,
+      "clauses": [
+        "C-7"
+      ],
+      "scenario": "The orchestrator renders findings with --workflow code-review-full (the skill name) instead of --workflow full",
+      "expected": "render-findings.mjs stops without drawing, naming the valid workflow names (and, with --dir and --run, the workflow recorded in run.start), instead of drawing headings such as \"### 06\" without module names and dropping the modules that have no findings"
     }
   ],
   "defaultWorkflowOnlyCases": [

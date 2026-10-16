@@ -18,7 +18,8 @@
 //   review-tasks.mjs next   --dir D --run R --stage module|verify [--rules RULES_DIR] [--targets routed.json] [--inflight 4]
 //   review-tasks.mjs bind   --dir D --run R --task T --attempt N --host-task ID
 //   review-tasks.mjs done   --dir D --run R (--host-task ID | --task T --attempt N) --status ok|failed [--failure-class C] [--result 파일] [--note 사유]
-//   review-tasks.mjs cancel --dir D --run R (--task T | --all) --reason user
+//   review-tasks.mjs cancel --dir D --run R (--task T | --all) --reason user|agent-unavailable
+//       agent-unavailable: 리뷰 에이전트를 띄울 수 없어 리뷰를 멈춘다(C-6) — 띄우기 전이면 시도 없이 디스패치만 멈춘다
 //   review-tasks.mjs status --dir D --run R [--rules RULES_DIR] [--targets routed.json] [--json]
 //   review-tasks.mjs resume --dir D --run R [--repo .] [--max-tasks N] [--max-duration 30m] [--stale-after 20m]
 //
@@ -33,10 +34,11 @@ import { writeTextAtomic } from './lib/atomic-write.mjs'
 import { durationLimitScope, hostCapabilities } from './lib/hosts.mjs'
 import { moduleScope, plannedModules } from './lib/review-snapshot.mjs'
 import { readJsonFile, readTextFile } from './lib/read-text.mjs'
+import { resultLanguageProblems } from './lib/result-language.mjs'
 import { readEvents, recordPhase, requireStartedTimeline } from './lib/run-record.mjs'
 import { currentTarget, runOutputs } from './lib/run-identity.mjs'
 import {
-  CANCEL_REASONS, DEFAULT_INFLIGHT, MAX_ATTEMPTS, STAGES, attemptsOf, budgetOf, claimOf, decideNext, decisionRecords,
+  CANCEL_REASONS, DEFAULT_INFLIGHT, MANUAL_CANCEL_REASONS, MAX_ATTEMPTS, STAGES, attemptsOf, budgetOf, claimOf, decideNext, decisionRecords,
   foldAttempts, haltOf, isTerminal, parseDuration, planStates, segmentOf, settleDecision, settleRecord, verifyPlan,
   endState, verifyRoundOf, verifyRoundStart,
 } from './lib/task-ledger.mjs'
@@ -472,6 +474,12 @@ const done = () => {
       return { code: 0, out: { outcome: 'recorded', task: target.task, attempt: target.attempt, status, failureClass } }
     }
 
+    if (!target.boundTaskId || target.boundTaskId !== hostTaskId) {
+      return { code: 3, out: { outcome: 'unbound', task: target.task, attempt: target.attempt,
+        reason: 'task.bind로 실제 호스트 작업 ID를 먼저 연결해야 성공 결과를 받는다. 리뷰 에이전트가 없으면 cancel --all --reason agent-unavailable로 멈춘다',
+        note: '결과 파일을 정본으로 복사하지 않았고 성공 기록도 남기지 않았다' } }
+    }
+
     const sha = sha256(text)
     // 이 시도까지 쓴 횟수. 취소된 시도는 세지 않는다(C-12) — 교정 차례가 남았는지가 여기서 갈린다.
     const spent = attemptsOf(fold, target.stage, target.task).filter(one => one.settled?.failureClass !== 'cancelled').length
@@ -480,10 +488,16 @@ const done = () => {
     let problems = null
     let retryPrompt
     if (target.stage === 'module') {
+      let parsed
       try {
-        JSON.parse(text)
+        parsed = JSON.parse(text)
       } catch (error) {
         problems = [`JSON으로 읽지 못했다: ${error.message} — 코드펜스나 서문 없이 JSON 객체 하나만 돌려준다`]
+      }
+      // 한국어가 아닌 지적은 받지 않는다 — 교정 시도로 다시 받는다(00-rule, run.start.language)
+      if (!problems) {
+        const language = resultLanguageProblems(parsed, { language: start.language })
+        if (language.length) problems = language
       }
     } else {
       const routed = readRouted({ required: true })
@@ -531,7 +545,9 @@ const done = () => {
 
 const cancel = () => {
   const reason = flag('reason')
-  if (reason !== 'user') throw new LedgerError(`cancel의 --reason은 user다 — ${CANCEL_REASONS.filter(one => one !== 'user').join(', ')}는 next가 정한다`)
+  if (!MANUAL_CANCEL_REASONS.includes(reason)) {
+    throw new LedgerError(`cancel의 --reason은 ${MANUAL_CANCEL_REASONS.join(' 또는 ')}다 — ${CANCEL_REASONS.filter(one => !MANUAL_CANCEL_REASONS.includes(one)).join(', ')}는 next가 정한다`)
+  }
   const task = flag('task')
   const all = switches.has('all')
   if (Boolean(task) === all) throw new LedgerError('cancel에는 --task <이름> 또는 --all 중 하나를 준다')
@@ -544,10 +560,10 @@ const cancel = () => {
       if (!all && name !== task) continue
       const last = [...attempts.values()].sort((left, right) => left.attempt - right.attempt).at(-1)
       if (!last || last.settled) continue
-      settle(stage, name, last.attempt, { status: 'failed', failureClass: 'cancelled', cancelReason: 'user', taskId: last.hostTaskId ?? undefined })
+      settle(stage, name, last.attempt, { status: 'failed', failureClass: 'cancelled', cancelReason: reason, taskId: last.hostTaskId ?? undefined })
       cancelled.push({ stage, task: name, attempt: last.attempt, ...(last.hostTaskId ? { hostTaskId: last.hostTaskId } : {}) })
     }
-    if (all && !haltOf(events)) record('dispatch.halt', { reason: 'user', running: 0 })
+    if (all && !haltOf(events)) record('dispatch.halt', { reason, running: 0 })
     if (!all && !cancelled.length) throw new LedgerError(`${task}에는 돌고 있는 시도가 없다`, 3)
     const host = hostCapabilities(startOf(events).host)
     return {

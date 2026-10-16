@@ -7,6 +7,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { parseSnapshot } from '../scripts/lib/review-snapshot.mjs'
+import { writeAcceptedResult } from './helpers/accepted-result.mjs'
 
 // 증분 재리뷰(C-13, #88 PR 4)를 실제 스크립트 순서대로 두 번 돌린다.
 //
@@ -115,8 +116,8 @@ const reviewOnce = ({
       log({ phase: 'module.done', module: name, attempt: 1, status: 'failed', failureClass: 'inactivity-timeout' })
       continue
     }
-    writeFileSync(join(timing, `${run}.${name}.json`), JSON.stringify({ schemaVersion: 1, findings: findings[name] ?? [], openQuestions: [] }))
-    log({ phase: 'module.done', module: name, attempt: 1, status: 'ok' })
+    writeAcceptedResult({ log, path: join(timing, `${run}.${name}.json`), stage: 'module', task: name,
+      payload: { schemaVersion: 1, findings: findings[name] ?? [], openQuestions: [] } })
   }
 
   const collected = node(repo, 'prepare-verification.mjs', ['--merge-base', base, '--dir', dir, '--run', run, '--rules', rules, '--collect'])
@@ -129,11 +130,12 @@ const reviewOnce = ({
   for (const task of routed.verifierTasks) {
     if (task.route === 'recheck' || task.route === 'identity') {
       const verdict = (task.route === 'recheck' ? answerRecheck : answerIdentity)(task.candidateIds[0])
-      if (verdict) writeFileSync(task.verdict, JSON.stringify({ schemaVersion: 1, verdicts: [{ candidateId: task.candidateIds[0], ...verdict }] }))
+      if (verdict) writeAcceptedResult({ log, path: task.verdict, stage: 'verify', task: task.taskId,
+        payload: { schemaVersion: 1, verdicts: [{ candidateId: task.candidateIds[0], ...verdict }] } })
       continue
     }
     const verdicts = task.candidateIds.map(candidateId => ({ candidateId, ...answerCurrent(byId.get(candidateId)) }))
-    writeFileSync(task.verdict, JSON.stringify({ schemaVersion: 1, verdicts }))
+    writeAcceptedResult({ log, path: task.verdict, stage: 'verify', task: task.taskId, payload: { schemaVersion: 1, verdicts } })
   }
   // 검증할 작업이 없으면 집계하지 않는다(SKILL). 이 시나리오의 지적은 모두 영향이 낮아 교차검증 대상이
   // 아니고, 두 번째 실행의 작업은 재확인뿐이다.

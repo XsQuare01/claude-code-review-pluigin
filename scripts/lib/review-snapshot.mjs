@@ -672,6 +672,7 @@ const HALT_TEXT = {
   'max-tasks': '호출 한도를 다 썼다',
   'max-duration': '시간 상한이 지났다',
   user: '사용자가 멈췄다',
+  'agent-unavailable': '리뷰 에이전트가 없다',
 }
 const short = id => (typeof id === 'string' && OBJECT_ID.test(id) ? id.slice(0, 12) : String(id))
 
@@ -742,7 +743,10 @@ export function renderSnapshotMarkdown(snapshot) {
   if (rows.length) lines.push('', '| 모듈 | 상태 | 사유 |', '|------|------|------|', ...rows)
 
   const halted = snapshot.dispatch?.halted
-  if (halted) {
+  if (halted?.reason === 'agent-unavailable') {
+    // 리뷰 에이전트가 없어 멈춘 실행(C-6) — 결과 없는 모듈을 "지적 없음"으로 읽지 않게 첫 줄에서 말한다
+    lines.push('', `**리뷰 에이전트가 없어 리뷰를 멈췄다** — 호스트에서 \`react-code-review-plugin:rule-module-reviewer\`를 띄울 수 없었다(${codeSpan(halted.at)}). 표의 모듈은 검토하지 않았다 — 지적 없음이 아니다. 호스트의 플러그인·에이전트 설정을 고친 뒤 새 실행으로 다시 리뷰한다(C-6).`)
+  } else if (halted) {
     lines.push('', `**디스패치를 멈췄다** — ${HALT_TEXT[halted.reason] ?? codeSpan(halted.reason)}(${codeSpan(halted.at)}). 멈춘 뒤 띄우지 못한 모듈과 검증 작업은 이 실행이 검토하지 않은 범위다 — 판정을 받지 못한 지적은 \`검증 실패\`로 표시된다.`)
   }
 

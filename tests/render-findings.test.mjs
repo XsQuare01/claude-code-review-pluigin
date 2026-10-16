@@ -844,7 +844,8 @@ test('기준이 맞는 승인이면 지우고, 상세 지적 맨 위에 삭제 �
     approval: approvalFor(['high']), phases: ['active-deletion', 'rollout-shadow'],
   })
   assert.equal(out.status, 0, out.stderr)
-  assert.ok(out.stdout.startsWith('## 상세 지적\n\n삭제 단계: 영향 높음 `active-deletion` (승인 홍길동 · 2026-10-01 · isolated·bundle 경로) · 영향 낮음 `rollout-shadow` — 반박돼 이 절에서 지운 지적의 흔적은 `미해결 / 후속 확인`에 있다\n\n### 01 '), out.stdout.slice(0, 300))
+  assert.ok(out.stdout.startsWith('## 상세 지적\n\n삭제 단계: 영향 높음 `active-deletion` (승인 홍길동 · 2026-10-01 · isolated·bundle 경로) · 영향 낮음 `rollout-shadow` — 반박돼 이 절에서 지운 지적의 흔적은 `미해결 / 후속 확인`에 있다\n\n**지적 집계**'), out.stdout.slice(0, 300))
+  assert.match(out.stdout, /^### 01 /m)
   assert.doesNotMatch(out.stdout, /지적 04-3 1/, 'guard-exists 반박은 지워져야 한다')
   assert.match(out.stderr, /04-3 \(src\/a\.ts\): guard-exists/)
   // 결함을 인정한 반박은 승인이 있어도 지우지 않는다(#45)
@@ -912,11 +913,12 @@ test('--print-deletion-basis는 승인 파일에 적을 지금의 기준을 JSON
   assert.match(printed.basis.verifierPromptSha256, /^[0-9a-f]{64}$/)
 })
 
-test('둘 다 rollout-shadow면 삭제 단계 줄이 없다 — 이 기능 전의 출력과 같다', () => {
+test('둘 다 rollout-shadow면 삭제 단계 줄 없이 집계와 모듈을 그린다', () => {
   const guard = rejectedHigh('04-3#1', { kind: 'guard-exists' })
   const out = renderGated({ candidates: [guard.candidate], verdicts: [guard.verdict], phases: ['rollout-shadow', 'rollout-shadow'] })
   assert.equal(out.status, 0, out.stderr)
-  assert.ok(out.stdout.startsWith('## 상세 지적\n\n### 01 '), out.stdout.slice(0, 200))
+  assert.ok(out.stdout.startsWith('## 상세 지적\n\n**지적 집계**'), out.stdout.slice(0, 200))
+  assert.match(out.stdout, /^### 01 /m)
   assert.doesNotMatch(out.stdout, /삭제 단계/)
 })
 
@@ -1104,7 +1106,8 @@ test('needs-context finding은 상세 지적에서 빠지고 이동 목록으로
     { high: 'active-deletion', low: 'active-deletion' }, vocab,
     [{ kind: 'module', id: '04', title: '상태와 Effect' }], 'ran')
   assert.doesNotMatch(markdown, /범위 미확정 지적/, '상세 지적 본문에 그대로 남아있다')
-  assert.doesNotMatch(markdown, /범위 미확정/, '라벨을 단 채로 상세 지적에 남아있다')
+  assert.doesNotMatch(markdown, /교차검증: `범위 미확정`/, '라벨을 단 채로 상세 지적에 남아있다')
+  assert.match(markdown, /상세 표시 0건 \+ 범위 미확정 1건/)
   assert.deepEqual(movedToOpenQuestions, [{
     id: '04-3#1', ruleId: '04-3', title: '범위 미확정 지적',
     reason: '호출자를 diff 밖에서 확인해야 한다',
@@ -1523,6 +1526,10 @@ test('두 섹션 전문을 낸다 — golden', () => {
 
   assert.equal(render(candidates, verdicts, { high: 'rollout-shadow', low: 'rollout-shadow' }, vocab, SECTIONS, 'ran').markdown, [
     '## 상세 지적',
+    '',
+    '**지적 집계** — 후보 4건 = 상세 표시 4건 + 범위 미확정 0건 + 승인된 삭제 0건.',
+    '**높은 영향의 차단 후보** — 검증 유지 1건 · 반박 후 정책상 유지 0건 · 검증 판정 없음/대상 아님/꺼짐 0건. 유지 판정은 영향도를 재판정한 결과가 아니다.',
+    '건수는 지적 수다. 관련 지적은 같은 위치의 다른 주장일 수 있으며, 독립된 결함 수나 중복 제거 결과를 뜻하지 않는다.',
     '',
     '### 04 상태와 Effect',
     '',
@@ -2058,4 +2065,33 @@ test('--collect 출력을 그리면 맨 끝에 실행 ID를 적은 출처 줄을
   }
   // 출처 줄은 그린 섹션 뒤에 덧붙을 뿐 섹션은 그대로다
   assert.ok(collected.stdout.startsWith(withoutId.stdout.replace(/\n+$/, '')))
+})
+
+// 2026-10-15 한 실행이 `--workflow code-review-full`로 그렸다. catalog의 이름은 `full`이라 섹션이 될 모듈이 하나도
+// 없었고, 렌더러는 지적만 규칙 번호로 묶어 `### 06`처럼 이름 없이 그렸다 — 지적 없는 모듈은 섹션째 사라졌다.
+test('catalog에 없는 워크플로우 이름은 섹션을 만들지 않고 거부한다 — 유효한 이름을 보인다', () => {
+  const wrong = loadModuleSections(RULES, 'code-review-full', null)
+  assert.match(wrong.error, /code-review-full.*catalog에 없다/)
+  assert.match(wrong.error, /full/)
+  assert.ok(loadModuleSections(RULES, 'full', null).value.length > 0)
+})
+
+test('--dir·--run이면 기록의 워크플로우와 다른 --workflow를 거부한다', t => {
+  const dir = mkdtempSync(join(tmpdir(), 'render-workflow-'))
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const run = 'code-review-full-feat-x-2026-10-15'
+  const started = spawnSync(process.execPath, [join(ROOT, 'scripts', 'review-timeline.mjs'), '--dir', dir, '--run', run, '--phase', 'run.start', '--data',
+    JSON.stringify({ host: 'test', rules: 'r', version: 'x', branch: 'feat/x', changedFiles: 1, workflow: 'full', runId: 'r-1' })], { encoding: 'utf8' })
+  assert.equal(started.status, 0, started.stderr)
+  const input = join(dir, 'targets.json')
+  writeFileSync(input, JSON.stringify({ candidates: [ok()] }), 'utf8')
+  const render = workflow => spawnSync(process.execPath, [
+    SCRIPT, '--input', input, '--rules', RULES, '--phase-high', 'rollout-shadow', '--phase-low', 'rollout-shadow',
+    '--workflow', workflow, '--verification-state', 'disabled', '--dir', dir, '--run', run,
+  ], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+  const mismatch = render('default')
+  assert.equal(mismatch.status, 2)
+  assert.match(mismatch.stderr, /기록된 워크플로우는 full/)
+  assert.equal(mismatch.stdout, '')
+  assert.equal(render('full').status, 0)
 })
