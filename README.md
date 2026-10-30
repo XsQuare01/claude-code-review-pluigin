@@ -485,6 +485,19 @@ Reports show rebuttal evidence beside the original claim and count upheld, rejec
 
 Validation uses automated tests and replay of saved outputs. Actual model accuracy, false positives and cost have not been remeasured; this is a PATCH, not a claim of measured review-quality improvement.
 
+## Repositories with apps in other languages (2.27.0)
+
+A frontend and a Python backend moved into one repository (`apps/frontend`, `apps/backend`). A preflight dry run over one range of that repository listed 285 files to review; 94 were `.py`, and 46 of those were backend tests that the test-name rules (`__tests__`, `*.test.*`) did not catch. Every workflow would have sent them to reviewers that carry only React rules — producing findings that do not apply, or a clean report that reads as if the backend had been reviewed. The rules also looked for `package.json`, `tsconfig.json` and `src/` at the repository root, where a monorepo has none.
+
+- **Files the rules do not cover are split out as `검토 안 함` (not reviewed).** A file belongs to another language's app when the nearest manifest above it is one of `pyproject.toml`, `requirements.txt`, `go.mod`, `Cargo.toml`, `pom.xml`, `build.gradle`, `Gemfile`, `composer.json` and similar; a nearer `package.json` wins. Source files in those languages (`.py`, `.go`, `.rs`, `.java`, `.kt`, `.rb`, `.php`) are split out wherever they are. A manifest at the repository root does not mark an app — it often belongs to repository tooling, and treating it as one would drop `.github/`, `docs/` and `infra/`, which `16` and `18` review.
+- **They leave the review targets, not the diff.** Like tests, the changes stay in the diff as evidence: a backend that removes a response field can break a frontend line, and the finding sits on that frontend line.
+- **One rule for every workflow.** `/code-review-full` gets the split from preflight (`scope.json`: `outside`, `otherApps`, `packageRoots`; `scope.done`: `outside`, recorded as 0 when nothing was split out). The other six workflows call the new `scripts/review-scope.mjs` (`--merge-base` for a range, `--commit` for one commit, reading manifests from that commit's tree) instead of applying the test-name rules by hand.
+- **The report says what was not reviewed.** The full report's snapshot block draws `**검토 안 함 N개** — …` with the count per app, next to the review status. The other workflows copy the script's `line` into `리뷰 기준`.
+- **Nothing to review means no review.** When a change has files but none left to review — all tests, or all in another language — no reviewer is launched and no report is written; the scope is reported to the user instead. A backend-only PR in that repository (a dependency pin, two files) would otherwise have produced a clean report that reads as a backend review. `/code-review-full` stops in preflight before writing anything. A range with no changes at all is unchanged (C-4).
+- **Profiles are detected from the package folder.** The scope output lists the `package.json` folders of the reviewed files (`packageRoots`); `workflow-contract.md` C-3 now reads dependency, file and directory signals from that folder instead of the repository root.
+
+The backend is not reviewed by this plugin; this change makes that visible instead of implicit. Validation is automated tests plus a dry run of the scope split against the repository above. No review was run with the new instructions, so how reviewers follow the `검토 안 함` paths has not been measured.
+
 ## Applicability metadata
 
 `review-rules/catalog.json` records **when** a module applies — required profile (FSD, Tailwind, RSC, Electron, TanStack Query, server code, contract provider), minimum React version, which workflows load it, and which individual rules carry a narrower gate than their module. The Markdown modules stay canonical for **what** a rule says; the catalog never generates documentation and never restates rule text.
