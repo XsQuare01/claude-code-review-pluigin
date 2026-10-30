@@ -47,7 +47,7 @@ import { parseSnapshot } from './lib/review-snapshot.mjs'
 import { currentTarget, newRunId, repoIdentity, rulesDigest, runOutputs } from './lib/run-identity.mjs'
 import { runNameProblem } from './lib/run-name.mjs'
 import { writeTextAtomic } from './lib/atomic-write.mjs'
-import { scopeOf } from './lib/review-scope.mjs'
+import { manifestsAt, outsideSummary, scopeOf } from './lib/review-scope.mjs'
 import { readJsonFile } from './lib/read-text.mjs'
 import { DEFAULT_STALE_AFTER_SEC, parseDuration } from './lib/task-ledger.mjs'
 
@@ -237,8 +237,26 @@ const changed = (() => {
   }
 })()
 
-// 지적 대상으로 삼는 파일(C-5). 이름 규칙으로 빼는 테스트·mock 파일은 여기서 센다 — `scope.done`의 수다.
-const scope = scopeOf(changed)
+// 지적 대상으로 삼는 파일(C-5). 이름 규칙으로 빼는 테스트·mock 파일과 React 규칙이 다루지 않는 언어의 파일은
+// 여기서 센다 — `scope.done`의 수다. 앱 경계는 HEAD 트리의 매니페스트로 정한다.
+const scope = (() => {
+  try {
+    return scopeOf(changed, { manifests: manifestsAt(repo) })
+  } catch (error) {
+    die(`매니페스트 목록을 읽지 못했다: ${String(error.stderr || error.message).trim()}`)
+  }
+})()
+
+// 지적할 파일이 없으면 시작하지 않는다(C-5). 다른 언어 앱만 바꾼 PR(michelo.studio의 백엔드 핀 PR #66)에 리뷰어를
+// 띄우면 빈 범위에서 "지적 없음" 리포트가 나오고, 그 리포트는 백엔드를 검토한 것처럼 읽힌다. 아무것도 쓰기 전에 멈춘다.
+// 변경이 아예 없는 범위는 여기서 가르지 않는다 — C-4가 정하는 경우다.
+if (changed.length && !scope.files.length) {
+  die([
+    `리뷰 대상이 없다 — 변경 파일 ${changed.length}개가 전부 테스트·mock(${scope.excluded.length}개)이거나 검토 안 함(${scope.outside.length}개)이다(C-5).`,
+    ...(scope.outside.length ? [`검토 안 함: React 규칙이 다루지 않는 언어 — ${outsideSummary({ outside: scope.outside.length, otherApps: scope.otherApps })}`] : []),
+    '리뷰어를 띄우지 않고 리포트도 쓰지 않는다. 사용자에게 이 범위를 알리고 끝낸다 — 다른 언어 앱은 그 언어의 리뷰 도구로 따로 본다.',
+  ].join('\n'))
+}
 
 // base가 merge-base 뒤로 앞서 나가 같은 파일을 바꿨는지(C-6). 리뷰 diff에는 보이지 않지만, 도구는 base를 따라잡지
 // 않은 HEAD에서 돈다 — 실패가 이 변경이 아니라 따라잡지 않은 데서 올 수 있다. 어느 쪽인지는 합친 트리에서 다시 재야
@@ -355,9 +373,14 @@ const logged = (() => {
   try {
     writeTextAtomic(join(dir, '.timing', `${run}.scope.json`), `${JSON.stringify({
       schemaVersion: 1, runId: identity.runId, mergeBase, head: identity.head, files: scope.files, excluded: scope.excluded,
+      outside: scope.outside, otherApps: scope.otherApps, packageRoots: scope.packageRoots,
     }, null, 2)}\n`)
+    // 검토 안 함이 없어도 0을 남긴다 — 이 필드가 없는 기록은 가르지 않은 예전 실행이다
     execFileSync(process.execPath, [TIMELINE, '--dir', dir, '--run', run, '--phase', 'scope.done', '--data',
-      JSON.stringify({ files: scope.files.length, excluded: scope.excluded.length })], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+      JSON.stringify({
+        files: scope.files.length, excluded: scope.excluded.length, outside: scope.outside.length,
+        ...(scope.otherApps.length ? { otherApps: scope.otherApps } : {}),
+      })], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
   } catch (error) {
     return { ok: false, error: `run.start는 남겼지만 범위를 남기지 못했다 — ${String(error.stderr || error.message).trim()}` }
   }
@@ -386,6 +409,8 @@ const out = [
   `실행 ID       ${identity.runId}`,
   `변경 파일     ${changed.length}개`,
   `리뷰 파일     ${scope.files.length}개 (제외 ${scope.excluded.length}개 — 테스트·mock, C-5)${logged.ok && !logged.skipped ? ` · 목록 .timing/${run}.scope.json` : ''}`,
+  ...(scope.outside.length ? [`검토 안 함    ${scope.outside.length}개 — React 규칙이 다루지 않는 언어: ${outsideSummary({ outside: scope.outside.length, otherApps: scope.otherApps })}. 지적 대상이 아니고 리포트에 검토 안 함으로 남는다(C-5)`] : []),
+  ...(scope.packageRoots.length ? [`패키지 루트   ${scope.packageRoots.map(entry => `${entry.root}(${entry.files}개)`).join(', ')} — 프로필은 저장소 루트가 아니라 이 폴더에서 판정한다(C-3)`] : []),
   ...(dependencyFiles.length ? [`의존성 변경   ${dependencyFiles.join(', ')} — baseline은 그 트리에 그 트리의 의존성을 설치해 잰다. 지금 트리의 의존성을 같이 쓰면 baseline도 같은 실패를 내 "신규 0"으로 잘못 나온다(C-6)`] : []),
   ...(workflow === 'full' ? [`기존 구현 검색 예정 — 05를 뺀 모듈을 먼저 띄우고, 그동안 검색 계획을 써 review-reuse.mjs로 후보를 모은다. 05는 검색이 끝난 뒤 띄운다(C-6C)`] : []),
   `리뷰 에이전트  첫 디스패치 전에 작업 도구의 에이전트 목록에서 react-code-review-plugin:rule-module-reviewer를 찾는다. 없으면 리뷰하지 않고 review-tasks.mjs cancel --all --reason agent-unavailable로 멈춘다 — 직접 리뷰하거나 다른 에이전트로 대신하지 않는다(C-6)`,

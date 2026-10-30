@@ -297,14 +297,14 @@ const { timedOut, spawnError } = result
 const exit = !timedOut && typeof result.code === 'number' ? result.code : null
 const { stdout, stderr } = result
 
-// 실패한 자리를 가른다(C-6). 변경 목록은 preflight가 남긴 `scope.json`(리뷰 대상과 대상에서 뺀 파일)이다.
+// 실패한 자리를 가른다(C-6). 변경 목록은 preflight가 남긴 `scope.json`(리뷰 대상, 테스트·mock으로 뺀 파일, 검토 안 함)이다.
 let failures = null
 // 기존 구현 검색의 실패는 검색 스크립트가 reuse.done에 남긴다 — 그 오류 문장의 `경로:줄`은 도구가 실패한 자리가 아니다(C-6C)
 if (exit !== 0 && name !== REUSE_TOOL_NAME) {
   let changed = null
   try {
     const scope = readJsonFile(join(dir, '.timing', `${run}.scope.json`))
-    changed = [...(scope.files ?? []), ...(scope.excluded ?? []).map(entry => (typeof entry === 'string' ? entry : entry?.path)).filter(Boolean)]
+    changed = [...(scope.files ?? []), ...(scope.outside ?? []), ...(scope.excluded ?? []).map(entry => (typeof entry === 'string' ? entry : entry?.path)).filter(Boolean)]
   } catch {
     // 변경 목록이 없으면 추적 여부만 가른다
   }
