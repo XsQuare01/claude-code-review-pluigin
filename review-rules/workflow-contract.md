@@ -64,6 +64,7 @@ ls "$RULES_DIR"/[0-9]*.md
 - 각 모듈 문서 상단의 전제(FSD, Electron, Tailwind, RSC, SSR, React/TypeScript 버전 등)를 먼저 확인한다
 - `$RULES_DIR/catalog.json`에 모듈별 적용 조건이 기계 판독 가능한 형태로 정리돼 있다. 조건 판정에는 이 파일을 우선 참조하고, 판정 근거의 정본은 각 모듈 문서 본문이다
 - **profile 성립 여부는 `profiles[].detect`의 신호로 판정한다.** 신호는 `dependency`(package.json 의존성), `file`(글롭), `content`(문자열 — `in`이 탐색 범위), `dirs`(`min`개 이상 존재), `profile`(다른 profile이 함의함)이며 `any`/`all`로 결합된다. 프레임워크 이름에 대한 인상이 아니라 찾은 것에 근거한다
+- **신호는 리뷰 대상 파일이 속한 package.json 폴더(`packageRoots`)에서 읽는다 — 저장소 루트가 아니다.** `dependency`는 그 폴더의 package.json, `file`·`dirs`의 `under`·모듈의 `reads`(`tsconfig.json` 등)는 그 폴더 기준이다. 범위를 가르는 스크립트(C-5)가 그 폴더를 낸다. 모노레포는 루트에 package.json·tsconfig·`src/`가 없다 — 2026-10-28 점검한 michelo.studio는 프론트가 `apps/frontend/`에, FSD 레이어가 `apps/frontend/src/renderer/src/`에 있었다. 폴더가 여럿이면 폴더마다 판정하고 매칭 줄에 폴더를 적는다(`tailwind: apps/frontend — dependency tailwindcss 매칭`). 폴더가 없으면(package.json이 없는 저장소) 저장소 루트에서 읽는다
 - **매칭된 신호를 리포트에 한 줄로 남긴다** — 예: `tailwind: dependency tailwindcss 매칭`. 어떤 신호도 매칭되지 않았으면 그것을 `SKIPPED` 사유로 적는다. 무엇을 찾아봤는지 없는 SKIP은 검증할 수 없다
 - `detect`가 `"declared"`인 profile은 **추론하지 않는다.** 사용자 요청이나 프로젝트 설정에 선언이 없으면 성립하지 않는 것으로 본다. `hints`는 사용자에게 물어볼 근거일 뿐 판정 근거가 아니다
 - 전제가 성립하지 않는 모듈은 지적을 만들지 말고 `SKIPPED`와 사유를 리포트에 남긴다. **조용히 빼지 않는다** — 빠진 사실이 보이지 않으면 검토된 것으로 오인된다
@@ -114,6 +115,26 @@ node "$RULES_DIR/../scripts/review-base.mjs" --repo .   # 사용자가 base를 �
 **이름 규칙으로 가를 수 있는 것은 스크립트가 센다.** `/code-review-full`은 preflight가 위 이름 규칙(디렉터리 `__test__`·`__tests__`·`__mocks__`·`mock`·`mocks`·`mockData`, 파일 `*.test.*`·`*.spec.*`·`*.mock.*`)으로 변경 파일을 나눠 `.timing/<run>.scope.json`(`files`·`excluded`)에 두고 `scope.done`을 남긴다(`scripts/lib/review-scope.mjs`). 2026-10-12 실행은 손으로 세어 249개를 빼고도 `excluded: 0`을 적었다. 이름으로 드러나지 않는 fixture를 더 뺐으면 그 목록을 리포트에 적는다.
 
 **제외는 오케스트레이터가 적용한다.** producer 프롬프트에 담는 diff 본문(C-4)은 테스트·목 변경까지 그대로 두고, 변경 파일 목록과 지적 범위에서만 뺀다. producer가 받는 제외 경로 목록은 "지적하지 않을 경로"이지 "읽지 않을 경로"가 아니다 — diff에서 테스트 hunk를 지우면 producer는 영향 범위를 읽을 증거를 잃고, 그 사실을 알 길도 없다.
+
+### React 규칙이 다루지 않는 언어 — `검토 안 함`
+
+규칙은 React 애플리케이션 전용이다(`00-rule.md`). 한 저장소에 다른 언어의 앱이 함께 있으면(모노레포) 그 앱의 파일은 지적 대상이 아니다. 테스트·mock과 같은 방식으로 **지적 대상에서만 빼고 diff 본문에는 남긴다** — `16`(API 계약)·`20`(삭제 회귀)은 백엔드가 지운 응답 필드를 프론트가 아직 읽는지처럼, 다른 앱의 변경을 봐야 판단할 수 있다.
+
+**왜.** 2026-10-28 점검에서 michelo.studio(`apps/frontend` React·Electron, `apps/backend` Python)의 한 범위를 preflight에 넣었더니 리뷰 대상 285개 중 `.py`가 94개였고, 그중 46개는 이름 규칙에 걸리지 않는 백엔드 테스트였다. React 규칙을 Python에 대면 오탐이 되고, 지적이 없으면 백엔드까지 검토한 것으로 읽힌다 — C-3이 막는 "누락이 통과로 보이는" 상황이다.
+
+가르는 규칙(`scripts/lib/review-scope.mjs`):
+
+- 파일에서 위로 올라가며 **가장 가까운 매니페스트**를 찾는다. 다른 언어 앱의 매니페스트(`pyproject.toml`·`requirements.txt`·`go.mod`·`Cargo.toml`·`pom.xml`·`build.gradle`·`Gemfile`·`composer.json` 등)면 그 앱의 파일이다. `package.json`이 더 가깝거나 한 폴더에 둘 다 있으면 JS다
+- **저장소 루트의 매니페스트는 앱 경계로 쓰지 않는다.** 루트의 매니페스트는 저장소 도구의 것일 수 있다 — michelo.studio의 루트 `pyproject.toml`은 개발 실행기이고, 그것을 앱으로 보면 `.github/`·`docs/`·`infra/`까지 빠진다. 그 파일들은 `18`(config/env·배포 산출물)과 `16`(config/env key)의 대상이다
+- 매니페스트가 없어도 그 언어의 소스(`.py`·`.go`·`.rs`·`.java`·`.kt`·`.rb`·`.php`)는 어디에 있든 뺀다 — React 앱 안의 스크립트도 그렇다
+- **다른 언어 앱이 먼저다.** 그 앱 안의 테스트는 `excluded`가 아니라 `outside`다
+- 판정은 리뷰하는 트리의 매니페스트로 한다 — 범위 리뷰는 HEAD, 커밋 리뷰는 그 커밋의 트리
+
+**누가 가르는가.** `/code-review-full`은 preflight가 갈라 `.timing/<run>.scope.json`의 `outside`·`otherApps`·`packageRoots`에 두고 `scope.done`에 `outside` 수를 남긴다(뺀 것이 없어도 0을 남긴다). 나머지 워크플로우는 `scripts/review-scope.mjs`를 부른다 — 범위 리뷰는 `--merge-base $MERGE_BASE`, 커밋 리뷰는 `--commit <sha>`. 출력의 `files`가 `{CHANGED_FILES}`이고, `line`을 `리뷰 기준`에 옮긴다. 다시 세지 않는다.
+
+**지적할 파일이 없으면 리뷰하지 않는다.** 변경이 있는데 `files`가 비었으면(전부 테스트·mock이거나 검토 안 함) producer를 띄우지 않고 리포트도 쓰지 않는다. 범위 줄을 사용자에게 알리고 끝낸다. 빈 범위로 띄운 리뷰는 "지적 없음"을 내고, 다른 언어 앱만 바꾼 PR(michelo.studio의 백엔드 핀 PR #66)에서 그 리포트는 백엔드를 검토한 것처럼 읽힌다. `/code-review-full`은 preflight가 아무것도 쓰기 전에 멈춘다. 변경이 아예 없는 범위는 C-4가 정한다.
+
+**조용히 빼지 않는다.** 뺀 수와 앱을 리포트에 `검토 안 함`으로 적는다. `/code-review-full`은 스냅숏 블록이 그린다(`**검토 안 함 N개** — …`). 나머지는 `line`을 `리뷰 기준`에 그대로 옮긴다 — 모든 워크플로우의 골격에 있는 섹션이다. `검토 안 함`은 지적 없음이 아니다 — 판정에 "검토한 범위"를 적을 때 이 파일들을 넣지 않는다. 다른 언어 앱을 리뷰하려면 그 언어의 리뷰 도구를 따로 쓴다.
 
 ## C-6. 실행 안전
 
@@ -1460,7 +1481,7 @@ UTF-16 파일도 읽는다 — PowerShell 5.1의 `Set-Content -Encoding UTF8`은
 |---|---|---|
 | `run.start` | 가장 먼저 | `host`, `rules`(해석된 RULES_DIR), `version`, `branch`, `changedFiles` · 무엇을 리뷰하는지(C-10): `runId`, `base`, `head`, `worktree`, `dirtyFiles`, `repo`, `repoRoot`, `rulesDigest` · 선택 패스를 켰는지: `correctness`(`on`/`off`, 선택 패스가 있는 워크플로우만) · 한도(C-12): `maxTasks`, `maxDurationSec`(준 것만), `staleAfterSec` · (새 실행으로 이어 받았으면) `continues` · (이전 리뷰와 비교하면, C-13) `previousSnapshot`, `previousRunId`, `previousSha256` · base 앞섬(C-6): `baseAhead`(merge-base 뒤 base의 커밋 수), (같은 파일을 바꿨으면) `baseOverlapCount`, `baseOverlap`(20개까지) · (의존성 매니페스트를 바꿨으면) `dependencyFiles` · `baseHead`(base 끝 SHA — 시작할 때 한 번 해석한다. 없으면 "base 끝 SHA 미기록") · (full이면, C-6C) `reuseSearch`(`planned`) · (사용자가 다른 언어를 정했으면) `language` — preflight가 쓴다 |
 | `run.resume` | 멈춘 실행을 이어 갈 때 (`review-tasks.mjs resume`이 쓴다) | 새 구간의 `maxTasks`·`maxDurationSec`·`staleAfterSec`, 다시 잰 `head`·`worktree` |
-| `scope.done` | 범위 확정(C-4) — `/code-review-full`은 **preflight가 남긴다**(C-5의 이름 규칙으로 센 수) | `files`, `excluded` |
+| `scope.done` | 범위 확정(C-4) — `/code-review-full`은 **preflight가 남긴다**(C-5의 이름 규칙으로 센 수) | `files`, `excluded` · React 규칙이 다루지 않는 언어(C-5): `outside`(0이어도 남긴다 — 없으면 가르지 않은 예전 실행), (다른 언어 앱이 있으면) `otherApps`(`{ root, manifest, files }`) |
 | `modules.planned` | 적용 모듈 확정(C-3) | `candidates`, `applied`(적용한 **번호 모듈** 수 — Props·수학·예외·정확성 패스는 세지 않는다. 후보 수를 넘으면 스크립트가 거부한다. 스냅숏의 `적용 N개`는 패스 전부를 센 수라 다르다) · `skipped`, `unknown`(중첩, `--data-file`) |
 | `dispatch.start` | **첫 sub-agent를 실제로 띄운 직후** (full은 작업 대장이 첫 시도를 내줄 때 쓴다) | `modules`, `inflight` |
 | `module.start` | **모듈 하나를 띄운 직후** (full은 작업 대장이 띄우기 **전에** 쓴다 — C-12) | `module`, `attempt`, `taskId`, (재시도면) `retryOf` · 대장이 쓰면 `claim` |

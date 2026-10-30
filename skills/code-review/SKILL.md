@@ -39,7 +39,7 @@ git diff $MERGE_BASE..HEAD
 
 **diff는 여기서 오케스트레이터가 한 번만 수집한다.** 두 번째 명령의 출력 전체가 Step 4 producer 프롬프트의 `{DIFF}`가 된다. producer는 git을 돌리지 않는다 — 셸이 없는 에이전트로 띄우기 때문이다(Step 4, C-6). 삭제된 파일의 옛 내용도 이 diff의 `-` 줄에 들어 있어 따로 꺼낼 것이 없다. `/code-review-full`의 3a(3)과 같은 방식이다.
 
-제외 경로는 C-5를 따른다. **범위와 제외는 오케스트레이터가 정한다.** 제외 경로는 `{CHANGED_FILES}`와 지적 범위에서만 빼고, `{DIFF}`에는 테스트 파일 변경까지 그대로 담는다 — 테스트는 지적 대상에서 빠질 뿐 영향 범위를 읽는 증거에서 빠지지 않는다(C-5, `00-rule.md` 00-3).
+제외 경로는 C-5를 따른다. **범위는 스크립트로 가른다** — `node "$RULES_DIR/../scripts/review-scope.mjs" --repo . --merge-base $MERGE_BASE`의 `files`가 `{CHANGED_FILES}`, `excluded`가 테스트·mock, `outside`가 React 규칙이 다루지 않는 언어(검토 안 함)다. 다시 세지 않는다. `line`은 `리뷰 기준`에 그대로 옮기고(검토 안 함이 지적 없음으로 읽히지 않게), `packageRoots`는 프로필을 판정할 폴더다(C-3). 변경이 있는데 `files`가 비면(전부 테스트·mock이거나 검토 안 함) 리뷰어를 띄우지 않고 리포트도 쓰지 않는다 — `line`을 사용자에게 알리고 끝낸다(C-5). 제외·검토 안 함은 `{CHANGED_FILES}`와 지적 범위에서만 빼고, `{DIFF}`에는 그 변경까지 그대로 담는다 — 지적 대상에서 빠질 뿐 영향 범위를 읽는 증거에서 빠지지 않는다(C-5, `00-rule.md` 00-3).
 
 ### Step 2: Lint 확인 (read-only)
 
@@ -112,9 +112,10 @@ task(
 - 대상: HEAD
 - 변경 파일: {CHANGED_FILES}
 - 제외 파일(지적하지 않을 경로): `__test__/**`, `__tests__/**`, `*.test.*`, `*.spec.*`, `__mocks__/**`, `mock/**`, `mocks/**`, `*.mock.*`, 테스트/목 전용 fixture/mock data
+- 검토 안 함(지적하지 않을 경로 — React 규칙이 다루지 않는 언어): {OUTSIDE_FILES — `review-scope.mjs`의 `outside`. 다른 언어 앱(`otherApps`) 아래 파일은 `<root>/**`로 줄여 적는다. 없으면 `없음`}
 
 ## Diff
-{DIFF — Step 1에서 오케스트레이터가 수집한 git diff {MERGE_BASE}..HEAD 본문 전체. 테스트 파일 변경 포함}
+{DIFF — Step 1에서 오케스트레이터가 수집한 git diff {MERGE_BASE}..HEAD 본문 전체. 테스트·검토 안 함 파일 변경 포함}
 
 ## 리뷰 수행 방법
 1. 위 `## Diff`가 리뷰 대상의 전부입니다. git을 직접 실행하지 마세요 — diff는 오케스트레이터가 이미 수집했고, 삭제된 파일의 옛 내용도 그 diff의 `-` 줄에 있습니다
@@ -125,7 +126,7 @@ task(
 6. 위반이 없는 규칙은 출력하지 마세요
 7. 동작 여부만 보지 말고, 문제 정의·의도·선택 근거·장기 변경 비용까지 함께 검토하세요
 8. 파일 전체를 읽더라도 **지적은 diff에 포함된 변경 라인** 또는 그 변경 때문에 직접 깨진 **인접 라인/구조**로 제한하세요. diff가 삭제하거나 바꾼 export·함수·타입·상수·prop을 diff 밖 코드가 아직 참조하면, 그 참조는 이 변경 때문에 깨진 구조입니다(20-3, 아래 금지 사항의 예외)
-9. 제외 파일의 diff는 지적하지 말고, production 변경의 영향 범위를 읽는 증거로만 쓰세요
+9. 제외 파일과 검토 안 함 파일의 diff는 지적하지 말고, production 변경의 영향 범위를 읽는 증거로만 쓰세요 — 다른 언어 앱의 변경 때문에 React 코드가 깨지면 위치는 React 쪽 줄입니다
 
 ## 공통 리뷰 규칙
 {COMMON_RULES_CONTENT — 00-rule.md 전체 내용}
@@ -215,6 +216,7 @@ echo '{"locations": <REVIEW_LOCATIONS 블록 내용>}'   | node "$RULES_DIR/../s
 
 > **기준**: {MERGE_BASE} | **대상**: HEAD | **리뷰 시각**: {TIMESTAMP}
 > **변경 파일**: {N}개 | **리뷰 모듈**: {M}개
+> **범위**: {`review-scope.mjs`의 `line` 그대로 — 예: 리뷰 대상 110개 · 테스트·mock 제외 25개 · 검토 안 함 96개 — React 규칙이 다루지 않는 언어: apps/backend(pyproject.toml) 94개 · 그 밖의 소스 2개}
 > **모듈 필터**: {선택된 모듈 목록 — `--module`이 없으면 이 줄을 생략}
 
 ## 판정
@@ -280,5 +282,6 @@ echo '{"locations": <REVIEW_LOCATIONS 블록 내용>}'   | node "$RULES_DIR/../s
 - 상세/exhaustive 모듈별 multi-pass coverage가 필요하면 `/code-review-full`을 사용한다
 - diff에 포함되지 않은 기존 코드는 리뷰 대상이 아니다. 단 diff가 삭제·변경한 심볼을 아직 참조하는 호출부는 그 변경의 결함 근거로 인용할 수 있다(20-3, targeted reference check)
 - producer는 diff를 받아 읽기만 한다. diff 수집과 lint는 오케스트레이터가 하고, producer는 쓰기 도구와 셸이 없는 `rule-module-reviewer`로 띄운다(C-6)
+- 모노레포의 다른 언어 앱(`apps/backend` 같은 Python 앱)은 검토하지 않는다 — `검토 안 함`으로 리포트에 남는다(C-5)
 - 리뷰 규칙 파일 추가/삭제만으로 리뷰 범위를 조절할 수 있다
 - 나머지 실행 규칙(제외 경로, 빈 diff, read-only, 리포트 저장)은 `workflow-contract.md`를 따른다

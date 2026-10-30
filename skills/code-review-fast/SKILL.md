@@ -35,7 +35,7 @@ description: Use when the user wants a faster, shorter code review that highligh
 
 ### Step 1: Diff 범위 결정
 
-범위 결정은 `workflow-contract.md` C-4를 따른다. 기준은 스크립트로 정한다 — `node "$RULES_DIR/../scripts/review-base.mjs" --repo .`(사용자가 범위를 정했으면 `--base <그 base>`)가 낸 `mergeBase`를 `$MERGE_BASE`로, `line`을 리포트의 기준 줄로 쓴다. 지금 브랜치에 열린 PR이 있으면 그 PR의 base가 기준이다 — 다른 PR 위에 쌓은 PR이면 아래 PR의 브랜치이고, 그 위에 더한 변경만 리뷰한다. 종료 코드 2면(PR의 base를 이 저장소에서 찾을 수 없다) main으로 물러서지 않고 `git fetch origin <base>` 뒤 다시 돌리거나 사용자에게 범위를 묻는다. 결정된 범위로 `git diff --stat $MERGE_BASE..HEAD`와 `git diff $MERGE_BASE..HEAD`를 확인한다. 제외 경로는 C-5를 따른다.
+범위 결정은 `workflow-contract.md` C-4를 따른다. 기준은 스크립트로 정한다 — `node "$RULES_DIR/../scripts/review-base.mjs" --repo .`(사용자가 범위를 정했으면 `--base <그 base>`)가 낸 `mergeBase`를 `$MERGE_BASE`로, `line`을 리포트의 기준 줄로 쓴다. 지금 브랜치에 열린 PR이 있으면 그 PR의 base가 기준이다 — 다른 PR 위에 쌓은 PR이면 아래 PR의 브랜치이고, 그 위에 더한 변경만 리뷰한다. 종료 코드 2면(PR의 base를 이 저장소에서 찾을 수 없다) main으로 물러서지 않고 `git fetch origin <base>` 뒤 다시 돌리거나 사용자에게 범위를 묻는다. 결정된 범위로 `git diff --stat $MERGE_BASE..HEAD`와 `git diff $MERGE_BASE..HEAD`를 확인한다. 제외 경로는 C-5를 따른다 — 범위는 `node "$RULES_DIR/../scripts/review-scope.mjs" --repo . --merge-base $MERGE_BASE`로 가른다. 출력의 `files`가 `{CHANGED_FILES}`, `outside`(React 규칙이 다루지 않는 언어)는 검토 안 함이다. 다시 세지 않고, `line`을 `리뷰 기준`에 그대로 옮긴다(C-5). 변경이 있는데 `files`가 비면(전부 테스트·mock이거나 검토 안 함) 리뷰어를 띄우지 않고 리포트도 쓰지 않는다 — `line`을 사용자에게 알리고 끝낸다(C-5).
 
 **diff는 여기서 오케스트레이터가 한 번만 수집한다.** `git diff $MERGE_BASE..HEAD` 출력 전체가 Step 3 producer 프롬프트의 `{DIFF}`가 된다. producer는 git을 돌리지 않는다 — 셸이 없는 에이전트로 띄우기 때문이다(Step 3, C-6). 삭제된 파일의 옛 내용도 이 diff의 `-` 줄에 들어 있다. 제외 경로는 `{CHANGED_FILES}`와 지적 범위에서만 빼고, `{DIFF}`에는 테스트 파일 변경까지 그대로 담는다 — 테스트는 지적 대상에서 빠질 뿐 증거에서 빠지지 않는다(C-5).
 
@@ -66,9 +66,10 @@ task(
 - 대상: HEAD
 - 변경 파일: {CHANGED_FILES}
 - 제외 파일(지적하지 않을 경로): `__test__/**`, `__tests__/**`, `*.test.*`, `*.spec.*`, `__mocks__/**`, `mock/**`, `mocks/**`, `*.mock.*`, 테스트/목 전용 fixture/mock data
+- 검토 안 함(지적하지 않을 경로 — React 규칙이 다루지 않는 언어): {OUTSIDE_FILES — `review-scope.mjs`의 `outside`. 다른 언어 앱(`otherApps`) 아래 파일은 `<root>/**`로 줄여 적는다. 없으면 `없음`}
 
 ## Diff
-{DIFF — Step 1에서 오케스트레이터가 수집한 git diff {MERGE_BASE}..HEAD 본문 전체. 테스트 파일 변경 포함}
+{DIFF — Step 1에서 오케스트레이터가 수집한 git diff {MERGE_BASE}..HEAD 본문 전체. 테스트·검토 안 함 파일 변경 포함}
 
 ## 리뷰 수행 방법
 1. 위 `## Diff`가 리뷰 대상의 전부입니다. git을 직접 실행하지 마세요 — diff는 오케스트레이터가 이미 수집했고, 삭제된 파일의 옛 내용도 그 diff의 `-` 줄에 있습니다
@@ -92,7 +93,7 @@ task(
 - 이슈가 없는 파일은 출력에서 제외
 - diff에 포함되지 않은 기존 코드는 지적 금지
   - 예외: diff가 삭제·변경한 export·함수·타입·상수·prop을 diff 밖 코드가 아직 참조하면, 그 참조 위치를 삭제 회귀 지적의 근거나 위치로 인용할 수 있다. 원인은 diff 안의 변경이다. 확인은 삭제·변경된 심볼 이름을 Grep으로 찾는 targeted reference check로 한정하고, 무엇을 어디까지 찾았는지 적는다
-- 제외 파일은 지적하지 않는다 — 영향 범위를 읽는 증거로만 쓴다
+- 제외 파일과 검토 안 함 파일은 지적하지 않는다 — 영향 범위를 읽는 증거로만 쓴다
 - 파일 전체를 읽었다는 이유로 리뷰 범위를 파일 전체로 넓히지 말 것
 - 추측 금지 — 실제 코드를 읽고 확인
 - 가능하면 각 이슈는 **문제 → 현재 선택 → 왜 부족한지**가 드러나게 쓴다
