@@ -10,6 +10,7 @@
 
 import { readFileSync, readdirSync, existsSync } from 'node:fs'
 import { checkProducerWriteAccess, checkStopsWithoutReviewer, parseAgentTools } from './lib/producer-tools.mjs'
+import { checkFastReview } from './lib/fast-review-contract.mjs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { validateEffectiveCommonContext } from './lib/effective-common-context-validator.mjs'
@@ -419,6 +420,18 @@ function conditionKeywords(qualifier) {
   const latin = qualifier.match(/[A-Za-z][A-Za-z0-9/+.]{2,}/g) ?? []
   const korean = (qualifier.match(/[가-힣]{2,}/g) ?? []).filter(w => !CONDITION_STOPWORDS.has(w))
   return [...latin, ...korean]
+}
+
+// ------------------------------------------------------ fast review contract
+//
+// 판정은 `lib/fast-review-contract.mjs`가 한다 — 리뷰어가 등급 근거·정확성 기준·변경 의도를 받는지,
+// 파일당 개수 상한이나 승인 문구가 되돌아오지 않았는지, 리포트가 도구 결과와 범위 줄을 싣는지.
+
+for (const problem of checkFastReview({
+  skill: read(join(SKILLS, 'code-review-fast', 'SKILL.md')),
+  rules: rulesFile('fast.md'),
+})) {
+  failCode('fast-review', problem.code, problem.message)
 }
 
 // ------------------------------------------------------------- fast digest
