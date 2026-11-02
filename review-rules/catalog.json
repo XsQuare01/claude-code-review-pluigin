@@ -678,7 +678,8 @@
       "title": "의도 대비 정확성",
       "role": "specialist",
       "workflows": [
-        "full"
+        "full",
+        "fast"
       ],
       "requires": [],
       "idFormat": "CR-{n}",
@@ -689,7 +690,7 @@
         "full"
       ],
       "ruleClauses": false,
-      "notes": "optIn: full runs this pass only when preflight records correctness=on (--correctness on). ruleClauses false: CR-{n} numbers findings within the pass and names no clause in correctness.md, so the verifier gets the VERIFICATION_BASIS block instead of a clause."
+      "notes": "optIn: full runs this pass only when preflight records correctness=on (--correctness on). fast always hands this document to its single reviewer next to fast.md and 00-rule.md, so it is not optIn there. ruleClauses false: CR-{n} numbers findings within the pass and names no clause in correctness.md, so the verifier gets the VERIFICATION_BASIS block instead of a clause."
     }
   ]
 }

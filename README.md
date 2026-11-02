@@ -172,7 +172,7 @@ A version-gated rule that fires on a project that cannot use the API is a false 
 | Command | Scope |
 |---------|-------|
 | `/code-review` | Bounded default review — one consolidated pass over all numbered modules |
-| `/code-review-fast` | Compressed single-agent review, at most one issue per file |
+| `/code-review-fast` | Compressed single-agent review that reports only high-impact defects — rule violations and intent mismatches alike |
 | `/code-review-commit` | Same modules, scoped to a single commit patch |
 | `/code-review-full` | Exhaustive multi-pass: general (per-module) + props + math + exception, plus correctness with `--correctness on` |
 | `/code-review-props` | Props drilling, handler tunneling, argument passing |
@@ -216,7 +216,7 @@ Numbered modules (`review-rules/[0-9]*.md`) are loaded by the general review pas
 
 Non-numbered files are excluded from the automatic scan:
 
-- `fast.md` — compressed ruleset for `/code-review-fast`
+- `fast.md` — compressed ruleset for `/code-review-fast` (its reviewer also gets `00-rule.md` and `correctness.md`)
 - `props.md` — `P-x` rules for `/code-review-props`
 - `math.md` — `A-x` / `C-x` rules for `/code-review-math`
 - `exception.md` — `EX-x` rules for `/code-review-exception`
@@ -498,6 +498,25 @@ A frontend and a Python backend moved into one repository (`apps/frontend`, `app
 
 The backend is not reviewed by this plugin; this change makes that visible instead of implicit. Validation is automated tests plus a dry run of the scope split against the repository above. No review was run with the new instructions, so how reviewers follow the `검토 안 함` paths has not been measured.
 
+## A fast review that finds the defects that matter (2.28.0)
+
+`/code-review-fast` had stopped being a useful review. Reading its skill and rule digest end to end showed four structural causes, none of which a shorter rule list would fix:
+
+- **No basis for severity.** The reviewer received `fast.md` alone. The digest says severity comes from the impact × confidence derivation, but that derivation lives in `00-rule.md`, which fast never passed on. The reviewer fell back to the emoji printed beside each rule, so an ambiguous variable name, a 21-line function or a magic number came out 🔴 next to an authorization bypass.
+- **One finding per file.** A second independent defect in the same file was dropped by design.
+- **No bug-finding question.** The pass matched rules and never asked whether the change does what it intends. A wrong condition, an inverted branch or a mismapped field has no rule to land in, so it went unreported.
+- **Lint run, then discarded.** The skill made the review wait for lint, but the result reached neither the reviewer nor the report. A run with no findings was then worded as approval.
+
+What changed:
+
+- **The reviewer gets `fast.md`, `00-rule.md` and `correctness.md`.** Severity follows the same two-axis derivation as every other workflow, and the rule emoji are calibration hints again, not grades.
+- **Only high-impact findings, all of them.** Findings that name one of the five closed high-impact outcomes are reported without a per-file cap; low-impact findings are omitted rather than used to fill space. Suspected but unconfirmed high-impact issues go to `확인 필요`. Each row shows `영향 · 확신`, so the grade can be checked from the report.
+- **Intent is part of the pass.** The orchestrator collects the PR title and description — or the user's stated goal, or commit messages marked as inferred intent — and the reviewer follows changed behavior through its normal, failure, cancel, retry and reordering paths, reporting mismatches as `CR-{n}`.
+- **No tools by default, and the report says so.** Lint, typecheck and test no longer run; `도구 실행 결과` states that they did not. When the user asks for them, they run without fix flags in the package folder (`packageRoots`), since a monorepo root has no `package.json`.
+- **The verdict states what was not reviewed.** No approval wording; the verdict lists what fast skips — low-impact findings, tools, the specialist passes, cross-verification, `검토 안 함` files and changes the reviewer could not follow. The report follows the C-7 skeleton, including the `> **범위**:` line that 2.27.0 told fast to write but its template had no place for.
+
+`validate-rules.mjs` now runs a `fast-review` check (`scripts/lib/fast-review-contract.mjs`) that fails if any of the four causes returns: a reviewer prompt without `00-rule.md`, `correctness.md` or the intent slot, a per-file cap, approval wording, or a report template without `도구 실행 결과` and the scope line. This is MINOR: rule IDs and past reports keep their meaning. No review was run with the new instructions; detection rate, false positives and latency have not been measured.
+
 ## Applicability metadata
 
 `review-rules/catalog.json` records **when** a module applies — required profile (FSD, Tailwind, RSC, Electron, TanStack Query, server code, contract provider), minimum React version, which workflows load it, and which individual rules carry a narrower gate than their module. The Markdown modules stay canonical for **what** a rule says; the catalog never generates documentation and never restates rule text.
@@ -625,6 +644,7 @@ It checks the properties this repo promises but cannot hold by hand:
 | `catalog` | a module scheduled out of the normal fan-out in `catalog.json` without the matching declaration in C-2, or without the workflow's own skill excluding it — either gap makes the module run twice or count as missing |
 | `fixtures` | two workflow-contract scenarios sharing an id, which makes a regression impossible to attribute |
 | `fast-sync` | a missing digest section, a conditional rule whose applicability, exception, or typical impact calibration was lost in compression, a stale module range |
+| `fast-review` | a `/code-review-fast` reviewer prompt that drops `00-rule.md`, `correctness.md` or the change intent, a per-file finding cap, approval wording in the verdict, or a report template without `도구 실행 결과` and the scope line |
 | `hardcoded-path` | `~/.claude/review-rules` re-introduced into a skill instead of using the resolution order |
 | `catalog` | a module with no catalog entry, an entry pointing at a missing file, an undefined profile, a profile with no detection signal, a mistyped or incomplete signal, a profile reference cycle, a profile no module requires, workflow membership that disagrees with the module set a skill declares it loads |
 | `manifest` | missing manifest fields, plugin/marketplace disagreement, a second `version` string anywhere in `marketplace.json`, a packaged directory that is absent, skill frontmatter without name or description |
