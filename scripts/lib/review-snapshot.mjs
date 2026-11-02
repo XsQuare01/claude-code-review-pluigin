@@ -2,6 +2,7 @@ import * as nodeFs from 'node:fs'
 
 import { writeTextAtomic } from './atomic-write.mjs'
 import { REUSE_STATUSES, lastReuseModuleStart, reuseState, reuseStateBefore } from './reuse-state.mjs'
+import { outsideSummary } from './review-scope.mjs'
 
 import { codeSpan, dispositionOf, escapeProse } from '../render-findings.mjs'
 import { COMPARISONS, METHODS, OUTCOMES } from './evidence.mjs'
@@ -393,6 +394,12 @@ export function buildSnapshot({ name, events, catalog, routed, verdicts, verific
   const comparison = routed.previous ? comparisonOf(routed.previous, findings, rechecks, start.runId) : null
   const reuse = reuseSummaryOf(events, { context: reuseContext, routedReuse: routed.counts?.reuse, now })
 
+  // React 규칙이 다루지 않는 언어로 뺀 파일(C-5). preflight가 `scope.done`에 센 실행에만 있다 — 0이면 싣지 않는다
+  const scopeDone = events.findLast(event => event?.phase === 'scope.done')
+  const outside = count(scopeDone?.outside) && scopeDone.outside > 0
+    ? { files: scopeDone.outside, otherApps: Array.isArray(scopeDone.otherApps) ? scopeDone.otherApps : [] }
+    : null
+
   const recorded = { head: start.head, worktree: start.worktree, rulesDigest: start.rulesDigest }
   const drift = DRIFT_FIELDS
     .filter(field => current?.[field] !== undefined && current[field] !== recorded[field])
@@ -430,6 +437,7 @@ export function buildSnapshot({ name, events, catalog, routed, verdicts, verific
       // base가 merge-base 뒤로 앞서 나간 정도(C-6). preflight가 잰 실행에만 있다 — 없는 값을 0으로 짓지 않는다.
       ...(count(start.baseAhead) ? { baseAhead: start.baseAhead } : {}),
       ...(count(start.baseOverlapCount) && Array.isArray(start.baseOverlap) ? { baseOverlapCount: start.baseOverlapCount, baseOverlap: start.baseOverlap } : {}),
+      ...(outside ? { outside } : {}),
     },
     drift,
     status: statusOf(counts),
@@ -486,6 +494,15 @@ export function snapshotProblems(snapshot) {
     else if ('baseOverlap' in target) {
       if (!Array.isArray(target.baseOverlap) || !target.baseOverlap.every(nonEmpty)) problems.push('target.baseOverlap이 경로 배열이 아니다')
       else if (!count(target.baseOverlapCount) || target.baseOverlapCount < target.baseOverlap.length) problems.push('target.baseOverlapCount가 baseOverlap의 길이보다 작다')
+    }
+    if ('outside' in target) {
+      const { files, otherApps } = isObject(target.outside) ? target.outside : {}
+      if (!count(files) || files === 0) problems.push('target.outside.files가 1 이상의 정수가 아니다 — 뺀 것이 없으면 필드를 두지 않는다')
+      if (!Array.isArray(otherApps) || !otherApps.every(app => isObject(app) && nonEmpty(app.root) && nonEmpty(app.manifest) && count(app.files))) {
+        problems.push('target.outside.otherApps가 { root, manifest, files }의 배열이 아니다')
+      } else if (count(files) && otherApps.reduce((sum, app) => sum + app.files, 0) > files) {
+        problems.push('target.outside.otherApps의 파일 수 합이 target.outside.files보다 많다')
+      }
     }
   }
 
@@ -755,6 +772,10 @@ export function renderSnapshotMarkdown(snapshot) {
   const { target, run } = snapshot
   const worktree = target.worktree === 'clean' ? 'clean' : `커밋하지 않은 변경 ${target.dirtyFiles}개 (${codeSpan(target.worktree.slice(0, 19))}…)`
   lines.push('', `검토 대상: HEAD ${codeSpan(short(target.head))} · 작업 트리 ${worktree} · base ${codeSpan(target.base)} (${'baseHead' in target ? `끝 ${codeSpan(short(target.baseHead))}` : '끝 SHA 미기록'} · merge-base ${codeSpan(short(target.mergeBase))}) · 실행 ID ${codeSpan(run.runId)}`)
+  // 뺀 범위는 "검토 상태: 완료" 옆에 있어야 한다 — 없으면 백엔드까지 검토한 것으로 읽힌다(C-5)
+  if (target.outside) {
+    lines.push('', `**검토 안 함 ${target.outside.files}개** — React 규칙이 다루지 않는 언어의 파일이라 지적 대상에서 뺐다: ${outsideSummary({ outside: target.outside.files, otherApps: target.outside.otherApps }, codeSpan)}. 지적 없음이 아니다 — 이 실행은 이 파일들을 검토하지 않았다(C-5).`)
+  }
   // base가 앞서 나가 같은 파일을 바꿨으면 도구 결과를 읽는 법이 달라진다(C-6). 리뷰 diff에는 보이지 않는 사실이라 여기서 적는다.
   if (target.baseAhead > 0 && target.baseOverlapCount > 0) {
     const shown = target.baseOverlap.slice(0, 5).map(codeSpan).join(', ')

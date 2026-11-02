@@ -447,11 +447,40 @@ test('preflight가 C-5의 이름 규칙으로 범위를 세어 scope.done과 목
   assert.match(out.stdout, /리뷰 파일 {5}2개 \(제외 5개 — 테스트·mock, C-5\)/)
   const [start, scope] = linesOf(dir)
   assert.deepEqual([start.phase, start.changedFiles], ['run.start', 7])
-  assert.deepEqual([scope.phase, scope.files, scope.excluded], ['scope.done', 2, 5])
+  // 검토 안 함이 없어도 0을 남긴다 — 없는 필드는 "세지 않았다"로 읽힌다(C-9)
+  assert.deepEqual([scope.phase, scope.files, scope.excluded, scope.outside], ['scope.done', 2, 5, 0])
+  assert.doesNotMatch(out.stdout, /검토 안 함/)
   const list = JSON.parse(readFileSync(join(dir, '.timing', `${RUN}.scope.json`), 'utf8'))
   assert.deepEqual(list.files.sort(), ['src/app.ts', 'src/mockery.ts'])
   assert.equal(list.excluded.length, 5)
   assert.equal(list.runId, start.runId)
+})
+
+test('모노레포에서 React 규칙이 다루지 않는 언어의 파일을 검토 안 함으로 가르고 패키지 루트를 알린다', t => {
+  // 2026-10-28 점검: michelo.studio의 한 범위에서 리뷰 대상 285개 중 `.py`가 94개였다(46개는 백엔드 테스트)
+  const repo = scopeRepo(t, [
+    'pyproject.toml',
+    'apps/frontend/package.json',
+    'apps/frontend/src/app.tsx',
+    'apps/backend/pyproject.toml',
+    'apps/backend/api/routes.py',
+    'apps/backend/tests/test_routes.py',
+    'manuals/export.py',
+  ])
+  const dir = freshDir(t)
+  const out = preflightAt(repo, dir, RUN)
+  assert.equal(out.status, 0, out.stderr)
+  assert.match(out.stdout, /리뷰 파일 {5}3개 \(제외 0개 — 테스트·mock, C-5\)/)
+  assert.match(out.stdout, /검토 안 함 {4}4개 — React 규칙이 다루지 않는 언어: apps\/backend\(pyproject\.toml\) 3개 · 그 밖의 소스 1개\. 지적 대상이 아니고 리포트에 검토 안 함으로 남는다\(C-5\)/)
+  // 루트에는 package.json이 없다 — 루트의 pyproject.toml은 리뷰 대상이지만 어느 패키지에도 속하지 않는다
+  assert.match(out.stdout, /패키지 루트 {3}apps\/frontend\(2개\) — 프로필은 저장소 루트가 아니라 이 폴더에서 판정한다\(C-3\)/)
+  const scope = linesOf(dir).find(line => line.phase === 'scope.done')
+  assert.deepEqual([scope.files, scope.excluded, scope.outside, scope.otherApps], [3, 0, 4, [{ root: 'apps/backend', manifest: 'pyproject.toml', files: 3 }]])
+  const list = JSON.parse(readFileSync(join(dir, '.timing', `${RUN}.scope.json`), 'utf8'))
+  assert.deepEqual(list.files.sort(), ['apps/frontend/package.json', 'apps/frontend/src/app.tsx', 'pyproject.toml'])
+  assert.deepEqual(list.outside.sort(), ['apps/backend/api/routes.py', 'apps/backend/pyproject.toml', 'apps/backend/tests/test_routes.py', 'manuals/export.py'])
+  assert.deepEqual(list.packageRoots, [{ root: 'apps/frontend', files: 2 }])
+  assert.deepEqual(list.otherApps, [{ root: 'apps/backend', manifest: 'pyproject.toml', files: 3 }])
 })
 
 test('git이 인용해 내는 이름(한글·공백)도 실제 경로로 남기고 이름 규칙을 그 경로에 적용한다', t => {
@@ -466,6 +495,20 @@ test('git이 인용해 내는 이름(한글·공백)도 실제 경로로 남기�
   assert.deepEqual(list.files.sort(), ['src/그림 목록.tsx', 'src/한글.ts'])
   assert.deepEqual(list.excluded, ['__tests__/한글.ts'])
   for (const path of [...list.files, ...list.excluded]) assert.ok(existsSync(join(repo.dir, path)), path)
+})
+
+test('리뷰 대상이 하나도 없으면 아무것도 쓰지 않고 멈춘다 — 다른 언어 앱만 바꾼 PR에 리뷰어를 띄우지 않는다', t => {
+  // michelo.studio의 백엔드 핀 PR(#66)은 `apps/backend`의 두 파일만 바꿨다. 리뷰어를 띄우면 빈 범위에서 "지적 없음"
+  // 리포트가 나오고, 그 리포트는 백엔드를 검토한 것처럼 읽힌다. 테스트만 바꾼 변경도 지적할 파일이 없다
+  for (const paths of [['apps/backend/pyproject.toml', 'apps/backend/uv.lock'], ['src/a.test.ts']]) {
+    const repo = scopeRepo(t, paths)
+    const dir = freshDir(t)
+    const out = preflightAt(repo, dir, RUN)
+    assert.equal(out.status, 2, out.stdout)
+    assert.match(out.stderr, /리뷰 대상이 없다 — 변경 파일 \d+개가 전부 테스트·mock\(\d+개\)이거나 검토 안 함\(\d+개\)이다/)
+    assert.match(out.stderr, /리뷰어를 띄우지 않고 리포트도 쓰지 않는다/)
+    assert.equal(existsSync(join(dir, '.timing')), false)
+  }
 })
 
 test('리포트 디렉터리가 대상 저장소의 루트면 아무것도 쓰지 않고 멈추며 자리를 정하는 순서를 보인다', t => {

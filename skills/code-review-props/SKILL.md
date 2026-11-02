@@ -33,7 +33,7 @@ Props drilling, 과도한 props 전달, 함수 인자 과다를 **독립적으�
 
 ### Step 1: Diff 범위 결정
 
-범위 결정은 `workflow-contract.md` C-4를 따른다. 기준은 스크립트로 정한다 — `node "$RULES_DIR/../scripts/review-base.mjs" --repo .`(사용자가 범위를 정했으면 `--base <그 base>`)가 낸 `mergeBase`를 `$MERGE_BASE`로, `line`을 리포트의 기준 줄로 쓴다. 지금 브랜치에 열린 PR이 있으면 그 PR의 base가 기준이다 — 다른 PR 위에 쌓은 PR이면 아래 PR의 브랜치이고, 그 위에 더한 변경만 리뷰한다. 종료 코드 2면(PR의 base를 이 저장소에서 찾을 수 없다) main으로 물러서지 않고 `git fetch origin <base>` 뒤 다시 돌리거나 사용자에게 범위를 묻는다. 결정된 범위로 `git diff --stat $MERGE_BASE..HEAD`와 `git diff $MERGE_BASE..HEAD`를 확인한다. 제외 경로는 C-5를 따른다.
+범위 결정은 `workflow-contract.md` C-4를 따른다. 기준은 스크립트로 정한다 — `node "$RULES_DIR/../scripts/review-base.mjs" --repo .`(사용자가 범위를 정했으면 `--base <그 base>`)가 낸 `mergeBase`를 `$MERGE_BASE`로, `line`을 리포트의 기준 줄로 쓴다. 지금 브랜치에 열린 PR이 있으면 그 PR의 base가 기준이다 — 다른 PR 위에 쌓은 PR이면 아래 PR의 브랜치이고, 그 위에 더한 변경만 리뷰한다. 종료 코드 2면(PR의 base를 이 저장소에서 찾을 수 없다) main으로 물러서지 않고 `git fetch origin <base>` 뒤 다시 돌리거나 사용자에게 범위를 묻는다. 결정된 범위로 `git diff --stat $MERGE_BASE..HEAD`와 `git diff $MERGE_BASE..HEAD`를 확인한다. 제외 경로는 C-5를 따른다 — 범위는 `node "$RULES_DIR/../scripts/review-scope.mjs" --repo . --merge-base $MERGE_BASE`로 가른다. 출력의 `files`가 좁히기 전 리뷰 대상, `outside`(React 규칙이 다루지 않는 언어)는 검토 안 함이다. 다시 세지 않고, `line`을 `리뷰 기준`에 그대로 옮긴다(C-5). 변경이 있는데 `files`가 비면(전부 테스트·mock이거나 검토 안 함) 리뷰어를 띄우지 않고 리포트도 쓰지 않는다 — `line`을 사용자에게 알리고 끝낸다(C-5).
 
 변경 파일 중 컴포넌트, 훅, 함수 시그니처, 서비스/API 호출, 상태 전달 구조가 바뀐 파일만 리뷰 대상으로 좁힌다. 관련 변경이 없으면 "대상 없음"으로 종료한다.
 
@@ -61,9 +61,10 @@ task(
 - 대상: HEAD
 - 변경 파일 (props/인자 전달 구조 관련 파일만): {CHANGED_PROP_FILES}
 - 제외 파일(지적하지 않을 경로): `__test__/**`, `__tests__/**`, `*.test.*`, `*.spec.*`, `__mocks__/**`, `mock/**`, `mocks/**`, `*.mock.*`, 테스트/목 전용 fixture/mock data
+- 검토 안 함(지적하지 않을 경로 — React 규칙이 다루지 않는 언어): {OUTSIDE_FILES — `review-scope.mjs`의 `outside`. 다른 언어 앱(`otherApps`) 아래 파일은 `<root>/**`로 줄여 적는다. 없으면 `없음`}
 
 ## Diff
-{DIFF — Step 1에서 오케스트레이터가 수집한 git diff {MERGE_BASE}..HEAD 본문 전체. 좁히기 전 전체이며 테스트 파일 변경 포함}
+{DIFF — Step 1에서 오케스트레이터가 수집한 git diff {MERGE_BASE}..HEAD 본문 전체. 좁히기 전 전체이며 테스트·검토 안 함 파일 변경 포함}
 
 ## 리뷰 수행 방법
 1. 위 `## Diff`가 입력의 전부입니다. git을 직접 실행하지 마세요 — diff는 오케스트레이터가 이미 수집했고, 삭제된 파일의 옛 내용도 그 diff의 `-` 줄에 있습니다. 지적은 위 변경 파일 목록에 한정하고, 나머지 diff는 전달 체인을 읽는 근거로 씁니다

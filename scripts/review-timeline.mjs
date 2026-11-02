@@ -156,7 +156,9 @@ const PHASES = new Map([
   }],
   // 한도에 닿아 멈춘 실행을 이어 갈 때 새 한도 구간을 연다(C-12). 대상이 그대로인지 확인한 값을 함께 남긴다.
   ['run.resume', { required: [], structured: [], allowed: ['maxTasks', 'maxDurationSec', 'staleAfterSec', 'head', 'worktree'] }],
-  ['scope.done', { required: ['files', 'excluded'], structured: [], allowed: [] }],
+  // `outside`: React 규칙이 다루지 않는 언어의 파일 수(C-5) — 이 필드가 없는 기록은 가르지 않은 예전 실행이다.
+  // `otherApps`: 그중 다른 언어 앱 아래 파일을 앱마다 센 것
+  ['scope.done', { required: ['files', 'excluded'], structured: ['otherApps'], allowed: ['outside'] }],
   // 기존 구현 검색(C-6C). 디스패치와 함께 돌므로 `script.*`를 쓰지 않는다 — `--check`가 `script.done`의 수를 검증
   // 집계로, `script.*`를 디스패치 뒤 단계로 읽는다. `reuse.planned`는 첫 디스패치 전에 예정을 등록하고(검색 ID를
   // 정한다), `reuse.start`·`reuse.done`은 검색 스크립트가 직접 남긴다. 오케스트레이터가 끝을 만들어 채우지 않는다.

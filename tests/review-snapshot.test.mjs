@@ -247,6 +247,31 @@ test('base가 merge-base 뒤로 앞서 같은 파일을 바꿨으면 대상에 �
   }
 })
 
+test('React 규칙이 다루지 않는 언어의 파일을 뺐으면 대상에 남기고, 블록에 검토 안 함으로 적는다', () => {
+  // 2026-10-28 점검: 모노레포의 백엔드 `.py`가 React 규칙 프롬프트에 그대로 들어갔다. 빼더라도 리포트가 "검토 상태:
+  // 완료"만 말하면 백엔드까지 검토한 것으로 읽힌다 — 빠진 범위는 스크립트가 그리는 블록에 있어야 한다
+  const otherApps = [{ root: 'apps/backend', manifest: 'pyproject.toml', files: 94 }]
+  const scope = extra => ({ phase: 'scope.done', files: 285, excluded: 71, ...extra })
+  const withScope = extra => buildSnapshot(fixture({ events: [runStart(), scope(extra), ...fixture().events.slice(1)] }))
+  const split = withScope({ outside: 96, otherApps })
+  assert.deepEqual(split.target.outside, { files: 96, otherApps })
+  assert.deepEqual(snapshotProblems(split), [])
+  assert.match(renderSnapshotMarkdown(split), /\*\*검토 안 함 96개\*\* — React 규칙이 다루지 않는 언어의 파일이라 지적 대상에서 뺐다: `apps\/backend`\(`pyproject\.toml`\) 94개 · 그 밖의 소스 2개\. 지적 없음이 아니다 — 이 실행은 이 파일들을 검토하지 않았다\(C-5\)\./)
+  // 뺀 것이 없거나(0) 가르지 않은 예전 기록이면 필드도 줄도 없다
+  for (const snapshot of [withScope({ outside: 0 }), withScope({}), buildSnapshot(fixture())]) {
+    assert.equal('outside' in snapshot.target, false)
+    assert.doesNotMatch(renderSnapshotMarkdown(snapshot), /검토 안 함/)
+  }
+  for (const [outside, pattern] of [
+    [{ files: 0, otherApps: [] }, /target\.outside\.files/],
+    [{ files: 96, otherApps: [{ root: '', manifest: 'pyproject.toml', files: 94 }] }, /target\.outside\.otherApps/],
+    [{ files: 10, otherApps }, /target\.outside\.otherApps.*files보다 많다/],
+  ]) {
+    const problems = snapshotProblems({ ...split, target: { ...split.target, outside } })
+    assert.ok(problems.some(problem => pattern.test(problem)), `${pattern}: ${problems.join(' / ')}`)
+  }
+})
+
 test('실행 식별이 없는 기록으로는 스냅숏을 만들지 않는다', () => {
   // 2.16.0 이전 preflight로 시작한 실행이다. 대상을 모르는 결과는 다른 실행과 이을 수 없다.
   const events = [runStart({ runId: undefined }), ...ALL.map(name => done(name))]

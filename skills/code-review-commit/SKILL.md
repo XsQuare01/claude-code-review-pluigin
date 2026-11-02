@@ -53,7 +53,7 @@ git show --format=medium $TARGET_COMMIT
 
 **patch는 여기서 오케스트레이터가 한 번만 수집한다.** 두 번째 명령의 출력 전체(커밋 메타데이터 + patch)가 Step 5 producer 프롬프트의 `{COMMIT_PATCH}`가 된다. producer는 git을 돌리지 않는다 — 셸이 없는 에이전트로 띄우기 때문이다(Step 5, C-6). root commit도 같은 명령으로 같은 형식의 patch가 나오고, 삭제된 파일의 옛 내용도 patch의 `-` 줄에 들어 있다.
 
-제외 경로는 `workflow-contract.md` C-5를 따른다. **범위와 제외는 오케스트레이터가 정한다.** 제외 경로는 `{CHANGED_FILES}`와 지적 범위에서만 빼고, `{COMMIT_PATCH}`에는 테스트 파일 변경까지 그대로 담는다 — 테스트는 지적 대상에서 빠질 뿐 영향 범위를 읽는 증거에서 빠지지 않는다(C-5, `00-rule.md` 00-3).
+제외 경로는 `workflow-contract.md` C-5를 따른다. **범위는 스크립트로 가른다** — `node "$RULES_DIR/../scripts/review-scope.mjs" --repo . --commit $TARGET_COMMIT`의 `files`가 `{CHANGED_FILES}`, `excluded`가 테스트·mock, `outside`가 React 규칙이 다루지 않는 언어(검토 안 함)다. 매니페스트도 그 커밋의 트리에서 읽는다. 다시 세지 않는다. `line`은 `리뷰 기준`에 그대로 옮기고, `packageRoots`는 프로필을 판정할 폴더다(C-3). 변경이 있는데 `files`가 비면(전부 테스트·mock이거나 검토 안 함) 리뷰어를 띄우지 않고 리포트도 쓰지 않는다 — `line`을 사용자에게 알리고 끝낸다(C-5). 제외·검토 안 함은 `{CHANGED_FILES}`와 지적 범위에서만 빼고, `{COMMIT_PATCH}`에는 그 변경까지 그대로 담는다 — 지적 대상에서 빠질 뿐 영향 범위를 읽는 증거에서 빠지지 않는다(C-5, `00-rule.md` 00-3).
 
 ### Step 3: Lint 확인 (read-only)
 
@@ -99,9 +99,10 @@ task(
 - HEAD 여부: {TARGET_IS_HEAD — 예/아니오}
 - 변경 파일: {CHANGED_FILES}
 - 제외 파일(지적하지 않을 경로): `__test__/**`, `__tests__/**`, `*.test.*`, `*.spec.*`, `__mocks__/**`, `mock/**`, `mocks/**`, `*.mock.*`, 테스트/목 전용 fixture/mock data
+- 검토 안 함(지적하지 않을 경로 — React 규칙이 다루지 않는 언어): {OUTSIDE_FILES — `review-scope.mjs`의 `outside`. 다른 언어 앱(`otherApps`) 아래 파일은 `<root>/**`로 줄여 적는다. 없으면 `없음`}
 
 ## 커밋 patch
-{COMMIT_PATCH — Step 2에서 오케스트레이터가 수집한 git show --format=medium {TARGET_COMMIT} 출력 전체. 테스트 파일 변경 포함}
+{COMMIT_PATCH — Step 2에서 오케스트레이터가 수집한 git show --format=medium {TARGET_COMMIT} 출력 전체. 테스트·검토 안 함 파일 변경 포함}
 
 ## 리뷰 수행 방법
 1. 위 `## 커밋 patch`가 리뷰 대상의 전부입니다. git을 직접 실행하지 마세요 — patch는 오케스트레이터가 이미 수집했고, root commit도 같은 형식이며, 삭제된 파일의 옛 내용도 patch의 `-` 줄에 있습니다
@@ -113,7 +114,7 @@ task(
 7. 지적은 **이 커밋 patch 안의 변경 라인** 또는 그 변경 때문에 직접 깨진 **인접 라인/구조**로 제한하세요. 이 커밋이 삭제하거나 바꾼 export·함수·타입·상수·prop을 patch 밖 코드가 아직 참조하면, 그 참조는 이 변경 때문에 깨진 구조입니다(20-3, 아래 금지 사항의 예외)
 8. HEAD 여부가 `아니오`이면 워킹 트리는 이 커밋 뒤의 상태입니다. Read와 Grep이 보는 것은 지금 파일이지 이 커밋의 파일이 아닙니다 — 읽은 줄이 patch의 `+` 줄과 다르면 번호를 추측하지 말고 `위치 미확인`으로 적고, 참조 확인 결과에는 지금 워킹 트리에서 찾았다고 적으세요(00-10, 00-11)
 9. 동작 여부만 보지 말고, 문제 정의·의도·선택 근거·장기 변경 비용까지 함께 검토하세요
-10. 제외 파일의 변경은 지적하지 말고, production 변경의 영향 범위를 읽는 증거로만 쓰세요
+10. 제외 파일과 검토 안 함 파일의 변경은 지적하지 말고, production 변경의 영향 범위를 읽는 증거로만 쓰세요 — 다른 언어 앱의 변경 때문에 React 코드가 깨지면 위치는 React 쪽 줄입니다
 
 ## 공통 리뷰 규칙
 {COMMON_RULES_CONTENT — 00-rule.md 전체 내용}
@@ -169,6 +170,7 @@ bounded 단일 통합 pass 완료 후:
 
 > **커밋**: {TARGET_COMMIT} | **리뷰 시각**: {TIMESTAMP}
 > **변경 파일**: {N}개 | **리뷰 모듈**: {M}개
+> **범위**: {`review-scope.mjs`의 `line` 그대로}
 
 ## 판정
 

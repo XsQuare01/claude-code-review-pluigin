@@ -256,6 +256,22 @@ test('실패하면 실패한 자리를 이 변경의 파일·바꾸지 않은 �
   assert.equal('failures' in passed, false)
 })
 
+test('검토 안 함(outside)으로 가른 파일도 이 변경이 바꾼 파일이다 — 바꾸지 않은 파일로 세지 않는다', t => {
+  // 다른 언어 앱 아래의 파일은 지적 대상이 아닐 뿐 이 변경이 바꾼 파일이다(C-5). 바꾸지 않은 파일로 세면 그 실패가
+  // "이 변경과 무관할 수 있는 실패"처럼 읽힌다
+  const ctx = setup(t)
+  const git = (...args) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.com', '-c', 'commit.gpgsign=false', ...args], { cwd: ctx.repo, encoding: 'utf8' })
+  mkdirSync(join(ctx.repo, 'backend', 'static'), { recursive: true })
+  writeFileSync(join(ctx.repo, 'backend', 'static', 'x.js'), 'x\n')
+  git('add', 'backend')
+  git('commit', '-qm', 'files')
+  writeFileSync(join(ctx.dir, '.timing', `${RUN}.scope.json`), JSON.stringify({ schemaVersion: 1, files: [], excluded: [], outside: ['backend/static/x.js'] }), 'utf8')
+  const report = [join(ctx.repo, 'backend', 'static', 'x.js'), '  1:1  error  bad  no-undef', ''].join('\n')
+  const out = tool(ctx, '--name', 'lint', '--', process.execPath, '-e', `console.log(${JSON.stringify(report)}); process.exit(1)`)
+  assert.equal(out.status, 0, out.stderr)
+  assert.deepEqual(JSON.parse(out.stdout).failures, { parsed: true, files: 1, inChange: ['backend/static/x.js'], outsideChange: [], untracked: [] })
+})
+
 // 기존 구현 검색(C-6C)도 review-tool --detach --name reuse-search로 띄우지만 lint·test 같은 도구가 아니다. 그 상태는
 // 검색 스크립트가 남기는 reuse.* 기록이 말한다 — `--wait`가 그것까지 기다리면 05 하나 때문에 모든 도구를 기다리게 되고,
 // 유실된 검색을 "--detach 없이 다시 돌린다"고 안내하면 05가 이미 돈 뒤에 검색을 다시 돌린다. 검색이 남긴 오류 문장의
