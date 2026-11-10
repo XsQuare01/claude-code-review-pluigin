@@ -120,7 +120,7 @@ test('리뷰어 프롬프트에 정확성 기준이나 변경 의도가 없으�
 })
 
 test('의도를 review-intent.mjs로 모으지 않으면 실패한다 — 범위를 정한 실행에서 PR 설명이 빠진다', () => {
-  // 2.29.0은 preflight의 base 줄에 PR 번호가 있을 때만 PR을 읽었다. --base를 주면 base 결정이 PR 조회를 건너뛰어
+  // 고치는 도중의 fast(PR #110 첫 리뷰)는 base를 정한 출력에 PR 번호가 있을 때만 PR을 읽었다. --base를 주면 base 결정이 PR 조회를 건너뛰어
   // PR이 있어도 커밋 메시지로 의도를 추정했다
   const skill = SKILL.replace('node "$RULES_DIR/../scripts/review-intent.mjs" --dir "$REPORT_DIR" --run "$REPORT_BASENAME"', '`base` 줄에 `PR #N`이 있으면 `gh pr view <N> --json title,body`')
   assert.deepEqual(codes(skill), [FAST_REVIEW_CODES.INTENT_SOURCE])
