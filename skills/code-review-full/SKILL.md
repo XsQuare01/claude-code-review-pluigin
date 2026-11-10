@@ -91,7 +91,7 @@ C-3에 따라 프로젝트 프로파일(FSD, Electron, Tailwind, RSC, SSR, Three
 node "$RULES_DIR/../scripts/review-intent.mjs" --dir "$REPORT_DIR" --run "$REPORT_BASENAME" [--request-file <사용자 요청 원문 파일>]
 ```
 
-PR 설명은 스크립트가 `gh pr view`로 읽는다(gh가 없으면 그 명령의 출력을 담은 파일을 `--pr-json`으로 준다). 사용자 요청은 사용자가 쓴 문장 그대로를 파일에 담아 넘긴다 — 요약하지 않는다. 스크립트가 낸 블록을 정확성 producer 프롬프트에 그대로 붙인다. 검증자 프롬프트에는 `prepare-verification.mjs`가 같은 원문을 붙인다. 아래 표는 그 원문의 출처와 순서다.
+PR 설명은 스크립트가 `gh pr view`로 읽는다(gh가 없으면 그 명령의 출력을 담은 파일을 `--pr-json`으로 준다). 사용자 요청은 사용자가 쓴 문장 그대로를 파일에 담아 넘긴다 — 요약하지 않는다. 스크립트가 낸 블록을 정확성 producer 프롬프트에 그대로 붙인다. 붙이지 못해 파일로 넘겨야 하면 같은 블록을 원문의 줄 그대로 담은 `.timing/$REPORT_BASENAME.intent.md`를 넘긴다 — `intent.json`은 출처마다 원문을 한 줄에 담아 읽기 도구가 2,000자에서 자른다. 검증자 프롬프트에는 `prepare-verification.mjs`가 같은 원문을 붙인다. 아래 표는 그 원문의 출처와 순서다.
 
 | 순서 | 출처 | 라벨 |
 |------|------|------|
