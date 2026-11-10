@@ -1484,12 +1484,12 @@ UTF-16 파일도 읽는다 — PowerShell 5.1의 `Set-Content -Encoding UTF8`은
 | `scope.done` | 범위 확정(C-4) — `/code-review-full`은 **preflight가 남긴다**(C-5의 이름 규칙으로 센 수) | `files`, `excluded` · React 규칙이 다루지 않는 언어(C-5): `outside`(0이어도 남긴다 — 없으면 가르지 않은 예전 실행), (다른 언어 앱이 있으면) `otherApps`(`{ root, manifest, files }`) |
 | `modules.planned` | 적용 모듈 확정(C-3) | `candidates`, `applied`(적용한 **번호 모듈** 수 — Props·수학·예외·정확성 패스는 세지 않는다. 후보 수를 넘으면 스크립트가 거부한다. 스냅숏의 `적용 N개`는 패스 전부를 센 수라 다르다) · `skipped`, `unknown`(중첩, `--data-file`) |
 | `dispatch.start` | **첫 sub-agent를 실제로 띄운 직후** (full은 작업 대장이 첫 시도를 내줄 때 쓴다) | `modules`, `inflight` |
-| `module.start` | **모듈 하나를 띄운 직후** (full은 작업 대장이 띄우기 **전에** 쓴다 — C-12) | `module`, `attempt`, `taskId`, (재시도면) `retryOf` · 대장이 쓰면 `claim` |
+| `module.start` | **모듈 하나를 띄운 직후** (full은 작업 대장이 띄우기 **전에** 쓴다 — C-12. fast는 리뷰어가 결과를 돌려줄 때까지 돌아오지 않으므로 띄우기 **직전**에 쓴다) | `module`, `attempt`, `taskId`, (재시도면) `retryOf` · 대장이 쓰면 `claim` |
 | `module.done` | **모듈 하나가 끝날 때마다** (full은 작업 대장이 결과 파일을 쓴 뒤) | `module`, `attempt`, `status`(**`ok`/`failed`만** — SKILL의 상태 이름 `COMPLETED`가 아니다), `findings`, `failureClass`, `taskId`, (있으면) `tokensIn`·`tokensOut` · 대장이 받으면 `resultSha256` · 취소면 `cancelReason`(`max-duration`/`user`) |
 | `verify.start` / `verify.done` | 검증 작업의 시도 하나를 띄우기 전 / 끝을 받을 때 (작업 대장이 쓴다 — C-12) | `task`(routed의 작업 이름), `attempt`, `kind`, `claim`, `round` / `task`, `attempt`, `status`(`ok`/`failed`), `failureClass`, `taskId`, `resultSha256`, `cancelReason` |
 | `task.bind` | 띄운 시도에 호스트 작업 ID를 묶을 때 — 다시 남기면 살아 있다는 확인 (작업 대장) | `stage`(`module`/`verify`), `task`, `attempt`, `taskId` |
 | `dispatch.halt` | 한도나 사용자가 디스패치를 멈췄을 때, 리뷰 에이전트가 없을 때 (작업 대장) | `reason`(`max-tasks`/`max-duration`/`user`/`agent-unavailable`), `stage`, `queuedTasks`(띄우지 못한 작업), `running` |
-| `dispatch.end` | 전부 수집 후 (full은 작업 대장이 모듈 단계가 끝났을 때 쓴다) | `terminalOk`, `terminalFailed`(최종 모듈 단위) · `attemptsTotal`, `attemptsFailed`(시도 단위) — **이 넷은 스크립트가 `module.done`에서 센다.** 넘기지 않아도 되고, 넘긴 값이 기록과 다르면 경고하고 센 값을 남긴다 · `attemptFailureClasses`(중첩, `--data-file`), (있으면) `tokensIn`·`tokensOut` |
+| `dispatch.end` | 전부 수집 후 (full은 작업 대장이 모듈 단계가 끝났을 때 쓴다) | `terminalOk`, `terminalFailed`(최종 모듈 단위) · `attemptsTotal`, `attemptsFailed`(시도 단위) — **이 넷은 스크립트가 `module.done`에서 센다.** 세는 단위는 번호 모듈이고, `fast`는 번호 모듈을 띄우지 않으므로 리뷰어 하나(`module: fast`)를 센다. 넘기지 않아도 되고, 넘긴 값이 기록과 다르면 경고하고 센 값을 남긴다 · `attemptFailureClasses`(중첩, `--data-file`), (있으면) `tokensIn`·`tokensOut` |
 | `script.start` | `prepare-verification.mjs` 진입 직후 (스크립트가 직접 남긴다) | `script` |
 | `script.done` | `prepare-verification.mjs` 실행 후 | `ran`, `counts`(중첩, 스크립트가 직접 남긴다 — 검색을 예정한 실행이면 `counts.reuse`, C-6C) |
 | `reuse.planned` | **첫 디스패치 전** 기존 구현 검색을 예정할 때 — `review-reuse.mjs register`가 남긴다(C-6C) | `searchId`, `scopeSha256`, `plan`(계획 파일 경로) · `runId`, `head`, `baseHead` · (기다릴 상한을 바꿨으면) `waitSec` |
@@ -2402,6 +2402,7 @@ preflight가 스냅숏을 읽어 계약에 맞는지(C-10의 `parseSnapshot`), �
 | 분할 방식 | 단일 통합 pass | `full` — 모듈별 sub-agent, wave 단위 |
 | 출력 밀도 | 위반 전부 | `fast` — 영향 높음 지적과 `확인 필요`만(영향 낮음 생략, 개수 상한 없음) |
 | 도구 실행 | C-6 | `fast` — 기본으로 돌리지 않고 `도구 실행 결과`에 그 사실을 적는다 |
+| 실행 타임라인 | C-9 | `full`·`fast` — `review-preflight.mjs`가 시작을 남기고 `assemble-report.mjs`가 `--summary` 표를 리포트에 끼운다. `fast`는 리뷰어 한 번(`module: fast`)의 시작·끝을 남기고, 조립 틀에 `{{timeline}}` 하나만 둔다 |
 | 모듈 필터 | 없음 | `default` — `--module` |
 | 결과 스냅숏 | 없음 | `full` — `review-snapshot.mjs` (C-10) |
 | 재현 근거 | 없음 | `full` — `review-evidence.mjs` (C-11) |

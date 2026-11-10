@@ -264,3 +264,68 @@ test('시작되지 않은 실행과 모르는 플래그는 거부한다', t => {
   assert.equal(unknown.status, 2)
   assert.match(unknown.stderr, /unknown flag --force/)
 })
+
+// fast는 스냅숏도 렌더러도 없다 — 리뷰어 하나의 표를 오케스트레이터가 틀에 옮기고, 스크립트가 만드는 조각은 타임라인
+// 표 하나다. 그 표가 이 실행의 기록에서 뽑은 것인지는 full과 같은 검사로 본다. 무엇을 요구하는지는 `run.start`의
+// workflow로 정한다 — 이름이 없는 예전 기록과 full은 지금처럼 셋을 요구한다.
+const FAST_RUN = 'code-review-fast-feat-x-2026-11-10'
+const FAST_TEMPLATE = [
+  '# feat-x 빠른 코드 리뷰 리포트',
+  '',
+  '## 판정',
+  '',
+  '확인한 범위에서 영향이 높은 결함을 찾지 못했다.',
+  '',
+  '## 실행 타임라인',
+  '',
+  '{{timeline}}',
+  '',
+].join('\n')
+
+const fastRun = t => {
+  const dir = tempDir(t, 'assemble-fast-')
+  log(dir, 'run.start', { ...START, workflow: 'fast' }, FAST_RUN)
+  log(dir, 'module.start', { module: 'fast', attempt: 1 }, FAST_RUN)
+  log(dir, 'module.done', { module: 'fast', attempt: 1, status: 'ok', findings: 0 }, FAST_RUN)
+  log(dir, 'render.start', { findings: 0 }, FAST_RUN)
+  summarize(dir, join(timing(dir), `${FAST_RUN}.timeline.md`), FAST_RUN)
+  const template = join(dir, 'template.md')
+  writeFileSync(template, FAST_TEMPLATE, 'utf8')
+  return { dir, template }
+}
+const assembleFast = (dir, template) => spawnSync(process.execPath, [SCRIPT, '--dir', dir, '--run', FAST_RUN, '--template', template], { encoding: 'utf8' })
+
+test('fast 실행은 타임라인 표 하나만 끼워 리포트를 쓴다 — 스냅숏·상세 지적 조각을 요구하지 않는다', t => {
+  const { dir, template } = fastRun(t)
+  const out = assembleFast(dir, template)
+  assert.equal(out.status, 0, out.stderr)
+  const report = readFileSync(join(dir, `${FAST_RUN}.md`), 'utf8')
+  const table = readFileSync(join(timing(dir), `${FAST_RUN}.timeline.md`), 'utf8').trimEnd()
+  assert.equal(report, `${FAST_TEMPLATE.replace('{{timeline}}', table).trimEnd()}\n`)
+  assert.match(report, /`module\.done`/)
+  assert.equal(JSON.parse(out.stdout).lines, report.split('\n').length - 1)
+})
+
+test('fast 실행도 타임라인 자리가 없거나, 다른 조각 자리를 두거나, 표가 지금 기록보다 앞선 것이면 쓰지 않는다', t => {
+  const { dir } = fastRun(t)
+  const cases = [
+    [FAST_TEMPLATE.replace('{{timeline}}', ''), /\{\{timeline\}\} 줄이 0개다/],
+    // fast에는 스냅숏도 렌더러도 없다 — 그 자리를 두면 채울 조각이 없는 칸이 리포트에 남는다
+    [FAST_TEMPLATE.replace('## 판정', '{{plan}}\n\n## 판정'), /채우지 않은 자리표시자가 있다: \{\{plan\}\}/],
+    [FAST_TEMPLATE.replace('## 판정', '{{findings}}\n\n## 판정'), /채우지 않은 자리표시자가 있다: \{\{findings\}\}/],
+  ]
+  for (const [text, pattern] of cases) {
+    const template = join(dir, 'bad.md')
+    writeFileSync(template, text, 'utf8')
+    const out = assembleFast(dir, template)
+    assert.equal(out.status, 2, text)
+    assert.match(out.stderr, pattern)
+    assert.equal(existsSync(join(dir, `${FAST_RUN}.md`)), false)
+  }
+
+  const template = join(dir, 'template.md')
+  log(dir, 'render.start', { findings: 0 }, FAST_RUN)
+  const out = assembleFast(dir, template)
+  assert.equal(out.status, 2)
+  assert.match(out.stderr, /이벤트 4개일 때 뽑은 표인데 지금 기록은 5개다/)
+})

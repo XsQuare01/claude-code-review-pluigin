@@ -629,3 +629,25 @@ test('사용자가 다른 언어를 요청하면 --language로 run.start에 남�
   assert.equal(linesOf(english)[0].language, 'en')
   assert.equal(preflightIn(repo, freshDir(t), ['--base', 'main', '--language', 'english!']).status, 2)
 })
+
+test('fast도 preflight로 시작한다 — 번호 모듈 후보는 0개이고, 리뷰 에이전트가 없을 때 멈추는 길은 작업 대장이 아니라 기록 두 줄이다', t => {
+  // fast는 리뷰어 하나를 직접 띄운다. 작업 대장(review-tasks.mjs)을 쓰지 않으므로 full의 `cancel --all`을 안내하면
+  // 따를 수 없는 지시가 된다. 멈춘 사실은 `dispatch.halt`(reason=agent-unavailable)와 `run.end`(verdict=not-reviewed)로
+  // 남긴다 — `--check`가 그 둘로 "리뷰하지 않고 멈춘 실행"을 알아본다.
+  const repo = scratchRepo()
+  const dir = freshDir(t)
+  const run = 'code-review-fast-feat-x-2026-11-10'
+  const out = spawnSync(process.execPath, [
+    SCRIPT, '--dir', dir, '--run', run, '--rules', RULES, '--workflow', 'fast',
+    '--repo', repo.dir, '--base', repo.base, '--host', 'test',
+  ], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+  assert.equal(out.status, 0, out.stderr)
+  assert.match(out.stdout, /후보 모듈 +0개/)
+  assert.match(out.stdout, /특수 패스 +correctness/)
+  assert.doesNotMatch(out.stdout, /기존 구현 검색/)
+  assert.match(out.stdout, /리뷰 에이전트 +.*rule-module-reviewer.*--phase dispatch\.halt --set reason=agent-unavailable.*--phase run\.end --set verdict=not-reviewed/)
+  assert.doesNotMatch(out.stdout, /review-tasks\.mjs cancel/)
+  const [start, scope] = readFileSync(join(dir, '.timing', `${run}.jsonl`), 'utf8').split('\n').filter(Boolean).map(line => JSON.parse(line))
+  assert.deepEqual([start.phase, start.workflow, start.candidates, 'reuseSearch' in start], ['run.start', 'fast', 0, false])
+  assert.equal(scope.phase, 'scope.done')
+})

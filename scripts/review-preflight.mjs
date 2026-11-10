@@ -413,7 +413,11 @@ const out = [
   ...(scope.packageRoots.length ? [`패키지 루트   ${scope.packageRoots.map(entry => `${entry.root}(${entry.files}개)`).join(', ')} — 프로필은 저장소 루트가 아니라 이 폴더에서 판정한다(C-3)`] : []),
   ...(dependencyFiles.length ? [`의존성 변경   ${dependencyFiles.join(', ')} — baseline은 그 트리에 그 트리의 의존성을 설치해 잰다. 지금 트리의 의존성을 같이 쓰면 baseline도 같은 실패를 내 "신규 0"으로 잘못 나온다(C-6)`] : []),
   ...(workflow === 'full' ? [`기존 구현 검색 예정 — 05를 뺀 모듈을 먼저 띄우고, 그동안 검색 계획을 써 review-reuse.mjs로 후보를 모은다. 05는 검색이 끝난 뒤 띄운다(C-6C)`] : []),
-  `리뷰 에이전트  첫 디스패치 전에 작업 도구의 에이전트 목록에서 react-code-review-plugin:rule-module-reviewer를 찾는다. 없으면 리뷰하지 않고 review-tasks.mjs cancel --all --reason agent-unavailable로 멈춘다 — 직접 리뷰하거나 다른 에이전트로 대신하지 않는다(C-6)`,
+  // 작업 대장(review-tasks.mjs)으로 띄우는 것은 full뿐이다. 리뷰어를 직접 띄우는 워크플로우에 `cancel --all`을 안내하면
+  // 따를 수 없는 지시가 된다 — 멈춘 사실을 기록 두 줄로 남긴다. `--check`는 그 둘로 리뷰하지 않고 멈춘 실행을 알아본다.
+  `리뷰 에이전트  첫 디스패치 전에 작업 도구의 에이전트 목록에서 react-code-review-plugin:rule-module-reviewer를 찾는다. 없으면 리뷰하지 않고 ${workflow === 'full'
+    ? 'review-tasks.mjs cancel --all --reason agent-unavailable로 멈춘다'
+    : 'review-timeline.mjs --phase dispatch.halt --set reason=agent-unavailable, 이어서 --phase run.end --set verdict=not-reviewed로 기록을 닫고 리포트를 쓰지 않는다'} — 직접 리뷰하거나 다른 에이전트로 대신하지 않는다(C-6)`,
   '',
   `후보 모듈     ${candidates.length}개  ${candidates.map(module => module.id).join(' ')}`,
 ]

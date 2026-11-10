@@ -29,6 +29,7 @@ description: Use when the user wants a faster, shorter code review that reports 
 | 분할 방식 | 단일 sub-agent |
 | 출력 밀도 | 영향 높음 지적 전부와 `확인 필요` — 영향 낮음은 생략, 개수 상한 없음 |
 | 도구 실행 | 기본으로 돌리지 않는다 — `도구 실행 결과`에 그 사실을 적는다 |
+| 실행 타임라인 | C-9 — preflight가 시작을 남기고, 리뷰어 한 번의 시작·끝과 리포트 쓰기를 단계마다 남긴다. 리포트 `실행 타임라인`에 `--summary` 표를 싣는다 |
 
 이 워크플로우는 **legacy producer workflow**다. `workflow-contract.md`의 ownership matrix에서 legacy로 유지되며, C-6A의 structured lifecycle은 여기 적용하지 않는다. 기존 producer 계약을 유지한다.
 
@@ -38,9 +39,32 @@ description: Use when the user wants a faster, shorter code review that reports 
 
 ## 실행 절차
 
+### Step 0: 리포트 자리와 기록 시작
+
+**명령을 부르기 전에 리포트 자리(`$REPORT_DIR`)와 이름(`$REPORT_BASENAME`)부터 정한다(C-7).** 자리는 사용자가 이번 요청에서 정한 곳 → 사용자·프로젝트 지시 파일(전역 포함 `CLAUDE.md`·`AGENTS.md`)에 적힌 문서 저장 위치 → `./review-reports/` 순서로 정하고, 대상 저장소의 루트는 안 된다. 이름은 `code-review-fast-{브랜치}-{날짜}`다. 단계마다 남기는 기록(`.timing/`)이 이 자리 아래에 생기므로, 나중에 리포트만 다른 곳에 쓰면 기록과 리포트가 서로를 못 찾는다.
+
+**리뷰의 첫 명령은 preflight다(C-9).** 이 스크립트가 시작 기록(`run.start`)과 범위 기록(`scope.done`)을 남기고, 리뷰 기준(`base`·`merge-base`)을 정한다.
+
+```bash
+node "$RULES_DIR/../scripts/review-preflight.mjs" --dir "$REPORT_DIR" --run "$REPORT_BASENAME" --rules "$RULES_DIR" --workflow fast [--base <사용자가 정한 base>] --host <harness 이름>
+```
+
+- `--base`는 사용자가 범위를 정했을 때만 준다. 주지 않으면 지금 브랜치의 열린 PR의 base가 기준이다 — 다른 PR 위에 쌓은 PR이면 아래 PR의 브랜치이고, 그 위에 더한 변경만 리뷰한다
+- 출력의 `merge-base`가 `$MERGE_BASE`, `base` 줄(기준과 이유)이 리포트의 기준 줄이다. `base` 줄에 `PR #N`이 있으면 Step 2의 의도는 그 PR에서 읽는다. `실행 ID`는 리포트 `리뷰 기준`에 옮긴다. 작업 트리에 커밋하지 않은 변경이 있다고 나오면 그 사실도 `리뷰 기준`에 적는다
+- 종료 코드 2면 아무것도 쓰지 않고 멈춘 것이다. 리뷰 대상이 없으면(변경이 전부 테스트·mock이거나 검토 안 함) 출력의 사유를 사용자에게 알리고 끝낸다 — 리뷰어를 띄우지 않고 리포트도 쓰지 않는다(C-5). PR의 base를 이 저장소에서 찾을 수 없으면 main으로 물러서지 않고 `git fetch origin <base>` 뒤 다시 돌리거나 사용자에게 범위를 묻는다
+- 종료 코드 1은 기록을 남기지 못한 것이다. 리뷰는 계속하고 리포트 `실행 타임라인`에 그 사실을 적는다
+
+**기록은 단계를 지날 때마다 바로 남긴다.** 시각과 경과는 스크립트가 만든다 — 시각을 문장으로 적지 않는다. 기록 명령은 모두 이 모양이다(값에 공백이 있으면 따옴표로 감싼다).
+
+```bash
+node "$RULES_DIR/../scripts/review-timeline.mjs" --dir "$REPORT_DIR" --run "$REPORT_BASENAME" --phase <단계> --set key=value
+```
+
+이 워크플로우가 남기는 단계는 `run.start`·`scope.done`(preflight) → `module.start`·`module.done`·`dispatch.end`(Step 3) → `render.start`·`render.wrote`·`run.end`(Step 5)다. 리뷰어가 쓴 시간이 `module.start`와 `module.done` 사이로, 범위 확인과 의도 수집에 쓴 시간이 `scope.done`과 `module.start` 사이로 나온다. 기록 실패는 리뷰 실패가 아니다 — 남기지 못했으면 그 사실을 리포트에 적고 계속한다.
+
 ### Step 1: Diff 범위 결정
 
-범위 결정은 `workflow-contract.md` C-4를 따른다. 기준은 스크립트로 정한다 — `node "$RULES_DIR/../scripts/review-base.mjs" --repo .`(사용자가 범위를 정했으면 `--base <그 base>`)가 낸 `mergeBase`를 `$MERGE_BASE`로, `line`을 리포트의 기준 줄로 쓴다. 지금 브랜치에 열린 PR이 있으면 그 PR의 base가 기준이다 — 다른 PR 위에 쌓은 PR이면 아래 PR의 브랜치이고, 그 위에 더한 변경만 리뷰한다. 종료 코드 2면(PR의 base를 이 저장소에서 찾을 수 없다) main으로 물러서지 않고 `git fetch origin <base>` 뒤 다시 돌리거나 사용자에게 범위를 묻는다. 결정된 범위로 `git diff --stat $MERGE_BASE..HEAD`와 `git diff $MERGE_BASE..HEAD`를 확인한다. 제외 경로는 C-5를 따른다 — 범위는 `node "$RULES_DIR/../scripts/review-scope.mjs" --repo . --merge-base $MERGE_BASE`로 가른다. 출력의 `files`가 `{CHANGED_FILES}`, `outside`(React 규칙이 다루지 않는 언어)는 검토 안 함이다. 다시 세지 않고, `line`을 리포트 `리뷰 기준`의 `> **범위**:` 줄에 그대로 옮긴다(C-5). 변경이 있는데 `files`가 비면(전부 테스트·mock이거나 검토 안 함) 리뷰어를 띄우지 않고 리포트도 쓰지 않는다 — `line`을 사용자에게 알리고 끝낸다(C-5).
+범위 결정은 `workflow-contract.md` C-4를 따른다. 기준은 Step 0의 preflight가 정한 `$MERGE_BASE`다. 결정된 범위로 `git diff --stat $MERGE_BASE..HEAD`와 `git diff $MERGE_BASE..HEAD`를 확인한다. 제외 경로는 C-5를 따른다 — 범위는 `node "$RULES_DIR/../scripts/review-scope.mjs" --repo . --merge-base $MERGE_BASE`로 가른다. 출력의 `files`가 `{CHANGED_FILES}`, `outside`(React 규칙이 다루지 않는 언어)는 검토 안 함이다. 다시 세지 않고, `line`을 리포트 `리뷰 기준`의 `> **범위**:` 줄에 그대로 옮긴다(C-5). preflight와 같은 이름 규칙으로 세므로 수는 preflight의 `리뷰 파일` 줄과 같다. 변경이 있는데 `files`가 비는 범위는 preflight가 이미 멈췄다(Step 0).
 
 **diff는 여기서 오케스트레이터가 한 번만 수집한다.** `git diff $MERGE_BASE..HEAD` 출력 전체가 Step 3 producer 프롬프트의 `{DIFF}`가 된다. producer는 git을 돌리지 않는다 — 셸이 없는 에이전트로 띄우기 때문이다(Step 3, C-6). 삭제된 파일의 옛 내용도 이 diff의 `-` 줄에 들어 있다. 제외 경로는 `{CHANGED_FILES}`와 지적 범위에서만 빼고, `{DIFF}`에는 테스트 파일 변경까지 그대로 담는다 — 테스트는 지적 대상에서 빠질 뿐 증거에서 빠지지 않는다(C-5).
 
@@ -48,7 +72,7 @@ description: Use when the user wants a faster, shorter code review that reports 
 
 정확성 판정의 근거인 의도를 오케스트레이터가 한 번 모아 `{INTENT}`로 넘긴다. 출처를 첫 줄에 적는다 — 리뷰어는 출처에 따라 의도를 정본으로 쓸지 추정으로 쓸지 정한다(`correctness.md` "무엇을 근거로 의도를 정하는가").
 
-1. Step 1의 `review-base.mjs` 출력에 `pr`이 있으면 `gh pr view <pr.number> --json title,body`(읽기만 한다)의 제목과 설명. 출처는 `PR #<번호> 설명`
+1. Step 0의 preflight `base` 줄에 `PR #N`이 있으면 `gh pr view <N> --json title,body`(읽기만 한다)의 제목과 설명. 출처는 `PR #<번호> 설명`
 2. PR이 없거나 설명이 비었으면, 사용자가 이번 요청에서 변경의 목적을 적었을 때 그 문장. 출처는 `사용자 요구`
 3. 둘 다 없으면 `git log --format='%s%n%n%b' $MERGE_BASE..HEAD`의 커밋 메시지. 출처는 `커밋 메시지(의도 추정)`
 4. 셋 다 없으면 `없음`
@@ -63,7 +87,13 @@ fast는 lint·typecheck·test를 돌리지 않는다. 예전에는 리뷰 전에
 
 **단 하나의 sub-agent**만 dispatch한다. `run_in_background=false`로 즉시 실행.
 
-**producer는 `subagent_type="react-code-review-plugin:rule-module-reviewer"`로 띄운다(C-6).** 이 에이전트는 `Read`·`Grep`·`Glob`만 가진다 — 쓰기 도구도 셸도 없어서 실제로 고칠 수 없다. diff와 의도는 오케스트레이터가 이미 모았으므로 producer에게 셸이 필요 없다. `general` 같은 만능 에이전트나 셸을 가진 `correctness-reviewer`로 띄우지 않는다. **리뷰 에이전트가 없으면 멈춘다(C-6).** 호스트에 이 에이전트가 없거나(작업 도구의 에이전트 목록에 없다, 띄우면 알 수 없는 에이전트로 실패한다) 런타임이 그 도구를 제한하지 못하면 리뷰하지 않는다 — 오케스트레이터가 직접 리뷰하거나 다른 에이전트(`explore`·`general`·`build` 등)로 대신하지 않고, 결과를 직접 쓰지 않는다. 리포트를 쓰지 않고, 무엇을 띄울 수 없었는지와 확인할 곳(호스트의 플러그인·에이전트 설정)을 사용자에게 알린다. 리뷰하지 않은 실행의 리포트는 지적 없음으로 읽힌다.
+**producer는 `subagent_type="react-code-review-plugin:rule-module-reviewer"`로 띄운다(C-6).** 이 에이전트는 `Read`·`Grep`·`Glob`만 가진다 — 쓰기 도구도 셸도 없어서 실제로 고칠 수 없다. diff와 의도는 오케스트레이터가 이미 모았으므로 producer에게 셸이 필요 없다. `general` 같은 만능 에이전트나 셸을 가진 `correctness-reviewer`로 띄우지 않는다. **리뷰 에이전트가 없으면 멈춘다(C-6).** 호스트에 이 에이전트가 없거나(작업 도구의 에이전트 목록에 없다, 띄우면 알 수 없는 에이전트로 실패한다) 런타임이 그 도구를 제한하지 못하면 리뷰하지 않는다 — 오케스트레이터가 직접 리뷰하거나 다른 에이전트(`explore`·`general`·`build` 등)로 대신하지 않고, 결과를 직접 쓰지 않는다. 기록을 `--phase dispatch.halt --set reason=agent-unavailable --set stage=module`, 이어서 `--phase run.end --set verdict=not-reviewed`로 닫는다. 리포트를 쓰지 않고, 무엇을 띄울 수 없었는지와 확인할 곳(호스트의 플러그인·에이전트 설정)을 사용자에게 알린다. 리뷰하지 않은 실행의 리포트는 지적 없음으로 읽힌다.
+
+**리뷰어를 띄우는 앞뒤로 기록을 남긴다(C-9).** 리뷰어는 결과를 돌려줄 때까지 돌아오지 않으므로 시작은 띄우기 **직전**에 남긴다. `module`에는 압축 규칙의 이름 `fast`를 쓴다.
+
+1. 띄우기 직전: `--phase module.start --set module=fast --set attempt=1`
+2. 결과를 받은 직후: `--phase module.done --set module=fast --set attempt=1 --set status=ok --set findings=<받은 지적 표의 행 수>`. 리뷰어가 실패했거나(시간 초과, 빈 결과) 세 블록을 읽을 수 없으면 `--set status=failed --set failureClass=<inactivity-timeout|empty-result|malformed-output|unknown>`이다. 다시 띄우면 `attempt=2`로 시작과 끝을 다시 남긴다 — 앞 줄을 고치지 않는다
+3. 이어서 `--phase dispatch.end` — 수치는 넘기지 않는다. 스크립트가 `module.done`에서 센다
 
 사용자가 영향이 낮은 지적도 보자고 했으면 프롬프트 `## 무엇을 내는가` 표의 영향 낮음 행을 `상세 지적에 냅니다`로 바꿔 넘긴다. 그 밖에는 아래 프롬프트를 그대로 쓴다.
 
@@ -143,13 +173,15 @@ task(
 )
 ```
 
-### Step 4: 결과 확인과 리포트 조립
+### Step 4: 결과 확인과 리포트 틀
 
-리뷰어의 세 블록을 받아 아래 리포트를 조립한다. **다시 리뷰하지 않는다** — 지적을 더하거나 내용을 바꾸지 않는다. 다만 다음은 고친다.
+리뷰어의 세 블록을 받아 아래 리포트의 틀을 쓴다. **다시 리뷰하지 않는다** — 지적을 더하거나 내용을 바꾸지 않는다. 다만 다음은 고친다.
 
 - 등급이 두 축과 어긋난 행(`영향: 높음 · 확신: 낮음`인데 🔴 등)은 `00-rule.md` 파생표대로 등급만 고친다
 - `영향: 낮음` 행이 섞여 오면 빼고, `미해결 / 후속 확인`에 "영향 낮음으로 판정돼 생략한 지적 N건"을 한 줄 적는다(사용자가 낮은 영향도 보자고 한 실행은 빼지 않는다)
 - 리뷰어가 블록을 내지 못했거나 출력이 형식을 벗어나 지적을 읽을 수 없으면, 읽은 척 요약하지 않고 그 사실을 `판정`에 적는다
+
+틀은 **파일 쓰기 도구로** `$REPORT_DIR/.timing/$REPORT_BASENAME.template.md`에 쓴다 — 쓰는 시점은 Step 5의 4번(`render.start`와 기록 검사 뒤)이다. `실행 타임라인` 섹션의 표 자리에는 `{{timeline}}` 한 줄만 둔다 — 그 줄에 다른 글자를 두지 않는다. 표는 Step 5에서 스크립트가 끼운다. 그 밖의 `{…}` 칸은 모두 채운다. 남은 자리표시자가 있으면 조립이 거부한다.
 
 ```markdown
 # `{대상}` 빠른 코드 리뷰 리포트
@@ -160,6 +192,7 @@ task(
 > **변경 파일**: {N}개 | **규칙**: `fast.md` · `00-rule.md` · `correctness.md` | **플러그인 버전**: {`$RULES_DIR/../.claude-plugin/plugin.json`의 version}
 > **범위**: {`review-scope.mjs`의 `line` 그대로 — 예: 리뷰 대상 110개 · 테스트·mock 제외 25개 · 검토 안 함 96개 — React 규칙이 다루지 않는 언어: apps/backend(pyproject.toml) 94개}
 > **변경 의도**: {Step 2의 출처 — `PR #N 설명` / `사용자 요구` / `커밋 메시지(의도 추정)` / `없음`}
+> **실행 ID**: {preflight의 `실행 ID`} | **기록**: `.timing/{REPORT_BASENAME}.jsonl`{ | 작업 트리에 커밋하지 않은 변경 N개 — preflight가 알렸을 때만}
 
 ## 판정
 
@@ -175,14 +208,37 @@ task(
 
 {기본: `실행하지 않음 — fast는 lint·typecheck·test를 돌리지 않는다.` 사용자가 요청해 돌렸으면 명령·폴더·종료 코드·실패 요약을 표로}
 
+## 실행 타임라인
+
+{{timeline}}
+
+{`--check --before-end`가 종료 코드 1이었으면 짚은 빈 곳을 여기 적는다. 기록을 남기지 못했으면 그 사실을 적는다}
+
 ## 미해결 / 후속 확인
 
 {리뷰어의 `### 확인 필요`와 `### 따라가지 못한 변경`. 생략한 영향 낮음 지적 수. 더 넓은 확인이 필요하면 `/code-review-full`을 제안한다 — 자동으로 돌리지 않는다}
 ```
 
-### Step 5: 문서 저장
+### Step 5: 문서 저장과 기록 닫기
 
-리포트 저장은 `workflow-contract.md` C-7을 따른다 (`workflow-name`은 `fast`). 저장 자리는 사용자가 이번 요청에서 정한 곳 → 사용자·프로젝트 지시 파일(전역 포함 `CLAUDE.md`·`AGENTS.md`)에 적힌 문서 저장 위치 → `./review-reports/` 순서로 정하고, 대상 저장소의 루트에는 두지 않는다. 섹션 이름·순서·헤딩 레벨은 C-7 **문서 골격**을 따르되, fast에는 실행 계획·모듈 섹션·특수 패스·요약·실행 타임라인이 없으므로 그 섹션들은 생략한다. 문서 내용은 **이번 브랜치에서 바뀐 동작의 결함** 중심으로 유지하고, 일반 설명은 최소화한다.
+리포트 저장은 `workflow-contract.md` C-7을 따른다 (`workflow-name`은 `fast`). 자리와 이름은 Step 0에서 정한 `$REPORT_DIR`·`$REPORT_BASENAME`이다. 섹션 이름·순서·헤딩 레벨은 C-7 **문서 골격**을 따르되, fast에는 실행 계획·모듈 섹션·특수 패스·요약이 없으므로 그 섹션들은 생략한다. 문서 내용은 **이번 브랜치에서 바뀐 동작의 결함** 중심으로 유지하고, 일반 설명은 최소화한다.
+
+순서대로 한다. 기록 명령의 `--dir`·`--run`은 Step 0과 같은 값이다.
+
+1. 틀을 쓰기 전에 `--phase render.start --set findings=<상세 지적 행 수>`
+2. `review-timeline.mjs --summary --out "$REPORT_DIR/.timing/$REPORT_BASENAME.timeline.md"` — 표를 파일로 받는다. 셸 출력으로 받아 옮기지 않는다(PowerShell 5.1이 한글을 깨뜨린다)
+3. `review-timeline.mjs --check --before-end` — 종료 코드 1은 리뷰 실패가 아니다. 짚은 빈 곳을 틀의 `실행 타임라인` 섹션에 적는다
+4. Step 4의 틀을 파일 쓰기 도구로 쓴다
+5. 조립한다. 스크립트가 틀의 `{{timeline}}` 자리에 2의 표를 끼워 `$REPORT_DIR/$REPORT_BASENAME.md`를 쓰고 `path`·`lines`를 낸다. 표가 이 실행의 기록이 아니거나 그 뒤로 기록이 늘었으면 쓰지 않는다 — 2부터 다시 한다
+
+   ```bash
+   node "$RULES_DIR/../scripts/assemble-report.mjs" --dir "$REPORT_DIR" --run "$REPORT_BASENAME" --template "$REPORT_DIR/.timing/$REPORT_BASENAME.template.md"
+   ```
+
+6. `--phase render.wrote --set path=<조립이 낸 path> --set lines=<조립이 낸 lines>`
+7. `--phase run.end --set verdict=<blocking|unconfirmed|no-high-impact>` — 판정 첫 줄과 같은 것: 🔴이 있으면 `blocking`, 🟡만 있으면 `unconfirmed`, 둘 다 없으면 `no-high-impact`. **`run.end`가 마지막 줄이다.** 그 뒤에 기록을 덧붙이지 않는다
+
+리포트를 옮기라는 요청을 받으면 `.timing/`도 함께 옮긴다.
 
 ## 사용법
 
@@ -198,7 +254,8 @@ task(
 - 이 모드는 완전한 리뷰 대신 **영향이 높은 결함만 빠르게 보는 저지연/timeout-safe 경로**다. 영향 낮은 지적·도구 실행·특수 패스·교차검증은 하지 않으며, 리포트 `판정`이 그 사실을 적는다
 - 큐 포화(queue saturation), tail latency, timeout 위험이 우려될 때 이 모드를 사용한다
 - 상세/포괄적 리뷰가 필요하면 `/code-review-full`을 사용한다
-- fast 룰 문서(`fast.md`)는 숫자 prefix 상세 모듈 전체의 압축본이며, 모듈이 추가·삭제·재배치되면 fast.md의 해당 섹션도 함께 갱신해야 한다. 압축하면서 원본의 예외 조항을 빠뜨리면 오탐이 생긴다
+- fast 룰 문서(`fast.md`)는 숫자 prefix 상세 모듈 전체의 압축본이며, 모듈이 추가·삭제·재배치되거나 **조항이 고쳐지면** fast.md의 해당 섹션도 같은 변경에서 갱신해야 한다. 압축하면서 원본의 예외 조항이나 담당 이동을 빠뜨리면 오탐이 생긴다. 2026-08-13부터 11-10까지 조항이 고쳐지는 동안 fast.md는 따라가지 않았고, 검사(`fast-sync`)는 그것을 잡지 못했다
 - 빈 diff면 리뷰를 수행하지 않는다
 - 도구는 기본으로 돌리지 않고, 사용자가 요청해 돌릴 때도 수정 옵션 없이 돌린다 (`00-rule.md` 00-9)
 - diff·의도 수집은 오케스트레이터가 하고, producer는 받은 것을 읽기만 하는 `rule-module-reviewer`로 띄운다 (C-6)
+- 단계별 시간은 `.timing/<리포트 이름>.jsonl`에 남는다. 리포트의 `실행 타임라인` 표가 그 요약이고, 정본은 기록 파일이다 (C-9)

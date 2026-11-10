@@ -2449,3 +2449,28 @@ test('--check는 검색 결과 파일이 검색이 기록한 해시와 다르면
   writeFileSync(out, body.replace('"status"', '"extra":1,"status"'), 'utf8')
   assert.match(check(dir).stdout, /검색 결과 파일의 해시\([0-9a-f]{12}\)가 기록\([0-9a-f]{12}\)과 다르다/)
 })
+
+test('fast 실행의 기록 — 리뷰어 한 번의 시작·끝으로 소요가 나오고, 번호 모듈 후보가 0개라 검사가 팬아웃을 요구하지 않는다', t => {
+  // fast는 작업 대장 없이 리뷰어 하나를 띄운다. 띄우기 직전에 module.start, 결과를 받은 직후에 module.done을 남기면
+  // 그 사이가 리뷰어가 쓴 시간이다. preflight가 남기는 후보 수는 0이다(번호 모듈을 띄우지 않는다).
+  const dir = freshDir(t)
+  log(dir, 'run.start', { host: 'test', rules: 'r', version: 'v', branch: 'b', changedFiles: 3, candidates: 0, workflow: 'fast' })
+  log(dir, 'scope.done', { files: 3, excluded: 0, outside: 0 })
+  log(dir, 'module.start', { module: 'fast', attempt: 1 })
+  log(dir, 'module.done', { module: 'fast', attempt: 1, status: 'ok', findings: 2 })
+  // 수집 수치는 스크립트가 센다 — fast의 주 리뷰 패스는 번호 모듈이 아니라 `fast` 하나다
+  const ended = log(dir, 'dispatch.end', {})
+  assert.equal(ended.status, 0, ended.stderr)
+  const counted = linesOf(dir).at(-1)
+  assert.deepEqual([counted.terminalOk, counted.terminalFailed, counted.attemptsTotal, counted.attemptsFailed], [1, 0, 1, 0])
+  log(dir, 'render.start', { findings: 2 })
+  const before = spawnSync(process.execPath, [SCRIPT, '--dir', dir, '--run', RUN, '--check', '--before-end'], { encoding: 'utf8' })
+  assert.equal(before.status, 0, before.stdout + before.stderr)
+  const table = summary(dir)
+  assert.equal(table.status, 0, table.stderr)
+  assert.match(table.stdout, /\*\*디스패치\*\* 모듈 1개 · 시도 1개\(완료 1 · 미완료 0\)/)
+  log(dir, 'render.wrote', { path: join(dir, `${RUN}.md`), lines: 40 })
+  log(dir, 'run.end', { verdict: 'high-impact-2' })
+  const checked = check(dir)
+  assert.equal(checked.status, 0, checked.stdout + checked.stderr)
+})
