@@ -149,6 +149,8 @@ test('fast 실행은 full과 같은 스크립트로 결과를 받고 상세 지�
 test('fast 실행의 지적이 없으면 정확성은 "지적 없음."이고 모듈 섹션은 없다 — 결과 없음으로 그리지 않는다', t => {
   const run = runFast(t, { schemaVersion: 1, findings: [], openQuestions: [] })
   assert.doesNotMatch(run.findings, /^### \d\d /m)
+  // 섹션이 하나도 없으면 상세 지적이 잘린 것처럼 보인다 — 2026-11-10 PR #255 리포트가 그랬다. 없다고 적는다
+  assert.match(run.findings, /지적이 있는 모듈만 싣는다\.\n\n규칙 모듈\(01~21\)에서 나온 지적 없음\.\n/)
   assert.match(run.findings, /^### 정확성\n\n지적 없음\.$/m)
   assert.doesNotMatch(run.findings, /결과 없음/)
 })
