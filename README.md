@@ -525,6 +525,22 @@ What changed:
 
 This is MINOR: rule IDs and past reports keep their meaning, while fast's report takes full's format. No review was run with the new instructions; detection rate, false positives and latency — including the cost of the larger digest — are unmeasured. The timeline is what will measure the last one.
 
+## Follow-ups from the first structured fast run (2.28.1)
+
+The first two `/code-review-fast` runs on 2.28.0 (OpenCode; a 33-file and a 17-file frontend change) took the new path end to end — task ledger, location check, renderer, snapshot, shared template — and the one finding they produced holds in the code. Their records showed two defects:
+
+- **The reviewer read a quarter of the intent.** The host's orchestrator rewrites delegation prompts into its own template and swaps long content for file paths. It passed `intent.json`, which keeps each source on one line; the read tool cuts a line at 2,000 characters, so the reviewer saw 2,000 of the PR description's 8,413 characters and 2,000 of 7,311 characters of commit messages; the second run lost 60% of its PR description the same way. `review-intent.mjs` now also writes the same block, with the original line breaks, to `.timing/<run>.intent.md`, and the fast and full skills say to pass that file — never the JSON — when the block cannot go into the prompt. Wording alone cannot stop a host from rewriting the prompt, so the fix is a file that survives being read.
+- **The snapshot said tools ran when none did.** When base had moved ahead on the same files, the `실행 계획` block always said lint, typecheck and test ran on a HEAD that had not caught up. The snapshot now records which tools started (`tools`, without the existing-implementation search) and says so only when they did; otherwise it says no tools ran. A snapshot written before this field is redrawn with "if they ran".
+
+The reports themselves had four more rough spots, fixed here:
+
+- **The timeline's first row held the whole `run.start` record** — about 1,100 characters in one cell. The row now shows the fields that identify the run (workflow, host, version, branch, base, changed files, candidates) and says how many more are in the sidecar.
+- **`←최장` landed on `task.bind`.** On a host that returns only when the reviewer is done, the reviewer's 226 seconds sat on the row that binds its task id. When modules or tools were running during the longest gap, the table now says so underneath — the same count `--check` already gave.
+- **`미해결 / 후속 확인` said `없음`** while the plan block above it reported that the target changed mid-review and that base had touched two of the same files. The shared template now asks for both to be carried over as things to look at again.
+- **The pass table in `요약` dropped the main pass** in the run with no findings: it listed Props, math, exception and correctness, so it read as a review that ran only the special passes. The template now fixes the first row as the main review pass — the numbered modules in full, the `fast` reviewer in fast.
+
+This is PATCH. The run also passed its 284 KB diff as a file path; the reviewer paged through all of it this time, and a separate diff file would hit the same line limit, so that is left as is.
+
 ## Applicability metadata
 
 `review-rules/catalog.json` records **when** a module applies — required profile (FSD, Tailwind, RSC, Electron, TanStack Query, server code, contract provider), minimum React version, which workflows load it, and which individual rules carry a narrower gate than their module. The Markdown modules stay canonical for **what** a rule says; the catalog never generates documentation and never restates rule text.
