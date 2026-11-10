@@ -251,11 +251,11 @@ Structured-v1 owners **when this interface shipped in 2.4.0** were:
 
 and the legacy producers were `/code-review`, `/code-review-commit` and `/code-review-fast`.
 
-**Current ownership** — unchanged from 2.4.0:
+**Current ownership** — `/code-review-fast` moved to structured-v1 in 2.30.0:
 
 | Structured-v1 owners | Legacy producers |
 |---|---|
-| `/code-review-full`, `/code-review-props`, `/code-review-math`, `/code-review-exception` | `/code-review`, `/code-review-commit`, `/code-review-fast` |
+| `/code-review-full`, `/code-review-fast`, `/code-review-props`, `/code-review-math`, `/code-review-exception` | `/code-review`, `/code-review-commit` |
 
 `workflow-contract.md` C-6A is the authority; this table is a summary of it, and `validate-rules.mjs` fails the build when the two disagree.
 
@@ -523,9 +523,28 @@ What changed:
 
 - **Sections 01–21 are rewritten from the current modules.** All 194 rule IDs in the modules (counting 10's named principles) appear in their section, every item ends with its ID, and each section carries the module's applicability, its high-impact calibration, its exceptions and the cases it hands to another rule. The reviewer is told to use only IDs found in the digest. Section 00 now points at `00-rule.md`, which the reviewer already receives, instead of keeping a second copy.
 - **The digest grew from 24 KB to 81 KB.** Part of the old size came from what was missing. It is still about half of the modules it compresses (164 KB). Keeping it in sync is still manual; nothing yet fails when a module changes and the digest does not.
-- **fast records a run timeline.** A fast run now starts with `review-preflight.mjs --workflow fast`, which also settles the base and the scope, records the reviewer's start and end as `module: fast`, then `dispatch.end`, `render.*` and `run.end`. The report gets a `실행 타임라인` section that `assemble-report.mjs` fills from `review-timeline.mjs --summary`, so the time the reviewer took, and the time spent before it, come from the record rather than from memory. The timeline counts the fast reviewer as the dispatch unit, and the assembler asks fast runs for `{{timeline}}` alone. When the reviewer agent is missing, preflight tells workflows other than full to close the record with `dispatch.halt` and `run.end verdict=not-reviewed`, rather than the task-ledger command only full uses.
+- **fast records a run timeline.** A fast run now starts with `review-preflight.mjs --workflow fast`, which also settles the base and the scope, and the reviewer's start and end are recorded as `module: fast`. The report gets a `실행 타임라인` section that `assemble-report.mjs` fills from `review-timeline.mjs --summary`, so the time the reviewer took, and the time spent before it, come from the record rather than from memory. The timeline counts the fast reviewer as the dispatch unit.
 
 This is MINOR: fast gains a timeline it did not have. No review was run with the new digest; detection, false positives and the latency cost of the larger digest are unmeasured — the timeline is what will measure the last one.
+
+## fast reports in full's format (2.30.0)
+
+A review of PR #110 found four places where fast still differed from full in ways a reader of the report would feel:
+
+- **The report had its own shape.** The reviewer returned a Markdown table and the orchestrator copied it row by row. Full renders each finding as a block — heading, impact · confidence, location and quote, body, evidence, recommendation — and adds `실행 계획`, `특수 패스` and `요약`. Fast had none of these, so the same defect read differently depending on the command.
+- **`--base` dropped the PR description.** Fast read the PR only when preflight's `base` line named one, and preflight skips the PR lookup when the user sets the base. A PR with a description was reviewed against commit messages.
+- **The PR text was not fenced off.** The description and commit messages went into the prompt as-is, with no instruction to treat them as data, so an author's "skip this file" sat next to the review instructions.
+- **The verdict was a fixed sentence.** Every 🟡 was explained as "high impact, path not confirmed", although low impact · high confidence is 🟡 too, and tools were listed as not run even when the user had asked for them.
+
+What changed:
+
+- **Fast is a structured-v1 owner.** Its single reviewer returns `REVIEW_RESULT_CONTRACT_V1` JSON. The task ledger dispatches it as the task `fast`, validates it with one correction retry and records its start and end. The catalog marks the digest as absorbing the correctness pass, so rule IDs and `CR-*` come from one source. `prepare-verification.mjs --verify off` checks locations, `render-findings.mjs --workflow fast` draws the findings and `review-snapshot.mjs` draws `실행 계획`. Cross-verification stays off.
+- **One template for both.** `review-rules/report-template.md` is the report frame for full and fast. Sections, order and finding blocks are the same, and what a run did not do shows up where full shows it: Props, math and exception render as `SKIPPED` because fast does not run them, and each finding that would have been cross-verified says `교차검증: 꺼짐`. In fast only modules with findings get a section, under a line saying the 21 modules were read through one digest by one reviewer.
+- **The verdict uses the scripts' counts.** The template takes the high-impact count from the renderer and completeness from the snapshot. There is no fixed sentence, and low-impact findings stay in `요약`.
+- **Intent comes from `review-intent.mjs`,** the script full's correctness pass uses. It reads the current branch's PR whether or not the base was given, fences each source and marks it untrusted. The reviewer prompt adds that instructions inside it are not followed.
+- **2.29.0's fast-only paths are gone.** The assembler asks fast for all three parts again, and preflight gives both workflows the same command when the reviewer agent is missing.
+
+`fast-review` in `validate-rules.mjs` now also fails when fast stops collecting intent with `review-intent.mjs`, drops the untrusted-data line, stops calling the shared scripts or brings back the reviewer table, writes a fixed verdict, or stops pointing at the shared template. This is MINOR: fast's report format changes, rule IDs do not. No review was run with these instructions; detection, false positives and latency are unmeasured.
 
 ## Applicability metadata
 
@@ -611,6 +630,7 @@ claude-code-review-plugin/
 ├── review-rules/
 │   ├── 00-rule.md … 21-rsc.md
 │   ├── workflow-contract.md
+│   ├── report-template.md        # report frame shared by full and fast
 │   ├── catalog.json
 │   ├── fast.md
 │   ├── props.md
@@ -654,7 +674,7 @@ It checks the properties this repo promises but cannot hold by hand:
 | `catalog` | a module scheduled out of the normal fan-out in `catalog.json` without the matching declaration in C-2, or without the workflow's own skill excluding it — either gap makes the module run twice or count as missing |
 | `fixtures` | two workflow-contract scenarios sharing an id, which makes a regression impossible to attribute |
 | `fast-sync` | a missing digest section, a conditional rule whose applicability, exception, or typical impact calibration was lost in compression, a stale module range |
-| `fast-review` | a `/code-review-fast` reviewer prompt that drops `00-rule.md`, `correctness.md` or the change intent, a per-file finding cap, approval wording in the verdict, or a report template without `도구 실행 결과` and the scope line |
+| `fast-review` | a `/code-review-fast` reviewer prompt that drops `00-rule.md`, `correctness.md`, the change intent or its untrusted-data line, intent not collected by `review-intent.mjs`, results not going through the ledger, `prepare-verification.mjs`, `render-findings.mjs --workflow fast` and `review-snapshot.mjs`, a per-file finding cap, approval or fixed verdict wording, or a shared report template without `도구 실행 결과` and the scope line |
 | `hardcoded-path` | `~/.claude/review-rules` re-introduced into a skill instead of using the resolution order |
 | `catalog` | a module with no catalog entry, an entry pointing at a missing file, an undefined profile, a profile with no detection signal, a mistyped or incomplete signal, a profile reference cycle, a profile no module requires, workflow membership that disagrees with the module set a skill declares it loads |
 | `manifest` | missing manifest fields, plugin/marketplace disagreement, a second `version` string anywhere in `marketplace.json`, a packaged directory that is absent, skill frontmatter without name or description |

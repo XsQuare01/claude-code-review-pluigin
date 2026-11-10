@@ -19,8 +19,6 @@
 //   {{findings}}  → .timing/<run>.findings.md  (render-findings.mjs --out)
 //   {{timeline}}  → .timing/<run>.timeline.md  (review-timeline.mjs --summary --out, `render.start` 뒤에 뽑은 것)
 //
-// `run.start`의 workflow가 `fast`면 {{timeline}} 하나만 둔다 — fast에는 스냅숏도 렌더러도 없다.
-//
 // 조각은 이 실행의 것이어야 한다. 스냅숏 블록과 상세 지적은 `run.start`의 실행 ID를, 타임라인 표는 이 실행의 사이드카
 // 경로와 지금의 이벤트 수를 적고 있어야 한다. 조립은 지금 구간(마지막 `run.start`·`run.resume` 뒤)의 `render.start`
 // 뒤에 하고, 그 구간에 `run.end`가 있으면 하지 않는다.
@@ -82,19 +80,11 @@ if (!events.slice(segment.index).some(event => event?.phase === 'render.start'))
 const runId = events.find(event => event?.phase === 'run.start')?.runId
 if (typeof runId !== 'string' || !runId) die(`run.start에 runId가 없다 — 조각이 이 실행의 것인지 대조할 수 없다. review-preflight.mjs로 시작한 실행만 조립한다`)
 
-const ALL_PARTS = [
+const PARTS = [
   { name: 'plan', from: 'review-snapshot.mjs --out' },
   { name: 'findings', from: 'render-findings.mjs --out' },
   { name: 'timeline', from: 'review-timeline.mjs --summary --out' },
 ]
-// 워크플로우마다 스크립트가 만드는 조각이 다르다. fast에는 스냅숏도 렌더러도 없고 리뷰어 하나의 표를 오케스트레이터가
-// 틀에 옮긴다 — 스크립트가 만드는 조각은 타임라인 표 하나다. 이름이 없는 예전 기록과 full은 셋을 요구한다.
-const PARTS_BY_WORKFLOW = { fast: ['timeline'] }
-const workflow = events.find(event => event?.phase === 'run.start')?.workflow
-const PARTS = PARTS_BY_WORKFLOW[workflow]
-  ? ALL_PARTS.filter(({ name }) => PARTS_BY_WORKFLOW[workflow].includes(name))
-  : ALL_PARTS
-const needs = name => PARTS.some(part => part.name === name)
 const partPath = name => join(dir, '.timing', `${run}.${name}.md`)
 
 let template
@@ -114,7 +104,7 @@ for (const { name, from } of PARTS) {
 // 남은 자리표시자는 채우지 않은 칸이다. 그대로 저장하면 리포트에 `{{VERDICT}}`가 남는다.
 const leftover = [...new Set(lines.flatMap(line => line.match(/\{\{[^{}\n]*\}\}/g) ?? []))]
   .filter(token => !PARTS.some(({ name }) => token === `{{${name}}}`))
-if (leftover.length) die(`틀에 채우지 않은 자리표시자가 있다: ${leftover.join(', ')} — 오케스트레이터가 쓸 칸이면 내용을 쓰고, 스크립트 조각이면 ${PARTS.map(({ name }) => `{{${name}}}`).join('·')} 중 하나다${workflow ? `(${workflow} 워크플로우)` : ''}`)
+if (leftover.length) die(`틀에 채우지 않은 자리표시자가 있다: ${leftover.join(', ')} — 오케스트레이터가 쓸 칸이면 내용을 쓰고, 스크립트 조각이면 {{plan}}·{{findings}}·{{timeline}} 중 하나다`)
 
 const parts = new Map()
 for (const { name, from } of PARTS) {
@@ -127,10 +117,10 @@ for (const { name, from } of PARTS) {
 // 적는다. 이름이나 개수 하나만 보면 다른 실행의 조각이 지나간다 — 이벤트 수가 같은 두 실행의 표를 바꿔 넣으니
 // 조립이 통과해 다른 브랜치의 기록이 리포트에 실렸다(PR #105 리뷰에서 재현).
 const runIdMark = `실행 ID ${codeSpan(runId)}`
-if (needs('plan') && (!parts.get('plan').includes(`.timing/${run}.snapshot.json`) || !parts.get('plan').includes(runIdMark))) {
+if (!parts.get('plan').includes(`.timing/${run}.snapshot.json`) || !parts.get('plan').includes(runIdMark)) {
   die(`${partPath('plan')}은 이 실행(${run}, ${runIdMark})의 스냅숏 블록이 아니다 — review-snapshot.mjs --dir … --run ${run} --out으로 다시 쓴다`)
 }
-if (needs('findings') && !parts.get('findings').includes(runIdMark)) {
+if (!parts.get('findings').includes(runIdMark)) {
   die(`${partPath('findings')}은 이 실행(${runIdMark})의 상세 지적이 아니다 — 이 실행의 routed 출력(.timing/${run}.routed.json)으로 render-findings.mjs --out을 다시 돌린다`)
 }
 {

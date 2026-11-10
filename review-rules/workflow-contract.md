@@ -262,12 +262,12 @@ baseline이 없을 때 `미측정`으로 적는 것으로 끝내지 않는다. p
 | `agents/correctness-reviewer.md` | correctness pass | direct agent only (`not structured-v1 until orchestrated consumer exists`) |
 | `skills/code-review/SKILL.md` | `default` | legacy producer 유지 |
 | `skills/code-review-commit/SKILL.md` | `commit` | legacy producer 유지 |
-| `skills/code-review-fast/SKILL.md` | `fast` | legacy producer 유지 |
+| `skills/code-review-fast/SKILL.md` | `fast` 단일 리뷰어(압축 규칙 + 정확성 기준, 교차검증 없음) | structured-v1 producer 지시 보유 |
 
 - numbered rule modules `01`~`21`과 specialist rule docs `props.md` / `math.md` / `exception.md` / `correctness.md`는 **workflow-neutral domain judgment docs**다. producer schema, raw JSON, malformed-output, renderer, legacy/structured ownership을 직접 소유하지 않는다.
 - 직접 호출하는 correctness agent는 `CR-{n}` namespace와 `00-9`/`00-10`/`00-11` evidence discipline을 그대로 따르지만, **phase-1 structured-v1 owner는 아니다.** 그 에이전트의 산문 결과를 받는 validation/render consumer가 없으므로 direct-agent evidence-first 결과만 낸다.
 - **`full`의 정확성 패스는 그 에이전트를 쓰지 않는다(2.17.0).** `--correctness on`일 때 full SKILL이 structured-v1 producer 지시를 보유하고, 판정 문서 `correctness.md`를 쓰기 도구 없는 `rule-module-reviewer`에게 넘긴다. 결과는 다른 특수 패스와 같은 validation → aggregation → verification → rendering을 지난다. 판정 기준은 에이전트 문서와 `correctness.md`가 같고, `validate-rules.mjs`가 두 문서를 대조한다.
-- 아래 lifecycle은 **structured-v1 owner에만 적용**한다. legacy owner(`default`, `commit`, `fast`)는 기존 producer 계약을 유지한다.
+- 아래 lifecycle은 **structured-v1 owner에만 적용**한다. legacy owner(`default`, `commit`)는 기존 producer 계약을 유지한다. `fast`는 2.30.0부터 structured-v1 owner다 — 리뷰어 하나의 결과를 full과 같은 검증·위치 확인·렌더러로 받고, 교차검증(C-6B)만 하지 않는다.
 - legacy와 structured-v1은 **출력 계약**의 구분이다. producer를 어느 에이전트로 띄우고 diff를 누가 뜨는지는 구분 없이 C-4·C-6을 따른다 — legacy owner의 producer도 오케스트레이터가 넘긴 diff를 받는 `rule-module-reviewer`다.
 
 `REVIEW_RESULT_CONTRACT_V1`을 쓰는 owner에서는 결과가 **producer → validation → aggregation → Markdown rendering** 순서로 흐른다. 공통 원칙은 다음과 같다.
@@ -1197,12 +1197,12 @@ H1은 **`# {대상} {워크플로우 이름} 리포트`** 형식이며, 대상�
 | `#` | `{대상} {워크플로우 이름} 리포트` | 문서에 **하나뿐** | 전체 |
 | `##` | 리뷰 기준 | 범위, base, merge-base, HEAD, 작업 트리(`clean` 또는 커밋하지 않은 변경 수), 실행 ID, `RULES_DIR`, 플러그인 버전, 프로젝트 프로파일 | 전체 |
 | `##` | 판정 | 결론 한 줄과 차단 사유. 길어야 서너 줄 | 전체 |
-| `##` | 실행 계획 | 후보 N / 적용 M / `SKIPPED`·`UNKNOWN` 목록과 사유 / 실패 클래스별 건수. `full`은 맨 앞에 `review-snapshot.mjs` 블록(검토 상태와 모듈별 범위, C-10)을 그대로 붙인다 | 모듈을 쓰는 워크플로우 |
-| `##` | 상세 지적 | 아래 모듈 섹션을 담는다. `full`은 `render-findings.mjs` 출력을 그대로 붙인다 — 표기를 직접 만들지 않는다. 다른 워크플로우는 각자의 기존 producer 계약과 표 형식을 그대로 유지한다 | 전체 (`render-findings.mjs` 호출은 `full`만) |
+| `##` | 실행 계획 | 후보 N / 적용 M / `SKIPPED`·`UNKNOWN` 목록과 사유 / 실패 클래스별 건수. `full`·`fast`는 맨 앞에 `review-snapshot.mjs` 블록(검토 상태와 모듈별 범위, C-10)을 그대로 붙인다 | 모듈을 쓰는 워크플로우, `fast` |
+| `##` | 상세 지적 | 아래 모듈 섹션을 담는다. `full`·`fast`는 `render-findings.mjs` 출력을 그대로 붙인다 — 표기를 직접 만들지 않는다. `fast`는 지적이 있는 번호 모듈만 섹션이 된다(리뷰어 하나가 압축 규칙으로 01~21을 함께 봤으므로). 다른 워크플로우는 각자의 기존 producer 계약과 표 형식을 그대로 유지한다 | 전체 (`render-findings.mjs` 호출은 `full`·`fast`) |
 | `###` | `{NN} {모듈 제목}` | 모듈 하나당 하나 | 모듈을 쓰는 워크플로우 |
 | `####` | `{severity} {규칙 ID} {제목}` | finding 하나당 하나 | 전체 |
-| `##` | 특수 패스 | Props·수학·예외를 `###`로 **셋 다** 낸다 — 지적이 없으면 "지적 없음.", 실행 계획에서 건너뛴 패스는 `SKIPPED`와 사유, 결과 파일이 수집되지 않은 모듈·패스는 "결과 없음"(`collected.sources` 대조 — 0건과 다르다). 그 뒤에 선택 패스 `정확성`이 온다 — 켰으면 같은 규칙으로, 켜지 않았으면 `SKIPPED`(선택 패스, 켜지 않았다)로 낸다. `render-findings.mjs` 출력을 그대로 붙인다. 표기를 직접 만들지 않는다 | `full` |
-| `##` | 요약 | 중복 제거된 지적을 severity 순으로 | `full`, `default` |
+| `##` | 특수 패스 | Props·수학·예외를 `###`로 **셋 다** 낸다 — 지적이 없으면 "지적 없음.", 실행 계획에서 건너뛴 패스는 `SKIPPED`와 사유, 결과 파일이 수집되지 않은 모듈·패스는 "결과 없음"(`collected.sources` 대조 — 0건과 다르다), 그 워크플로우가 돌리지 않는 패스는 `SKIPPED`와 그 사실(catalog의 `workflows`). 그 뒤에 `정확성`이 온다 — full에서는 선택 패스라 켰으면 같은 규칙으로, 켜지 않았으면 `SKIPPED`(선택 패스, 켜지 않았다)로 내고, fast에서는 리뷰어가 같은 패스에서 본 결과다. `render-findings.mjs` 출력을 그대로 붙인다. 표기를 직접 만들지 않는다 | `full`, `fast` |
+| `##` | 요약 | 중복 제거된 지적을 severity 순으로 | `full`, `fast`, `default` |
 | `##` | 도구 실행 결과 | C-6 / `00-rule.md` 00-9 | 전체 |
 | `##` | 실행 타임라인 | C-9 `--summary` 출력 표를 그대로. 표를 직접 만들지 않는다 | 전체 |
 | `##` | 미해결 / 후속 확인 | 확인이 남은 항목 | 전체 |
@@ -1211,7 +1211,8 @@ H1은 **`# {대상} {워크플로우 이름} 리포트`** 형식이며, 대상�
 - 워크플로우에 해당하지 않는 섹션은 **생략한다**. 빈 섹션을 남기지 않는다
 - 위 목록에 없는 섹션을 추가하지 않는다. 남길 내용이 있으면 `미해결 / 후속 확인`에 넣는다
 - **플러그인 버전을 적는 이유**는 severity의 눈금이 버전에 따라 다르기 때문이다. 같은 🔴이 다른 판정 기준에서 나왔을 수 있으므로, 어느 눈금으로 판정된 리포트인지 리포트만 보고 알 수 있어야 한다. `RULES_DIR`이 어느 규칙 파일을 썼는지 알려주는 것과 같은 목적이다
-- **`full`은 스크립트가 만든 조각을 셸로 옮기지 않는다.** `review-snapshot.mjs`·`render-findings.mjs`·`review-timeline.mjs --summary`에 `--out "$REPORT_DIR/.timing/$REPORT_BASENAME.{plan,findings,timeline}.md"`를 주어 파일로 받고, 오케스트레이터가 파일 쓰기 도구로 쓴 틀(`{{plan}}`·`{{findings}}`·`{{timeline}}` 줄 하나씩)과 `assemble-report.mjs`로 잇는다. 그 스크립트가 `$REPORT_DIR/$REPORT_BASENAME.md`를 쓰고 `render.wrote`에 남길 `path`·`lines`를 낸다. 2026-10-13 실행은 세 출력을 PowerShell 변수로 받아 조립했고, PowerShell 5.1이 node의 UTF-8 출력을 시스템 코드 페이지로 읽어 한글이 깨진 리포트를 저장했다. 조립 스크립트는 자리표시자가 빠지거나 남았을 때, 조각이 다른 실행의 것일 때(스냅숏 블록과 상세 지적에 적힌 실행 ID가 `run.start`의 것과 다르거나, 타임라인 표의 출처가 이 실행의 사이드카가 아닐 때), 타임라인 표가 지금 기록보다 앞선 시점의 것일 때, 깨진 글자가 섞였을 때 아무것도 쓰지 않는다. 이름이나 이벤트 수 하나만 보면 다른 실행의 조각이 지나간다 — 이벤트 수가 같은 두 실행의 표를 바꿔 넣으니 다른 브랜치의 기록이 리포트에 실렸다(PR #105 리뷰에서 재현). 끝났는지는 지금 구간에서 본다. 부분 보고로 닫은 뒤 `run.resume`으로 이어 간 실행(C-12)은 새 구간의 `render.start` 뒤에 조각을 다시 만들어 조립하고, 앞 구간의 `run.end`나 `render.start`로 막거나 통과시키지 않는다
+- **`full`·`fast`의 틀은 `report-template.md` 하나다.** 두 워크플로우는 같은 틀에 같은 스크립트 조각을 끼운다 — 섹션 순서와 지적 블록이 같고, 하지 않은 일은 같은 자리(실행 계획·특수 패스·지적의 `교차검증:`·도구 실행 결과)에서 보인다. 판정의 수는 렌더러의 `높은 영향의 차단 후보`와 스냅숏의 `검토 상태`에서 옮기고 고정 문장으로 쓰지 않는다(틀 파일의 「판정 쓰는 법」). 2.29.0까지 fast는 리뷰어 표를 옮겨 적어 full과 형식이 달랐고, 판정이 🟡을 한 가지 뜻으로만 설명했다(PR #110 리뷰)
+- **`full`·`fast`는 스크립트가 만든 조각을 셸로 옮기지 않는다.** `review-snapshot.mjs`·`render-findings.mjs`·`review-timeline.mjs --summary`에 `--out "$REPORT_DIR/.timing/$REPORT_BASENAME.{plan,findings,timeline}.md"`를 주어 파일로 받고, 오케스트레이터가 파일 쓰기 도구로 쓴 틀(`{{plan}}`·`{{findings}}`·`{{timeline}}` 줄 하나씩)과 `assemble-report.mjs`로 잇는다. 그 스크립트가 `$REPORT_DIR/$REPORT_BASENAME.md`를 쓰고 `render.wrote`에 남길 `path`·`lines`를 낸다. 2026-10-13 실행은 세 출력을 PowerShell 변수로 받아 조립했고, PowerShell 5.1이 node의 UTF-8 출력을 시스템 코드 페이지로 읽어 한글이 깨진 리포트를 저장했다. 조립 스크립트는 자리표시자가 빠지거나 남았을 때, 조각이 다른 실행의 것일 때(스냅숏 블록과 상세 지적에 적힌 실행 ID가 `run.start`의 것과 다르거나, 타임라인 표의 출처가 이 실행의 사이드카가 아닐 때), 타임라인 표가 지금 기록보다 앞선 시점의 것일 때, 깨진 글자가 섞였을 때 아무것도 쓰지 않는다. 이름이나 이벤트 수 하나만 보면 다른 실행의 조각이 지나간다 — 이벤트 수가 같은 두 실행의 표를 바꿔 넣으니 다른 브랜치의 기록이 리포트에 실렸다(PR #105 리뷰에서 재현). 끝났는지는 지금 구간에서 본다. 부분 보고로 닫은 뒤 `run.resume`으로 이어 간 실행(C-12)은 새 구간의 `render.start` 뒤에 조각을 다시 만들어 조립하고, 앞 구간의 `run.end`나 `render.start`로 막거나 통과시키지 않는다
 
 **하위 에이전트가 만든 헤딩을 그대로 옮기지 않는다.** structured result 워크플로우에서는 하위 에이전트가 헤딩 자체를 만들지 않고 JSON만 반환한다. 레거시 Markdown 워크플로우에서 헤딩이 섞여 오면 오케스트레이터가 이 골격에 맞게 낮춘다. 어느 경우든 최종 문서 골격과 Markdown 표기는 오케스트레이터가 정한다.
 
@@ -1309,7 +1310,7 @@ finding 헤딩 **바로 다음 줄**에 영향도와 확신도를 적는다. `00
 
 **판정은 전역이고, 표시는 형식이 허용하는 범위다.** 일곱 워크플로우 **전부**가 두 축을 판정하고 severity를 거기서 파생한다 (`00-rule.md`의 **Severity 기준**). 워크플로우마다 다른 것은 두 축을 **리포트에 찍는지 여부**뿐이다.
 
-위 `영향: … · 확신: …` 줄이 실제로 찍히는 자리는 골격의 `####` finding 헤딩이며, 오늘 그것은 `/code-review-full` 하나다. 표로 지적을 내보내는 형식 중에서는 `props.md`·`math.md`·`exception.md`의 출력 형식표가 `영향·확신` 열로 같은 두 값을 싣는다 — `/code-review-props`, `/code-review-math`, `/code-review-exception`과 `full`의 해당 패스가 여기 해당한다. `/code-review-fast`도 2.28.0부터 `fast.md`의 출력 형식표에 `영향 · 확신` 열을 둔다.
+위 `영향: … · 확신: …` 줄이 실제로 찍히는 자리는 골격의 `####` finding 헤딩이며, 오늘 그것은 `/code-review-full`과 `/code-review-fast`다(같은 렌더러). 표로 지적을 내보내는 형식 중에서는 `props.md`·`math.md`·`exception.md`의 출력 형식표가 `영향·확신` 열로 같은 두 값을 싣는다 — `/code-review-props`, `/code-review-math`, `/code-review-exception`이 여기 해당한다.
 
 남은 것은 숫자 모듈들의 출력 형식표이며, `/code-review`·`/code-review-commit`이 그 형식으로 지적을 낸다. 그 행에는 아직 두 축을 실을 자리가 없다. **그 리포트도 파생을 적용해 등급을 정하지만, 두 축이 보이지 않으므로 읽는 사람이 리포트만으로 등급을 검증할 수 없다.** 등급이 규칙 고정값이라는 뜻이 아니다 — 검증 가능성의 차이지 판정 면제가 아니다.
 
@@ -1482,14 +1483,14 @@ UTF-16 파일도 읽는다 — PowerShell 5.1의 `Set-Content -Encoding UTF8`은
 | `run.start` | 가장 먼저 | `host`, `rules`(해석된 RULES_DIR), `version`, `branch`, `changedFiles` · 무엇을 리뷰하는지(C-10): `runId`, `base`, `head`, `worktree`, `dirtyFiles`, `repo`, `repoRoot`, `rulesDigest` · 선택 패스를 켰는지: `correctness`(`on`/`off`, 선택 패스가 있는 워크플로우만) · 한도(C-12): `maxTasks`, `maxDurationSec`(준 것만), `staleAfterSec` · (새 실행으로 이어 받았으면) `continues` · (이전 리뷰와 비교하면, C-13) `previousSnapshot`, `previousRunId`, `previousSha256` · base 앞섬(C-6): `baseAhead`(merge-base 뒤 base의 커밋 수), (같은 파일을 바꿨으면) `baseOverlapCount`, `baseOverlap`(20개까지) · (의존성 매니페스트를 바꿨으면) `dependencyFiles` · `baseHead`(base 끝 SHA — 시작할 때 한 번 해석한다. 없으면 "base 끝 SHA 미기록") · (full이면, C-6C) `reuseSearch`(`planned`) · (사용자가 다른 언어를 정했으면) `language` — preflight가 쓴다 |
 | `run.resume` | 멈춘 실행을 이어 갈 때 (`review-tasks.mjs resume`이 쓴다) | 새 구간의 `maxTasks`·`maxDurationSec`·`staleAfterSec`, 다시 잰 `head`·`worktree` |
 | `scope.done` | 범위 확정(C-4) — `/code-review-full`은 **preflight가 남긴다**(C-5의 이름 규칙으로 센 수) | `files`, `excluded` · React 규칙이 다루지 않는 언어(C-5): `outside`(0이어도 남긴다 — 없으면 가르지 않은 예전 실행), (다른 언어 앱이 있으면) `otherApps`(`{ root, manifest, files }`) |
-| `modules.planned` | 적용 모듈 확정(C-3) | `candidates`, `applied`(적용한 **번호 모듈** 수 — Props·수학·예외·정확성 패스는 세지 않는다. 후보 수를 넘으면 스크립트가 거부한다. 스냅숏의 `적용 N개`는 패스 전부를 센 수라 다르다) · `skipped`, `unknown`(중첩, `--data-file`) |
-| `dispatch.start` | **첫 sub-agent를 실제로 띄운 직후** (full은 작업 대장이 첫 시도를 내줄 때 쓴다) | `modules`, `inflight` |
-| `module.start` | **모듈 하나를 띄운 직후** (full은 작업 대장이 띄우기 **전에** 쓴다 — C-12. fast는 리뷰어가 결과를 돌려줄 때까지 돌아오지 않으므로 띄우기 **직전**에 쓴다) | `module`, `attempt`, `taskId`, (재시도면) `retryOf` · 대장이 쓰면 `claim` |
-| `module.done` | **모듈 하나가 끝날 때마다** (full은 작업 대장이 결과 파일을 쓴 뒤) | `module`, `attempt`, `status`(**`ok`/`failed`만** — SKILL의 상태 이름 `COMPLETED`가 아니다), `findings`, `failureClass`, `taskId`, (있으면) `tokensIn`·`tokensOut` · 대장이 받으면 `resultSha256` · 취소면 `cancelReason`(`max-duration`/`user`) |
+| `modules.planned` | 적용 모듈 확정(C-3) | `candidates`, `applied`(적용한 **번호 모듈** 수 — Props·수학·예외·정확성 패스는 세지 않는다. `fast`는 리뷰어 하나(`fast`)라 둘 다 1이다. 후보 수를 넘으면 스크립트가 거부한다. 스냅숏의 `적용 N개`는 패스 전부를 센 수라 다르다) · `skipped`, `unknown`(중첩, `--data-file`) |
+| `dispatch.start` | **첫 sub-agent를 실제로 띄운 직후** (full·fast는 작업 대장이 첫 시도를 내줄 때 쓴다) | `modules`, `inflight` |
+| `module.start` | **모듈 하나를 띄운 직후** (full·fast는 작업 대장이 띄우기 **전에** 쓴다 — C-12) | `module`, `attempt`, `taskId`, (재시도면) `retryOf` · 대장이 쓰면 `claim` |
+| `module.done` | **모듈 하나가 끝날 때마다** (full·fast는 작업 대장이 결과 파일을 쓴 뒤) | `module`, `attempt`, `status`(**`ok`/`failed`만** — SKILL의 상태 이름 `COMPLETED`가 아니다), `findings`, `failureClass`, `taskId`, (있으면) `tokensIn`·`tokensOut` · 대장이 받으면 `resultSha256` · 취소면 `cancelReason`(`max-duration`/`user`) |
 | `verify.start` / `verify.done` | 검증 작업의 시도 하나를 띄우기 전 / 끝을 받을 때 (작업 대장이 쓴다 — C-12) | `task`(routed의 작업 이름), `attempt`, `kind`, `claim`, `round` / `task`, `attempt`, `status`(`ok`/`failed`), `failureClass`, `taskId`, `resultSha256`, `cancelReason` |
 | `task.bind` | 띄운 시도에 호스트 작업 ID를 묶을 때 — 다시 남기면 살아 있다는 확인 (작업 대장) | `stage`(`module`/`verify`), `task`, `attempt`, `taskId` |
 | `dispatch.halt` | 한도나 사용자가 디스패치를 멈췄을 때, 리뷰 에이전트가 없을 때 (작업 대장) | `reason`(`max-tasks`/`max-duration`/`user`/`agent-unavailable`), `stage`, `queuedTasks`(띄우지 못한 작업), `running` |
-| `dispatch.end` | 전부 수집 후 (full은 작업 대장이 모듈 단계가 끝났을 때 쓴다) | `terminalOk`, `terminalFailed`(최종 모듈 단위) · `attemptsTotal`, `attemptsFailed`(시도 단위) — **이 넷은 스크립트가 `module.done`에서 센다.** 세는 단위는 번호 모듈이고, `fast`는 번호 모듈을 띄우지 않으므로 리뷰어 하나(`module: fast`)를 센다. 넘기지 않아도 되고, 넘긴 값이 기록과 다르면 경고하고 센 값을 남긴다 · `attemptFailureClasses`(중첩, `--data-file`), (있으면) `tokensIn`·`tokensOut` |
+| `dispatch.end` | 전부 수집 후 (full·fast는 작업 대장이 모듈 단계가 끝났을 때 쓴다) | `terminalOk`, `terminalFailed`(최종 모듈 단위) · `attemptsTotal`, `attemptsFailed`(시도 단위) — **이 넷은 스크립트가 `module.done`에서 센다.** 세는 단위는 번호 모듈이고, `fast`는 번호 모듈을 띄우지 않으므로 리뷰어 하나(`module: fast`)를 센다. 넘기지 않아도 되고, 넘긴 값이 기록과 다르면 경고하고 센 값을 남긴다 · `attemptFailureClasses`(중첩, `--data-file`), (있으면) `tokensIn`·`tokensOut` |
 | `script.start` | `prepare-verification.mjs` 진입 직후 (스크립트가 직접 남긴다) | `script` |
 | `script.done` | `prepare-verification.mjs` 실행 후 | `ran`, `counts`(중첩, 스크립트가 직접 남긴다 — 검색을 예정한 실행이면 `counts.reuse`, C-6C) |
 | `reuse.planned` | **첫 디스패치 전** 기존 구현 검색을 예정할 때 — `review-reuse.mjs register`가 남긴다(C-6C) | `searchId`, `scopeSha256`, `plan`(계획 파일 경로) · `runId`, `head`, `baseHead` · (기다릴 상한을 바꿨으면) `waitSec` |
@@ -2399,12 +2400,14 @@ preflight가 스냅숏을 읽어 계약에 맞는지(C-10의 `parseSnapshot`), �
 |------|-----------|---------------------------|
 | 범위 결정 | C-4 (merge-base) | `commit` — 단일 커밋 patch |
 | 모듈 집합 | C-2 (numbered non-00 전체) | `fast` — `fast.md` 압축본 + `correctness.md`, 공통 규칙 `00-rule.md` 함께(숫자 모듈 미로드) / `props`·`math`·`exception` — 각 전용 문서 |
-| 분할 방식 | 단일 통합 pass | `full` — 모듈별 sub-agent, wave 단위 |
-| 출력 밀도 | 위반 전부 | `fast` — 영향 높음 지적과 `확인 필요`만(영향 낮음 생략, 개수 상한 없음) |
+| 분할 방식 | 단일 통합 pass | `full` — 모듈별 sub-agent, wave 단위 / `fast` — 리뷰어 하나(작업 대장의 작업 `fast`, 정확성 기준을 같은 패스에서 본다) |
+| 출력 밀도 | 위반 전부 | `fast` — 영향 높음 지적과 `openQuestions`만(영향 낮음 생략, 개수 상한 없음) |
+| 교차검증 | C-6B | `fast` — 하지 않는다(`--verify off`, 렌더러 `--verification-state disabled`) |
+| 리포트 틀 | C-7 골격 | `full`·`fast` — `report-template.md` 하나와 같은 스크립트 조각(`{{plan}}`·`{{findings}}`·`{{timeline}}`) |
 | 도구 실행 | C-6 | `fast` — 기본으로 돌리지 않고 `도구 실행 결과`에 그 사실을 적는다 |
-| 실행 타임라인 | C-9 | `full`·`fast` — `review-preflight.mjs`가 시작을 남기고 `assemble-report.mjs`가 `--summary` 표를 리포트에 끼운다. `fast`는 리뷰어 한 번(`module: fast`)의 시작·끝을 남기고, 조립 틀에 `{{timeline}}` 하나만 둔다 |
+| 실행 타임라인 | C-9 | `full`·`fast` — `review-preflight.mjs`가 시작을, 작업 대장이 리뷰어의 시작·끝을 남기고 `assemble-report.mjs`가 `--summary` 표를 리포트에 끼운다. `fast`의 리뷰어는 `module: fast`로 남는다 |
 | 모듈 필터 | 없음 | `default` — `--module` |
-| 결과 스냅숏 | 없음 | `full` — `review-snapshot.mjs` (C-10) |
+| 결과 스냅숏 | 없음 | `full`·`fast` — `review-snapshot.mjs` (C-10) |
 | 재현 근거 | 없음 | `full` — `review-evidence.mjs` (C-11) |
-| 작업 상태·한도·재개 | 없음 | `full` — `review-tasks.mjs` (C-12) |
+| 작업 상태·한도·재개 | 없음 | `full`·`fast` — `review-tasks.mjs` (C-12) |
 | 이전 리뷰와 비교 | 없음 | `full` — `review-preflight.mjs --previous` (C-13) |

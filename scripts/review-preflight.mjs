@@ -187,10 +187,13 @@ if (!forWorkflow.length) die(`--workflow ${JSON.stringify(workflow)}에 해당�
 const commonContext = forWorkflow.filter(module => module.role === 'common-context')
 const deferred = forWorkflow.filter(module =>
   module.role === 'module' && module.phaseByWorkflow?.[workflow] === 'post-verification-synthesis')
+// 압축 규칙(`role: digest`)은 그 워크플로우의 리뷰어 하나다 — fast의 후보는 그것 하나다. 그 리뷰어가 같은 패스에서 보는
+// 특수 패스(`absorbs`)는 따로 띄우지 않으므로 특수 패스 줄에 넣지 않고 그렇다고 따로 적는다.
 const candidates = forWorkflow.filter(module =>
-  module.role === 'module' && module.phaseByWorkflow?.[workflow] !== 'post-verification-synthesis')
+  (module.role === 'module' && module.phaseByWorkflow?.[workflow] !== 'post-verification-synthesis') || module.role === 'digest')
+const absorbed = new Set(forWorkflow.filter(module => module.role === 'digest').flatMap(module => module.absorbs ?? []))
 const optedIn = module => (module.optIn ?? []).includes(workflow)
-const specialists = forWorkflow.filter(module => module.role === 'specialist' && !optedIn(module))
+const specialists = forWorkflow.filter(module => module.role === 'specialist' && !optedIn(module) && !absorbed.has(module.id))
 const optional = forWorkflow.filter(module => module.role === 'specialist' && optedIn(module))
 if (correctness === 'on' && !optional.some(module => module.id === 'correctness')) {
   die(`--correctness on은 correctness 선택 패스가 있는 워크플로우에서만 쓴다 — ${JSON.stringify(workflow)}에는 없다`)
@@ -413,14 +416,13 @@ const out = [
   ...(scope.packageRoots.length ? [`패키지 루트   ${scope.packageRoots.map(entry => `${entry.root}(${entry.files}개)`).join(', ')} — 프로필은 저장소 루트가 아니라 이 폴더에서 판정한다(C-3)`] : []),
   ...(dependencyFiles.length ? [`의존성 변경   ${dependencyFiles.join(', ')} — baseline은 그 트리에 그 트리의 의존성을 설치해 잰다. 지금 트리의 의존성을 같이 쓰면 baseline도 같은 실패를 내 "신규 0"으로 잘못 나온다(C-6)`] : []),
   ...(workflow === 'full' ? [`기존 구현 검색 예정 — 05를 뺀 모듈을 먼저 띄우고, 그동안 검색 계획을 써 review-reuse.mjs로 후보를 모은다. 05는 검색이 끝난 뒤 띄운다(C-6C)`] : []),
-  // 작업 대장(review-tasks.mjs)으로 띄우는 것은 full뿐이다. 리뷰어를 직접 띄우는 워크플로우에 `cancel --all`을 안내하면
-  // 따를 수 없는 지시가 된다 — 멈춘 사실을 기록 두 줄로 남긴다. `--check`는 그 둘로 리뷰하지 않고 멈춘 실행을 알아본다.
-  `리뷰 에이전트  첫 디스패치 전에 작업 도구의 에이전트 목록에서 react-code-review-plugin:rule-module-reviewer를 찾는다. 없으면 리뷰하지 않고 ${workflow === 'full'
-    ? 'review-tasks.mjs cancel --all --reason agent-unavailable로 멈춘다'
-    : 'review-timeline.mjs --phase dispatch.halt --set reason=agent-unavailable, 이어서 --phase run.end --set verdict=not-reviewed로 기록을 닫고 리포트를 쓰지 않는다'} — 직접 리뷰하거나 다른 에이전트로 대신하지 않는다(C-6)`,
+  `리뷰 에이전트  첫 디스패치 전에 작업 도구의 에이전트 목록에서 react-code-review-plugin:rule-module-reviewer를 찾는다. 없으면 리뷰하지 않고 review-tasks.mjs cancel --all --reason agent-unavailable로 멈춘다 — 직접 리뷰하거나 다른 에이전트로 대신하지 않는다(C-6)`,
   '',
   `후보 모듈     ${candidates.length}개  ${candidates.map(module => module.id).join(' ')}`,
 ]
+if (absorbed.size) {
+  out.push(`함께 보는 기준 ${[...absorbed].join(' ')} — 압축 규칙의 리뷰어가 같은 패스에서 본다(따로 띄우지 않는다)`)
+}
 if (commonContext.length) {
   out.push(`후보 아님     ${commonContext.map(module => module.id).join(' ')} — 공통 컨텍스트 전용(독립 pass로 실행하지 않는다)`)
 }

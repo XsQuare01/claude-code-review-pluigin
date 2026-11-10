@@ -75,17 +75,18 @@ const STRUCTURED_OWNER_CONSUMERS = {
   'skills/code-review-props/SKILL.md': ['validation', 'rendering'],
   'skills/code-review-math/SKILL.md': ['validation', 'rendering'],
   'skills/code-review-exception/SKILL.md': ['validation', 'rendering'],
+  'skills/code-review-fast/SKILL.md': ['validation', 'rendering'],
 }
 const STRUCTURED_OWNER_POLICY_BEARING_COMMON_CONTEXTS = {
   'skills/code-review-full/SKILL.md': ['review-rules/00-rule.md'],
   'skills/code-review-props/SKILL.md': ['review-rules/00-rule.md'],
   'skills/code-review-math/SKILL.md': ['review-rules/00-rule.md'],
   'skills/code-review-exception/SKILL.md': ['review-rules/00-rule.md'],
+  'skills/code-review-fast/SKILL.md': ['review-rules/00-rule.md'],
 }
 const LEGACY_WORKFLOW_FILES = [
   'skills/code-review/SKILL.md',
   'skills/code-review-commit/SKILL.md',
-  'skills/code-review-fast/SKILL.md',
 ]
 let CONTRACT_MANIFEST_CACHE = null
 
@@ -233,6 +234,7 @@ const EXPLICIT_STRUCTURED_PRODUCER_FILES = [
   'skills/code-review-props/SKILL.md',
   'skills/code-review-math/SKILL.md',
   'skills/code-review-exception/SKILL.md',
+  'skills/code-review-fast/SKILL.md',
 ]
 
 /**
@@ -430,6 +432,7 @@ function conditionKeywords(qualifier) {
 for (const problem of checkFastReview({
   skill: read(join(SKILLS, 'code-review-fast', 'SKILL.md')),
   rules: rulesFile('fast.md'),
+  template: rulesFile('report-template.md'),
 })) {
   failCode('fast-review', problem.code, problem.message)
 }
@@ -627,7 +630,8 @@ for (const problem of checkFastReview({
 
   // 규칙 모듈이 아닌 문서다. `workflow-contract.md`는 공통 계약이고,
   // `verifier-prompt.md`는 prepare-verification.mjs가 읽는 검증자 지시문 템플릿이다.
-  const NOT_RULE_DOCS = new Set(['workflow-contract.md', 'verifier-prompt.md'])
+  // `report-template.md`는 full·fast가 함께 쓰는 리포트 틀이다.
+  const NOT_RULE_DOCS = new Set(['workflow-contract.md', 'verifier-prompt.md', 'report-template.md'])
   for (const file of allFiles.filter(f => f.endsWith('.md') && !NOT_RULE_DOCS.has(f))) {
     if (!byPath.has(file)) fail('catalog', `catalog.json: no entry for ${file}`)
   }

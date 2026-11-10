@@ -61,12 +61,17 @@ export function plannedModules(catalog, workflow) {
     .filter(module => module.phaseByWorkflow?.[workflow] !== 'post-verification-synthesis')
     .map(module => ({ name: String(module.path ?? '').replace(/\.md$/, ''), kind: 'module', id: module.id }))
     .sort((left, right) => (left.name < right.name ? -1 : 1))
+  // 압축 규칙(`role: digest`)을 쓰는 워크플로우(fast)는 그 규칙을 읽는 리뷰어 하나가 작업이다. 그 리뷰어가 같은
+  // 패스에서 보는 특수 패스(`absorbs` — fast의 정확성 기준)는 따로 띄우지 않는다.
+  const digests = modules.filter(module => module.role === 'digest' && (module.workflows ?? []).includes(workflow))
+  const absorbed = new Set(digests.flatMap(module => module.absorbs ?? []))
+  const digestTasks = digests.map(module => ({ name: String(module.path ?? '').replace(/\.md$/, ''), kind: 'digest', id: module.id }))
   // `optIn`은 이 워크플로우에서 켰을 때만 도는 패스다(`--correctness on`). 켰는지는
   // preflight가 `run.start`에 남긴다.
   const passes = modules
-    .filter(module => module.role === 'specialist' && (module.workflows ?? []).includes(workflow))
+    .filter(module => module.role === 'specialist' && (module.workflows ?? []).includes(workflow) && !absorbed.has(module.id))
     .map(module => ({ name: module.id, kind: 'pass', id: module.id, optIn: (module.optIn ?? []).includes(workflow) }))
-  return [...numbered, ...passes]
+  return [...numbered, ...digestTasks, ...passes]
 }
 
 /** `modules.planned`의 항목이 가리키는 모듈. 번호 모듈은 두 자리(`21`)로도, 이름(`21-rsc`)으로도 적힌다. */
@@ -535,7 +540,7 @@ export function snapshotProblems(snapshot) {
       if (!isObject(module) || !nonEmpty(module.name)) { problems.push('scope.modules에 이름 없는 항목이 있다'); continue }
       if (names.has(module.name)) problems.push(`scope.modules에 ${module.name}이 두 번 있다`)
       names.add(module.name)
-      if (!['module', 'pass'].includes(module.kind)) problems.push(`${module.name}의 kind가 module/pass가 아니다`)
+      if (!['module', 'digest', 'pass'].includes(module.kind)) problems.push(`${module.name}의 kind가 module/digest/pass가 아니다`)
       if (!MODULE_STATES.includes(module.state)) problems.push(`${module.name}의 state ${JSON.stringify(module.state)}는 ${MODULE_STATES.join('/')} 밖이다`)
       if (module.state === 'missing' && !MISSING_REASONS.includes(module.reason)) problems.push(`${module.name}의 missing reason이 ${MISSING_REASONS.join('/')} 밖이다`)
       if (['ok', 'failed'].includes(module.state) && !Number.isInteger(module.attempt)) problems.push(`${module.name}에 attempt가 없다`)

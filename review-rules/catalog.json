@@ -622,7 +622,10 @@
         "fast"
       ],
       "requires": [],
-      "notes": "Hand-maintained compression of the numbered modules. Severity, applicability, and exception clauses must match the source."
+      "absorbs": [
+        "correctness"
+      ],
+      "notes": "Hand-maintained compression of the numbered modules. Severity, applicability, and exception clauses must match the source. In the fast workflow this digest is the single producer task: one reviewer reads it with 00-rule.md and correctness.md and returns numbered rule IDs and CR-{n} in one result. absorbs: the specialist passes that reviewer covers, so they are not dispatched separately and their findings carry source fast. Its findings render under the numbered module they cite; modules without findings get no section."
     },
     {
       "id": "props",
@@ -690,7 +693,7 @@
         "full"
       ],
       "ruleClauses": false,
-      "notes": "optIn: full runs this pass only when preflight records correctness=on (--correctness on). fast always hands this document to its single reviewer next to fast.md and 00-rule.md, so it is not optIn there. ruleClauses false: CR-{n} numbers findings within the pass and names no clause in correctness.md, so the verifier gets the VERIFICATION_BASIS block instead of a clause."
+      "notes": "optIn: full runs this pass only when preflight records correctness=on (--correctness on). fast always hands this document to its single reviewer next to fast.md and 00-rule.md, so it is not optIn there and is not a separate task — the fast digest absorbs it. ruleClauses false: CR-{n} numbers findings within the pass and names no clause in correctness.md, so the verifier gets the VERIFICATION_BASIS block instead of a clause."
     }
   ]
 }
