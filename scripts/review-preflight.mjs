@@ -187,10 +187,13 @@ if (!forWorkflow.length) die(`--workflow ${JSON.stringify(workflow)}에 해당�
 const commonContext = forWorkflow.filter(module => module.role === 'common-context')
 const deferred = forWorkflow.filter(module =>
   module.role === 'module' && module.phaseByWorkflow?.[workflow] === 'post-verification-synthesis')
+// 압축 규칙(`role: digest`)은 그 워크플로우의 리뷰어 하나다 — fast의 후보는 그것 하나다. 그 리뷰어가 같은 패스에서 보는
+// 특수 패스(`absorbs`)는 따로 띄우지 않으므로 특수 패스 줄에 넣지 않고 그렇다고 따로 적는다.
 const candidates = forWorkflow.filter(module =>
-  module.role === 'module' && module.phaseByWorkflow?.[workflow] !== 'post-verification-synthesis')
+  (module.role === 'module' && module.phaseByWorkflow?.[workflow] !== 'post-verification-synthesis') || module.role === 'digest')
+const absorbed = new Set(forWorkflow.filter(module => module.role === 'digest').flatMap(module => module.absorbs ?? []))
 const optedIn = module => (module.optIn ?? []).includes(workflow)
-const specialists = forWorkflow.filter(module => module.role === 'specialist' && !optedIn(module))
+const specialists = forWorkflow.filter(module => module.role === 'specialist' && !optedIn(module) && !absorbed.has(module.id))
 const optional = forWorkflow.filter(module => module.role === 'specialist' && optedIn(module))
 if (correctness === 'on' && !optional.some(module => module.id === 'correctness')) {
   die(`--correctness on은 correctness 선택 패스가 있는 워크플로우에서만 쓴다 — ${JSON.stringify(workflow)}에는 없다`)
@@ -417,6 +420,9 @@ const out = [
   '',
   `후보 모듈     ${candidates.length}개  ${candidates.map(module => module.id).join(' ')}`,
 ]
+if (absorbed.size) {
+  out.push(`함께 보는 기준 ${[...absorbed].join(' ')} — 압축 규칙의 리뷰어가 같은 패스에서 본다(따로 띄우지 않는다)`)
+}
 if (commonContext.length) {
   out.push(`후보 아님     ${commonContext.map(module => module.id).join(' ')} — 공통 컨텍스트 전용(독립 pass로 실행하지 않는다)`)
 }

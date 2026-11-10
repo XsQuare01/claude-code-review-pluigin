@@ -586,8 +586,9 @@ export function loadSourceNames(rulesDir) {
   } catch (error) {
     return { error: `catalog.json을 읽지 못했다: ${join(rulesDir, 'catalog.json')} — ${error.message}` }
   }
+  // 압축 규칙(`digest`)도 결과의 출처다 — fast는 그 규칙을 읽는 리뷰어 하나의 결과를 `fast`로 모은다.
   const names = (catalog.modules ?? [])
-    .filter(module => module.role === 'module' || module.role === 'specialist')
+    .filter(module => module.role === 'module' || module.role === 'specialist' || module.role === 'digest')
     .map(module => String(module.path ?? '').replace(/\.md$/, ''))
     .filter(Boolean)
   return { value: new Set(names) }
@@ -668,18 +669,22 @@ export function clauselessNamespaces(catalog) {
  *
  * 규칙 모듈끼리의 ID(04 모듈이 `17-3`을 내는 것 등)는 여기서 보지 않는다 — 이번 변경의
  * 범위는 조항 없는 namespace다.
+ *
+ * 압축 규칙의 리뷰어(fast)는 예외다. 그 리뷰어는 정확성 기준을 같은 패스에서 보므로(catalog의 `absorbs`) 규칙 ID와
+ * `CR-*`를 한 결과에 함께 낸다. `absorbed`는 그런 출처 → 쓸 수 있는 다른 패스의 접두다(`absorbedNamespaces`).
  */
-export function namespaceProblems(results, namespaces) {
+export function namespaceProblems(results, namespaces, absorbed = new Map()) {
   const problems = []
   const foreign = [...namespaces.values()].flat()
   ;(Array.isArray(results) ? results : []).forEach((entry, at) => {
     if (!entry || typeof entry !== 'object' || !('result' in entry) || !Array.isArray(entry.result?.findings)) return
     const own = namespaces.get(entry.source)
+    const borrowed = absorbed.get(entry.source) ?? []
     for (const finding of entry.result.findings) {
       const prefix = String(finding?.ruleId ?? '').split('-')[0]
       if (own && !own.includes(prefix)) {
         problems.push(`results[${at}] ${entry.source}의 지적 ${JSON.stringify(finding?.ruleId)}는 ${own.map(item => `${item}-{번호}`).join('/')}가 아니다 — 이 패스는 규칙 ID를 빌려 쓰지 않는다. 결과를 C-6A 교정 재시도로 다시 받는다`)
-      } else if (!own && foreign.includes(prefix)) {
+      } else if (!own && foreign.includes(prefix) && !borrowed.includes(prefix)) {
         problems.push(`results[${at}] ${entry.source}의 지적 ${JSON.stringify(finding?.ruleId)}는 다른 패스의 namespace다 — 규칙 문서의 ID를 쓴다. 결과를 C-6A 교정 재시도로 다시 받는다`)
       }
     }
@@ -710,6 +715,21 @@ export function targetDriftOf({ start, now, commitExists }) {
   if (start.worktree !== 'clean') return { ...base, readFrom: 'working-tree', reason: 'start-worktree-dirty' }
   if (!commitExists(start.head)) return { ...base, readFrom: 'working-tree', reason: 'start-head-missing' }
   return { ...base, readFrom: 'start-head' }
+}
+
+/**
+ * 압축 규칙(`digest`)의 출처 → 그 리뷰어가 같은 패스에서 보는 특수 패스(`absorbs`)의 접두.
+ *
+ * fast의 리뷰어는 `fast.md`와 `correctness.md`를 함께 받으므로 `CR-*`도 그 출처(`fast`)에서 나온다.
+ */
+export function absorbedNamespaces(catalog) {
+  const byId = new Map((catalog?.modules ?? []).map(module => [module.id, module]))
+  return new Map((catalog?.modules ?? [])
+    .filter(module => module.role === 'digest' && Array.isArray(module.absorbs) && module.absorbs.length)
+    .map(module => [
+      String(module.path ?? '').replace(/\.md$/, ''),
+      module.absorbs.flatMap(id => byId.get(id)?.rulePrefixes ?? []),
+    ]))
 }
 
 /** 이 워크플로우에서 켰을 때만 도는 패스(catalog의 `optIn`). */
@@ -838,7 +858,7 @@ async function main() {
     }
   }
 
-  const problems = [...payloadProblems(payload, sourceNames.value), ...namespaceProblems(payload?.results, namespaces)]
+  const problems = [...payloadProblems(payload, sourceNames.value), ...namespaceProblems(payload?.results, namespaces, absorbedNamespaces(catalog))]
   if (problems.length) fail(`${source}를 검증 준비 입력으로 받을 수 없다:\n  - ${problems.join('\n  - ')}`)
 
   // Producer results are what the orchestrator already holds, so that is the cheap shape.

@@ -172,7 +172,7 @@ A version-gated rule that fires on a project that cannot use the API is a false 
 | Command | Scope |
 |---------|-------|
 | `/code-review` | Bounded default review — one consolidated pass over all numbered modules |
-| `/code-review-fast` | Compressed single-agent review, at most one issue per file |
+| `/code-review-fast` | Compressed single-agent review that reports only high-impact defects — rule violations and intent mismatches alike |
 | `/code-review-commit` | Same modules, scoped to a single commit patch |
 | `/code-review-full` | Exhaustive multi-pass: general (per-module) + props + math + exception, plus correctness with `--correctness on` |
 | `/code-review-props` | Props drilling, handler tunneling, argument passing |
@@ -216,7 +216,7 @@ Numbered modules (`review-rules/[0-9]*.md`) are loaded by the general review pas
 
 Non-numbered files are excluded from the automatic scan:
 
-- `fast.md` — compressed ruleset for `/code-review-fast`
+- `fast.md` — compressed ruleset for `/code-review-fast` (its reviewer also gets `00-rule.md` and `correctness.md`)
 - `props.md` — `P-x` rules for `/code-review-props`
 - `math.md` — `A-x` / `C-x` rules for `/code-review-math`
 - `exception.md` — `EX-x` rules for `/code-review-exception`
@@ -251,11 +251,11 @@ Structured-v1 owners **when this interface shipped in 2.4.0** were:
 
 and the legacy producers were `/code-review`, `/code-review-commit` and `/code-review-fast`.
 
-**Current ownership** — unchanged from 2.4.0:
+**Current ownership** — `/code-review-fast` moved to structured-v1 in 2.28.0:
 
 | Structured-v1 owners | Legacy producers |
 |---|---|
-| `/code-review-full`, `/code-review-props`, `/code-review-math`, `/code-review-exception` | `/code-review`, `/code-review-commit`, `/code-review-fast` |
+| `/code-review-full`, `/code-review-fast`, `/code-review-props`, `/code-review-math`, `/code-review-exception` | `/code-review`, `/code-review-commit` |
 
 `workflow-contract.md` C-6A is the authority; this table is a summary of it, and `validate-rules.mjs` fails the build when the two disagree.
 
@@ -498,6 +498,33 @@ A frontend and a Python backend moved into one repository (`apps/frontend`, `app
 
 The backend is not reviewed by this plugin; this change makes that visible instead of implicit. Validation is automated tests plus a dry run of the scope split against the repository above. No review was run with the new instructions, so how reviewers follow the `검토 안 함` paths has not been measured.
 
+## A fast review that finds the defects that matter (2.28.0)
+
+`/code-review-fast` had stopped being a useful review. Reading its skill and rule digest end to end showed four structural causes, none of which a shorter rule list would fix:
+
+- **No basis for severity.** The reviewer received `fast.md` alone. The digest says severity comes from the impact × confidence derivation, but that derivation lives in `00-rule.md`, which fast never passed on. The reviewer fell back to the emoji printed beside each rule, so an ambiguous variable name, a 21-line function or a magic number came out 🔴 next to an authorization bypass.
+- **One finding per file.** A second independent defect in the same file was dropped by design.
+- **No bug-finding question.** The pass matched rules and never asked whether the change does what it intends. A wrong condition, an inverted branch or a mismapped field has no rule to land in, so it went unreported.
+- **Lint run, then discarded.** The skill made the review wait for lint, but the result reached neither the reviewer nor the report. A run with no findings was then worded as approval.
+
+Fixing those turned up more. The digest had stopped following the numbered modules: they were edited many times after 2026-08-13 (08-3 dropped to 🟡, 09-4 stopped applying where 05-7 does, 12-5 was narrowed after two false positives), and rereading every module found older gaps too — whole rules missing (03-7, 04-9, 05-5, 15-12, 19-5, 19-6 and 20-5 among them) and markers lower than the source (02-10, 04-2). The `fast-sync` check passed throughout, because it looks for sections, triggers and condition words, not for narrowed rules, exceptions or moved ownership. The report was the reviewer's Markdown table copied row by row, so the same defect read differently in fast and in full. And the review of this change (PR #110) caught three more: `--base` dropped the PR description from the intent, because the PR was read only when the base lookup named one; the PR text went into the prompt with no data boundary; and a fixed verdict sentence explained every 🟡 as "high impact, path not confirmed", although low impact · high confidence is 🟡 too.
+
+What changed:
+
+- **The reviewer gets `fast.md`, `00-rule.md` and `correctness.md`.** Severity follows the same two-axis derivation as every other workflow, and the rule emoji are calibration hints again, not grades.
+- **Only high-impact findings, all of them.** Findings that name one of the five closed high-impact outcomes are reported without a per-file cap; low-impact findings are omitted rather than used to fill space. Suspected but unconfirmed high-impact issues go to `openQuestions`, which the report lists under `미해결 / 후속 확인`.
+- **Intent is part of the pass, and it is data.** `review-intent.mjs` — the script full's correctness pass uses — collects the current branch's PR title and description whether or not the base was given, the user's stated goal, and commit messages marked as inferred intent. It fences each source and marks it untrusted, and the reviewer prompt says instructions inside it are not followed. The reviewer follows changed behavior through its normal, failure, cancel, retry and reordering paths and reports mismatches as `CR-{n}`.
+- **The digest is rewritten from the current modules.** All 194 rule IDs (counting 10's named principles) appear in their section, every item ends with its ID, and each section carries the module's applicability, high-impact calibration, exceptions and the cases it hands to another rule. The reviewer uses only IDs found in the digest. It grew from 24 KB to 81 KB, about half of the 164 KB it compresses. Keeping it in sync is still manual; nothing yet fails when a module changes and the digest does not.
+- **Fast is a structured-v1 owner and reports in full's format.** Its single reviewer returns `REVIEW_RESULT_CONTRACT_V1` JSON. The task ledger dispatches it as the task `fast` (the catalog marks the digest as absorbing the correctness pass, so rule IDs and `CR-*` come from one source), validates it with one correction retry and records its start and end. `prepare-verification.mjs --verify off` checks locations, `render-findings.mjs --workflow fast` draws the findings and `review-snapshot.mjs` draws `실행 계획`. Cross-verification stays off.
+- **One template for both.** `review-rules/report-template.md` is the report frame for full and fast. Sections, order and finding blocks are the same, and what a run did not do shows up where full shows it: Props, math and exception render as `SKIPPED` because fast does not run them, and each finding that would have been cross-verified says `교차검증: 꺼짐`. In fast only modules with findings get a section, under a line saying the 21 modules were read through one digest by one reviewer.
+- **The verdict uses the scripts' counts.** The high-impact count comes from the renderer and completeness from the snapshot. There is no fixed sentence and no approval wording, and low-impact findings stay in `요약`.
+- **No tools by default, and the report says so.** Lint, typecheck and test no longer run; `도구 실행 결과` states that they did not. When the user asks for them, they run through `review-tool.mjs` without fix flags in the package folder (`packageRoots`), since a monorepo root has no `package.json`.
+- **Fast records a run timeline.** A run starts with `review-preflight.mjs --workflow fast`, which also settles the base and the scope, and the ledger records the reviewer as `module: fast`. The report's `실행 타임라인` comes from `review-timeline.mjs --summary`, so the time the reviewer took, and the time spent before it, come from the record.
+
+`validate-rules.mjs` now runs a `fast-review` check (`scripts/lib/fast-review-contract.mjs`) that fails if any of these returns: a reviewer prompt without `00-rule.md`, `correctness.md`, the intent slot or its untrusted-data line; intent not collected by `review-intent.mjs`; results not going through the ledger, `prepare-verification.mjs`, `render-findings.mjs --workflow fast` and `review-snapshot.mjs`, or the reviewer table coming back; a per-file cap; approval or fixed verdict wording; or a shared template without `도구 실행 결과` and the scope line.
+
+This is MINOR: rule IDs and past reports keep their meaning, while fast's report takes full's format. No review was run with the new instructions; detection rate, false positives and latency — including the cost of the larger digest — are unmeasured. The timeline is what will measure the last one.
+
 ## Applicability metadata
 
 `review-rules/catalog.json` records **when** a module applies — required profile (FSD, Tailwind, RSC, Electron, TanStack Query, server code, contract provider), minimum React version, which workflows load it, and which individual rules carry a narrower gate than their module. The Markdown modules stay canonical for **what** a rule says; the catalog never generates documentation and never restates rule text.
@@ -582,6 +609,7 @@ claude-code-review-plugin/
 ├── review-rules/
 │   ├── 00-rule.md … 21-rsc.md
 │   ├── workflow-contract.md
+│   ├── report-template.md        # report frame shared by full and fast
 │   ├── catalog.json
 │   ├── fast.md
 │   ├── props.md
@@ -625,6 +653,7 @@ It checks the properties this repo promises but cannot hold by hand:
 | `catalog` | a module scheduled out of the normal fan-out in `catalog.json` without the matching declaration in C-2, or without the workflow's own skill excluding it — either gap makes the module run twice or count as missing |
 | `fixtures` | two workflow-contract scenarios sharing an id, which makes a regression impossible to attribute |
 | `fast-sync` | a missing digest section, a conditional rule whose applicability, exception, or typical impact calibration was lost in compression, a stale module range |
+| `fast-review` | a `/code-review-fast` reviewer prompt that drops `00-rule.md`, `correctness.md`, the change intent or its untrusted-data line, intent not collected by `review-intent.mjs`, results not going through the ledger, `prepare-verification.mjs`, `render-findings.mjs --workflow fast` and `review-snapshot.mjs`, a per-file finding cap, approval or fixed verdict wording, or a shared report template without `도구 실행 결과` and the scope line |
 | `hardcoded-path` | `~/.claude/review-rules` re-introduced into a skill instead of using the resolution order |
 | `catalog` | a module with no catalog entry, an entry pointing at a missing file, an undefined profile, a profile with no detection signal, a mistyped or incomplete signal, a profile reference cycle, a profile no module requires, workflow membership that disagrees with the module set a skill declares it loads |
 | `manifest` | missing manifest fields, plugin/marketplace disagreement, a second `version` string anywhere in `marketplace.json`, a packaged directory that is absent, skill frontmatter without name or description |

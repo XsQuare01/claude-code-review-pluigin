@@ -19,14 +19,14 @@ tools: Read, Grep, Glob
 |---|---|
 | `/code-review-full` numbered module 리뷰 | 담당 `NN-*.md` 하나의 전문 |
 | `/code-review` · `/code-review-commit` 통합 pass | 선택된 numbered non-00 모듈 전부의 전문을 한 프롬프트에 |
-| `/code-review-fast` | `fast.md` 하나 |
+| `/code-review-fast` | `fast.md`(압축 규칙)·`00-rule.md`·`correctness.md`를 한 프롬프트에 |
 | 특수 패스 — `/code-review-props` · `/code-review-math` · `/code-review-exception` 단독 실행과 full의 해당 패스 | `props.md` · `math.md` · `exception.md` 중 하나 |
 | full 정확성 패스(`--correctness on`) | `correctness.md` |
 | 교차검증 verifier | 판정 대상 finding이 인용한 `## NN-x` 조항 본문 |
 
-`/code-review-full`의 모든 자리와 `/code-review` · `/code-review-commit` 통합 pass에서는 `00-rule.md`
-공통 규칙이 함께 온다. 단독으로 실행하는 `/code-review-fast` · `-props` · `-math` · `-exception`은 전용 규칙
-문서 하나만 넘기므로, 그 문서에 없는 공통 규칙을 받았다고 가정하지 않는다. 출력 형식은 어느 자리든 프롬프트가 정한다.
+`/code-review-full`의 모든 자리와 `/code-review` · `/code-review-commit` 통합 pass, `/code-review-fast`에서는
+`00-rule.md` 공통 규칙이 함께 온다. 단독으로 실행하는 `-props` · `-math` · `-exception`은 전용 규칙 문서 하나만
+넘기므로, 그 문서에 없는 공통 규칙을 받았다고 가정하지 않는다. 출력 형식은 어느 자리든 프롬프트가 정한다.
 
 verifier는 지적을 만들지 않고 **기각 여부만** 판정한다. 그 경우에도 쓰기 도구가
 없어야 하는 이유는 같다 — 반례를 찾다 보면 고치는 방법이 먼저 보인다.

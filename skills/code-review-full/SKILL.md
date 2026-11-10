@@ -517,6 +517,7 @@ node "$RULES_DIR/../scripts/tally-verdicts.mjs" --dir "$REPORT_DIR" --run "$REPO
 
 ## 리포팅
 - 문서 골격(섹션 이름·순서·헤딩 레벨)은 `workflow-contract.md` C-7의 **문서 골격** 표를 따른다. 매 실행마다 다른 골격을 만들지 않는다.
+- **리포트의 틀은 `$RULES_DIR/report-template.md`다** — `/code-review-fast`와 같은 틀이다. 틀 파일에 그대로 옮겨 `{…}` 칸만 채우고, 판정은 그 파일의 「판정 쓰는 법」대로 쓴다(수는 렌더러의 `높은 영향의 차단 후보`와 스냅숏의 `검토 상태`에서 옮긴다).
 - 패스의 결과를 각각 구분해 출력한다: 일반, Props, 수학, 예외, (켰으면) 정확성.
 - producer가 반환한 원본은 Markdown이 아니라 parsed JSON이다. 오케스트레이터는 producer heading/section/severity를 보존·정규화하는 대신, **검증을 통과한 구조화 필드만** 수집 대상으로 삼는다: finding/openQuestion의 내용, `impact`/`confidence`, `category`, `location`, 규칙 ID, 출처 패스 라벨.
 - 일반 패스 리포트는 `RULES_DIR`의 `[0-9]*.md`에서 발견한 numbered non-00 모듈명을 나열하고, 모듈별 sub-agent 결과를 각각 표시한다. `00-rule.md`는 공통 규칙이므로, `post-verification-synthesis` 모듈은 일반 패스 소속이 아니므로 이 목록에 넣지 않는다. 후자는 synthesis 단계 결과로 따로 표시한다.

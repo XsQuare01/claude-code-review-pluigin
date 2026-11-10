@@ -923,6 +923,19 @@ export function loadModuleSections(rulesDir, workflow, planned) {
   // 2026-10-15 한 실행이 `code-review-full`로 그려 `### 06`처럼 이름 없는 섹션이 나왔고 지적 없는 모듈은 사라졌다.
   const known = [...new Set((catalog.modules ?? []).flatMap(module => module.workflows ?? []))].sort()
   if (!known.includes(workflow)) return { error: `--workflow ${workflow}는 catalog에 없다 — ${known.join(', ')} 중 하나다(전체 리뷰는 full)` }
+  // 압축 규칙(`digest`)을 쓰는 워크플로우(fast)는 번호 모듈을 따로 띄우지 않는다 — 그 규칙을 읽는 리뷰어 하나가 01~21을
+  // 한 번에 본다. 섹션은 full과 같은 번호 모듈이지만, 지적이 있는 모듈만 그린다(`onlyWithFindings`). 지적 없는
+  // 모듈마다 "지적 없음."을 찍으면 모듈마다 따로 본 리뷰처럼 읽힌다. 결과의 출처는 그 리뷰어(`source`)다.
+  const digest = (catalog.modules ?? []).find(module => module.role === 'digest' && (module.workflows ?? []).includes(workflow))
+  if (digest) {
+    const source = String(digest.path ?? '').replace(/\.md$/, '')
+    return {
+      value: (catalog.modules ?? [])
+        .filter(module => module.role === 'module')
+        .map(module => ({ kind: 'module', id: module.id, title: module.title, source, onlyWithFindings: true, digest: digest.path }))
+        .sort((left, right) => (left.id < right.id ? -1 : 1)),
+    }
+  }
   const skipped = new Set()
   const plan = readPlanned(planned)
   if (plan.error) return { error: plan.error }
@@ -970,13 +983,25 @@ export function loadModuleSections(rulesDir, workflow, planned) {
  * 방식(`{value}`/`{error}`)을 쓴다 — catalog를 그 사실의 단일 소스로 만든
  * 것(Ruling 1)은, 그 소스가 조용히 사라질 수 있으면 단일 소스가 아니다.
  */
-export function loadSpecialistPasses(rulesDir, planned) {
+export function loadSpecialistPasses(rulesDir, planned, workflow) {
   let catalog
   try {
     catalog = JSON.parse(readFileSync(join(rulesDir, 'catalog.json'), 'utf8'))
   } catch (error) {
     return { error: `catalog.json을 읽지 못했다: ${error.message}` }
   }
+  // 워크플로우를 받으면 catalog로 패스마다 이 실행에서 무엇이었는지 정한다. 이 워크플로우에 속하지 않는 패스는
+  // 돌 수 없었으므로 `SKIPPED`와 그 사실이고, 압축 규칙의 리뷰어가 같은 패스에서 본 것(`absorbs`)은 그 리뷰어의
+  // 결과가 출처다. 오케스트레이터가 사유를 적어 넘기지 않는다 — fast의 리포트가 Props·수학·예외를 "결과 없음"으로
+  // 그리면 실행이 실패한 것처럼 읽힌다.
+  const digest = workflow
+    ? (catalog.modules ?? []).find(module => module.role === 'digest' && (module.workflows ?? []).includes(workflow))
+    : undefined
+  const absorbedBy = new Map((digest?.absorbs ?? []).map(id => [id, String(digest.path ?? '').replace(/\.md$/, '')]))
+  const commandOf = name => (name === 'default' ? '/code-review' : `/code-review-${name}`)
+  const notInWorkflow = module => (workflow && !absorbedBy.has(module?.id) && !(module?.workflows ?? []).includes(workflow)
+    ? { reason: `${workflow}는 이 패스를 돌리지 않는다 — ${(module?.workflows ?? []).map(commandOf).join('·')}에서 돈다` }
+    : undefined)
   // 적용 범위가 없어 띄우지 않은 특수 패스는 실행 계획(`--planned`)의 `skipped`에
   // 그 패스 이름(`props`·`math`·`exception`)으로 적힌다. 렌더러는 그 사유를
   // 그 패스 자리에 옮긴다 — 번호 모듈의 SKIPPED가 `실행 계획`에 적히는 것과 달리,
@@ -996,7 +1021,8 @@ export function loadSpecialistPasses(rulesDir, planned) {
     if (!Array.isArray(prefixes) || prefixes.length === 0) {
       return { error: `catalog.json의 "${id}" specialist 항목에 rulePrefixes가 없다 — 특수 패스 접두를 알 수 없다` }
     }
-    passes.push({ kind: 'pass', id, title, prefixes, source: id, ...(skipped.has(id) ? { skipped: skipped.get(id) } : {}) })
+    const outside = notInWorkflow(byId.get(id))
+    passes.push({ kind: 'pass', id, title, prefixes, source: id, ...(outside ? { skipped: outside } : skipped.has(id) ? { skipped: skipped.get(id) } : {}) })
   }
   // 선택 패스(#88 PR 1). 켰을 때만 도는 패스라 catalog에 없어도 거부하지 않는다 — 이 패스가
   // 생기기 전의 규칙 디렉터리(C-1의 홈 사본 등)를 읽는 실행이 있다. 있는데 접두가 없으면
@@ -1006,10 +1032,14 @@ export function loadSpecialistPasses(rulesDir, planned) {
     if (!Array.isArray(correctness.rulePrefixes) || correctness.rulePrefixes.length === 0) {
       return { error: 'catalog.json의 "correctness" specialist 항목에 rulePrefixes가 없다 — 특수 패스 접두를 알 수 없다' }
     }
+    // 선택 패스인지는 워크플로우마다 다르다(catalog의 `optIn`) — full에서는 켰을 때만 돌고, fast에서는 리뷰어가 늘 본다.
+    // 워크플로우를 모르는 예전 호출은 어느 워크플로우에서든 선택 패스로 본다.
+    const optIn = workflow ? (correctness.optIn ?? []).includes(workflow) : (correctness.optIn ?? []).length > 0
+    const outside = notInWorkflow(correctness)
     passes.push({
-      kind: 'pass', id: 'correctness', title: '정확성', prefixes: correctness.rulePrefixes, source: 'correctness',
-      ...((correctness.optIn ?? []).length ? { optIn: true } : {}),
-      ...(skipped.has('correctness') ? { skipped: skipped.get('correctness') } : {}),
+      kind: 'pass', id: 'correctness', title: '정확성', prefixes: correctness.rulePrefixes, source: absorbedBy.get('correctness') ?? 'correctness',
+      ...(optIn ? { optIn: true } : {}),
+      ...(outside ? { skipped: outside } : skipped.has('correctness') ? { skipped: skipped.get('correctness') } : {}),
     })
   }
   return { value: passes }
@@ -1252,9 +1282,17 @@ export function render(candidates, verdictByCandidateId, phaseByImpact, vocabula
     ...numberedModules.map(candidate => candidate.ruleId.slice(0, 2)),
   ])].sort()
 
+  // 압축 규칙(fast)의 섹션은 모듈마다 따로 띄운 리뷰가 아니다. 그 사실을 섹션 앞에 적고, 지적이 있는 모듈만 그린다.
+  const digest = moduleSections.find(section => section.digest)?.digest
+  if (digest) {
+    const ids = moduleSections.map(section => section.id)
+    lines.push(`모듈 ${ids[0]}~${ids.at(-1)}은 압축 규칙 \`${digest}\` 하나로 리뷰어 한 번에 봤다 — 모듈마다 따로 띄운 리뷰가 아니다. 지적이 있는 모듈만 싣는다.`, '')
+  }
+
   for (const key of moduleKeys) {
-    lines.push(`### ${key} ${titleById.get(key) ?? ''}`.trimEnd(), '')
     const inModule = numberedModules.filter(candidate => candidate.ruleId.startsWith(`${key}-`))
+    if (!inModule.length && sectionById.get(key)?.onlyWithFindings) continue
+    lines.push(`### ${key} ${titleById.get(key) ?? ''}`.trimEnd(), '')
     if (!inModule.length) {
       lines.push(emptyText(sectionById.get(key)), '')
       continue
@@ -1480,7 +1518,7 @@ if (process.argv[1] && process.argv[1].endsWith('render-findings.mjs')) {
   // 아직 남아 있는 별도 정리 항목이다. 여기서 두 loader의 결과를 합쳐
   // 하나의 `sections`로 넘기는 것은 그 중복을 막기 위해서가 아니라, render
   // 자체를 두 loader의 파일 I/O에서 떼어 놓기 위해서다.)
-  const specialistPasses = loadSpecialistPasses(rulesDir, planned)
+  const specialistPasses = loadSpecialistPasses(rulesDir, planned, workflow)
   if (specialistPasses.error) die(specialistPasses.error)
 
   const byCandidateId = new Map()

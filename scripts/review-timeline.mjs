@@ -303,10 +303,22 @@ const FAILURE_CLASSES = new Set([
  * 넣어 셌다 — 규칙이 직관과 반대인데 세는 일을 모델에게 맡겼기 때문이다. 재료는
  * 기록에 다 있으므로 `seq`·`at`처럼 이 스크립트가 센다. status가 닫힌 목록 밖이면
  * 그 시도가 성공인지 실패인지 기록이 말하지 않으므로 세지 않는다(`countable: false`).
+ *
+ * fast는 번호 모듈을 띄우지 않는다 — 압축 규칙을 읽는 리뷰어 하나(`fast`)가 주 리뷰 패스다. 그 실행에서 번호
+ * 모듈만 세면 늘 0이 되어, 리뷰어가 끝났는데 `dispatch.end`가 "끝낸 모듈 0개"를 적는다. `modules.planned.applied`와
+ * 끝낸 모듈 수를 맞춰 보는 `--check`도 같은 단위로 센다.
  */
+const countedModule = events => {
+  const workflow = events.find(event => event?.phase === 'run.start')?.workflow
+  return workflow === 'fast'
+    ? module => module === 'fast'
+    : module => /^\d\d-/.test(module)
+}
+
 const dispatchCounts = events => {
   const { superseded } = moduleDoneCorrections(events)
-  const attempts = events.filter(event => event.phase === 'module.done' && /^\d\d-/.test(String(event.module ?? '')) && !superseded.has(event))
+  const counted = countedModule(events)
+  const attempts = events.filter(event => event.phase === 'module.done' && counted(String(event.module ?? '')) && !superseded.has(event))
   // 최종 상태는 **가장 큰 시도**의 것이다. 파일의 마지막 줄로 정하면, 시도 1을 나중에 바로잡은
   // 줄이 시도 2의 성공을 덮어 멀쩡한 `dispatch.end`를 틀렸다고 짚는다(PR #87 리뷰에서 재현).
   const terminal = new Map()
@@ -604,8 +616,9 @@ if (has('check')) {
   // `applied`는 번호 모듈만 센다(C-3). 특수 패스까지 세면 정상 실행마다 "18인데 21개"가
   // 나온다 — 2026-09-30 실행의 리포트가 그 문장을 미해결 항목으로 옮겨 적었다.
   const applied = events.find(event => event.phase === 'modules.planned')?.applied
+  const counted = countedModule(events)
   const finished = new Set(events
-    .filter(event => event.phase === 'module.done' && /^\d\d-/.test(String(event.module ?? '')))
+    .filter(event => event.phase === 'module.done' && counted(String(event.module ?? '')))
     .map(event => String(event.module)))
   if (Number.isInteger(applied) && finished.size !== applied) {
     notes.push(`\`modules.planned.applied\`는 ${applied}인데 \`module.done\`이 남은 모듈은 ${finished.size}개다`)
