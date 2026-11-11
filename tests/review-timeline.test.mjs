@@ -123,6 +123,61 @@ test('경과 시간을 첫 줄 기준으로 센다', t => {
 
 // ── --summary ──────────────────────────────────────────────────────────────
 
+// 2026-11-10 full 리포트의 타임라인 표는 117행으로 리포트에서 가장 길었다. 그중 99행이 모듈·검증의 시작·끝과 작업 연결
+// 줄이었다. 이어진 디스패치 줄은 한 행으로 접고, 줄마다의 값은 사이드카에 맡긴다. 긴 구간은 접힌 행 안에 묻지 않는다.
+test('이어진 디스패치 줄은 한 행으로 접는다 — 긴 구간에서 끊고, 최장 표시는 접힌 행에 남는다', t => {
+  const dir = freshDir(t)
+  const base = Date.parse('2026-11-10T00:00:00.000Z')
+  const at = sec => new Date(base + sec * 1000).toISOString()
+  const modules = ['01-fsd', '02-type', '03-react-rules', '04-state']
+  const events = [
+    { at: at(0), phase: 'run.start' },
+    { at: at(10), phase: 'dispatch.start', modules: 4, inflight: 4 },
+    ...modules.map(module => ({ at: at(10), phase: 'module.start', module, attempt: 1 })),
+    ...modules.flatMap((module, index) => [
+      { at: at(310 + index), phase: 'task.bind', stage: 'module', task: module, attempt: 1, taskId: `ses-${index}` },
+      { at: at(310 + index), phase: 'module.done', module, attempt: 1, status: 'ok', findings: index },
+    ]),
+    { at: at(320), phase: 'render.start', findings: 6 },
+  ].map((event, index) => ({ ...event, seq: index + 1 }))
+  plant(dir, events)
+  const out = summary(dir).stdout
+  assert.match(out, /\| `module\.start` ×4 \| 10s \| 0s \| 01-fsd#1 · 02-type#1 · 03-react-rules#1 · 04-state#1 \|/)
+  assert.match(out, /\| `task\.bind` ×4 · `module\.done` ×4 \*\*←최장\*\* \| 310–313s \| 300s \| 01-fsd#1 ok 0건 · 02-type#1 ok 1건 · 03-react-rules#1 ok 2건 · 04-state#1 ok 3건 \|/)
+  assert.doesNotMatch(out, /\| `module\.done` \| /)
+  assert.match(out, /> 디스패치 줄 12개를 2행으로 접었다 — 줄마다의 값\(작업 ID·해시\)은 사이드카에 있다/)
+  // 접어도 최장 구간의 설명은 그대로다
+  assert.match(out, /`←최장`은 `module\.start`와 `task\.bind` \*\*사이\*\*의 300s다 — 그동안 모듈 4개가 돌고 있었다/)
+})
+
+test('웨이브의 끝과 다음 웨이브의 시작이 한 묶음이면 끝난 시도와 새 시도를 →로 가른다', t => {
+  const dir = freshDir(t)
+  const at = sec => new Date(Date.parse('2026-11-10T00:00:00.000Z') + sec * 1000).toISOString()
+  plant(dir, [
+    { at: at(0), phase: 'run.start' },
+    { at: at(1), phase: 'module.start', module: '01-fsd', attempt: 1 },
+    { at: at(200), phase: 'task.bind', stage: 'module', task: '01-fsd', attempt: 1, taskId: 's1' },
+    { at: at(200), phase: 'module.done', module: '01-fsd', attempt: 1, status: 'failed', failureClass: 'inactivity-timeout' },
+    { at: at(201), phase: 'module.start', module: '01-fsd', attempt: 2 },
+    { at: at(201), phase: 'module.start', module: '02-type', attempt: 1 },
+  ].map((event, index) => ({ ...event, seq: index + 1 })))
+  assert.match(summary(dir).stdout, /\| `task\.bind` ×1 · `module\.done` ×1 · `module\.start` ×2 \*\*←최장\*\* \| 200–201s \| 199s \| 01-fsd#1 failed inactivity-timeout → 01-fsd#2 · 02-type#1 \|/)
+})
+
+test('디스패치 줄이 둘 이하로 이어지면 접지 않는다', t => {
+  const dir = freshDir(t)
+  plant(dir, [
+    { at: '2026-11-10T00:00:00.000Z', seq: 1, phase: 'run.start' },
+    { at: '2026-11-10T00:00:01.000Z', seq: 2, phase: 'module.start', module: 'fast', attempt: 1 },
+    { at: '2026-11-10T00:03:47.000Z', seq: 3, phase: 'task.bind', stage: 'module', task: 'fast', attempt: 1, taskId: 's' },
+    { at: '2026-11-10T00:03:47.000Z', seq: 4, phase: 'module.done', module: 'fast', attempt: 1, status: 'ok', findings: 1 },
+  ])
+  const out = summary(dir).stdout
+  assert.match(out, /\| `module\.start` \| 1s \| 1s \|/)
+  assert.match(out, /\| `module\.done` \| 227s \| 0s \|/)
+  assert.doesNotMatch(out, /접었다/)
+})
+
 test('요약 표를 스크립트가 만든다', t => {
   const dir = freshDir(t)
   const base = Date.parse('2026-09-01T00:00:00.000Z')

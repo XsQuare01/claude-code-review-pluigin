@@ -1072,11 +1072,55 @@ if (has('summary')) {
   // 리포트에 "체감"으로 들어간다.
   const slowest = rows.reduce((worst, row) => (row.step > worst.step ? row : worst), rows[0])
 
+  // 이어진 디스패치 줄(모듈·검증의 시작·끝, 작업 연결)은 한 행으로 접는다. 2026-11-10 full 리포트의 표는 117행 중
+  // 99행이 이 줄이었고 리포트에서 가장 길었다. 앞 줄과 FOLD_GAP_SEC보다 벌어진 줄과 최장 구간의 줄에서는 끊는다 — 긴
+  // 구간이 접힌 행 안에 묻히지 않게 한다. 셋 이상 이어질 때만 접는다. 줄마다의 값(작업 ID·해시)은 사이드카에 있다.
+  const FOLDABLE = new Set(['module.start', 'module.done', 'task.bind', 'verify.start', 'verify.done'])
+  const FOLD_GAP_SEC = 5
+  const groups = []
+  for (const [at, row] of rows.entries()) {
+    const last = groups.at(-1)
+    const joins = last && FOLDABLE.has(row.phase) && FOLDABLE.has(last[0].row.phase) && row.step <= FOLD_GAP_SEC && row !== slowest
+    if (joins) last.push({ row, event: events[at] })
+    else groups.push([{ row, event: events[at] }])
+  }
+  const briefOf = event => {
+    const name = `${event.module ?? event.task}#${event.attempt ?? '?'}`
+    if (event.phase === 'module.done' || event.phase === 'verify.done') {
+      return [name, event.status, Number.isInteger(event.findings) ? `${event.findings}건` : null, event.failureClass ?? null].filter(value => value !== null && value !== undefined).join(' ')
+    }
+    return event.phase === 'task.bind' ? null : name
+  }
+  let folded = 0
+  const lineOf = group => {
+    const [{ row: first }] = group
+    const mark = group.some(entry => entry.row === slowest) && slowest.step > 0 ? ' **←최장**' : ''
+    if (group.length < 3) return group.map(({ row }) => `| \`${row.phase}\`${row === slowest && row.step > 0 ? ' **←최장**' : ''} | ${row.elapsed}s | ${row.step}s | ${row.detail} |`)
+    folded += group.length
+    const counts = new Map()
+    for (const { row } of group) counts.set(row.phase, (counts.get(row.phase) ?? 0) + 1)
+    const label = [...counts].map(([phase, count]) => `\`${phase}\` ×${count}`).join(' · ')
+    const last = group.at(-1).row
+    const elapsed = first.elapsed === last.elapsed ? `${first.elapsed}s` : `${first.elapsed}–${last.elapsed}s`
+    // 끝난 시도와 새로 띄운 시도가 한 묶음에 섞이면(웨이브의 끝과 다음 웨이브의 시작) `→`로 가른다
+    const segments = []
+    for (const { event } of group) {
+      const brief = briefOf(event)
+      if (!brief) continue
+      const kind = /\.start$/.test(event.phase) ? 'start' : 'end'
+      if (segments.at(-1)?.kind !== kind) segments.push({ kind, items: [] })
+      segments.at(-1).items.push(brief)
+    }
+    return [`| ${label}${mark} | ${elapsed} | ${first.step}s | ${segments.map(segment => segment.items.join(' · ')).join(' → ')} |`]
+  }
+  const tableRows = groups.flatMap(lineOf)
+
   const out = [
     '| 단계 | 경과 | 구간 | 상세 |',
     '|---|---:|---:|---|',
-    ...rows.map(row => `| \`${row.phase}\`${row === slowest && row.step > 0 ? ' **←최장**' : ''} | ${row.elapsed}s | ${row.step}s | ${row.detail} |`),
+    ...tableRows,
   ]
+  if (folded) out.push('', `> 디스패치 줄 ${folded}개를 ${groups.filter(group => group.length >= 3).length}행으로 접었다 — 줄마다의 값(작업 ID·해시)은 사이드카에 있다. 구간은 그 묶음의 첫 줄과 앞 줄 사이다.`)
   // 끝 표시를 **마지막 자리에서** 찾는다. 있기만 하면 통과시키면, 종료 뒤에
   // 줄이 더 붙은 실행을 정상 종료로 읽는다 — 실제로 기록 실패 때문에 순서가
   // 밀려 그런 타임라인이 만들어진 적이 있다. 없는 것과 자리에 없는 것은 다르다.
