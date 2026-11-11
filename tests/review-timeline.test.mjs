@@ -139,6 +139,37 @@ test('요약 표를 스크립트가 만든다', t => {
   assert.match(out.stdout, /`render\.start` \*\*←최장\*\* \| 1860s \| 1800s/)
 })
 
+test('run.start 행은 실행을 알아볼 필드만 싣고 나머지는 사이드카에 둔다', t => {
+  // 2026-11-10 fast 리포트의 첫 행에 run.start 기록 전체(약 1,100자)가 한 칸에 들어가 표를 읽기 어려웠다
+  const dir = freshDir(t)
+  const base = Date.parse('2026-09-01T00:00:00.000Z')
+  plant(dir, [
+    { at: new Date(base).toISOString(), seq: 1, sinceStartSec: 0, phase: 'run.start', workflow: 'fast', host: 'opencode', version: '2.28.1', branch: 'feat/x', base: 'origin/main', changedFiles: 80, candidates: 1, runId: 'r-1', mergeBase: 'a'.repeat(40), head: 'b'.repeat(40), rulesDigest: `sha256:${'c'.repeat(64)}`, baseOverlap: ['x.py', 'y.md'] },
+    { at: new Date(base + 1_000).toISOString(), seq: 2, sinceStartSec: 1, phase: 'render.start', findings: 1 },
+  ])
+  const row = summary(dir).stdout.split('\n').find(line => line.startsWith('| `run.start`'))
+  assert.match(row, /"workflow":"fast"/)
+  assert.match(row, /"branch":"feat\/x"/)
+  assert.doesNotMatch(row, /rulesDigest|mergeBase|baseOverlap/)
+  assert.match(row, /외 5개 필드는 사이드카/)
+})
+
+test('최장 구간 동안 모듈이 돌고 있었으면 표 밑에 그렇게 적는다 — 그 줄의 단계가 걸린 시간으로 읽히지 않게', t => {
+  // 2026-11-10 fast 실행: 리뷰어가 돈 226초가 `task.bind ←최장`으로 찍혔다. 리뷰어가 돌아온 뒤에 작업 ID를 묶는 호스트라서다
+  const dir = freshDir(t)
+  const base = Date.parse('2026-09-01T00:00:00.000Z')
+  plant(dir, [
+    { at: new Date(base).toISOString(), seq: 1, sinceStartSec: 0, phase: 'run.start', workflow: 'fast' },
+    { at: new Date(base + 1_000).toISOString(), seq: 2, sinceStartSec: 1, phase: 'module.start', module: 'fast', attempt: 1 },
+    { at: new Date(base + 227_000).toISOString(), seq: 3, sinceStartSec: 227, phase: 'task.bind', stage: 'module', task: 'fast', attempt: 1, taskId: 't' },
+    { at: new Date(base + 228_000).toISOString(), seq: 4, sinceStartSec: 228, phase: 'module.done', module: 'fast', attempt: 1, status: 'ok', findings: 1 },
+    { at: new Date(base + 230_000).toISOString(), seq: 5, sinceStartSec: 230, phase: 'render.start', findings: 1 },
+  ])
+  const out = summary(dir).stdout
+  assert.match(out, /`task\.bind` \*\*←최장\*\* \| 227s \| 226s/)
+  assert.match(out, /`←최장`은 `module\.start`와 `task\.bind` \*\*사이\*\*의 226s다 — 그동안 모듈 1개가 돌고 있었다\. `task\.bind`가 그만큼 걸렸다는 뜻이 아니다/)
+})
+
 test('run.end가 없으면 그 사실을 적는다', t => {
   // 마지막 단계가 성공했다는 뜻이 아니다. 없는 것과 0은 다르다.
   //

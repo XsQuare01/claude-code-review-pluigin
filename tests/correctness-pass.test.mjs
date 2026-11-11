@@ -389,6 +389,24 @@ test('CR 검증자 프롬프트에 PR 설명과 사용자 요청의 원문이 �
   assert.equal(routed.collected.intent.status, 'stated')
 })
 
+test('의도 블록을 읽기 도구로 읽어도 잘리지 않는 Markdown 파일로도 남긴다 — JSON은 출처마다 원문을 한 줄에 담는다', t => {
+  // 2026-11-10 fast 실행: 오케스트레이터가 블록 대신 intent.json 경로를 넘겼고, 그 파일은 PR 설명 8,413자를 한 줄에
+  // 담아 읽기 도구가 2,000자에서 잘랐다. 리뷰어는 PR 설명의 4분의 1만 봤다. 원문 그대로 줄을 나누면 가장 긴 줄이 284자였다.
+  const run = startRun(t, { correctness: 'on' })
+  const pr = join(run.dir, 'pr.json')
+  const body = Array.from({ length: 80 }, (_, at) => `- 항목 ${at}: 저장이 실패하면 사용자에게 알리고 재시도하지 않는다`).join('\n')
+  writeFileSync(pr, JSON.stringify({ number: 12, title: '저장 실패 처리', body, url: 'https://example.com/pr/12' }))
+  const recorded = intent(run, ['--pr-json', pr])
+  assert.equal(recorded.status, 0, recorded.stderr)
+  const lines = text => text.split('\n')
+  const json = readFileSync(join(run.timing, `${RUN}.intent.json`), 'utf8')
+  assert.ok(Math.max(...lines(json).map(line => line.length)) > 2000, 'JSON은 원문을 한 줄에 담는다 — 이 테스트가 재현하는 조건')
+  const md = readFileSync(join(run.timing, `${RUN}.intent.md`), 'utf8')
+  assert.equal(md, recorded.stdout, '파일은 표준 출력의 블록과 같다')
+  assert.ok(Math.max(...lines(md).map(line => line.length)) < 200)
+  assert.match(md, /- 항목 79: 저장이 실패하면/)
+})
+
 test('PR 정보가 없고 커밋 메시지뿐이면 추정이라고 적고, 아무것도 없으면 없다고 적는다', t => {
   const estimated = startRun(t, { correctness: 'on' })
   assert.equal(intent(estimated, ['--no-pr']).status, 0)

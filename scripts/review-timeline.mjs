@@ -297,6 +297,36 @@ const FAILURE_CLASSES = new Set([
 ])
 
 /**
+ * 두 시각 사이에 돌고 있던 모듈 시도·도구·기존 구현 검색을 세는 함수를 만든다. `--check`의 무기록 구간과
+ * `--summary`의 최장 구간이 같은 셈을 쓴다.
+ *
+ * 도구가 도는 동안에도 줄은 안 남는다. 그 구간까지 "돌고 있던 모듈이 기록에 없다"로 적으면 **아무 일도
+ * 없었다**로 읽히는데, 이 계약이 442초를 귀속하려고 `tool.start`를 넣은 바로 그 구간이 그렇게 적힌다.
+ * 끝나지 않은 도구도 돌고 있던 것으로 센다. 열린 모듈과 같은 처리다 — `tool.start`만 남기고 죽은 실행에서
+ * 그 30분을 "돌고 있던 것이 기록에 없다"로 적으면, 도구 요약은 "끝 기록 없음"이라고 하는데 구간은 비었다고
+ * 해서 같은 기록이 두 말을 한다. 기존 구현 검색(C-6C)도 같다 — 끝을 남기지 못한 검색은 마지막 줄까지 돈 것으로 센다.
+ */
+const runningDuring = events => {
+  const msOf = event => new Date(event.at).getTime()
+  const lastSeen = msOf(events[events.length - 1])
+  const spans = attemptSpans(events)
+  const running = toolRuns(events).runs
+    .filter(one => one.from !== null)
+    .map(one => ({ from: one.from, to: one.to ?? Math.max(lastSeen, one.from) }))
+  const searches = events
+    .filter(event => event?.phase === 'reuse.start')
+    .map(begin => {
+      const end = events.find(event => event?.phase === 'reuse.done' && event.searchId === begin.searchId && msOf(event) >= msOf(begin))
+      return { from: msOf(begin), to: end ? msOf(end) : Math.max(lastSeen, msOf(begin)) }
+    })
+  const overlap = (list, from, to) => list.filter(one => one.from < to && one.to > from).length
+  return (from, to) => ({ modules: overlap(spans, from, to), tools: overlap(running, from, to), search: overlap(searches, from, to) > 0 })
+}
+
+/** 구간 동안 돌고 있던 것을 문장 조각으로 — 없으면 빈 배열이다. */
+const busyParts = gap => [gap.modules && `모듈 ${gap.modules}개`, gap.tools && `도구 ${gap.tools}개`, gap.search && '기존 구현 검색'].filter(Boolean)
+
+/**
  * `dispatch.end`의 네 수치를 `module.done`에서 센다.
  *
  * 세는 단위는 **numbered 모듈**이다(C-9). 2026-09-30의 두 실행이 모두 특수 패스까지
@@ -680,26 +710,7 @@ if (has('check')) {
   if (events.length > 1) {
     const msOf = event => new Date(event.at).getTime()
     const span = msOf(events[events.length - 1]) - msOf(events[0])
-    const spans = attemptSpans(events)
-    // 도구가 도는 동안에도 줄은 안 남는다. 그 구간까지 "돌고 있던 모듈이 기록에
-    // 없다"로 적으면 **아무 일도 없었다**로 읽히는데, 이 계약이 442초를 귀속하려고
-    // `tool.start`를 넣은 바로 그 구간이 그렇게 적힌다.
-    // 끝나지 않은 도구도 돌고 있던 것으로 센다. 열린 모듈과 같은 처리다 —
-    // `tool.start`만 남기고 죽은 실행에서 그 30분을 "돌고 있던 것이 기록에 없다"로
-    // 적으면, 도구 요약은 "끝 기록 없음"이라고 하는데 구간은 비었다고 해서 같은
-    // 기록이 두 말을 한다.
-    const lastSeen = msOf(events[events.length - 1])
-    const running = toolRuns(events).runs
-      .filter(one => one.from !== null)
-      .map(one => ({ from: one.from, to: one.to ?? Math.max(lastSeen, one.from) }))
-    // 기존 구현 검색(C-6C)도 같다. 끝을 남기지 못한 검색은 마지막 줄까지 돈 것으로 센다.
-    const searches = events
-      .filter(event => event?.phase === 'reuse.start')
-      .map(begin => {
-        const end = events.find(event => event?.phase === 'reuse.done' && event.searchId === begin.searchId && msOf(event) >= msOf(begin))
-        return { from: msOf(begin), to: end ? msOf(end) : Math.max(lastSeen, msOf(begin)) }
-      })
-    const overlap = (list, from, to) => list.filter(one => one.from < to && one.to > from).length
+    const during = runningDuring(events)
     const gaps = []
     for (let at = 1; at < events.length; at += 1) {
       const from = msOf(events[at - 1])
@@ -711,15 +722,13 @@ if (has('check')) {
         share: span > 0 ? Math.round((sec * 1000 * 100) / span) : 0,
         from: events[at - 1].phase,
         to: events[at].phase,
-        modules: overlap(spans, from, to),
-        tools: overlap(running, from, to),
-        search: overlap(searches, from, to) > 0,
+        ...during(from, to),
       })
     }
     gaps.sort((a, b) => b.sec - a.sec)
     const shown = gaps.filter((gap, at) => at === 0 || gap.share >= 10).slice(0, 3)
     shown.forEach((gap, at) => {
-      const busy = [gap.modules && `모듈 ${gap.modules}개`, gap.tools && `도구 ${gap.tools}개`, gap.search && '기존 구현 검색'].filter(Boolean)
+      const busy = busyParts(gap)
       notes.push(`${at === 0 ? '가장 긴 무기록 구간' : `그 다음 ${at + 1}위`} ${gap.sec}s (전체의 ${gap.share}%): \`${gap.from}\` → \`${gap.to}\` — ${
         busy.length ? `${busy.join('와 ')}${subjectParticle(busy.at(-1))} 그 사이 돌고 있었다` : '돌고 있던 것이 기록에 없다'}`)
     })
@@ -1005,15 +1014,28 @@ if (has('summary')) {
   if (!events.length) die(`타임라인이 비었다: ${path}`)
 
   const started = new Date(events[0].at).getTime()
+  // `run.start`는 실행의 식별·기준·범위를 모두 담아 길다 — 2026-11-10 fast 리포트의 첫 행은 약 1,100자가 한 칸이었다.
+  // 표에는 실행을 알아볼 필드만 싣고, 나머지는 사이드카(정본)에 둔다.
+  const SHOWN = { 'run.start': ['workflow', 'host', 'version', 'branch', 'base', 'changedFiles', 'candidates'] }
+  const detailOf = (phase, rest) => {
+    if (!Object.keys(rest).length) return ''
+    const keys = SHOWN[phase]
+    if (!keys) return JSON.stringify(rest)
+    const picked = Object.fromEntries(keys.filter(key => key in rest).map(key => [key, rest[key]]))
+    const left = Object.keys(rest).length - Object.keys(picked).length
+    return `${JSON.stringify(picked)}${left > 0 ? ` · 외 ${left}개 필드는 사이드카` : ''}`
+  }
   const rows = events.map((event, at) => {
     const now = new Date(event.at).getTime()
     const previous = at === 0 ? now : new Date(events[at - 1].at).getTime()
     const { at: _at, seq, sinceStartSec, phase, ...rest } = event
     return {
       phase,
+      from: previous,
+      to: now,
       elapsed: Math.round((now - started) / 1000),
       step: Math.round((now - previous) / 1000),
-      detail: Object.keys(rest).length ? JSON.stringify(rest) : '',
+      detail: detailOf(phase, rest),
     }
   })
 
@@ -1055,7 +1077,14 @@ if (has('summary')) {
   // 않았다 — `script.start`는 스크립트 진입 직후에 찍히므로 그 자체는 0초이고,
   // 1863초는 **그 앞의 아무 기록도 없는 구간**이었다. 시작 표시에 붙은 최장
   // 구간은 "여기까지 오는 데"라고 읽어야 한다.
-  if (slowest && slowest.step > 0 && /\.start$/.test(slowest.phase)) {
+  //
+  // 그 사이에 모듈·도구가 돌고 있었으면 그렇다고 적는다. 2026-11-10 fast 실행은 리뷰어가 돈 226초가
+  // `task.bind ←최장`으로 찍혔다 — 리뷰어가 돌아온 뒤에야 작업 ID를 묶는 호스트라서, 그 시간이 묶기에 걸린 것으로 읽혔다.
+  const slowestAt = rows.indexOf(slowest)
+  const busy = slowest && slowest.step > 0 && slowestAt > 0 ? busyParts(runningDuring(events)(slowest.from, slowest.to)) : []
+  if (busy.length) {
+    out.push('', `> \`←최장\`은 \`${rows[slowestAt - 1].phase}\`와 \`${slowest.phase}\` **사이**의 ${slowest.step}s다 — 그동안 ${busy.join('와 ')}${subjectParticle(busy.at(-1))} 돌고 있었다. \`${slowest.phase}\`가 그만큼 걸렸다는 뜻이 아니다.`)
+  } else if (slowest && slowest.step > 0 && /\.start$/.test(slowest.phase)) {
     out.push('', `> \`←최장\`은 앞 줄과 \`${slowest.phase}\` **사이**의 ${slowest.step}s이고, \`${slowest.phase}\`가 그만큼 걸렸다는 뜻이 아니다. 그 사이에 남은 기록이 없으므로 무엇이 그 시간을 썼는지는 이 표로 알 수 없다.`)
   }
 

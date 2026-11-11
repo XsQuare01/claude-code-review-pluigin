@@ -16,7 +16,8 @@
 //   PR 설명은 `gh pr view --json number,title,body,url`(읽기만 한다)로 읽는다. gh를 쓸 수 없는 호스트에서는
 //   그 명령의 출력을 그대로 담은 파일을 --pr-json으로 준다. 커밋 메시지는 merge-base..HEAD의 git log다.
 //
-// 출력: `.timing/<run>.intent.json`(원문·출처·sha256)과, producer 프롬프트에 그대로 붙일 블록(stdout).
+// 출력: `.timing/<run>.intent.json`(원문·출처·sha256)과, producer 프롬프트에 그대로 붙일 블록(stdout). 같은 블록을
+// `.timing/<run>.intent.md`에도 쓴다 — 프롬프트에 붙이지 못해 파일로 넘길 때는 이 파일을 넘긴다(JSON이 아니라).
 
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
@@ -133,4 +134,9 @@ const doc = {
 }
 const path = join(dir, '.timing', `${run}.intent.json`)
 writeTextAtomic(path, `${JSON.stringify(doc, null, 2)}\n`)
-process.stdout.write(`${intentBlock(doc, { path: `.timing/${run}.intent.json`, sha256: sha256(readFileSync(path, 'utf8')) })}\n`)
+const block = `${intentBlock(doc, { path: `.timing/${run}.intent.json`, sha256: sha256(readFileSync(path, 'utf8')) })}\n`
+// 같은 블록을 Markdown 파일로도 남긴다. 호스트의 오케스트레이터는 위임 프롬프트를 제 형식으로 다시 쓰면서 긴 내용을
+// 파일 경로로 바꾼다. JSON은 출처마다 원문을 한 줄에 담으므로 읽기 도구가 한 줄을 2,000자에서 자르고 —
+// 2026-11-10 fast 실행의 리뷰어는 PR 설명 8,413자 중 2,000자만 봤다. 이 파일은 원문의 줄을 그대로 둔다.
+writeTextAtomic(join(dir, '.timing', `${run}.intent.md`), block)
+process.stdout.write(block)

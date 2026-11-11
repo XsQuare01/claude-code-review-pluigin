@@ -1287,6 +1287,8 @@ export function render(candidates, verdictByCandidateId, phaseByImpact, vocabula
   if (digest) {
     const ids = moduleSections.map(section => section.id)
     lines.push(`모듈 ${ids[0]}~${ids.at(-1)}은 압축 규칙 \`${digest}\` 하나로 리뷰어 한 번에 봤다 — 모듈마다 따로 띄운 리뷰가 아니다. 지적이 있는 모듈만 싣는다.`, '')
+    // 그릴 모듈 섹션이 없으면 없다고 적는다. 섹션이 하나도 없는 상세 지적은 잘린 것처럼 보인다 — 2026-11-10 PR #255 리포트가 그랬다.
+    if (!numberedModules.length) lines.push(`규칙 모듈(${ids[0]}~${ids.at(-1)})에서 나온 지적 없음.`, '')
   }
 
   for (const key of moduleKeys) {

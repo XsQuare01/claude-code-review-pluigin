@@ -378,6 +378,12 @@ export function buildSnapshot({ name, events, catalog, routed, verdicts, verific
     }
   })
 
+  // 이 실행에서 돌린 도구(`review-tool.mjs`의 `tool.start`). 기존 구현 검색도 같은 스크립트로 돌지만 도구가 아니다(C-6C).
+  // base가 앞서 있을 때 도구 결과를 어떻게 읽을지 적는 줄이 이 값을 본다 — 돌리지 않은 도구를 돌았다고 적지 않는다.
+  const tools = [...new Set(events
+    .filter(event => event?.phase === 'tool.start' && nonEmpty(event.name) && event.name !== 'reuse-search')
+    .map(event => String(event.name)))].sort()
+
   const openQuestions = []
   for (const source of routed.collected.sources) {
     // 출처는 결과 파일 이름에서 붙인다. producer 출력은 신뢰하지 않는 content라(C-6A),
@@ -453,6 +459,7 @@ export function buildSnapshot({ name, events, catalog, routed, verdicts, verific
     findings,
     ...(comparison ? { comparison } : {}),
     openQuestions,
+    tools,
     inputs,
     notes,
   }
@@ -483,6 +490,8 @@ export function snapshotProblems(snapshot) {
     }
     if (!SHA256.test(String(run.rulesDigest))) problems.push('run.rulesDigest가 sha256:<hex>가 아니다')
   }
+  // `tools`가 없는 스냅숏은 이 필드가 생기기 전(2.28.1 이전)의 것이다 — 읽되, 도구를 돌렸는지는 모른다고 그린다.
+  if ('tools' in snapshot && (!Array.isArray(snapshot.tools) || !snapshot.tools.every(nonEmpty))) problems.push('tools가 도구 이름 배열이 아니다')
   if (!isObject(target)) problems.push('target이 없다')
   else {
     if (!OBJECT_ID.test(String(target.head))) problems.push('target.head가 commit id가 아니다')
@@ -785,7 +794,13 @@ export function renderSnapshotMarkdown(snapshot) {
   if (target.baseAhead > 0 && target.baseOverlapCount > 0) {
     const shown = target.baseOverlap.slice(0, 5).map(codeSpan).join(', ')
     const rest = target.baseOverlapCount - Math.min(5, target.baseOverlap.length)
-    lines.push('', `**base가 앞서 있다** — ${codeSpan(target.base)}이 merge-base 뒤로 ${target.baseAhead}커밋 앞서 있고, 이 브랜치와 같은 파일 ${target.baseOverlapCount}개를 바꿨다: ${shown}${rest > 0 ? ` 외 ${rest}개` : ''}. lint·typecheck·test는 base를 따라잡지 않은 HEAD에서 돌았다. 실패가 그 때문인지는 이 브랜치를 base에 합친 트리에서 다시 재 가린다 — 파일이 겹친다는 것만으로 이 변경의 실패가 아니라고 하지 않는다(C-6).`)
+    // 도구를 돌렸는지는 기록(`tools`)으로 정한다. 2026-11-10 fast 실행은 도구를 돌리지 않았는데 "돌았다"고 그렸다.
+    const toolLine = !Array.isArray(snapshot.tools)
+      ? 'lint·typecheck·test를 돌렸다면 base를 따라잡지 않은 HEAD에서 돈 것이다. 실패가 그 때문인지는 이 브랜치를 base에 합친 트리에서 다시 재 가린다 — 파일이 겹친다는 것만으로 이 변경의 실패가 아니라고 하지 않는다(C-6).'
+      : snapshot.tools.length
+        ? `${snapshot.tools.map(codeSpan).join('·')}는 base를 따라잡지 않은 HEAD에서 돌았다. 실패가 그 때문인지는 이 브랜치를 base에 합친 트리에서 다시 재 가린다 — 파일이 겹친다는 것만으로 이 변경의 실패가 아니라고 하지 않는다(C-6).`
+        : '도구(lint·typecheck·test)는 돌리지 않았다 — 이 실행이 본 코드는 base를 따라잡지 않은 HEAD다. base에 합친 뒤에도 같은지는 합친 트리에서 다시 봐야 안다(C-6).'
+    lines.push('', `**base가 앞서 있다** — ${codeSpan(target.base)}이 merge-base 뒤로 ${target.baseAhead}커밋 앞서 있고, 이 브랜치와 같은 파일 ${target.baseOverlapCount}개를 바꿨다: ${shown}${rest > 0 ? ` 외 ${rest}개` : ''}. ${toolLine}`)
   } else if (target.baseAhead > 0) {
     lines.push('', `base ${codeSpan(target.base)}이 merge-base 뒤로 ${target.baseAhead}커밋 앞서 있다 — 이 브랜치가 바꾼 파일은 건드리지 않았다.`)
   }
