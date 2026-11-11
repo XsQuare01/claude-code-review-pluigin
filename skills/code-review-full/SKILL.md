@@ -167,7 +167,7 @@ node "$RULES_DIR/../scripts/review-tasks.mjs" next --stage module --dir "$REPORT
 - **멈춘 실행(`halted`)도 리포트를 쓰고 `run.end`를 남긴다** — 부분 보고다. 사용자가 더 돌리라고 하면 `review-tasks.mjs resume`이 새 구간을 열고, `next`가 멈춰서 띄우지 못한 모듈을 낸다. 모듈 단계를 마치면 `prepare-verification.mjs … --collect --discard-verdicts --out <같은 routed 자리>`로 다시 모으고 검증을 새 라운드로 한 뒤 리포트를 다시 쓴다. 다시 쓸 때도 새 구간에서 `render.start`를 남기고 세 조각을 다시 만들어 `assemble-report.mjs`로 조립한다 — 앞 구간의 `render.start`로는 조립하지 않는다. 멈춘 적 없이 끝난 실행은 이어 가지 않는다
 - **깨어날 때마다** — 작업 완료 알림, 사용자 메시지, 컨텍스트 압축 뒤, 같은 실행에서 스킬을 다시 불렀을 때 — 먼저 `review-tasks.mjs status`로 남은 일을 보고 `next`를 부른다. 같은 실행을 다른 세션에서 이어 가면 `review-tasks.mjs resume --repo <대상 저장소>`부터 부른다. 대상이 바뀌었다고 하면(종료 코드 3) 이 실행을 이어 가지 않고, 새 `--run` 이름으로 preflight를 `--continues <앞 실행 ID>`와 함께 다시 시작한다. 한도에 닿아 멈춘 실행을 사용자가 더 돌리라고 하면 `resume`에 새 한도를 준다
 - **`held`에 나온 `05`는 기존 구현 검색을 기다리는 것이다(C-6C).** 슬롯을 쓰지 않으므로 다른 모듈이 먼저 나간다. 검색이 풀리면 다음 `next`가 `05`를 낸다. 남은 일이 `05`뿐이라고 나오면(advice) `review-reuse.mjs wait --dir "$REPORT_DIR" --run "$REPORT_BASENAME"`로 기다린 뒤 `next`를 다시 부른다 — `review-tool.mjs --wait`는 lint·test까지 기다리므로 쓰지 않는다
-- 작업 하나가 끝나도 깨우지 않는 호스트(`host.perTaskNotification: false`, oh-my-openagent)에서는 `dispatch`를 전부 한 번에 foreground 병렬로 부르고, 돌아온 응답마다 `done`을 부른 뒤 `next`를 다시 부른다(아래 교차검증 `디스패치`와 같은 이유). **첫 웨이브와 오래 걸리는 도구(lint·typecheck·test)를 같은 묶음으로 부르지 않는다** — 묶음 전체가 끝나야 응답을 받으므로, 첫 웨이브가 즉시 실패해도 도구가 끝날 때까지 알 수 없다. 2026-10-12 실행은 그렇게 7분을 잃었다. 도구는 두 번째 웨이브와 함께 부른다
+- 작업 하나가 끝나도 깨우지 않는 호스트(`host.perTaskNotification: false`, oh-my-openagent)에서는 `dispatch`를 전부 한 번에 foreground 병렬로 부르고, 돌아온 응답마다 `done`을 부른 뒤 `next`를 다시 부른다(아래 교차검증 `디스패치`와 같은 이유). **첫 웨이브와 오래 걸리는 도구(lint·typecheck·test)를 같은 묶음으로 부르지 않는다** — 묶음 전체가 끝나야 응답을 받으므로, 첫 웨이브가 즉시 실패해도 도구가 끝날 때까지 알 수 없다. 2026-10-12 실행은 그렇게 7분을 잃었다. 도구는 `--detach`로 띄운다 — 띄우고 바로 돌아오므로 첫 웨이브를 막지 않는다(아래 `리포팅`의 도구 실행)
 
 #### 기존 구현 검색을 모듈과 겹쳐 돌린다 (C-6C)
 
@@ -527,7 +527,15 @@ node "$RULES_DIR/../scripts/tally-verdicts.mjs" --dir "$REPORT_DIR" --run "$REPO
 - producer가 반환한 원본은 Markdown이 아니라 parsed JSON이다. 오케스트레이터는 producer heading/section/severity를 보존·정규화하는 대신, **검증을 통과한 구조화 필드만** 수집 대상으로 삼는다: finding/openQuestion의 내용, `impact`/`confidence`, `category`, `location`, 규칙 ID, 출처 패스 라벨.
 - 일반 패스 리포트는 `RULES_DIR`의 `[0-9]*.md`에서 발견한 numbered non-00 모듈명을 나열하고, 모듈별 sub-agent 결과를 각각 표시한다. `00-rule.md`는 공통 규칙이므로, `post-verification-synthesis` 모듈은 일반 패스 소속이 아니므로 이 목록에 넣지 않는다. 후자는 synthesis 단계 결과로 따로 표시한다.
 - numbered non-00 모듈 중 실행 또는 수집이 누락된 항목이 있으면 `FAILED orchestration`으로 표시하고, 완료된 리뷰처럼 요약하지 않는다.
-- lint/typecheck/test를 실행했으면 `도구 실행 결과` 섹션으로 분리해 보고하고, 리뷰 지적과 섞지 않는다 (`00-rule.md` 00-9).
+- **lint·typecheck·test는 기본으로 돌린다(C-6).** preflight의 `패키지 루트` 폴더마다 그 `package.json`에 있는 스크립트로 돌린다 — 저장소 루트에 `package.json`이 없으면 루트에서 돈 명령은 코드와 무관하게 실패한다. 결과는 `도구 실행 결과` 섹션으로 분리해 보고하고, 리뷰 지적과 섞지 않는다 (`00-rule.md` 00-9).
+
+  **돌리지 않는 도구는 이유를 남긴다.** 이유는 닫힌 목록에서 고른다 — `user-request`(사용자가 돌리지 말라고 했다)·`no-script`(그 `package.json`에 스크립트가 없다)·`deps-missing`(의존성이 설치되지 않았고 설치하지 못했다)·`no-package-root`(도구를 돌릴 패키지 루트가 없다). 시간이 걸린다는 것은 이유가 아니다 — 아래처럼 모듈과 겹쳐 돌린다.
+
+  ```bash
+  node "$RULES_DIR/../scripts/review-timeline.mjs" --dir "$REPORT_DIR" --run "$REPORT_BASENAME" --phase tool.skipped --set name=test --set reasonCode=no-script --set "reason=apps/web/package.json에 test 스크립트가 없다"
+  ```
+
+  `도구 실행 결과`에도 같은 이유를 적는다. 돌리지도 이유를 남기지도 않은 실행은 `--check`가 짚는다. 2026-11-10의 두 full 실행 중 하나는 도구를 돌리지 않았고 이유도 없었다 — 이 문서에 "함께 돌린다"와 "실행했으면 보고한다"가 같이 있어 돌릴지가 모호했다.
 - **도구는 `review-tool.mjs`로 돌린다 — 시작(`tool.start`)과 끝(`tool.done`)을 스크립트가 돌리기 직전과 끝난 직후에 남긴다** (C-9). 손으로 남기면 그 시각은 도구가 돈 시각이 아니라 오케스트레이터가 깨어난 시각이다 — 2026-10-12 실행은 세 도구의 시작과 끝을 같은 초에 남겨 셋 다 416초로 기록됐다. 끝만 모아 찍던 실행은 442초를 이름 없는 구간 하나로 남겼다.
 
   ```bash

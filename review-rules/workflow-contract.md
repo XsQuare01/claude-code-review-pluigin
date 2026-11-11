@@ -141,6 +141,7 @@ node "$RULES_DIR/../scripts/review-base.mjs" --repo .   # 사용자가 base를 �
 `00-rule.md` 00-9 실행 안전 계약을 따른다. 요약하면:
 
 - 리뷰는 기본 read-only. lint/typecheck/test는 수정 옵션 없이 실행
+- **`full`은 lint/typecheck/test를 기본으로 돌린다.** 돌리지 않는 도구는 이유를 닫힌 목록(`user-request`·`no-script`·`deps-missing`·`no-package-root`)에서 골라 `tool.skipped`로 남긴다(C-9). preflight가 `run.start`에 `toolRun: required`를 남기고, `--check`는 렌더에 닿은 실행이 도구를 돌리지도 이유를 남기지도 않았으면 짚는다. 2026-11-10의 full 실행 둘 중 하나는 도구를 돌리지 않았고 이유도 없었다. `fast`는 돌리지 않는 것이 기본이다
 - **read-only는 프롬프트가 아니라 도구로 강제한다.** 지적을 만드는 sub-agent(producer)는
   파일을 쓸 수 있는 도구 없이 띄운다. 편집 도구뿐 아니라 셸도 제외한다 — 셸이 있으면
   리다이렉션이나 `sed -i`로 쓸 수 있어 편집 도구만 빼는 것은 절반짜리다.
@@ -1480,7 +1481,7 @@ UTF-16 파일도 읽는다 — PowerShell 5.1의 `Set-Content -Encoding UTF8`은
 
 | `--phase` | 시점 | `--set`/`--data`에 담는 것 |
 |---|---|---|
-| `run.start` | 가장 먼저 | `host`, `rules`(해석된 RULES_DIR), `version`, `branch`, `changedFiles` · 무엇을 리뷰하는지(C-10): `runId`, `base`, `head`, `worktree`, `dirtyFiles`, `repo`, `repoRoot`, `rulesDigest` · 선택 패스를 켰는지: `correctness`(`on`/`off`, 선택 패스가 있는 워크플로우만) · 한도(C-12): `maxTasks`, `maxDurationSec`(준 것만), `staleAfterSec` · (새 실행으로 이어 받았으면) `continues` · (이전 리뷰와 비교하면, C-13) `previousSnapshot`, `previousRunId`, `previousSha256` · base 앞섬(C-6): `baseAhead`(merge-base 뒤 base의 커밋 수), (같은 파일을 바꿨으면) `baseOverlapCount`, `baseOverlap`(20개까지) · (의존성 매니페스트를 바꿨으면) `dependencyFiles` · `baseHead`(base 끝 SHA — 시작할 때 한 번 해석한다. 없으면 "base 끝 SHA 미기록") · (full이면, C-6C) `reuseSearch`(`planned`) · (사용자가 다른 언어를 정했으면) `language` — preflight가 쓴다 |
+| `run.start` | 가장 먼저 | `host`, `rules`(해석된 RULES_DIR), `version`, `branch`, `changedFiles` · 무엇을 리뷰하는지(C-10): `runId`, `base`, `head`, `worktree`, `dirtyFiles`, `repo`, `repoRoot`, `rulesDigest` · 선택 패스를 켰는지: `correctness`(`on`/`off`, 선택 패스가 있는 워크플로우만) · 한도(C-12): `maxTasks`, `maxDurationSec`(준 것만), `staleAfterSec` · (새 실행으로 이어 받았으면) `continues` · (이전 리뷰와 비교하면, C-13) `previousSnapshot`, `previousRunId`, `previousSha256` · base 앞섬(C-6): `baseAhead`(merge-base 뒤 base의 커밋 수), (같은 파일을 바꿨으면) `baseOverlapCount`, `baseOverlap`(20개까지) · (의존성 매니페스트를 바꿨으면) `dependencyFiles` · `baseHead`(base 끝 SHA — 시작할 때 한 번 해석한다. 없으면 "base 끝 SHA 미기록") · (full이면, C-6C) `reuseSearch`(`planned`) · (full이면, C-6) `toolRun`(`required`) · (사용자가 다른 언어를 정했으면) `language` — preflight가 쓴다 |
 | `run.resume` | 멈춘 실행을 이어 갈 때 (`review-tasks.mjs resume`이 쓴다) | 새 구간의 `maxTasks`·`maxDurationSec`·`staleAfterSec`, 다시 잰 `head`·`worktree` |
 | `scope.done` | 범위 확정(C-4) — `/code-review-full`은 **preflight가 남긴다**(C-5의 이름 규칙으로 센 수) | `files`, `excluded` · React 규칙이 다루지 않는 언어(C-5): `outside`(0이어도 남긴다 — 없으면 가르지 않은 예전 실행), (다른 언어 앱이 있으면) `otherApps`(`{ root, manifest, files }`) |
 | `modules.planned` | 적용 모듈 확정(C-3) | `candidates`, `applied`(적용한 **번호 모듈** 수 — Props·수학·예외·정확성 패스는 세지 않는다. `fast`는 리뷰어 하나(`fast`)라 둘 다 1이다. 후보 수를 넘으면 스크립트가 거부한다. 스냅숏의 `적용 N개`는 패스 전부를 센 수라 다르다) · `skipped`, `unknown`(중첩, `--data-file`) |
@@ -1497,6 +1498,7 @@ UTF-16 파일도 읽는다 — PowerShell 5.1의 `Set-Content -Encoding UTF8`은
 | `reuse.start` | 검색 스크립트 시작 직후, 계획 검사 전 — `review-reuse.mjs search`가 **직접** 남긴다 | `searchId`, `plan` · (읽을 수 있으면) `planSha256` |
 | `reuse.done` | 검색을 마쳤거나 처리할 수 있는 오류로 멈춘 직후 — 검색 스크립트가 **직접** 남긴다. 오케스트레이터가 지어 남기지 않는다 | `searchId`, `status`(`complete`/`partial`/`failed`/`not-applicable`), `targets`(중첩 — 상태별 대상 수) · `reason` · `out`, `outSha256`, `planSha256`, `durationSec` |
 | `tool.start` | **도구 하나를 돌리기 직전** — `review-tool.mjs`가 남긴다 | `name`, `callId`(`review-tool.mjs`, 로그 이름) · (`--detach`로 띄웠으면) `detached` · (재시도면) `attempt` · 재현 명령이면 `candidateId`·`evidenceId`(C-11, `review-evidence.mjs`가 쓴다) |
+| `tool.skipped` | 도구를 돌리지 않기로 정했을 때 — 오케스트레이터가 남긴다(C-6) | `name`, `reasonCode`(`user-request`/`no-script`/`deps-missing`/`no-package-root`) · `reason`(확인한 내용) |
 | `tool.done` | lint/typecheck/test를 돌린 직후 — `review-tool.mjs`가 남긴다 | `name`, `exit`(시간 상한으로 끊었으면 `null`), `treeSha`, `callId` · (실패했으면, C-6) `failureFiles`(중첩 — `inChange`·`outsideChange`·`untracked`, 변경 목록이 없으면 `tracked`·`untracked`) · `failedNow`, `failedBaseline`(재지 못했으면 `null`) · `failing`(중첩, `--data-file`) · (재시도면) `attempt` · 재현 명령이면 `candidateId`·`evidenceId` |
 | `crossverify.start` / `.end` | 교차검증 패스 — 시작은 `prepare-verification.mjs`가 검증 작업을 만든 직후, 끝은 `tally-verdicts.mjs`가 **직접 남긴다** | `targets`, `round`(이 교차검증 라운드의 이름 — C-12) / `upheld`, `rejected`, `needsContext`, `noVerdict`, `countsFrom`, (있으면) `malformedTasksCorrected`·`tokensIn`·`tokensOut` |
 | `synthesis.start` / `.end` | synthesis 패스 | `findings` / `clusters`, (있으면) `tokensIn`·`tokensOut` |

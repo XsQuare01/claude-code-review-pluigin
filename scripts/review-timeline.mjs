@@ -32,7 +32,7 @@ import { basename, dirname, extname, isAbsolute, join, resolve } from 'node:path
 import { writeOutFile } from './lib/atomic-write.mjs'
 import { withFileLock } from './lib/file-lock.mjs'
 import { readJsonFile, readTextFile } from './lib/read-text.mjs'
-import { REUSE_MODULE, REUSE_STATUSES, reuseState, reuseStateBefore } from './lib/reuse-state.mjs'
+import { REUSE_MODULE, REUSE_STATUSES, REUSE_TOOL_NAME, reuseState, reuseStateBefore } from './lib/reuse-state.mjs'
 import { moduleOutcomes } from './lib/run-record.mjs'
 import { CANCEL_REASONS, HALT_REASONS, STAGES, endState, haltOf, resultBindingProblems } from './lib/task-ledger.mjs'
 import { runNameProblem } from './lib/run-name.mjs'
@@ -152,7 +152,8 @@ const PHASES = new Map([
       'maxTasks', 'maxDurationSec', 'staleAfterSec', 'continues', 'previousSnapshot', 'previousRunId', 'previousSha256', 'baseAhead', 'baseOverlapCount',
       // `baseHead`: 기준 ref의 끝 commit(정한 순간). `reuseSearch`: full이 기존 구현 검색을 예정했는지(C-6C).
       // `language`: 사용자가 정한 리뷰 언어(정하지 않으면 없다 — 한국어)
-      'baseHead', 'reuseSearch', 'language', 'resultBinding'],
+      // `toolRun`: full이 lint·typecheck·test를 기본으로 돌리는지(C-6) — 있으면 `--check`가 돌린 도구나 건너뛴 이유를 묻는다
+      'baseHead', 'reuseSearch', 'language', 'resultBinding', 'toolRun'],
   }],
   // 한도에 닿아 멈춘 실행을 이어 갈 때 새 한도 구간을 연다(C-12). 대상이 그대로인지 확인한 값을 함께 남긴다.
   ['run.resume', { required: [], structured: [], allowed: ['maxTasks', 'maxDurationSec', 'staleAfterSec', 'head', 'worktree'] }],
@@ -184,6 +185,8 @@ const PHASES = new Map([
   // `detached`: 띄워 두고 돌아온 도구(review-tool --detach) — 끝은 띄운 프로세스가 남긴다.
   ['tool.start', { required: ['name'], structured: [], allowed: ['attempt', 'callId', 'candidateId', 'evidenceId', 'detached'] }],
   // `failureFiles`: 실패한 자리가 이 변경의 파일·바꾸지 않은 파일·추적하지 않는 파일에 몇 개씩인지(C-6).
+  // 돌리지 않은 도구와 그 이유(C-6). `reasonCode`는 닫힌 목록(`TOOL_SKIP_REASONS`), `reason`은 확인한 내용이다.
+  ['tool.skipped', { required: ['name', 'reasonCode'], structured: [], allowed: ['reason'] }],
   ['tool.done', { required: ['name', 'exit', 'treeSha'], structured: ['failing', 'failureFiles'], allowed: ['failedNow', 'failedBaseline', 'attempt', 'callId', 'candidateId', 'evidenceId'] }],
   ['crossverify.start', { required: ['targets'], structured: [], allowed: ['round'] }],
   ['crossverify.end', { required: ['upheld', 'rejected'], structured: [], allowed: ['needsContext', 'noVerdict', 'malformedTasksCorrected', 'countsFrom'] }],
@@ -243,8 +246,19 @@ const undeclaredKeys = (phase, data) => {
  *
  * `failureClass`와 같은 이유로 줄은 거부하지 않는다. 경고하고 `--check`가 짚는다.
  */
+/**
+ * 도구(lint·typecheck·test)를 돌리지 않은 이유 — 닫힌 목록이다(C-6).
+ *
+ * - `user-request`: 사용자가 돌리지 말라고 했다
+ * - `no-script`: 패키지 루트의 package.json에 그 스크립트가 없다
+ * - `deps-missing`: 의존성이 설치되지 않았고 설치하지 못했다
+ * - `no-package-root`: 리뷰 범위에 도구를 돌릴 패키지 루트가 없다
+ */
+const TOOL_SKIP_REASONS = ['user-request', 'no-script', 'deps-missing', 'no-package-root']
+
 const CLOSED_VALUES = new Map([
-  ['run.start', { reuseSearch: ['planned'] }],
+  ['run.start', { reuseSearch: ['planned'], toolRun: ['required'] }],
+  ['tool.skipped', { reasonCode: TOOL_SKIP_REASONS }],
   ['module.done', { status: ['ok', 'failed'], cancelReason: CANCEL_REASONS }],
   ['verify.done', { status: ['ok', 'failed'], cancelReason: CANCEL_REASONS }],
   ['task.bind', { stage: STAGES }],
@@ -943,6 +957,19 @@ if (has('check')) {
     }
     if (twice.size) problems.push(`같은 검증 작업·시도가 두 번 시작됐다: ${[...twice].join(', ')}`)
     if (doubled.size) problems.push(`같은 검증 작업·시도가 두 번 끝났다: ${[...doubled].join(', ')}`)
+  }
+
+  // 도구 실행(C-6). 시작이 도구를 기본으로 돌린다고 정한 실행(`toolRun: required`)만 본다 — 예전 기록에 묻지 않는다.
+  // 기존 구현 검색(`reuse-search`)과 재현 명령(`candidateId`, C-11)은 같은 스크립트로 돌지만 도구 게이트가 아니다.
+  // 렌더에 닿기 전에는 아직 띄울 수 있으므로 묻지 않는다. 2026-11-10 full 실행 하나는 도구를 돌리지 않았고 이유도 없었다.
+  {
+    const startLine = events.find(event => event?.phase === 'run.start')
+    const rendered = events.some(event => event?.phase === 'render.start' || event?.phase === 'run.end')
+    if (startLine?.toolRun === 'required' && rendered && !stoppedWithoutReview) {
+      const ran = events.some(event => event?.phase === 'tool.start' && event.name !== REUSE_TOOL_NAME && event.candidateId === undefined && event.evidenceId === undefined)
+      const skipped = events.some(event => event?.phase === 'tool.skipped')
+      if (!ran && !skipped) problems.push('full 실행인데 도구(lint·typecheck·test)를 돌리지도, 건너뛴 이유(`tool.skipped`)를 남기지도 않았다 — 기본은 돌린다. 돌리지 않은 도구는 이유를 닫힌 목록에서 골라 남긴다(C-6)')
+    }
   }
 
   // 기존 구현 검색(C-6C). 시작이 검색을 예정한 실행만 본다 — 그 필드가 없는 예전 기록에 미실행을 묻지 않는다.

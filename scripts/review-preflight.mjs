@@ -351,6 +351,8 @@ const logged = (() => {
     // full은 diff 밖의 기존 구현을 찾아 05에 넘긴다(05-7). 예정이라는 사실을 시작에 남겨, 계획했는데 돌리지 않은
     // 검색을 기록 검사가 짚게 한다 — 이 필드가 없는 예전 기록은 그 검사를 받지 않는다.
     ...(workflow === 'full' ? { reuseSearch: 'planned', resultBinding: 'required' } : {}),
+    // full은 lint·typecheck·test를 기본으로 돌린다(C-6). 시작에 남겨, 돌리지도 이유를 남기지도 않은 실행을 기록 검사가 짚게 한다.
+    ...(workflow === 'full' ? { toolRun: 'required' } : {}),
     // 원격이 없으면 필드를 비워 둔다. 없는 값을 지어 넣지 않는다.
     ...(identity.remote ? { repo: identity.remote } : {}),
     repoRoot: identity.root,
@@ -421,6 +423,7 @@ const out = [
   ...(workflow === 'full' ? [capabilities.perTaskNotification
     ? `기존 구현 검색 예정 — 05를 뺀 모듈을 먼저 띄우고, 그동안 검색 계획을 써 review-reuse.mjs로 후보를 모은다. 05는 검색이 끝난 뒤 띄운다(C-6C)`
     : `기존 구현 검색 예정 — 이 호스트는 띄운 작업이 다 끝나야 돌아온다. 첫 디스패치 전에 검색 계획을 써 review-reuse.mjs로 띄우고(기다리지 않는다), 그 뒤 05를 뺀 모듈을 띄운다. 05는 검색이 끝난 뒤 띄운다(C-6C)`] : []),
+  ...(workflow === 'full' ? [`도구 실행     lint·typecheck·test를 기본으로 돌린다 — 패키지 루트 폴더에서 review-tool.mjs --detach로 띄우고 리포트 직전 --wait로 받는다. 돌리지 않는 도구는 이유(user-request·no-script·deps-missing·no-package-root)를 review-timeline.mjs --phase tool.skipped로 남긴다(C-6)`] : []),
   `리뷰 에이전트  첫 디스패치 전에 작업 도구의 에이전트 목록에서 react-code-review-plugin:rule-module-reviewer를 찾는다. 없으면 리뷰하지 않고 review-tasks.mjs cancel --all --reason agent-unavailable로 멈춘다 — 직접 리뷰하거나 다른 에이전트로 대신하지 않는다(C-6)`,
   '',
   `후보 모듈     ${candidates.length}개  ${candidates.map(module => module.id).join(' ')}`,

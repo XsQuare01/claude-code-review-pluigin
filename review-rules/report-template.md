@@ -59,7 +59,7 @@
 
 ## 도구 실행 결과
 
-{`review-tool.mjs`로 돌렸으면 명령·폴더·종료 코드·실패 요약 표. 돌리지 않았으면 `실행하지 않음 — {사유: fast 기본값 / 사용자가 요청하지 않음 등}`}
+{`review-tool.mjs`로 돌렸으면 명령·폴더·종료 코드·실패 요약 표. 돌리지 않은 도구는 `실행하지 않음 — {사유}`. fast는 `fast 기본값`, full은 `tool.skipped`에 남긴 이유(`user-request`·`no-script`·`deps-missing`·`no-package-root`와 확인한 내용) — full에서 이유 없이 건너뛰지 않는다}
 
 ## 실행 타임라인
 

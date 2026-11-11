@@ -2402,6 +2402,47 @@ test('--check는 검색을 예정했는데 계획·시작·끝이 빠진 실행�
   }
 })
 
+// ── 도구 실행(C-6) ─────────────────────────────────────────────────────────
+// 2026-11-10 full 실행 둘 중 하나는 lint·typecheck·test를 돌리지 않았고 사유도 남기지 않았다. SKILL에 "모듈이 도는
+// 동안 함께 돌린다"와 "실행했으면 따로 보고한다"가 함께 있어 돌릴지가 모호했다. 이제 기본은 돌리고, 건너뛴 도구는
+// 닫힌 목록의 이유로 `tool.skipped`에 남긴다. 시작이 그렇게 정한 실행(`toolRun: required`)만 검사한다.
+const toolStart = extra => reuseStart({ reuseSearch: undefined, toolRun: 'required', workflow: 'full', ...extra })
+
+test('tool.skipped는 표에 있고, reasonCode는 닫힌 목록이다', t => {
+  const dir = freshDir(t)
+  assert.equal(log(dir, 'run.start', { host: 'test', rules: 'r', version: 'v', branch: 'b', changedFiles: 1, toolRun: 'required' }).stderr, '')
+  assert.equal(log(dir, 'tool.skipped', { name: 'test', reasonCode: 'no-script', reason: 'apps/web/package.json에 test 스크립트가 없다' }).stderr, '')
+  const odd = log(dir, 'tool.skipped', { name: 'lint', reasonCode: 'slow' })
+  assert.equal(odd.status, 0)
+  assert.match(odd.stderr, /reasonCode "slow"는 C-9의 닫힌 목록에 없다/)
+})
+
+test('--check는 도구를 돌리지도 건너뛴 이유를 남기지도 않은 full 실행을 짚는다', t => {
+  const bare = freshDir(t)
+  plant(bare, numbered([toolStart(), reuseLine(50, 'render.start', { findings: 0 })]))
+  const out = check(bare)
+  assert.equal(out.status, 1)
+  assert.match(out.stdout, /도구\(lint·typecheck·test\)를 돌리지도, 건너뛴 이유\(`tool\.skipped`\)를 남기지도 않았다/)
+
+  const ran = freshDir(t)
+  plant(ran, numbered([toolStart(), reuseLine(5, 'tool.start', { name: 'lint', callId: 'c1' }), reuseLine(9, 'tool.done', { name: 'lint', exit: 0, treeSha: 'x', callId: 'c1' }), reuseLine(50, 'render.start', { findings: 0 })]))
+  assert.doesNotMatch(check(ran).stdout, /돌리지도, 건너뛴 이유/)
+
+  const skipped = freshDir(t)
+  plant(skipped, numbered([toolStart(), reuseLine(5, 'tool.skipped', { name: 'test', reasonCode: 'user-request' }), reuseLine(50, 'render.start', { findings: 0 })]))
+  assert.doesNotMatch(check(skipped).stdout, /돌리지도, 건너뛴 이유/)
+
+  // 기존 구현 검색과 재현 명령(C-11)은 같은 스크립트로 돌지만 도구 게이트가 아니다
+  const notGate = freshDir(t)
+  plant(notGate, numbered([toolStart(), reuseLine(5, 'tool.start', { name: 'reuse-search', callId: 'c2' }), reuseLine(6, 'tool.start', { name: 'repro', callId: 'c3', candidateId: '04-1#1' }), reuseLine(50, 'render.start', { findings: 0 })]))
+  assert.match(check(notGate).stdout, /돌리지도, 건너뛴 이유/)
+
+  // 이 필드가 없는 예전 기록은 묻지 않는다
+  const legacy = freshDir(t)
+  plant(legacy, numbered([toolStart({ toolRun: undefined }), reuseLine(50, 'render.start', { findings: 0 })]))
+  assert.doesNotMatch(check(legacy).stdout, /돌리지도, 건너뛴 이유/)
+})
+
 test('--check는 끝을 남기지 못한 검색을 위반이 아니라 미완료로 알린다 — 감싼 review-tool은 끝났다', t => {
   const dir = freshDir(t)
   plant(dir, numbered([reuseStart(), reuseLine(5, 'reuse.planned', { searchId: 's1', scopeSha256: 'h', plan: 'p' }), reuseLine(6, 'tool.start', { name: 'reuse-search', callId: 'c' }),
