@@ -538,7 +538,7 @@ The reports themselves had five more rough spots, fixed here:
 - **`←최장` landed on `task.bind`.** On a host that returns only when the reviewer is done, the reviewer's 226 seconds sat on the row that binds its task id. When modules or tools were running during the longest gap, the table now says so underneath — the same count `--check` already gave.
 - **`미해결 / 후속 확인` said `없음`** while the plan block above it reported that the target changed mid-review and that base had touched two of the same files. The shared template now asks for both to be carried over as things to look at again.
 - **The pass table in `요약` dropped the main pass** in the run with no findings: it listed Props, math, exception and correctness, so it read as a review that ran only the special passes. The template now fixes the first row as the main review pass — the numbered modules in full, the `fast` reviewer in fast.
-- **`상세 지적` simply stopped** in that run: fast draws only modules with findings, so with none the section ended after its counts and looked cut off. The renderer now says that the rule modules produced no findings.
+- **`상세 지적` simply stopped** in that run: fast draws only modules with findings, so with none the section ended after its counts and looked cut off. The renderer now says that the rule modules produced no findings — or, when the fast reviewer's result was never collected (it failed), that there is no result, the same wording the `정확성` section uses for that reviewer.
 
 This is PATCH. The run also passed its 284 KB diff as a file path; the reviewer paged through all of it this time, and a separate diff file would hit the same line limit, so that is left as is.
 
