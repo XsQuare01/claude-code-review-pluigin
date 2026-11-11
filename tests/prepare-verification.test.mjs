@@ -4,6 +4,7 @@ import { resolve } from 'node:path'
 
 import { buildBundles, candidatesFromLocations, candidatesFromResults, checkLocation, collectBlobs, computeOwnerCollisions, crossFileEvidenceOf, decideEligibility, normalizeForCompare, prepareVerification, resolveWithinRoot, reuseContextOf, routeCandidate, verifyDirOf } from '../scripts/prepare-verification.mjs'
 import { renderFinding } from '../scripts/render-findings.mjs'
+import { buildTaskPrompt, planVerifierTasks } from '../scripts/lib/verifier-tasks.mjs'
 
 // ------------------------------------------------------------- normalization
 
@@ -268,6 +269,56 @@ test('prepareVerification carries the per-candidate decision alongside the count
   assert.equal(decision.eligibility, 'VERIFY')
   assert.equal(decision.route, 'isolated')
   assert.equal(decision.locationCheck, 'location-ok')
+})
+
+// ------------------------------------------- 같은 자리의 후보는 검증 작업 하나로
+//
+// 2026-11-10 full 실행은 검증 작업 13개 중 8개가 같은 줄을 다른 모듈도 짚었다는 이유(owner-collision)만으로 하나씩
+// 따로 떴다. `erd.md:102` 한 줄에 셋, `useUpdateNode` 한 줄에 다섯이었다. 그 다섯은 같은 원인을 말했는데 따로 판정돼
+// 높음 둘은 반박, 낮음 셋은 유지로 갈렸다. 같은 자리끼리는 검증자 하나가 함께 보고 후보마다 판정한다. 경로는 그대로
+// isolated다 — 집계와 렌더러가 보는 값(`bundle + isolated = verify`)은 바뀌지 않는다.
+
+const sameLine = { kind: 'verified', path: 'src/hooks/use-camera.ts', line: 2, quote: 'if (pending) return' }
+
+test('같은 줄을 짚은 다른 규칙의 후보는 검증 작업 하나로 묶는다 — 경로는 isolated 그대로', () => {
+  const result = prepareVerification([
+    { candidateId: '04-9#1', ruleId: '04-9', impact: 'high', confidence: 'high', category: 'user-malfunction', location: sameLine },
+    { candidateId: '16-3#1', ruleId: '16-3', impact: 'low', confidence: 'high', location: sameLine },
+    { candidateId: '19-5#1', ruleId: '19-5', impact: 'low', confidence: 'high', location: sameLine },
+    { candidateId: '05-4#1', ruleId: '05-4', impact: 'low', confidence: 'high', location: { kind: 'verified', path: 'src/hooks/use-camera.ts', line: 1, quote: 'const a = 1' } },
+  ], blobs)
+  assert.deepEqual(result.candidates.filter(entry => entry.eligibility === 'VERIFY').map(entry => [entry.candidateId, entry.route]),
+    [['04-9#1', 'isolated'], ['16-3#1', 'isolated'], ['19-5#1', 'isolated']])
+  assert.equal(result.counts.bundle + result.counts.isolated, result.counts.verify)
+  assert.deepEqual(result.sameLocationGroups, [{ anchorPath: 'src/hooks/use-camera.ts', candidateIds: ['04-9#1', '16-3#1', '19-5#1'] }])
+  const { tasks, promotions } = planVerifierTasks(result)
+  assert.deepEqual(tasks.map(task => [task.taskId, task.kind, task.candidateIds, task.sameLocation]), [['isolated-same-1', 'isolated', ['04-9#1', '16-3#1', '19-5#1'], true]])
+  assert.deepEqual(promotions, [])
+})
+
+test('다른 이유로도 따로 봐야 하는 후보는 묶지 않는다 — 남은 후보가 하나면 예전처럼 따로 뜬다', () => {
+  const result = prepareVerification([
+    { candidateId: 'EX-1#1', ruleId: 'EX-1', impact: 'high', confidence: 'high', category: 'security-exposure', location: sameLine },
+    { candidateId: '16-3#1', ruleId: '16-3', impact: 'low', confidence: 'high', location: sameLine },
+  ], blobs)
+  assert.deepEqual(result.sameLocationGroups, [])
+  const { tasks } = planVerifierTasks(result)
+  assert.deepEqual(tasks.map(task => [task.taskId, task.candidateIds]), [['isolated-EX-1-1', ['EX-1#1']], ['isolated-16-3-1', ['16-3#1']]])
+  assert.ok(tasks.every(task => !task.sameLocation))
+})
+
+test('같은 자리 작업의 프롬프트는 후보마다 판정하되, 같은 사실을 주장하면 같은 근거로 판정하라고 적는다', () => {
+  const result = prepareVerification([
+    { candidateId: '04-9#1', ruleId: '04-9', impact: 'high', confidence: 'high', category: 'user-malfunction', location: sameLine, content: { title: '캐시 미갱신', body: '본문' } },
+    { candidateId: '16-3#1', ruleId: '16-3', impact: 'low', confidence: 'high', location: sameLine, content: { title: '캐시 미갱신', body: '본문' } },
+  ], blobs)
+  const [task] = planVerifierTasks(result).tasks
+  const { prompt } = buildTaskPrompt({
+    instructions: '지시', task, candidatesById: new Map(result.candidates.map(entry => [entry.candidateId, entry])), clauses: new Map(), mergeBase: 'm',
+  })
+  assert.match(prompt, /- 작업: `isolated-same-1` · isolated — 같은 줄을 짚은 다른 규칙의 후보 2개를 함께 본다/)
+  assert.match(prompt, /후보마다 판정한다 — 합치지 않는다/)
+  assert.match(prompt, /같은 실행 경로·같은 사실을 주장하는 후보는 같은 근거로 판정한다/)
 })
 
 // ------------------------------------------- producer results as direct input

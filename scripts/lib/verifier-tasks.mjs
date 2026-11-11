@@ -82,7 +82,20 @@ export function planVerifierTasks(prepared) {
     taskId: `bundle-${at + 1}`, kind: 'bundle', anchorPath: bundle.anchorPath, candidateIds: bundle.candidateIds,
   }))
   const promotions = []
+  // 같은 줄을 짚었다는 이유만으로 따로 보던 후보는 자리마다 작업 하나다(`sameLocationGroups`). 경로는 isolated
+  // 그대로라 `needs-context`는 승격 없이 범위 미확정이 된다. 작업은 그 자리의 첫 후보가 나오는 곳에 둔다.
+  const groups = prepared.sameLocationGroups ?? []
+  const groupOf = new Map(groups.flatMap((group, at) => group.candidateIds.map(id => [id, at])))
+  const emitted = new Set()
   for (const candidate of prepared.candidates ?? []) {
+    if (candidate.route === 'isolated' && groupOf.has(candidate.candidateId)) {
+      const at = groupOf.get(candidate.candidateId)
+      if (!emitted.has(at)) {
+        emitted.add(at)
+        tasks.push({ taskId: `isolated-same-${at + 1}`, kind: 'isolated', anchorPath: groups[at].anchorPath, candidateIds: groups[at].candidateIds, sameLocation: true })
+      }
+      continue
+    }
     const task = {
       taskId: isolatedTaskId(candidate.candidateId), anchorPath: candidate.location?.path, candidateIds: [candidate.candidateId],
     }
@@ -144,7 +157,9 @@ export function buildTaskPrompt({ instructions, task, candidatesById, clauses, m
     '',
     '## 이번 작업',
     '',
-    `- 작업: \`${task.taskId}\` · ${KIND_TEXT[task.kind]}`,
+    `- 작업: \`${task.taskId}\` · ${task.sameLocation
+      ? `isolated — 같은 줄을 짚은 다른 규칙의 후보 ${task.candidateIds.length}개를 함께 본다. 후보마다 판정한다 — 합치지 않는다. 규칙이 달라 하나는 맞고 하나는 틀릴 수 있다. 다만 같은 실행 경로·같은 사실을 주장하는 후보는 같은 근거로 판정한다 — 같은 주장에 서로 다른 결론을 내지 않는다. anchor 파일 밖을 봐야 하면 Read로 본다`
+      : KIND_TEXT[task.kind]}`,
     `- 판정할 \`candidateId\`: ${ids} — 이 집합과 정확히 같은 verdict를 돌려준다`,
     ...(task.anchorPath ? [`- anchor 파일: \`${task.anchorPath}\``] : []),
     `- 경로는 저장소 루트 기준이다. \`verified\` 위치는 ${verifiedBasis}, \`deleted\` 위치는 merge-base \`${mergeBase}\` 기준이다`,

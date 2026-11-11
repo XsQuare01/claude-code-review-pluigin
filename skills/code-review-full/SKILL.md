@@ -445,6 +445,8 @@ isolated 11)을 동시에 background dispatch한 결과, 1건만 2분 25초에 �
 
 ### verifier producer prompt
 
+**같은 줄을 다른 규칙도 짚었다는 이유만으로 따로 보던 후보는 자리마다 작업 하나다**(`isolated-same-<n>` — C-12). 검증자 하나가 그 자리의 후보를 함께 보고 후보마다 판정한다. 다른 isolated 작업과 똑같이 띄운다.
+
 **프롬프트는 `prepare-verification.mjs`가 만든다. 오케스트레이터는 쓰지 않는다.** routed 출력의 `verifierTasks[]`마다 `prompt` 경로에 프롬프트 파일이 있다(`$REPORT_DIR/.timing/$REPORT_BASENAME.verify/`). 지시문의 정본은 `review-rules/verifier-prompt.md`이고, 스크립트가 거기에 verdict manifest 전문(`REVIEW_VERDICT_CONTRACT_V1_MANIFEST`)과 그 작업의 후보·위치 대조 결과·해당 `## NN-x` 조항 본문을 붙인다. bundle verifier와 isolated verifier는 같은 지시를 받는다.
 
 2026-09-30 실행의 오케스트레이터는 이 지시를 자기 형식으로 다시 썼다. manifest도 조항도 빠진 프롬프트를 받은 검증자들은 디스크 전체에서 routed payload를 찾았고, 한 검증자는 거기서 자기 후보의 `impact`·`confidence`를 읽었다 — "확신: 높음"을 보면 검증자가 그쪽으로 기운다. 그래서 1차의 `impact`·`confidence`·`category`·`recommendation`·모듈 라벨은 스크립트가 뺀다.
