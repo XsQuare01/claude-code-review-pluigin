@@ -206,8 +206,8 @@ test('세 반례가 수집·검증·렌더·스냅숏까지 출처와 두 축을
   assert.match(correctness, /#### 🔴 `CR-1` 만료된 세션도 갱신 요청을 보낸다\n영향: 높음 \(사용자에게 보이는 오동작 또는 사용 불가\) · 확신: 높음 · 교차검증: `유지`\n출처 패스: correctness\n`src\/session\.ts:2` — `  if \(session\.expired\) return null`/)
   assert.match(correctness, /#### 🔴 `CR-2` 변경되지 않은 호출자가 문자열을 전제한다\n[^\n]*교차검증: `유지`\n출처 패스: correctness\n`src\/header\.ts:4`/)
   // rollout-shadow에서 반박된 지적은 남고 등급도 그대로다(C-6B)
-  assert.match(correctness, /#### 🟡 `CR-3` 취소 뒤 늦게 온 응답이 상태를 덮는다\n영향: 높음 [^\n]* · 확신: 낮음 · 교차검증: `반박됨 — 관찰 중`\n출처 패스: correctness\n관련 지적: `04-3`\n/)
-  assert.match(section(rendered.stdout, '04 상태 관리 & 사이드이펙트') ?? '', /관련 지적: `CR-3`/)
+  assert.match(correctness, /#### 🟡 `CR-3` 취소 뒤 늦게 온 응답이 상태를 덮는다\n영향: 높음 [^\n]* · 확신: 낮음 · 교차검증: `반박됨 — 관찰 중`\n출처 패스: correctness\n관련 지적: `04-3` \(영향 낮음\) — 같은 자리 지적과 영향 판정이 갈렸다\(이 지적: 높음\)\. 같은 결함인지는 읽고 판단한다\n/)
+  assert.match(section(rendered.stdout, '04 상태 관리 & 사이드이펙트') ?? '', /관련 지적: `CR-3` \(영향 높음\) — 같은 자리 지적과 영향 판정이 갈렸다\(이 지적: 낮음\)/)
 
   const snap = snapshot(run, ['--verification-state', 'ran'])
   assert.equal(snap.status, 0, snap.stderr)
@@ -234,8 +234,8 @@ test('active-deletion에서 반박된 CR 지적은 지워지고, 그 사실이 �
   assert.equal(rendered.status, 0, rendered.stderr)
   assert.doesNotMatch(rendered.stdout, /`CR-3`/)
   assert.match(rendered.stderr, /CR-3 \(src\/load\.ts\): guard-exists/)
-  // 지워진 지적을 가리키던 관련 지적 줄은 그것이 상세 지적에 없다고 말한다
-  assert.match(rendered.stdout, /관련 지적: `CR-3#1` \(상세 지적에 없음\)/)
+  // 지워진 지적을 가리키던 관련 지적 줄은 그것이 상세 지적에 없다고 말한다 — 영향은 후보 목록에서 읽는다
+  assert.match(rendered.stdout, /관련 지적: `CR-3#1` \(상세 지적에 없음 · 영향 높음\)/)
   // 상세 지적 맨 위가 삭제가 켜졌고 누가 승인했는지 말한다
   assert.match(rendered.stdout, /^## 상세 지적\n\n삭제 단계: 영향 높음 `active-deletion` \(승인 테스트 · 2026-10-06 · isolated·bundle 경로\)/)
 
