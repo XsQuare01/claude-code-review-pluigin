@@ -618,6 +618,21 @@ test('run.start에 base 끝 SHA(baseHead)와 기존 구현 검색 예정(reuseSe
   assert.match(out.stdout, /리뷰 에이전트 +첫 디스패치 전에 .*react-code-review-plugin:rule-module-reviewer.*cancel --all --reason agent-unavailable/)
 })
 
+// 2026-11-10 OpenCode 실행은 "첫 모듈들이 도는 동안 계획을 쓴다"를 따랐지만, 그 호스트는 띄운 작업이 다 끝나야
+// 돌아온다. 계획은 첫 웨이브 뒤에 쓰였고 그동안 05가 잡혀 두 번째 웨이브가 266초 늦었다.
+test('기존 구현 검색 예정 줄은 호스트에 맞는 순서를 말한다 — 작업별 알림이 없으면 첫 디스패치 전에 계획을 쓴다', t => {
+  const repo = behindRepo(t)
+  const withHost = host => spawnSync(process.execPath, [
+    SCRIPT, '--dir', freshDir(t), '--run', RUN, '--rules', RULES, '--workflow', 'full', '--repo', repo.dir, '--host', host, '--base', 'main',
+  ], { encoding: 'utf8' })
+  const barrier = withHost('opencode')
+  assert.equal(barrier.status, 0, barrier.stderr)
+  assert.match(barrier.stdout, /기존 구현 검색 +예정 — 이 호스트는 띄운 작업이 다 끝나야 돌아온다\. 첫 디스패치 전에/)
+  const notified = withHost('claude-code')
+  assert.equal(notified.status, 0, notified.stderr)
+  assert.match(notified.stdout, /기존 구현 검색 +예정 — 05를 뺀 모듈을 먼저 띄우고, 그동안 검색 계획을 써/)
+})
+
 test('사용자가 다른 언어를 요청하면 --language로 run.start에 남긴다 — 기본(한국어)은 남기지 않는다', t => {
   const repo = behindRepo(t)
   const plain = freshDir(t)

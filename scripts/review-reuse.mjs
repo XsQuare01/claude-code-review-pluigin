@@ -30,6 +30,7 @@ import {
   REUSE_LIMITS, REUSE_SCHEMA_VERSION, anchorProblems, changedRanges, gitReader, overallStatus, planProblems, searchTarget, sha256, summarizeTargets,
 } from './lib/reuse-context.mjs'
 import { reuseState } from './lib/reuse-state.mjs'
+import { hostCapabilities } from './lib/hosts.mjs'
 import { readEvents, recordPhase, requireStartedTimeline } from './lib/run-record.mjs'
 
 const die = message => {
@@ -130,10 +131,17 @@ if (mode === 'register') {
   }
   // 계획의 머리와 결정할 파일 목록을 함께 낸다 — 오케스트레이터가 preflight 출력에서 옮겨 적다 틀리면 계획 검사가
   // 검색 전체를 실패로 끝낸다. 파일 목록은 scope.json의 files 그대로다(다시 세지 않는다).
+  const host = hostCapabilities(start.host)
   const planHeader = { schemaVersion: REUSE_SCHEMA_VERSION, runId: start.runId, searchId, head: start.head, mergeBase: start.mergeBase, scopeSha256: scope.sha256 }
   process.stdout.write(`${JSON.stringify({
     searchId, plan, scopeSha256: scope.sha256, out: join(timing, `${run}.reuse-context.json`), planHeader, files: scope.value.files ?? [],
     ...(again ? { alreadyRegistered: true } : {}),
+    // 띄운 작업이 다 끝나야 돌아오는 호스트(작업별 알림 없음)에서는 웨이브가 도는 동안 계획을 쓸 수 없다. 2026-11-10
+    // OpenCode 실행은 첫 웨이브 뒤에 계획을 써 05가 잡히고 두 번째 웨이브가 266초 늦었다. 등록하는 바로 이 자리에서 알린다.
+    ...(!host.perTaskNotification ? {
+      planBeforeDispatch: true,
+      advice: `이 호스트(${host.name})는 띄운 작업이 다 끝나야 돌아온다 — 첫 \`next\`를 부르기 전에 계획을 쓰고 \`check\`·\`search\`까지 띄운다(search는 review-tool --detach로 띄우고 기다리지 않는다). 첫 웨이브 뒤에 쓰면 그동안 05가 잡혀 슬롯이 논다`,
+    } : {}),
   }, null, 2)}\n`)
   process.exit(0)
 }

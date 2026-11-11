@@ -399,6 +399,7 @@ function baseMovedLine(moved) {
   return `${base}이 merge-base 뒤로 ${moved.ahead}커밋 앞서 있고, 이 브랜치와 같은 파일 ${moved.overlap.length}개를 바꿨다: ${shown}${moved.overlap.length > 5 ? ` 외 ${moved.overlap.length - 5}개` : ''} — lint·typecheck·test는 base를 따라잡지 않은 HEAD에서 돈다. 실패가 그 때문인지는 이 브랜치를 base에 합친 트리에서 다시 재 가린다. 파일이 겹친다는 것만으로 이 변경의 실패가 아니라고 하지 않는다(C-6)`
 }
 
+const capabilities = hostCapabilities(host)
 const out = [
   `플러그인      ${version}`,
   `규칙 경로     ${rules}`,
@@ -415,7 +416,11 @@ const out = [
   ...(scope.outside.length ? [`검토 안 함    ${scope.outside.length}개 — React 규칙이 다루지 않는 언어: ${outsideSummary({ outside: scope.outside.length, otherApps: scope.otherApps })}. 지적 대상이 아니고 리포트에 검토 안 함으로 남는다(C-5)`] : []),
   ...(scope.packageRoots.length ? [`패키지 루트   ${scope.packageRoots.map(entry => `${entry.root}(${entry.files}개)`).join(', ')} — 프로필은 저장소 루트가 아니라 이 폴더에서 판정한다(C-3)`] : []),
   ...(dependencyFiles.length ? [`의존성 변경   ${dependencyFiles.join(', ')} — baseline은 그 트리에 그 트리의 의존성을 설치해 잰다. 지금 트리의 의존성을 같이 쓰면 baseline도 같은 실패를 내 "신규 0"으로 잘못 나온다(C-6)`] : []),
-  ...(workflow === 'full' ? [`기존 구현 검색 예정 — 05를 뺀 모듈을 먼저 띄우고, 그동안 검색 계획을 써 review-reuse.mjs로 후보를 모은다. 05는 검색이 끝난 뒤 띄운다(C-6C)`] : []),
+  // 계획을 언제 쓰는지는 호스트가 정한다. 띄운 작업이 다 끝나야 돌아오는 호스트에서는 웨이브가 도는 동안 오케스트레이터가
+  // 아무것도 못 한다 — 2026-11-10 OpenCode 실행은 첫 웨이브 뒤에 계획을 써 05가 잡히고 두 번째 웨이브가 266초 늦었다.
+  ...(workflow === 'full' ? [capabilities.perTaskNotification
+    ? `기존 구현 검색 예정 — 05를 뺀 모듈을 먼저 띄우고, 그동안 검색 계획을 써 review-reuse.mjs로 후보를 모은다. 05는 검색이 끝난 뒤 띄운다(C-6C)`
+    : `기존 구현 검색 예정 — 이 호스트는 띄운 작업이 다 끝나야 돌아온다. 첫 디스패치 전에 검색 계획을 써 review-reuse.mjs로 띄우고(기다리지 않는다), 그 뒤 05를 뺀 모듈을 띄운다. 05는 검색이 끝난 뒤 띄운다(C-6C)`] : []),
   `리뷰 에이전트  첫 디스패치 전에 작업 도구의 에이전트 목록에서 react-code-review-plugin:rule-module-reviewer를 찾는다. 없으면 리뷰하지 않고 review-tasks.mjs cancel --all --reason agent-unavailable로 멈춘다 — 직접 리뷰하거나 다른 에이전트로 대신하지 않는다(C-6)`,
   '',
   `후보 모듈     ${candidates.length}개  ${candidates.map(module => module.id).join(' ')}`,
@@ -437,7 +442,6 @@ for (const module of optional) {
   out.push(`선택 패스     ${module.id} ${state === 'on' ? '켜짐' : `꺼짐 — --${module.id} on일 때만 돈다`}`)
 }
 {
-  const capabilities = hostCapabilities(host)
   const minutes = sec => (sec % 60 === 0 ? `${sec / 60}분` : `${sec}초`)
   out.push('')
   out.push(`한도          ${maxTasks === null && maxDurationSec === null ? '없음' : [maxTasks !== null ? `호출 ${maxTasks}개` : null, maxDurationSec !== null ? `시간 ${minutes(maxDurationSec)}` : null].filter(Boolean).join(' · ')} — 응답 없이 ${minutes(staleAfterSec)}이 지난 시도는 죽은 것으로 본다`)

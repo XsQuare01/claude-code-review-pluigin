@@ -226,6 +226,15 @@ test('register를 다시 불러도 아직 시작하지 않은 등록이 있으�
   assert.equal(events(ctx).filter(event => event.phase === 'reuse.planned').length, 1)
 })
 
+// 작업별 알림이 없는 호스트(이 테스트의 `--host test`처럼 모르는 호스트 포함)는 띄운 작업이 다 끝나야 돌아온다.
+// 첫 웨이브 뒤에 계획을 쓰면 그동안 05가 잡힌다 — 등록하는 바로 그 자리에서 순서를 알린다.
+test('작업별 알림이 없는 호스트에서는 register가 첫 next 전에 계획을 쓰고 띄우라고 알린다', t => {
+  const ctx = setup(t)
+  const registered = JSON.parse(reuse(ctx, 'register').stdout)
+  assert.equal(registered.planBeforeDispatch, true)
+  assert.match(registered.advice, /첫 `next`를 부르기 전에 계획을 쓰고 `check`·`search`까지 띄운다/)
+})
+
 test('시작한 검색 뒤의 register는 새 시도다 — 실패한 검색을 다시 예정할 수 있다', t => {
   const ctx = setup(t)
   const first = JSON.parse(reuse(ctx, 'register').stdout)
