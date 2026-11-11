@@ -34,7 +34,7 @@
 
 ## 리뷰 기준
 
-> **기준**: {preflight의 `base` 줄 그대로} | **merge-base**: `{MERGE_BASE}` | **대상**: HEAD `{HEAD}` | **리뷰 시각**: {TIMESTAMP}
+> **기준**: {preflight의 `base` 줄 그대로} | **merge-base**: `{MERGE_BASE}` | **대상**: HEAD `{HEAD}` | **리뷰 시각**: {preflight `시작 시각` 줄의 시각 그대로 — `2026-11-10 15:45:12 +09:00` 꼴}
 > **범위**: {review-scope `line` 그대로 — full은 스냅숏 블록이 검토 안 함을 그리므로 리뷰 대상 수만}
 > **규칙**: {이 실행이 리뷰어에게 넘긴 규칙 문서 — full: 번호 모듈·특수 패스 문서·`00-rule.md` · fast: `fast.md`·`00-rule.md`·`correctness.md`} | **RULES_DIR**: `{RULES_DIR}` | **플러그인 버전**: {`$RULES_DIR/../.claude-plugin/plugin.json`의 version}
 > **프로젝트 프로파일**: {C-3 판정 결과 — fast는 `판정하지 않음 — 압축 규칙의 적용 조건을 리뷰어가 diff에서 본다`}

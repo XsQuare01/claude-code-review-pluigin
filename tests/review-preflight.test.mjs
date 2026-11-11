@@ -621,6 +621,21 @@ test('run.start에 base 끝 SHA(baseHead)와 기존 구현 검색 예정(reuseSe
   assert.match(out.stdout, /리뷰 에이전트 +첫 디스패치 전에 .*react-code-review-plugin:rule-module-reviewer.*cancel --all --reason agent-unavailable/)
 })
 
+// 2026-11-10 리포트 셋의 `리뷰 시각`은 날짜만, UTC ISO 문자열 둘로 제각각이었다. 틀이 무엇을 옮길지 말하지 않았다.
+test('시작 시각을 run.start의 시각으로, 이 기계의 현지 시간과 시차로 낸다 — 리포트의 리뷰 시각이 옮길 값이다', t => {
+  const repo = behindRepo(t)
+  const dir = freshDir(t)
+  const out = preflightIn(repo, dir, ['--base', 'main'])
+  assert.equal(out.status, 0, out.stderr)
+  const match = out.stdout.match(/^시작 시각 +(\d{4})-(\d\d)-(\d\d) (\d\d):(\d\d):(\d\d) ([+-])(\d\d):(\d\d)/m)
+  assert.ok(match, out.stdout)
+  const [, y, mo, d, h, mi, s, sign, oh, om] = match
+  const offsetMin = (sign === '-' ? -1 : 1) * (Number(oh) * 60 + Number(om))
+  const asUtc = Date.UTC(Number(y), Number(mo) - 1, Number(d), Number(h), Number(mi), Number(s)) - offsetMin * 60_000
+  const [start] = linesOf(dir)
+  assert.equal(asUtc, Math.floor(Date.parse(start.at) / 1000) * 1000)
+})
+
 // 2026-11-10 OpenCode 실행은 "첫 모듈들이 도는 동안 계획을 쓴다"를 따랐지만, 그 호스트는 띄운 작업이 다 끝나야
 // 돌아온다. 계획은 첫 웨이브 뒤에 쓰였고 그동안 05가 잡혀 두 번째 웨이브가 266초 늦었다.
 test('기존 구현 검색 예정 줄은 호스트에 맞는 순서를 말한다 — 작업별 알림이 없으면 첫 디스패치 전에 계획을 쓴다', t => {

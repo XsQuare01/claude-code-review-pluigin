@@ -402,6 +402,26 @@ function baseMovedLine(moved) {
 }
 
 const capabilities = hostCapabilities(host)
+// 시작 시각 — run.start가 남긴 시각을 이 기계의 현지 시간과 시차로 낸다. 리포트의 `리뷰 시각`이 이 줄을 옮긴다.
+// 2026-11-10 리포트 셋은 날짜만, UTC ISO 문자열로 제각각이었다. 기록하지 않은 실행(--dry-run)은 지금 시각이다.
+const startedAt = (() => {
+  if (logged.ok && !logged.skipped) {
+    try {
+      const first = readFileSync(sidecar, 'utf8').split('\n').find(Boolean)
+      const at = first ? JSON.parse(first).at : undefined
+      if (typeof at === 'string' && Number.isFinite(Date.parse(at))) return new Date(at)
+    } catch {
+      // 읽지 못하면 지금 시각으로 낸다 — 기록 실패는 아래 타임라인 줄이 따로 알린다
+    }
+  }
+  return new Date()
+})()
+const localStamp = date => {
+  const offset = -date.getTimezoneOffset()
+  const pad = value => String(Math.abs(value)).padStart(2, '0')
+  const local = new Date(date.getTime() + offset * 60_000).toISOString().slice(0, 19).replace('T', ' ')
+  return `${local} ${offset < 0 ? '-' : '+'}${pad(Math.trunc(offset / 60))}:${pad(offset % 60)}`
+}
 const out = [
   `플러그인      ${version}`,
   `규칙 경로     ${rules}`,
@@ -413,6 +433,7 @@ const out = [
   `HEAD          ${identity.head}`,
   `작업 트리     ${identity.worktree === 'clean' ? 'clean' : `커밋하지 않은 변경 ${identity.dirtyFiles}개 (${identity.worktree})`}`,
   `실행 ID       ${identity.runId}`,
+  `시작 시각     ${localStamp(startedAt)} — 리포트의 리뷰 시각에 그대로 옮긴다`,
   `변경 파일     ${changed.length}개`,
   `리뷰 파일     ${scope.files.length}개 (제외 ${scope.excluded.length}개 — 테스트·mock, C-5)${logged.ok && !logged.skipped ? ` · 목록 .timing/${run}.scope.json` : ''}`,
   ...(scope.outside.length ? [`검토 안 함    ${scope.outside.length}개 — React 규칙이 다루지 않는 언어: ${outsideSummary({ outside: scope.outside.length, otherApps: scope.otherApps })}. 지적 대상이 아니고 리포트에 검토 안 함으로 남는다(C-5)`] : []),

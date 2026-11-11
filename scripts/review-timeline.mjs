@@ -1287,13 +1287,19 @@ if (has('summary')) {
   // `module=11`은 숫자가 된다. 그러면 모듈별로 묶거나 두 실행을 비교할 때
   // `"11"`과 `11`이 서로 다른 것으로 읽힌다. 계약은 이름을 적으라고 하지만
   // 지시는 지켜지지 않을 수 있어서, 섞인 결과를 여기서 보이게 한다.
+  //
+  // 한 단계가 중첩 값(`structured`)으로 정한 필드는 그 단계 안에서만 견준다. 같은 이름이어도 계약이 단계마다 다르게 정한
+  // 다른 필드다 — 2026-11-10 실행의 요약은 `reuse.done`의 targets(상태별 대상 수)와 `crossverify.start`의 targets(검증
+  // 대상 수)를 섞였다고 짚었다.
   {
     const types = new Map()
     for (const event of events) {
+      const structured = new Set(PHASES.get(event.phase)?.structured ?? [])
       for (const [key, value] of Object.entries(event)) {
         if (value === null) continue
-        if (!types.has(key)) types.set(key, new Set())
-        types.get(key).add(typeof value)
+        const group = structured.has(key) ? `${event.phase}의 ${key}` : key
+        if (!types.has(group)) types.set(group, new Set())
+        types.get(group).add(typeof value)
       }
     }
     const mixed = [...types].filter(([, kinds]) => kinds.size > 1).map(([key, kinds]) => `\`${key}\`(${[...kinds].join('/')})`)

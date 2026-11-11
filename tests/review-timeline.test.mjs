@@ -433,6 +433,16 @@ test('타입이 일관되면 짚지 않는다', t => {
   assert.doesNotMatch(summary(dir).stdout, /타입이 섞인/)
 })
 
+// 2026-11-10 full 실행의 요약은 `targets`(object/number)를 섞였다고 짚었다. `reuse.done`의 targets는 상태별 대상 수
+// (중첩 값)이고 `crossverify.start`의 targets는 검증 대상 수다 — 계약이 단계마다 다르게 정한 다른 필드다.
+test('한 단계가 중첩 값으로 정한 필드는 다른 단계의 같은 이름 필드와 견주지 않는다', t => {
+  const dir = freshDir(t)
+  log(dir, 'reuse.done', { searchId: 's1', status: 'complete', targets: { complete: 12 } })
+  log(dir, 'crossverify.start', { targets: 13 })
+  log(dir, 'run.end', { verdict: 'WARN' })
+  assert.doesNotMatch(summary(dir).stdout, /타입이 섞인/)
+})
+
 test('null은 타입 판정에서 빼고 센다', t => {
   // 값이 없는 것은 다른 형이 아니다. 그것까지 섞였다고 하면 경고가 흔해져
   // 진짜 섞임이 묻힌다.
