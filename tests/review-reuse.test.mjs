@@ -213,6 +213,31 @@ test('register는 계획에 그대로 쓸 머리와 검사할 파일 목록을 �
   assert.equal(search.status, 0, search.stderr)
 })
 
+// 2026-11-10 full 실행은 등록 1분 뒤 대화 압축이 일어났고, 오케스트레이터가 등록을 잊고 다시 불러 검색이 두 번
+// 예정됐다. 같은 호출을 다시 해도 결과가 같아야 압축이 기억을 지워도 안전하다.
+test('register를 다시 불러도 아직 시작하지 않은 등록이 있으면 그 등록을 그대로 낸다', t => {
+  const ctx = setup(t)
+  const first = JSON.parse(reuse(ctx, 'register').stdout)
+  const again = reuse(ctx, 'register')
+  assert.equal(again.status, 0, again.stderr)
+  const second = JSON.parse(again.stdout)
+  assert.deepEqual([second.searchId, second.plan, second.planHeader, second.alreadyRegistered], [first.searchId, first.plan, first.planHeader, true])
+  assert.match(again.stderr, /이미 등록한 검색이다/)
+  assert.equal(events(ctx).filter(event => event.phase === 'reuse.planned').length, 1)
+})
+
+test('시작한 검색 뒤의 register는 새 시도다 — 실패한 검색을 다시 예정할 수 있다', t => {
+  const ctx = setup(t)
+  const first = JSON.parse(reuse(ctx, 'register').stdout)
+  writeFileSync(first.plan, '{ "not": "a plan" }', 'utf8')
+  const failed = reuse(ctx, 'search', '--search-id', first.searchId, '--out', first.out, '--repo', ctx.repo)
+  assert.equal(failed.status, 2)
+  const second = JSON.parse(reuse(ctx, 'register').stdout)
+  assert.notEqual(second.searchId, first.searchId)
+  assert.equal(second.alreadyRegistered, undefined)
+  assert.deepEqual(events(ctx).filter(event => event.phase === 'reuse.planned').map(event => event.searchId), [first.searchId, second.searchId])
+})
+
 // 검색은 띄워 두고 돌아오므로 계획이 틀린 것을 05가 풀린 뒤에야 안다. check는 같은 관문을 기록 없이 먼저 돌린다 —
 // 고친 뒤 띄우면 05가 근거 없이 나가는 일이 줄어든다.
 test('check는 검색과 같은 관문을 기록 없이 돌리고, 통과해야 0으로 끝난다', t => {

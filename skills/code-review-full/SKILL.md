@@ -127,7 +127,7 @@ preflight가 `기존 구현 검색 예정` 줄을 냈으면, `modules.planned`�
 node "$RULES_DIR/../scripts/review-reuse.mjs" register --dir "$REPORT_DIR" --run "$REPORT_BASENAME"
 ```
 
-출력의 `searchId`·`plan`(계획을 쓸 자리)·`out`(결과 파일 자리)·`planHeader`·`files`를 그대로 쓴다. 이 줄이 남으면 작업 대장이 `05`를 검색이 풀릴 때까지 잡아 둔다. **예정하지 않고 디스패치하면** 대장은 `05`를 `reuse.planned` 없이 기다리다 상한(1800초) 뒤에 풀고, 스냅숏과 `--check`가 검색이 돌지 않았다고 짚는다.
+출력의 `searchId`·`plan`(계획을 쓸 자리)·`out`(결과 파일 자리)·`planHeader`·`files`를 그대로 쓴다. **다시 불러도 된다** — 아직 시작하지 않은 등록이 있으면 새로 남기지 않고 그 등록을 그대로 낸다(`alreadyRegistered: true`). 압축 뒤 등록했는지 모르겠으면 기억을 더듬지 말고 다시 부른다. 2026-11-10 실행은 압축 뒤 다시 등록해 검색이 두 번 예정됐다. 이 줄이 남으면 작업 대장이 `05`를 검색이 풀릴 때까지 잡아 둔다. **예정하지 않고 디스패치하면** 대장은 `05`를 `reuse.planned` 없이 기다리다 상한(1800초) 뒤에 풀고, 스냅숏과 `--check`가 검색이 돌지 않았다고 짚는다.
 
 ### 3b. 실행
 
