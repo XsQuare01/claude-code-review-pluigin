@@ -273,7 +273,7 @@ test('prepareVerification carries the per-candidate decision alongside the count
 
 // ------------------------------------------- 같은 자리의 후보는 검증 작업 하나로
 //
-// 2026-11-10 full 실행은 검증 작업 13개 중 8개가 같은 줄을 다른 모듈도 짚었다는 이유(owner-collision)만으로 하나씩
+// 2026-11-10 full 실행은 검증 대상 13건 중 8건이 같은 줄을 다른 모듈도 짚었다는 이유(owner-collision)만으로 하나씩
 // 따로 떴다. `erd.md:102` 한 줄에 셋, `useUpdateNode` 한 줄에 다섯이었다. 그 다섯은 같은 원인을 말했는데 따로 판정돼
 // 높음 둘은 반박, 낮음 셋은 유지로 갈렸다. 같은 자리끼리는 검증자 하나가 함께 보고 후보마다 판정한다. 경로는 그대로
 // isolated다 — 집계와 렌더러가 보는 값(`bundle + isolated = verify`)은 바뀌지 않는다.
