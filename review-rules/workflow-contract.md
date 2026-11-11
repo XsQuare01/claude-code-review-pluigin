@@ -1500,7 +1500,7 @@ UTF-16 파일도 읽는다 — PowerShell 5.1의 `Set-Content -Encoding UTF8`은
 | `tool.done` | lint/typecheck/test를 돌린 직후 — `review-tool.mjs`가 남긴다 | `name`, `exit`(시간 상한으로 끊었으면 `null`), `treeSha`, `callId` · (실패했으면, C-6) `failureFiles`(중첩 — `inChange`·`outsideChange`·`untracked`, 변경 목록이 없으면 `tracked`·`untracked`) · `failedNow`, `failedBaseline`(재지 못했으면 `null`) · `failing`(중첩, `--data-file`) · (재시도면) `attempt` · 재현 명령이면 `candidateId`·`evidenceId` |
 | `crossverify.start` / `.end` | 교차검증 패스 — 시작은 `prepare-verification.mjs`가 검증 작업을 만든 직후, 끝은 `tally-verdicts.mjs`가 **직접 남긴다** | `targets`, `round`(이 교차검증 라운드의 이름 — C-12) / `upheld`, `rejected`, `needsContext`, `noVerdict`, `countsFrom`, (있으면) `malformedTasksCorrected`·`tokensIn`·`tokensOut` |
 | `synthesis.start` / `.end` | synthesis 패스 | `findings` / `clusters`, (있으면) `tokensIn`·`tokensOut` |
-| `render.start` | **문서를 쓰기 직전** | `findings`(중복 제거 후) |
+| `render.start` | **문서를 쓰기 직전** | `findings`(중복 제거 후 — routed 출력의 `counts.total`. 그 파일이 있으면 스크립트가 세고, 넘긴 값이 다르면 알린다. 셀 재료도 넘긴 값도 없으면 거부한다 — 렌더 뒤에는 이 줄을 다시 남길 수 없다) |
 | `render.wrote` | 파일을 쓴 직후 | `path`, `lines`(`assemble-report.mjs`가 낸 값), (있으면) `tokensIn`·`tokensOut` |
 | `run.end` | 마지막 | `verdict`(없으면 스크립트가 거부한다 — 그 뒤에 고칠 줄을 덧붙일 수 없다), `usageSource`, (있으면) `tokensIn`·`tokensOut`·`tokensCacheRead`·`costUsd` |
 

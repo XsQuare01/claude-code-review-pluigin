@@ -1397,6 +1397,29 @@ const data = (() => {
   if (flattened.length) {
     die(`\`${phase}\`의 ${flattened.join(', ')}는 중첩 값이다. \`--set\`은 첫 =에서만 자르므로 값이 문자열 하나로 남는다 — \`--data-file <경로>\`로 넘겨라`)
   }
+  // `render.start`의 지적 수는 routed 출력(`prepare-verification.mjs --out`)의 `counts.total`이다 — 중복 제거 뒤의
+  // 후보 수. 그 파일이 있으면 여기서 센다(`dispatch.end`의 수치와 같다). 2026-11-10 full 실행은 findings 없이 남겼고
+  // (full SKILL이 무엇을 넘길지 말하지 않았다) 경고만 받고 지나가 `--check`가 FAIL이 됐다. 렌더 뒤에는 이 줄을 다시
+  // 남길 수 없으므로(C-9), 셀 재료도 넘긴 값도 없으면 `run.end`처럼 거부한다 — 다시 부르면 된다.
+  if (phase === 'render.start') {
+    const routedPath = join(timingDir, `${run}.routed.json`)
+    let total
+    if (existsSync(routedPath)) {
+      try {
+        total = readJsonFile(routedPath).counts?.total
+      } catch {
+        total = undefined
+      }
+    }
+    if (Number.isInteger(total)) {
+      if (data.findings !== undefined && data.findings !== total) {
+        process.stderr.write(`경고: \`render.start\`에 넘긴 findings ${data.findings} → routed 출력의 counts.total ${total}. 기록으로 센 값을 남긴다(${routedPath})\n`)
+      }
+      data.findings = total
+    } else if (data.findings === undefined) {
+      die(`\`render.start\`에 findings가 없다 — 남기지 않았다. 렌더 뒤에는 이 줄을 다시 남길 수 없다. routed 출력(${routedPath})을 읽지 못했으니 \`--set findings=<routed 출력의 counts.total>\`을 붙여 다시 부른다`)
+    }
+  }
   // 빠진 필수 필드는 경고만 한다. 줄을 거부하면 그 단계가 통째로 사라지는데,
   // 필드 하나 빠진 기록이 없는 기록보다 낫다. `--check`가 종료 전에 다시 짚는다.
   // `dispatch.end`의 수치는 아래에서 이 스크립트가 센다 — 빠졌다고 경고하지 않는다.

@@ -115,7 +115,7 @@ test('경과 시간을 첫 줄 기준으로 센다', t => {
   const dir = freshDir(t)
   const base = new Date('2026-09-01T00:00:00.000Z')
   plant(dir, [{ at: base.toISOString(), seq: 1, sinceStartSec: 0, phase: 'run.start' }])
-  log(dir, 'render.start')
+  log(dir, 'synthesis.start')
   const last = linesOf(dir).at(-1)
   // 지금과 2026-09-01 사이만큼 벌어져야 한다 — 0이면 첫 줄을 안 읽은 것이다.
   assert.ok(last.sinceStartSec > 1000, `sinceStartSec=${last.sinceStartSec}`)
@@ -291,10 +291,10 @@ test('셋을 함께 주면 --set이 마지막으로 이긴다', t => {
 
 test('--set으로도 측정값은 덮어쓸 수 없다', t => {
   const dir = freshDir(t)
-  spawnSync(process.execPath, [SCRIPT, '--dir', dir, '--run', RUN, '--phase', 'render.start', '--set', 'phase=거짓', '--set', 'seq=99'],
+  spawnSync(process.execPath, [SCRIPT, '--dir', dir, '--run', RUN, '--phase', 'synthesis.start', '--set', 'phase=거짓', '--set', 'seq=99'],
     { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
   const last = linesOf(dir).at(-1)
-  assert.equal(last.phase, 'render.start')
+  assert.equal(last.phase, 'synthesis.start')
   assert.equal(last.seq, 1)
 })
 
@@ -641,6 +641,45 @@ test('run.end에 verdict가 없으면 남기지 않는다 — 그 뒤에는 고�
   const ended = log(dir, 'run.end', { verdict: 'MERGE_BLOCKED' })
   assert.equal(ended.status, 0, ended.stderr)
   assert.equal(linesOf(dir).at(-1).verdict, 'MERGE_BLOCKED')
+})
+
+const plantRouted = (dir, total) => {
+  mkdirSync(join(dir, '.timing'), { recursive: true })
+  writeFileSync(join(dir, '.timing', `${RUN}.routed.json`), JSON.stringify({ candidates: [], counts: { total } }), 'utf8')
+}
+
+test('render.start의 지적 수는 routed 출력에서 센다 — 넘기지 않아도 빠지지 않는다', t => {
+  // 2026-11-10 full 실행은 render.start를 findings 없이 남겼고(full SKILL이 무엇을 넘길지 말하지 않았다),
+  // 경고만 받고 지나가 `--check`가 FAIL이 됐다. 렌더 뒤에는 그 줄을 다시 남길 수 없다.
+  const dir = freshDir(t)
+  log(dir, 'run.start')
+  plantRouted(dir, 24)
+  const out = log(dir, 'render.start')
+  assert.equal(out.status, 0, out.stderr)
+  assert.equal(linesOf(dir).at(-1).findings, 24)
+  assert.doesNotMatch(out.stderr, /findings가 없다/)
+})
+
+test('render.start에 넘긴 지적 수가 routed 출력과 다르면 routed 출력의 수를 남기고 알린다', t => {
+  const dir = freshDir(t)
+  log(dir, 'run.start')
+  plantRouted(dir, 24)
+  const out = log(dir, 'render.start', { findings: 21 })
+  assert.equal(out.status, 0, out.stderr)
+  assert.equal(linesOf(dir).at(-1).findings, 24)
+  assert.match(out.stderr, /findings 21 → routed 출력의 counts\.total 24/)
+})
+
+test('render.start에 지적 수가 없고 routed 출력도 없으면 남기지 않는다', t => {
+  const dir = freshDir(t)
+  log(dir, 'run.start')
+  const refused = log(dir, 'render.start')
+  assert.equal(refused.status, 2)
+  assert.match(refused.stderr, /render\.start.*findings가 없다 — 남기지 않았다/)
+  assert.deepEqual(linesOf(dir).map(line => line.phase), ['run.start'])
+  const given = log(dir, 'render.start', { findings: 3 })
+  assert.equal(given.status, 0, given.stderr)
+  assert.equal(linesOf(dir).at(-1).findings, 3)
 })
 
 test('modules.planned의 applied가 후보 수보다 크면 남기지 않는다 — 번호 모듈만 센다', t => {

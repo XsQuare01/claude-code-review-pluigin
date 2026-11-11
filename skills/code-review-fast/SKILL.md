@@ -200,7 +200,7 @@ task(
    node "$RULES_DIR/../scripts/prepare-verification.mjs" --merge-base "$MERGE_BASE" --dir "$REPORT_DIR" --run "$REPORT_BASENAME" --rules "$RULES_DIR" --collect --verify off --out "$REPORT_DIR/.timing/$REPORT_BASENAME.routed.json"
    ```
 
-2. `--phase render.start --set findings=<routed 출력 counts.total>`
+2. `--phase render.start` — 지적 수(`findings`)는 스크립트가 routed 출력의 `counts.total`에서 센다
 3. 상세 지적과 특수 패스를 그린다 — full과 같은 렌더러다. `--workflow`는 `fast`(스킬 이름이 아니다), `--verification-state`는 `disabled`다
 
    ```bash
