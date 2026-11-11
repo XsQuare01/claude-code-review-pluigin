@@ -632,14 +632,14 @@ test('full 실행의 next는 시도마다 프롬프트 파일을 만든다 — �
   assert.match(readFileSync(props.prompt, 'utf8'), /`P-\{n\}`/)
 })
 
-test('정확성 패스의 프롬프트에는 의도 원문을, 의도 파일이 없으면 없다고 붙인다', t => {
+test('정확성 패스와 19-intent의 프롬프트에는 의도 원문을, 의도 파일이 없으면 없다고 붙인다', t => {
   const { dir } = promptRun(t, { keep: ['19-intent', '04-state'], correctness: 'on' })
   const byTask = new Map(json(next(dir)).dispatch.map(one => [one.task, readFileSync(one.prompt, 'utf8')]))
   assert.deepEqual([...byTask.keys()].sort(), ['04-state', '19-intent', 'correctness'])
-  assert.match(byTask.get('correctness'), /## 변경 의도\n\n## 변경 의도\n\n```text\nPR 설명 원문 — a를 2로 바꾼다/)
-  for (const task of ['04-state', '19-intent']) assert.doesNotMatch(byTask.get(task), /## 변경 의도/)
+  for (const task of ['19-intent', 'correctness']) assert.match(byTask.get(task), /## 변경 의도\n\n## 변경 의도\n\n```text\nPR 설명 원문 — a를 2로 바꾼다/)
+  assert.doesNotMatch(byTask.get('04-state'), /## 변경 의도/)
 
-  const { dir: bare } = promptRun(t, { keep: [], correctness: 'on', intent: false, profile: null })
+  const { dir: bare } = promptRun(t, { keep: ['19-intent'], intent: false, profile: null })
   const out = json(next(bare))
   const text = readFileSync(out.dispatch[0].prompt, 'utf8')
   assert.match(text, /## 변경 의도\n모으지 않았다/)

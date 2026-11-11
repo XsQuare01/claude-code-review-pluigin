@@ -2173,7 +2173,7 @@ full의 모듈 시도도 같다(`<모듈>.retry.md`).
 **full의 모듈 시도에는 대장이 프롬프트 파일(`prompt`)을 낸다.** preflight가 `run.start.modulePrompts: script`를 남긴
 실행에서, `next`가 띄울 시도마다 `.timing/<run>.prompts/<모듈>.md`를 쓴다 — full SKILL의 `MODULE_PROMPT` 지시에
 결과 manifest 전문, 범위(`scope.json`), diff 파일(`.timing/<run>.diff`, 첫 디스패치 때 merge-base..preflight가 잰 HEAD로
-한 번 뜬다), `modules.planned`의 `profile`, (정확성 패스면) 변경 의도 원문, (`05`면) 그 순간의 기존 구현
+한 번 뜬다), `modules.planned`의 `profile`, (정확성 패스와 의도 모듈 19면) 변경 의도 원문, (`05`면) 그 순간의 기존 구현
 검색 결과, `00-rule.md`와 담당 규칙 전문을 붙인 것이다. 재료를 못 읽으면 시작을 기록하지 않고 멈춘다 — 프롬프트 없는
 시도를 내주면 오케스트레이터가 다시 손으로 쓴다. 2026-11-10 실행은 웨이브마다 60~90초를 프롬프트를 쓰는 데 썼고,
 그 프롬프트는 규칙 문서와 manifest를 빼고 경로만 줬다.

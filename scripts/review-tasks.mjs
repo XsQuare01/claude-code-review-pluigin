@@ -174,8 +174,8 @@ const modulePlan = (events, start) => {
 const FULL_SKILL = join(dirname(fileURLToPath(import.meta.url)), '..', 'skills', 'code-review-full', 'SKILL.md')
 const promptPathOf = task => join(timing, `${run}.prompts`, `${task}.md`)
 const diffPath = () => join(timing, `${run}.diff`)
-/** 변경 의도 원문을 붙이는 작업 — 정확성 패스 */
-const INTENT_TASKS = new Set(['correctness'])
+/** 변경 의도 원문을 붙이는 작업 — 정확성 패스와 "문제를 맞게 잡았는가"를 보는 19 */
+const INTENT_TASKS = new Set(['correctness', '19-intent'])
 
 const readOrFail = (path, what) => {
   try {
@@ -254,7 +254,7 @@ const modulePromptTexts = ({ events, start, dispatch, byTask, reuse }) => {
   }
   const advice = []
   if (!profile) advice.push('modules.planned에 profile이 없다 — 프롬프트에 프로젝트 프로파일이 "기록되지 않았다"로 나갔다. 3a(1)의 판정을 한 줄로 남긴다')
-  if (intent.missing && dispatch.some(one => INTENT_TASKS.has(one.task))) advice.push('의도 파일이 없다(.timing/<run>.intent.md) — 정확성 패스 프롬프트에 "모으지 않았다"로 나갔다. review-intent.mjs를 먼저 돌린다(3a(1b))')
+  if (intent.missing && dispatch.some(one => INTENT_TASKS.has(one.task))) advice.push('의도 파일이 없다(.timing/<run>.intent.md) — 정확성 패스·19-intent 프롬프트에 "모으지 않았다"로 나갔다. review-intent.mjs를 먼저 돌린다(3a(1b))')
   return { texts, advice }
 }
 

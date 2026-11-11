@@ -83,9 +83,9 @@ C-9의 `run.start`를 이 스크립트가 쓴다. 동시에 `리뷰 기준`과 `
 
 C-3에 따라 프로젝트 프로파일(FSD, Electron, Tailwind, RSC, SSR, Three.js, TanStack Query, server-code, contract-provider)과 React/TypeScript 버전을 **한 번만** 판정한다. 결과를 한 줄로 `modules.planned`의 `profile`에 남긴다(아래 (4)) — 작업 대장이 모든 모듈 프롬프트에 그 줄을 붙여, 각 에이전트가 다시 조사하지 않게 한다.
 
-**(1b) 변경 의도 수집 — 정확성 패스를 켰을 때만, 1회**
+**(1b) 변경 의도 수집 — 1회**
 
-정확성 패스는 "이 변경이 하려는 일을 하는가"를 묻는다. 그 "하려는 일"의 **원문을 스크립트가 모은다**. producer와 검증자가 같은 원문을 받아야 검증자가 producer의 해석을 원문과 대조할 수 있다(C-6B `조항이 없는 지적`).
+정확성 패스는 "이 변경이 하려는 일을 하는가"를, `19-intent`는 "문제를 맞게 잡았는가"를 묻는다. 그 "하려는 일"의 **원문을 스크립트가 모은다** — 정확성 패스를 껐어도 모은다. 작업 대장이 정확성 패스와 `19-intent`의 프롬프트에 붙인다. 2026-11-10 실행은 정확성 패스를 꺼 의도를 모으지 않았고, `19-intent`는 의도를 "PR base와 커밋 diff 기준"으로 짐작했다. producer와 검증자가 같은 원문을 받아야 검증자가 producer의 해석을 원문과 대조할 수 있다(C-6B `조항이 없는 지적`).
 
 ```bash
 node "$RULES_DIR/../scripts/review-intent.mjs" --dir "$REPORT_DIR" --run "$REPORT_BASENAME" [--request-file <사용자 요청 원문 파일>]
@@ -207,7 +207,7 @@ node "$RULES_DIR/../scripts/review-tasks.mjs" next --stage module --dir "$REPORT
 - **파일 경로를 그대로 넘긴다.** 내용을 요약하거나 자기 형식으로 감싸 다시 쓰지 않는다. 작업 도구의 `prompt`에는 아래 `스킬은 싣지 않는다`의 호출 예처럼 경로 한 줄을 준다 — 파일 내용을 붙여도 되지만 고치지 않는다
 - 교정 시도(`correction: true`)의 `prompt`는 대장이 만든 `<모듈>.retry.md`다 — 원래 지시에 오류 목록과 직전 응답을 붙인 것이다. 교정 프롬프트를 직접 쓰지 않는다
 - **프로파일은 `modules.planned`의 `profile`에서 온다** — 3a(1)의 판정을 한 줄로(`FSD · Electron renderer · Tailwind · TanStack Query · React 18.3 · TypeScript 5.6`). 남기지 않으면 프롬프트에 "기록되지 않았다"가 찍힌다
-- **변경 의도는 3a(1b)의 `.timing/$REPORT_BASENAME.intent.md`에서 온다** — 정확성 패스에 붙는다. 그 파일이 없으면 프롬프트에 "모으지 않았다"가 찍힌다
+- **변경 의도는 3a(1b)의 `.timing/$REPORT_BASENAME.intent.md`에서 온다** — 정확성 패스와 `19-intent`에 붙는다. 그 파일이 없으면 프롬프트에 "모으지 않았다"가 찍힌다
 - `05`의 기존 구현 검색 결과는 대장이 디스패치 순간의 검색 상태로 붙인다(C-6C). 결과 파일을 읽어 다시 붙이지 않는다
 
 <!-- MODULE_PROMPT:BEGIN -->
@@ -268,7 +268,7 @@ task(
 
 #### Numbered module review producer prompt template
 
-- 입력: `MODULE_PROMPT` + `{REVIEW_RESULT_CONTRACT_V1_MANIFEST}` + `00-rule.md` 전문 + 담당 numbered module 전문 + diff/context/profile 정보 (`05`는 기존 구현 검색 결과도)
+- 입력: `MODULE_PROMPT` + `{REVIEW_RESULT_CONTRACT_V1_MANIFEST}` + `00-rule.md` 전문 + 담당 numbered module 전문 + diff/context/profile 정보 (`05`는 기존 구현 검색 결과, `19-intent`는 3a(1b)의 변경 의도도)
 - 출력: 위 structured producer instruction을 따르는 `REVIEW_RESULT_CONTRACT_V1` JSON 하나
 - 목적: numbered module 하나의 domain judgment를 structured finding/openQuestion으로 반환
 
