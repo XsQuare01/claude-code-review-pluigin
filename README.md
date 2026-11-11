@@ -538,9 +538,40 @@ The reports themselves had five more rough spots, fixed here:
 - **`←최장` landed on `task.bind`.** On a host that returns only when the reviewer is done, the reviewer's 226 seconds sat on the row that binds its task id. When modules or tools were running during the longest gap, the table now says so underneath — the same count `--check` already gave.
 - **`미해결 / 후속 확인` said `없음`** while the plan block above it reported that the target changed mid-review and that base had touched two of the same files. The shared template now asks for both to be carried over as things to look at again.
 - **The pass table in `요약` dropped the main pass** in the run with no findings: it listed Props, math, exception and correctness, so it read as a review that ran only the special passes. The template now fixes the first row as the main review pass — the numbered modules in full, the `fast` reviewer in fast.
-- **`상세 지적` simply stopped** in that run: fast draws only modules with findings, so with none the section ended after its counts and looked cut off. The renderer now says that the rule modules produced no findings — or, when the fast reviewer's result was never collected (it failed), that there is no result, the same wording the `정확성` section uses for that reviewer.
+- **`상세 지적` simply stopped** in that run: fast draws only modules with findings, so with none the section ended after its counts and looked cut off. The renderer now says that the rule modules produced no findings.
 
 This is PATCH. The run also passed its 284 KB diff as a file path; the reviewer paged through all of it this time, and a separate diff file would hit the same line limit, so that is left as is.
+
+## Follow-ups from the first full runs on 2.28.0 (2.29.0)
+
+Two `/code-review-full` runs on 2.28.0 (OpenCode, 2026-11-10) collected every module and cross-verified 13 and 2 findings. Their records showed where the time went and where the report misled.
+
+**Prompts.** About 45% of each ~300-second wave was the orchestrator, not the reviewers: 60–90 seconds writing four module prompts before the reviewer sessions appeared, and 55–80 seconds handling results after. The prompts it wrote left out the common rule, the module rule and the manifest, and passed paths instead.
+
+- **The task ledger now writes the module prompt.** `review-tasks.mjs next` writes `.timing/<run>.prompts/<module>.md` for every attempt it hands out and returns its path as `prompt`. The file is the `MODULE_PROMPT` block in the full skill (how to review, output format) with the result manifest filled in, followed by the scope, the diff file, the project profile, the intent where it applies, the existing-implementation search result for `05`, and the full text of `00-rule.md` and the module's rule. The orchestrator passes one line: read this file and follow it. The verifier prompts have worked this way since 2.15.0.
+- The ledger writes the diff once, on the first dispatch, from the merge-base to the HEAD that preflight measured (`.timing/<run>.diff`). The profile comes from a new `profile` field on `modules.planned`. If an input cannot be read, the ledger records nothing and stops — handing out an attempt without a prompt would bring back the hand-written one. A missing profile or intent is written into the prompt as missing, and `advice` says so.
+- A response that breaks the contract gets a correction prompt the ledger writes (`<module>.retry.md`): the original prompt, the problems and the previous response, as for verifiers.
+- Preflight marks new full runs with `modulePrompts: script`. Older records and fast are unchanged.
+- **`19-intent` receives the change intent.** Intent collection now runs whether or not the correctness pass is on, and the ledger attaches the intent to `19-intent` as well as to correctness. This is a hypothesis: the run with correctness off described the intent as "inferred from the PR base and the commit diff". Comparing `19-intent` findings with and without the intent will tell.
+
+**Cross-verification.** 8 of the 13 findings sent to cross-verification in one run, and both in the other, were sent — each in its own task — only because another module flagged the same line. Five of them pointed at one line in `useUpdateNode` and described one cause; verified one by one, the two high-impact ones were rejected as unreachable and the three low-impact ones were upheld.
+
+- **Findings isolated only because another rule flagged the same line are verified together** — one task per line (`isolated-same-<n>`). The verifier judges each finding separately, and gives findings that claim the same path the same verdict. The route stays `isolated`, so counts, rendering and deletion approval are unchanged. Findings that also need isolation for another reason are not grouped. Rerouting the two runs' records with this rule gives 5 tasks instead of 12, and 1 instead of 2.
+- **`관련 지적` lines show each related finding's impact** and say when it differs from this finding's. The verdict policy is unchanged: a high-impact finding rejected in `rollout-shadow` still counts as blocking. Judging related findings as one group, or feeding synthesis back into the verdict, would change C-6B and is left for later.
+
+**Ordering on a host that returns only when a wave ends.** The full skill said to write the existing-implementation search plan while the first modules ran. On OpenCode the orchestrator can do nothing while a wave runs, so the plan was written after the first wave; `05` waited 589 seconds and the second wave started 266 seconds late. Preflight's `기존 구현 검색 예정` line and `review-reuse.mjs register` now say, on a host without per-task notifications, to write, check and launch the search before the first `next`. The search is detached, so it does not hold up the first wave.
+
+**Smaller record and report defects.**
+
+- **`register` can be called again.** The run compacted a minute after registering and registered again, scheduling the search twice. An unstarted registration in the same scope is now returned as is (`alreadyRegistered: true`); one after a started or finished search is still a new attempt.
+- **`render.start` was written without `findings`**, which only warned, so `--check` failed at the end. The timeline script now takes the count from the routed output's `counts.total`, and refuses the line when it has neither that file nor a value.
+- **One run ran no lint, typecheck or test and gave no reason**; the other ran them. The skill said both "run them while modules run" and "if you ran them, report them". Full now runs them by default. A tool not run is recorded with `tool.skipped` and a reason from a closed list (`user-request`, `no-script`, `deps-missing`, `no-package-root`); `--check` flags a run that reached rendering with neither.
+- **The timeline table was 117 rows**, 99 of them module and verifier start, end and binding lines. Runs of three or more such lines now fold into one row (`` `module.start` ×4 ``), broken at gaps over 5 seconds and at the longest gap. The 11-10 record folds to 32 rows.
+- **The summary flagged `targets` as a mixed-type field.** `reuse.done.targets` (counts by status) and `crossverify.start.targets` (a number) are different fields; a field one phase declares as nested is now compared only within that phase.
+- **`리뷰 시각` was a bare date in one report and a UTC ISO string in two.** Preflight prints a `시작 시각` line — the `run.start` time in local time with its offset — and the template says to copy it.
+- **Fast: a failed reviewer showed as "no findings" for the rule modules.** 2.28.1 added the line for the case with no module findings, but it did not check whether the reviewer's result was collected. When it was not, the line now says there is no result, as the `정확성` section does. (This fix missed the 2.28.1 merge.)
+
+This is MINOR: prompts move from the orchestrator to the ledger, and full runs tools by default.
 
 ## Applicability metadata
 
