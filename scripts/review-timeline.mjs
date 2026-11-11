@@ -153,7 +153,8 @@ const PHASES = new Map([
       // `baseHead`: 기준 ref의 끝 commit(정한 순간). `reuseSearch`: full이 기존 구현 검색을 예정했는지(C-6C).
       // `language`: 사용자가 정한 리뷰 언어(정하지 않으면 없다 — 한국어)
       // `toolRun`: full이 lint·typecheck·test를 기본으로 돌리는지(C-6) — 있으면 `--check`가 돌린 도구나 건너뛴 이유를 묻는다
-      'baseHead', 'reuseSearch', 'language', 'resultBinding', 'toolRun'],
+      // `modulePrompts`: full의 모듈 프롬프트를 작업 대장이 파일로 만드는지(`script`)
+      'baseHead', 'reuseSearch', 'language', 'resultBinding', 'toolRun', 'modulePrompts'],
   }],
   // 한도에 닿아 멈춘 실행을 이어 갈 때 새 한도 구간을 연다(C-12). 대상이 그대로인지 확인한 값을 함께 남긴다.
   ['run.resume', { required: [], structured: [], allowed: ['maxTasks', 'maxDurationSec', 'staleAfterSec', 'head', 'worktree'] }],
@@ -166,7 +167,8 @@ const PHASES = new Map([
   ['reuse.planned', { required: ['searchId', 'scopeSha256', 'plan'], structured: [], allowed: ['runId', 'head', 'baseHead', 'waitSec'] }],
   ['reuse.start', { required: ['searchId', 'plan'], structured: [], allowed: ['planSha256'] }],
   ['reuse.done', { required: ['searchId', 'status'], structured: ['targets'], allowed: ['reason', 'out', 'outSha256', 'planSha256', 'durationSec'] }],
-  ['modules.planned', { required: ['candidates', 'applied'], structured: ['skipped', 'unknown'], allowed: [] }],
+  // `profile`: 3a(1)의 프로젝트 프로파일 한 줄 — 작업 대장이 모든 모듈 프롬프트에 붙인다
+  ['modules.planned', { required: ['candidates', 'applied'], structured: ['skipped', 'unknown'], allowed: ['profile'] }],
   ['dispatch.start', { required: ['modules', 'inflight'], structured: [], allowed: [] }],
   ['module.start', { required: ['module', 'attempt'], structured: [], allowed: ['taskId', 'retryOf', 'claim'] }],
   ['module.done', { required: ['module', 'attempt', 'status'], structured: [], allowed: ['findings', 'failureClass', 'taskId', 'resultSha256', 'cancelReason'] }],
@@ -257,7 +259,7 @@ const undeclaredKeys = (phase, data) => {
 const TOOL_SKIP_REASONS = ['user-request', 'no-script', 'deps-missing', 'no-package-root']
 
 const CLOSED_VALUES = new Map([
-  ['run.start', { reuseSearch: ['planned'], toolRun: ['required'] }],
+  ['run.start', { reuseSearch: ['planned'], toolRun: ['required'], modulePrompts: ['script'] }],
   ['tool.skipped', { reasonCode: TOOL_SKIP_REASONS }],
   ['module.done', { status: ['ok', 'failed'], cancelReason: CANCEL_REASONS }],
   ['verify.done', { status: ['ok', 'failed'], cancelReason: CANCEL_REASONS }],

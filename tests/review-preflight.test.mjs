@@ -616,6 +616,8 @@ test('run.start에 base 끝 SHA(baseHead)와 기존 구현 검색 예정(reuseSe
   assert.match(out.stdout, /기존 구현 검색 +예정 — /)
   // full은 도구를 기본으로 돌린다 — 건너뛰면 이유를 남긴다(C-6). 시작에 남겨 기록 검사가 묻게 한다
   assert.equal(start.toolRun, 'required')
+  // 모듈 프롬프트는 작업 대장이 만든다 — 시작에 남겨, 이 표시가 없는 예전 기록과 가른다
+  assert.equal(start.modulePrompts, 'script')
   assert.match(out.stdout, /도구 실행 +lint·typecheck·test를 기본으로 돌린다 .*tool\.skipped/)
   // 리뷰 에이전트가 없으면 멈춘다(C-6) — 첫 명령의 출력에서 알린다
   assert.match(out.stdout, /리뷰 에이전트 +첫 디스패치 전에 .*react-code-review-plugin:rule-module-reviewer.*cancel --all --reason agent-unavailable/)

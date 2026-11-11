@@ -2168,6 +2168,15 @@ C-9에서 시작 기록을 모델이 출력을 필요로 하는 자리로 옮긴
 검증 판정은 `REVIEW_VERDICT_CONTRACT_V1`과 요청한 후보 집합에 맞는지를 `tally-verdicts.mjs`와 같은
 함수로 본다. 맞지 않는 응답은 정해진 자리에 쓰지 않고 `malformed-output`으로 끝낸다. 시도가 남았으면
 `next`가 교정 시도를 내준다 — 검증 작업이면 교정 프롬프트(`<taskId>.retry.md`)를 대장이 만든다.
+full의 모듈 시도도 같다(`<모듈>.retry.md`).
+
+**full의 모듈 시도에는 대장이 프롬프트 파일(`prompt`)을 낸다.** preflight가 `run.start.modulePrompts: script`를 남긴
+실행에서, `next`가 띄울 시도마다 `.timing/<run>.prompts/<모듈>.md`를 쓴다 — full SKILL의 `MODULE_PROMPT` 지시에
+결과 manifest 전문, 범위(`scope.json`), diff 파일(`.timing/<run>.diff`, 첫 디스패치 때 merge-base..preflight가 잰 HEAD로
+한 번 뜬다), `modules.planned`의 `profile`, (정확성 패스면) 변경 의도 원문, (`05`면) 그 순간의 기존 구현
+검색 결과, `00-rule.md`와 담당 규칙 전문을 붙인 것이다. 재료를 못 읽으면 시작을 기록하지 않고 멈춘다 — 프롬프트 없는
+시도를 내주면 오케스트레이터가 다시 손으로 쓴다. 2026-11-10 실행은 웨이브마다 60~90초를 프롬프트를 쓰는 데 썼고,
+그 프롬프트는 규칙 문서와 manifest를 빼고 경로만 줬다.
 교정도 어기면 그 작업은 끝이고, 그 후보는 판정 없음(C-6B `verification-unavailable`)이다.
 `tally-verdicts.mjs --validate`도 대장의 기록을 보고, 시도를 다 쓴 작업(`exhausted`)과 돌고 있는
 작업(`running`)을 남은 작업과 가른다 — 교정까지 어긴 작업이 집계를 영영 막지 않는다.

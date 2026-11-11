@@ -326,13 +326,17 @@ export function instructionsWithManifest(template, manifestBlock) {
  * 오케스트레이터가 쓴 셈이다. 새 작업이 받아야 하는 것은 누군가의 요약이 아니라
  * 원래 지시와 자기 직전 응답 그대로다.
  */
-export function buildRetryPrompt(originalPrompt, problems, previousResponse) {
+export function buildRetryPrompt(originalPrompt, problems, previousResponse, { kind = 'verdict' } = {}) {
+  // 모듈 리뷰어(full의 producer)의 교정도 같은 모양이다 — 계약과 고칠 대상만 다르다
+  const lead = kind === 'result'
+    ? '이 작업의 직전 응답이 JSON으로 읽히지 않았거나 `REVIEW_RESULT_CONTRACT_V1`·언어 규칙을 어겼다. 아래 오류를 고친 raw JSON 객체 하나를 다시 돌려준다. 지적과 근거는 직전 응답의 것을 쓰되, 확인하지 않은 값을 지어내지 않는다 — 위치를 다시 확인해야 하면 저장소에서 읽는다.'
+    : '이 작업의 직전 응답이 `REVIEW_VERDICT_CONTRACT_V1` 또는 요청한 candidateId 집합을 어겼다. 아래 오류를 고친 raw JSON 객체 하나를 다시 돌려준다. 판정과 근거는 직전 응답의 것을 쓰되, 확인하지 않은 값을 지어내지 않는다 — 위치를 다시 확인해야 하면 저장소에서 읽는다.'
   return [
     String(originalPrompt).trimEnd(),
     '',
     '## 직전 응답의 형식 오류',
     '',
-    '이 작업의 직전 응답이 `REVIEW_VERDICT_CONTRACT_V1` 또는 요청한 candidateId 집합을 어겼다. 아래 오류를 고친 raw JSON 객체 하나를 다시 돌려준다. 판정과 근거는 직전 응답의 것을 쓰되, 확인하지 않은 값을 지어내지 않는다 — 위치를 다시 확인해야 하면 저장소에서 읽는다.',
+    lead,
     '',
     ...problems.map(problem => `- ${problem}`),
     '',

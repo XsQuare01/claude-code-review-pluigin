@@ -353,6 +353,8 @@ const logged = (() => {
     ...(workflow === 'full' ? { reuseSearch: 'planned', resultBinding: 'required' } : {}),
     // full은 lint·typecheck·test를 기본으로 돌린다(C-6). 시작에 남겨, 돌리지도 이유를 남기지도 않은 실행을 기록 검사가 짚게 한다.
     ...(workflow === 'full' ? { toolRun: 'required' } : {}),
+    // full의 모듈 프롬프트는 작업 대장이 파일로 만든다(SKILL `MODULE_PROMPT`). 이 표시가 없는 예전 기록에는 만들지 않는다.
+    ...(workflow === 'full' ? { modulePrompts: 'script' } : {}),
     // 원격이 없으면 필드를 비워 둔다. 없는 값을 지어 넣지 않는다.
     ...(identity.remote ? { repo: identity.remote } : {}),
     repoRoot: identity.root,
