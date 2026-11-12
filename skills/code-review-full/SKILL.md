@@ -158,7 +158,7 @@ node "$RULES_DIR/../scripts/review-tasks.mjs" next --stage module --dir "$REPORT
 
 1. **`next`가 준 `dispatch`만 띄운다.** 항목마다 `label`을 작업 설명에 넣는다. 대장은 그 시도의 시작(`module.start`)을 띄우기 **전에** 이미 남겼다 — `module.start`·`module.done`·`dispatch.start`·`dispatch.end`를 직접 남기지 않는다
 2. 띄웠으면 호스트의 작업 ID를 묶는다: `review-tasks.mjs bind --task <task> --attempt <attempt> --host-task <작업 ID> …`. 압축 뒤에도 어느 호스트 작업이 어느 시도인지 기록에 남는다
-3. **끝 알림을 받을 때마다** 응답을 한 글자도 고치지 않고 그 항목의 `resultPath`에 쓰고 `done`을 부른다: `review-tasks.mjs done --host-task <작업 ID> --status ok …`. 실패했으면 결과 없이 `--status failed --failure-class <클래스>`(C-9의 닫힌 목록)를 준다
+3. **끝 알림을 받을 때마다** 응답을 한 글자도 고치지 않고 그 항목의 `resultPath`에 쓰고 `done`을 부른다: `review-tasks.mjs done --host-task <작업 ID> --status ok …`. 응답이 왔으면 형식이 틀려 보여도 `--status ok`로 넘긴다 — 계약(C-6A)과 언어는 `done`이 검사해, 어기면 실패로 기록하고 교정 프롬프트를 만든다. 응답이 없는 실패(시간 초과·빈 응답·세션 유실 등)만 결과 없이 `--status failed --failure-class <클래스>`(C-9의 닫힌 목록)를 준다. `malformed-output`은 손으로 남기지 않는다 — `done`이 거부한다
 4. 그리고 바로 다시 `next`를 부른다. 빈 슬롯만큼 다음 시도가 나온다 — 그것이 배리어 없는 sliding window다
 5. `complete: true`가 나오면 모듈 단계가 끝났다. 검증 준비(`prepare-verification.mjs --collect`)로 간다
 
@@ -345,7 +345,7 @@ task(
     - `$RULES_DIR/correctness.md`만 읽고, 지적 ID는 `CR-x`로 표기한다. 이 번호는 지적의 순번이고 규칙 조항이 아니다. 규칙 모듈의 ID를 쓰면 `prepare-verification.mjs`가 거부한다 — 그때는 교정 재시도로 다시 받는다.
     - 범위는 변경 파일과 그 호출자·피호출자다. 변경되지 않은 호출자도 본다(삭제된 동작을 전제하는 쪽). 관련 없는 저장소 전체를 훑지 않는다.
     - 켰으면 **적용 대상이다.** 관련 범위가 없다는 이유로 `SKIPPED`로 두지 않는다 — 대장의 `next`가 다른 모듈과 같이 `correctness`를 낸다. 결과 파일은 `$REPORT_BASENAME.correctness.json`, `module.done`의 `module`은 `correctness`다. 대장이 시도마다 `module.start`/`module.done`을 남긴다 — 이 패스가 더한 호출량이 시도 수로 기록에 남고 호출 한도에 든다.
-    - 실패 처리는 특수 패스와 같다. no-start·timeout은 fresh retry 1회, `malformed-output`은 교정 재시도 1회. 두 번째도 실패하면 대장이 그 작업을 끝낸다(`done --status failed`와 그 `failureClass` — `inactivity-timeout`·`malformed-output` 등). 다음으로 간다. 그 실행은 `FAILED orchestration`(부분 완료)이고, 렌더러는 이 패스를 "결과 없음"으로, 스냅숏은 `FAILED`로 그린다. **지적 0건이나 통과로 쓰지 않는다.**
+    - 실패 처리는 특수 패스와 같다. no-start·timeout은 fresh retry 1회, `malformed-output`은 교정 재시도 1회. 두 번째도 실패하면 대장이 그 작업을 끝낸다(응답이 없으면 `done --status failed`와 그 `failureClass`, 형식을 어긴 응답이면 `--status ok`로 넘긴 `done`이 `malformed-output`으로 남긴다). 다음으로 간다. 그 실행은 `FAILED orchestration`(부분 완료)이고, 렌더러는 이 패스를 "결과 없음"으로, 스냅숏은 `FAILED`로 그린다. **지적 0건이나 통과로 쓰지 않는다.**
     - 껐으면 띄우지 않는다. `modules.planned`에 적지 않는다 — 렌더러와 스냅숏이 `run.start`에서 읽어 `SKIPPED`(선택 패스, 켜지 않았다)로 그린다.
     - 규칙 패스가 같은 자리를 지적했어도 이 패스의 지적을 버리지 않는다. 둘은 합쳐지지 않는다(exact dedup은 규칙 ID가 같아야 병합한다). `prepare-verification.mjs`가 같은 자리(같은 파일에서 줄이 겹치는 범위)를 짚은 다른 규칙의 지적을 `relatedCandidateIds`로 잇고, 렌더러가 `관련 지적:` 줄로 그린다. 규칙 모듈끼리도 같다 — 같은 규칙 ID끼리와 `CR-*`끼리만 잇지 않는다.
  7. 요약/리포팅 규칙.
@@ -492,7 +492,7 @@ isolated 11)을 동시에 background dispatch한 결과, 1건만 2분 25초에 �
 - **검증 에이전트 실패는 `FAILED orchestration`이 아니다.** 해당 candidate에 `verification-unavailable`을 부여하고 coverage에 건수를 남긴다. 보조 단계의 실패가 전체 리뷰를 실패로 만들면, 새로 붙인 단계가 리뷰 전체의 신뢰성을 떨어뜨린다
 - retry 1회 / in-flight 상한 공유 / 실패 클래스별 건수 기록 — 일반 모듈 정책을 그대로 재사용한다
 - verdict `malformed-output` → C-6A와 동일 (교정 재시도 1회, 두 번째 실패 시 확정). 반환된 `candidateId` 집합이 요청과 다르면 그것도 `malformed-output`이다
-- **형식 검사와 교정 프롬프트, 남은 작업 목록은 스크립트가 만든다.** 검증자가 돌아올 때마다 `done`이 판정을 검사한다. 계약을 어긴 작업마다 `<taskId>.retry.md`가 생기고 — 원래 지시에 오류 목록과 직전 응답 원문을 붙인 것이다 — 다음 `next`가 그 경로를 교정 시도의 `prompt`로 낸다. 그 **파일 내용을 그대로** 새 `rule-module-reviewer`에게 넘기고, 돌아온 JSON을 그 시도의 `resultPath`에 쓰고 `done`을 부른다. 교정도 어기면 그 작업은 끝이다(판정 없음). 교정 프롬프트를 직접 쓰지 않고, 판정 근거를 요약해 불러 주지 않는다 — 2026-09-30 실행은 세션 재개가 `task-not-found`로 막히자 새 작업에 "이 근거를 보존하라"며 근거를 불러 줬고, 그 판정은 검증자가 아니라 오케스트레이터가 쓴 것이 됐다
+- **형식 검사와 교정 프롬프트, 남은 작업 목록은 스크립트가 만든다.** 검증자가 돌아올 때마다 `done`이 판정을 검사한다 — 응답은 형식이 틀려 보여도 `--status ok`로 넘긴다. `malformed-output`을 손으로 남기면 `done`이 거부한다. 계약을 어긴 작업마다 `<taskId>.retry.md`가 생기고 — 원래 지시에 오류 목록과 직전 응답 원문을 붙인 것이다 — 다음 `next`가 그 경로를 교정 시도의 `prompt`로 낸다. 그 **파일 내용을 그대로** 새 `rule-module-reviewer`에게 넘기고, 돌아온 JSON을 그 시도의 `resultPath`에 쓰고 `done`을 부른다. 교정도 어기면 그 작업은 끝이다(판정 없음). 교정 프롬프트를 직접 쓰지 않고, 판정 근거를 요약해 불러 주지 않는다 — 2026-09-30 실행은 세션 재개가 `task-not-found`로 막히자 새 작업에 "이 근거를 보존하라"며 근거를 불러 줬고, 그 판정은 검증자가 아니라 오케스트레이터가 쓴 것이 됐다
 - `exhaustive` release-gate 실행에서 **차단 후보(`impact = high`)의 검증이 실패하면 최종 판정은 `INCONCLUSIVE`** 다. 개별 finding의 차단 여부와 gate 전체의 완결성 판정은 다른 값이다
 
 ### 검증 결과 집계
@@ -600,8 +600,8 @@ node "$RULES_DIR/../scripts/tally-verdicts.mjs" --dir "$REPORT_DIR" --run "$REPO
   스크립트가 `$REPORT_DIR/$REPORT_BASENAME.md`를 쓰고 JSON(`path`·`lines`·`sha256`)을 낸다 — 그 `path`·`lines`로 `render.wrote`를 남긴다. 조각을 PowerShell 변수나 `$(…)`로 받아 틀에 끼우지 않는다. 2026-10-13 실행은 그렇게 조립했고, PowerShell 5.1이 node의 UTF-8 출력을 시스템 코드 페이지로 읽어 한글이 깨진 리포트를 저장한 뒤에야 알아챘다. 스크립트가 거부하면(종료 코드 2) 아무것도 쓰지 않은 것이다. 자리표시자가 빠졌거나 남았으면 틀을, 조각이 다른 실행의 것이거나(스냅숏 블록·상세 지적의 실행 ID, 타임라인 표의 출처 경로로 본다) 타임라인 표가 지금 기록보다 앞선 것이면 그 조각을 다시 만들어 부른다
 - 요약 저장은 `workflow-contract.md` C-7을 따른다 (`workflow-name`은 `full`).
 - 저장 자리는 (0)에서 정한 `$REPORT_DIR`이다 — 사용자가 이번 요청에서 정한 곳 → 사용자·프로젝트 지시 파일(전역 포함 `CLAUDE.md`·`AGENTS.md`)에 적힌 문서 저장 위치 → `./review-reports/` 순서로 정한 곳이다. 끝난 뒤 사용자가 리포트를 옮기라고 하면 `.timing/`도 함께 옮기고, 기록의 `render.wrote` 경로는 옛 자리를 가리킨다고 알린다. 리포트만 옮기면 기록과 리포트가 서로를 못 찾는다.
-- 일반/Props/수학/예외 producer 결과는 수집 직후 `workflow-contract.md` C-6A validation 규칙으로 검사한다. JSON 파싱 실패, 필수 필드 누락, 금지 필드 `severity`, 허용되지 않은 enum/location 값은 `malformed-output`이다.
-- `malformed-output`이면 **같은 producer에 교정 재시도는 한 번만** 한다. `done --status failed --failure-class malformed-output`을 남기면(JSON으로 읽히지 않는 응답은 `done`이 스스로 그렇게 남긴다) 다음 `next`가 그 모듈의 교정 시도를 `correction: true`로 낸다. 재시도 prompt에는 잘못된 점만 짧게 적고 다시 `REVIEW_RESULT_CONTRACT_V1` raw JSON 하나만 요구한다.
+- 일반/Props/수학/예외 producer 결과는 받는 즉시 `workflow-contract.md` C-6A validation 규칙으로 검사한다 — **검사는 `done`이 한다.** JSON 파싱 실패, 필수 필드 누락, 금지 필드 `severity`, 허용되지 않은 enum/location 값, 한글 없는 지적은 `malformed-output`이다. 오케스트레이터는 응답을 고치지 않고 `resultPath`에 써서 `--status ok`로 넘긴다. `malformed-output`을 손으로 남기면 `done`이 거부한다 — 그 호출에는 응답도 오류도 없어 교정 프롬프트를 만들 수 없다(PR #112 리뷰: 최초 프롬프트가 그대로 다시 나갔다).
+- `malformed-output`이면 **같은 producer에 교정 재시도는 한 번만** 한다. `done`이 어긴 점과 직전 응답을 원래 프롬프트에 붙여 `.prompts/<모듈>.retry.md`를 만들고, 다음 `next`가 그 모듈의 교정 시도를 `correction: true`와 그 파일로 낸다. 그 **파일 내용을 그대로** 넘긴다 — 교정 프롬프트를 직접 쓰지 않는다.
 - 두 번째도 `malformed-output`이면 그 패스는 `FAILED malformed-output`으로 기록하고, 부분 보정이나 Markdown 해석으로 통과시키지 않는다. dispatch/result handling과 실패 기록은 이 skill이 책임진다.
 - aggregation은 **검증을 통과한 JSON만** 입력으로 받는다. 이 단계에서는 parsed finding/openQuestion을 패스 라벨과 함께 정렬·중복 제거·그룹화할 뿐, Markdown 헤딩이나 severity 문자열을 읽거나 재사용하지 않는다.
 - renderer가 구조화 필드에서 `상세 지적`과 `특수 패스`를 생성한다. `####` 헤딩, 섹션 이름, 상태 표, severity 이모지는 renderer가 만든다. **`미해결 / 후속 확인`은 renderer가 만들지 않는다** — `needs-context`(교차검증 `범위 미확정`)로 판정된 finding은 renderer가 상세 지적에서만 빼고, 무엇을 뺐는지를 **옮겨 적을 재료와 함께** stderr로 알린다 — 규칙 ID·candidate ID·title에 더해 verifier가 낸 `reason`, 본문·근거, 위치 줄, 출처 패스까지 이스케이프를 거친 상태로 나온다. 그 알림을 받아 `미해결 / 후속 확인`에 실제로 옮겨 적는 것은 이 skill(오케스트레이터)의 책임이다 — 옮겨 적지 않으면 그 finding은 리포트 어디에도 없는 채로 사라진다.

@@ -47,7 +47,7 @@ import {
   endState, verifyRoundOf, verifyRoundStart,
 } from './lib/task-ledger.mjs'
 import { REUSE_MODULE, reuseState } from './lib/reuse-state.mjs'
-import { checkTaskVerdict, loadVerdictValidator } from './lib/verdicts.mjs'
+import { checkTaskVerdict, loadResultValidator, loadVerdictValidator } from './lib/verdicts.mjs'
 import { buildRetryPrompt } from './lib/verifier-tasks.mjs'
 
 class LedgerError extends Error {
@@ -280,6 +280,20 @@ const validatorFor = start => {
     throw new LedgerError(error.message)
   }
 }
+
+const resultValidatorFor = start => {
+  try {
+    return loadResultValidator(rulesDirOf(start))
+  } catch (error) {
+    throw new LedgerError(error.message)
+  }
+}
+
+/**
+ * 이 시도의 프롬프트를 대장이 만드는가 — full의 모듈(`run.start.modulePrompts: script`)과 모든 검증 작업이다. 그 시도의
+ * 교정 프롬프트도 대장이 만들고, 그러려면 받은 응답과 그 오류가 있어야 한다.
+ */
+const scriptOwnsPrompt = (start, stage) => stage === 'verify' || (stage === 'module' && start.modulePrompts === 'script')
 
 /** routed 출력에서 검증 작업 하나를 찾는다 — 승격 작업까지. */
 const verifyEntryOf = (routed, task) => {
@@ -555,6 +569,19 @@ const done = () => {
     const stage = owner?.stage ?? (task === undefined ? undefined : inferStage(fold, task))
     const attempt = givenAttempt ?? owner?.attempt
 
+    // 손으로 남긴 malformed-output에는 응답도 오류도 없어, 대장이 교정 프롬프트를 만들지 못하고 next가 최초 프롬프트를 다시
+    // 냈다(PR #112 리뷰). 프롬프트를 대장이 만드는 시도는 응답을 받아 done이 직접 검사한다 — 그 경로가 교정 프롬프트를 만든다
+    if (status === 'failed' && failureClass === 'malformed-output' && scriptOwnsPrompt(start, stage)) {
+      return {
+        code: 3,
+        out: {
+          outcome: 'refused', task, attempt,
+          reason: '이 시도의 프롬프트는 대장이 만든다 — malformed-output을 손으로 남기지 않는다. 받은 응답을 한 글자도 고치지 않고 resultPath에 쓰고 --status ok로 넘기면, done이 계약(C-6A)과 언어를 검사해 어긴 점과 직전 응답을 붙인 교정 프롬프트를 만든다',
+          note: '받지 않았다 — 기록을 남기지 않았다',
+        },
+      }
+    }
+
     let text
     if (status === 'ok') {
       const round = stage === 'verify' ? verifyRoundOf(events) : null
@@ -603,10 +630,15 @@ const done = () => {
       } catch (error) {
         problems = [`JSON으로 읽지 못했다: ${error.message} — 코드펜스나 서문 없이 JSON 객체 하나만 돌려준다`]
       }
-      // 한국어가 아닌 지적은 받지 않는다 — 교정 시도로 다시 받는다(00-rule, run.start.language)
+      // 계약(C-6A)을 어긴 결과는 받지 않는다 — 프롬프트를 대장이 만드는 실행만 본다. 그 실행의 오케스트레이터는 교정
+      // 프롬프트를 쓰지 않으므로, 어긴 점을 찾는 것도 여기서 한다(PR #112 리뷰). 한국어가 아닌 지적도 받지 않는다(00-rule,
+      // run.start.language). 둘 다 교정 시도로 다시 받고, 한 번에 고치게 함께 알린다
       if (!problems) {
+        const contract = start.modulePrompts === 'script'
+          ? resultValidatorFor(start)(parsed).map(error => `${error.code}: ${error.message}`)
+          : []
         const language = resultLanguageProblems(parsed, { language: start.language })
-        if (language.length) problems = language
+        if (contract.length || language.length) problems = [...contract, ...language]
       }
       // 대장이 프롬프트를 만든 실행(full)이면 교정 프롬프트도 만든다 — 원래 지시에 오류와 직전 응답을 붙인 것이다.
       // 오케스트레이터가 교정을 쓰면 지시를 다시 쓰는 자리가 돌아온다

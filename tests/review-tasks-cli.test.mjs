@@ -685,6 +685,57 @@ test('계약에 맞지 않은 응답의 교정 시도는 원래 프롬프트에 
   assert.match(text, /## 직전 응답의 형식 오류[\s\S]*REVIEW_RESULT_CONTRACT_V1[\s\S]*JSON으로 읽지 못했다[\s\S]*Here is the review: not json/)
 })
 
+// PR #112 리뷰: JSON으로는 읽히지만 계약 필드가 빠진 응답(openQuestions 없음)은 done이 받았고, 오케스트레이터가 SKILL대로
+// `--status failed --failure-class malformed-output`을 남기면 교정 파일이 없어 next가 최초 프롬프트를 다시 냈다 — 무엇을 고칠지도,
+// 직전 응답도 없었다. 2.29.0부터 오케스트레이터는 교정 프롬프트를 쓰지 않으므로 계약 검사와 교정 파일을 done이 맡는다.
+test('JSON이지만 계약 필드가 빠진 응답도 done이 거부하고, 교정 파일에 오류와 직전 응답을 싣는다', t => {
+  const { dir } = promptRun(t, { keep: ['04-state'] })
+  const [claim] = json(next(dir)).dispatch
+  const partial = JSON.stringify({ schemaVersion: 1, findings: [] })
+  writeFileSync(claim.resultPath, partial, 'utf8')
+  const rejected = receive(dir, '04-state', 1)
+  assert.equal(rejected.status, 1)
+  const out = json(rejected)
+  assert.equal(out.outcome, 'rejected')
+  assert.ok(out.problems.some(line => /E_TOPLEVEL_MISSING_OPEN_QUESTIONS/.test(line)), JSON.stringify(out.problems))
+  assert.equal(existsSync(join(dir, '.timing', `${RUN}.04-state.json`)), false)
+  const [correction] = json(next(dir)).dispatch
+  assert.equal(correction.correction, true)
+  assert.equal(correction.prompt, out.retryPrompt)
+  const text = readFileSync(out.retryPrompt, 'utf8')
+  assert.match(text, /## 직전 응답의 형식 오류[\s\S]*E_TOPLEVEL_MISSING_OPEN_QUESTIONS/)
+  assert.ok(text.includes(partial))
+})
+
+test('프롬프트를 대장이 만드는 실행에서는 malformed-output을 손으로 남기지 못한다 — 응답을 넘기면 done이 검사한다', t => {
+  const { dir } = promptRun(t, { keep: ['04-state', '05-structure'] })
+  json(next(dir))
+  const before = eventsOf(dir).length
+  const refused = tasks(dir, 'done', '--task', '04-state', '--attempt', '1', '--status', 'failed', '--failure-class', 'malformed-output')
+  assert.equal(refused.status, 3)
+  assert.match(json(refused).reason, /--status ok/)
+  assert.equal(eventsOf(dir).length, before, '거부한 호출은 아무것도 기록하지 않는다')
+  // 응답이 없는 실패는 그대로 받는다 — 교정이 아니라 새 시도라서 교정 파일이 필요 없다
+  assert.equal(tasks(dir, 'done', '--task', '05-structure', '--attempt', '1', '--status', 'failed', '--failure-class', 'inactivity-timeout').status, 0)
+})
+
+test('검증 작업도 malformed-output을 손으로 남기지 못한다 — 판정 검사와 교정 프롬프트는 done이 맡는다', t => {
+  const { dir } = verifySetup(t)
+  json(next(dir, 'verify'))
+  const before = eventsOf(dir).length
+  const refused = tasks(dir, 'done', '--task', 'bundle-1', '--attempt', '1', '--status', 'failed', '--failure-class', 'malformed-output')
+  assert.equal(refused.status, 3)
+  assert.equal(json(refused).outcome, 'refused')
+  assert.equal(eventsOf(dir).length, before)
+})
+
+test('프롬프트를 대장이 만들지 않는 예전 기록은 malformed-output을 손으로 남길 수 있다', t => {
+  const dir = fresh(t)
+  plant(dir, [startEvent(), planned(['04-state'])])
+  json(next(dir))
+  assert.equal(tasks(dir, 'done', '--task', '04-state', '--attempt', '1', '--status', 'failed', '--failure-class', 'malformed-output').status, 0)
+})
+
 test('범위 파일이 없으면 아무것도 기록하지 않고 멈춘다 — 프롬프트 없는 시도를 내주지 않는다', t => {
   const { dir } = promptRun(t, { keep: ['04-state'] })
   rmSync(join(dir, '.timing', `${RUN}.scope.json`))

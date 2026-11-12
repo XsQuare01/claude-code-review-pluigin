@@ -291,7 +291,7 @@ baseline이 없을 때 `미측정`으로 적는 것으로 끝내지 않는다. p
 
 ### validation
 
-- 오케스트레이터는 producer 응답을 받은 즉시 envelope와 필수 필드를 검증한다
+- 오케스트레이터는 producer 응답을 받은 즉시 envelope와 필수 필드를 검증한다. `/code-review-full`은 작업 대장이 이 검사를 한다(`review-tasks.mjs done`, `scripts/lib/contract-validate.mjs`의 `validateResultPayload` — `validate-rules.mjs`가 계약 fixture에 쓰는 것과 같은 함수) — 어긴 점과 직전 응답을 붙인 교정 프롬프트도 대장이 만든다. 그래서 그 실행에서는 malformed-output을 손으로 기록하지 않는다(PR #112 리뷰: 손으로 남긴 실패에는 교정 파일이 없어 최초 프롬프트가 다시 나갔다)
 - JSON 파싱 실패, 필수 필드 누락, 금지 필드(`severity`) 포함, 허용되지 않은 location/impact/category 값은 **malformed-output**이다
 - 사용자가 다른 언어를 정하지 않은 실행(`run.start.language`가 없거나 `ko`)에서 제목·본문에 한글이 하나도 없는 지적·열린 질문도 **malformed-output**이다. `/code-review-full`의 작업 대장이 결과를 받을 때 검사한다(`scripts/lib/result-language.mjs`) — 언어 지시는 규칙 문서·에이전트·스킬에 있었지만 문장일 뿐이라, 프롬프트에서 빠진 날 영어 지적이 그대로 실렸다
 - malformed-output이든 legacy/prose 출력이든 **교정 재시도는 한 번만** 한다. 재시도 prompt는 잘못된 점만 짧게 지적하고 같은 계약으로 다시 요구한다
