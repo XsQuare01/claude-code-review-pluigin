@@ -2487,15 +2487,28 @@ test('--check는 도구를 돌리지도 건너뛴 이유를 남기지도 않은 
   plant(bare, numbered([toolStart(), reuseLine(50, 'render.start', { findings: 0 })]))
   const out = check(bare)
   assert.equal(out.status, 1)
-  assert.match(out.stdout, /도구\(lint·typecheck·test\)를 돌리지도, 건너뛴 이유\(`tool\.skipped`\)를 남기지도 않았다/)
+  assert.match(out.stdout, /도구 lint·typecheck·test를 돌리지도, 건너뛴 이유\(`tool\.skipped`\)를 남기지도 않았다/)
 
-  const ran = freshDir(t)
-  plant(ran, numbered([toolStart(), reuseLine(5, 'tool.start', { name: 'lint', callId: 'c1' }), reuseLine(9, 'tool.done', { name: 'lint', exit: 0, treeSha: 'x', callId: 'c1' }), reuseLine(50, 'render.start', { findings: 0 })]))
-  assert.doesNotMatch(check(ran).stdout, /돌리지도, 건너뛴 이유/)
+  const ran = (name, callId, at) => [reuseLine(at, 'tool.start', { name, callId }), reuseLine(at + 1, 'tool.done', { name, exit: 0, treeSha: 'x', callId })]
+  const all = freshDir(t)
+  plant(all, numbered([toolStart(), ...ran('lint', 'c1', 5), ...ran('typecheck', 'c2', 7), reuseLine(9, 'tool.skipped', { name: 'test', reasonCode: 'no-script' }), reuseLine(50, 'render.start', { findings: 0 })]))
+  assert.doesNotMatch(check(all).stdout, /돌리지도, 건너뛴 이유/)
 
-  const skipped = freshDir(t)
-  plant(skipped, numbered([toolStart(), reuseLine(5, 'tool.skipped', { name: 'test', reasonCode: 'user-request' }), reuseLine(50, 'render.start', { findings: 0 })]))
-  assert.doesNotMatch(check(skipped).stdout, /돌리지도, 건너뛴 이유/)
+  // PR #112 리뷰: 도구 하나의 기록만 있어도 통과했다. 검사는 도구마다 한다 — 빠진 도구만 이름을 댄다
+  const oneSkip = freshDir(t)
+  plant(oneSkip, numbered([toolStart(), reuseLine(5, 'tool.skipped', { name: 'test', reasonCode: 'no-script' }), reuseLine(50, 'render.start', { findings: 0 })]))
+  const partial = checkWith(oneSkip, '--before-end')
+  assert.equal(partial.status, 1)
+  assert.match(partial.stdout, /도구 lint·typecheck를 돌리지도, 건너뛴 이유/)
+
+  const oneRan = freshDir(t)
+  plant(oneRan, numbered([toolStart(), ...ran('lint', 'c1', 5), reuseLine(50, 'render.start', { findings: 0 })]))
+  assert.match(check(oneRan).stdout, /도구 typecheck·test를 돌리지도, 건너뛴 이유/)
+
+  // 다시 돌린 것(`test-rerun`)은 그 도구를 돌린 것이 아니다 — 먼저 돈 `test`가 있어야 한다
+  const rerunOnly = freshDir(t)
+  plant(rerunOnly, numbered([toolStart(), ...ran('lint', 'c1', 5), ...ran('typecheck', 'c2', 7), ...ran('test-rerun', 'c3', 9), reuseLine(50, 'render.start', { findings: 0 })]))
+  assert.match(check(rerunOnly).stdout, /도구 test를 돌리지도, 건너뛴 이유/)
 
   // 기존 구현 검색과 재현 명령(C-11)은 같은 스크립트로 돌지만 도구 게이트가 아니다
   const notGate = freshDir(t)

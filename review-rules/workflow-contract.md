@@ -141,7 +141,7 @@ node "$RULES_DIR/../scripts/review-base.mjs" --repo .   # 사용자가 base를 �
 `00-rule.md` 00-9 실행 안전 계약을 따른다. 요약하면:
 
 - 리뷰는 기본 read-only. lint/typecheck/test는 수정 옵션 없이 실행
-- **`full`은 lint/typecheck/test를 기본으로 돌린다.** 돌리지 않는 도구는 이유를 닫힌 목록(`user-request`·`no-script`·`deps-missing`·`no-package-root`)에서 골라 `tool.skipped`로 남긴다(C-9). preflight가 `run.start`에 `toolRun: required`를 남기고, `--check`는 렌더에 닿은 실행이 도구를 돌리지도 이유를 남기지도 않았으면 짚는다. 2026-11-10의 full 실행 둘 중 하나는 도구를 돌리지 않았고 이유도 없었다. `fast`는 돌리지 않는 것이 기본이다
+- **`full`은 lint/typecheck/test를 기본으로 돌린다.** 돌리지 않는 도구는 이유를 닫힌 목록(`user-request`·`no-script`·`deps-missing`·`no-package-root`)에서 골라 `tool.skipped`로 남긴다(C-9). preflight가 `run.start`에 `toolRun: required`를 남기고, `--check`는 렌더에 닿은 실행에서 **도구마다**(`lint`·`typecheck`·`test`, `review-tool.mjs --name` 그대로) 돌린 기록이나 건너뛴 이유가 있는지 보고, 빠진 도구의 이름을 댄다 — 하나의 기록으로 셋을 통과시키면 test만 건너뛴 이유를 남긴 실행도 통과했다(PR #112 리뷰). 다시 돌린 것(`test-rerun` 등)은 그 도구로 세지 않는다. 2026-11-10의 full 실행 둘 중 하나는 도구를 돌리지 않았고 이유도 없었다. `fast`는 돌리지 않는 것이 기본이다
 - **read-only는 프롬프트가 아니라 도구로 강제한다.** 지적을 만드는 sub-agent(producer)는
   파일을 쓸 수 있는 도구 없이 띄운다. 편집 도구뿐 아니라 셸도 제외한다 — 셸이 있으면
   리다이렉션이나 `sed -i`로 쓸 수 있어 편집 도구만 빼는 것은 절반짜리다.

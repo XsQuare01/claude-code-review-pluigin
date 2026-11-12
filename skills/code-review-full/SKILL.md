@@ -553,7 +553,7 @@ node "$RULES_DIR/../scripts/tally-verdicts.mjs" --dir "$REPORT_DIR" --run "$REPO
   node "$RULES_DIR/../scripts/review-timeline.mjs" --dir "$REPORT_DIR" --run "$REPORT_BASENAME" --phase tool.skipped --set name=test --set reasonCode=no-script --set "reason=apps/web/package.json에 test 스크립트가 없다"
   ```
 
-  `도구 실행 결과`에도 같은 이유를 적는다. 돌리지도 이유를 남기지도 않은 실행은 `--check`가 짚는다. 2026-11-10의 두 full 실행 중 하나는 도구를 돌리지 않았고 이유도 없었다 — 이 문서에 "함께 돌린다"와 "실행했으면 보고한다"가 같이 있어 돌릴지가 모호했다.
+  `도구 실행 결과`에도 같은 이유를 적는다. `--check`는 **도구마다** 본다 — `lint`·`typecheck`·`test` 각각에 돌린 기록(`review-tool.mjs --name`을 이 이름 그대로)이나 `tool.skipped`가 있어야 한다. 하나만 남기고 나머지를 비워 두면 빠진 도구를 짚는다. 2026-11-10의 두 full 실행 중 하나는 도구를 돌리지 않았고 이유도 없었다 — 이 문서에 "함께 돌린다"와 "실행했으면 보고한다"가 같이 있어 돌릴지가 모호했다.
 - **도구는 `review-tool.mjs`로 돌린다 — 시작(`tool.start`)과 끝(`tool.done`)을 스크립트가 돌리기 직전과 끝난 직후에 남긴다** (C-9). 손으로 남기면 그 시각은 도구가 돈 시각이 아니라 오케스트레이터가 깨어난 시각이다 — 2026-10-12 실행은 세 도구의 시작과 끝을 같은 초에 남겨 셋 다 416초로 기록됐다. 끝만 모아 찍던 실행은 442초를 이름 없는 구간 하나로 남겼다.
 
   ```bash

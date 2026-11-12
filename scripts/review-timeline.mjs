@@ -32,7 +32,7 @@ import { basename, dirname, extname, isAbsolute, join, resolve } from 'node:path
 import { writeOutFile } from './lib/atomic-write.mjs'
 import { withFileLock } from './lib/file-lock.mjs'
 import { readJsonFile, readTextFile } from './lib/read-text.mjs'
-import { REUSE_MODULE, REUSE_STATUSES, REUSE_TOOL_NAME, reuseState, reuseStateBefore } from './lib/reuse-state.mjs'
+import { REUSE_MODULE, REUSE_STATUSES, reuseState, reuseStateBefore } from './lib/reuse-state.mjs'
 import { moduleOutcomes } from './lib/run-record.mjs'
 import { CANCEL_REASONS, HALT_REASONS, STAGES, endState, haltOf, resultBindingProblems } from './lib/task-ledger.mjs'
 import { runNameProblem } from './lib/run-name.mjs'
@@ -257,6 +257,9 @@ const undeclaredKeys = (phase, data) => {
  * - `no-package-root`: 리뷰 범위에 도구를 돌릴 패키지 루트가 없다
  */
 const TOOL_SKIP_REASONS = ['user-request', 'no-script', 'deps-missing', 'no-package-root']
+
+/** full이 기본으로 돌리는 도구(C-6). 도구마다 `tool.start`나 `tool.skipped`가 있어야 한다 — 이름은 `review-tool.mjs --name` 그대로다. */
+const GATE_TOOLS = ['lint', 'typecheck', 'test']
 
 const CLOSED_VALUES = new Map([
   ['run.start', { reuseSearch: ['planned'], toolRun: ['required'], modulePrompts: ['script'] }],
@@ -967,10 +970,14 @@ if (has('check')) {
   {
     const startLine = events.find(event => event?.phase === 'run.start')
     const rendered = events.some(event => event?.phase === 'render.start' || event?.phase === 'run.end')
+    // 도구마다 본다 — 하나의 기록으로 셋을 통과시키면 test만 건너뛴 이유를 남긴 실행도 통과했다(PR #112 리뷰). 이름은 SKILL이
+    // 정한 `--name` 그대로다. 다시 돌린 것(`test-rerun` 등)은 먼저 돈 그 도구가 있어야 뜻이 있으므로 그 도구로 세지 않는다
     if (startLine?.toolRun === 'required' && rendered && !stoppedWithoutReview) {
-      const ran = events.some(event => event?.phase === 'tool.start' && event.name !== REUSE_TOOL_NAME && event.candidateId === undefined && event.evidenceId === undefined)
-      const skipped = events.some(event => event?.phase === 'tool.skipped')
-      if (!ran && !skipped) problems.push('full 실행인데 도구(lint·typecheck·test)를 돌리지도, 건너뛴 이유(`tool.skipped`)를 남기지도 않았다 — 기본은 돌린다. 돌리지 않은 도구는 이유를 닫힌 목록에서 골라 남긴다(C-6)')
+      const accounted = new Set(events
+        .filter(event => (event?.phase === 'tool.start' && event.candidateId === undefined && event.evidenceId === undefined) || event?.phase === 'tool.skipped')
+        .map(event => event.name))
+      const missing = GATE_TOOLS.filter(name => !accounted.has(name))
+      if (missing.length) problems.push(`full 실행인데 도구 ${missing.join('·')}를 돌리지도, 건너뛴 이유(\`tool.skipped\`)를 남기지도 않았다 — 기본은 lint·typecheck·test를 모두 돌린다. 돌리지 않은 도구는 도구마다 이유를 닫힌 목록에서 골라 남긴다(C-6)`)
     }
   }
 
