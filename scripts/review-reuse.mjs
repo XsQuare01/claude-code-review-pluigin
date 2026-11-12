@@ -30,6 +30,7 @@ import {
   REUSE_LIMITS, REUSE_SCHEMA_VERSION, anchorProblems, changedRanges, gitReader, overallStatus, planProblems, searchTarget, sha256, summarizeTargets,
 } from './lib/reuse-context.mjs'
 import { reuseState } from './lib/reuse-state.mjs'
+import { hostCapabilities } from './lib/hosts.mjs'
 import { readEvents, recordPhase, requireStartedTimeline } from './lib/run-record.mjs'
 
 const die = message => {
@@ -106,21 +107,41 @@ if (mode === 'register') {
   if (scope.error) die(scope.error)
   const waitSec = values.has('wait-sec') ? Number(values.get('wait-sec')) : null
   if (waitSec !== null && (!Number.isInteger(waitSec) || waitSec <= 0)) die('--wait-sec은 양의 정수(초)다')
-  const searchId = `s-${randomBytes(4).toString('hex')}`
-  const plan = values.get('plan') ?? join(timing, `${run}.reuse-plan.json`)
-  try {
-    recordPhase(dir, run, 'reuse.planned', {
-      searchId, scopeSha256: scope.sha256, plan, runId: start.runId, head: start.head,
-      ...(start.baseHead ? { baseHead: start.baseHead } : {}), ...(waitSec !== null ? { waitSec } : {}),
-    })
-  } catch (error) {
-    die(`reuse.planned를 남기지 못했다 — ${String(error.stderr || error.message).trim()}`)
+  // 같은 범위에 아직 시작하지 않은 등록이 있으면 그것을 그대로 낸다 — 같은 호출을 다시 해도 결과가 같다.
+  // 2026-11-10 full 실행은 등록 1분 뒤 대화 압축이 일어났고, 오케스트레이터가 등록을 잊고 다시 불러 검색이 두 번
+  // 예정됐다(첫 ID는 계획도 검색도 없이 버려졌다). 기억이 아니라 기록으로 판단한다. 이미 시작했거나 끝난 시도 뒤의
+  // 등록은 새 시도다 — 실패한 검색을 다시 예정하는 길은 그대로 둔다.
+  const previous = events.filter(event => event?.phase === 'reuse.planned').at(-1)
+  const touched = previous && events.some(event => (event?.phase === 'reuse.start' || event?.phase === 'reuse.done') && event.searchId === previous.searchId)
+  const again = previous && !touched && previous.scopeSha256 === scope.sha256 && typeof previous.searchId === 'string' && typeof previous.plan === 'string'
+  const searchId = again ? previous.searchId : `s-${randomBytes(4).toString('hex')}`
+  const plan = again ? previous.plan : values.get('plan') ?? join(timing, `${run}.reuse-plan.json`)
+  if (again) {
+    const ignored = [values.has('plan') && values.get('plan') !== previous.plan ? `--plan ${values.get('plan')}` : null, waitSec !== null && waitSec !== previous.waitSec ? `--wait-sec ${waitSec}` : null].filter(Boolean)
+    process.stderr.write(`이미 등록한 검색이다(${searchId}, seq ${previous.seq}) — 새로 남기지 않고 그 등록을 그대로 낸다${ignored.length ? `. 처음 등록의 값을 쓴다(무시: ${ignored.join(', ')})` : ''}\n`)
+  } else {
+    try {
+      recordPhase(dir, run, 'reuse.planned', {
+        searchId, scopeSha256: scope.sha256, plan, runId: start.runId, head: start.head,
+        ...(start.baseHead ? { baseHead: start.baseHead } : {}), ...(waitSec !== null ? { waitSec } : {}),
+      })
+    } catch (error) {
+      die(`reuse.planned를 남기지 못했다 — ${String(error.stderr || error.message).trim()}`)
+    }
   }
   // 계획의 머리와 결정할 파일 목록을 함께 낸다 — 오케스트레이터가 preflight 출력에서 옮겨 적다 틀리면 계획 검사가
   // 검색 전체를 실패로 끝낸다. 파일 목록은 scope.json의 files 그대로다(다시 세지 않는다).
+  const host = hostCapabilities(start.host)
   const planHeader = { schemaVersion: REUSE_SCHEMA_VERSION, runId: start.runId, searchId, head: start.head, mergeBase: start.mergeBase, scopeSha256: scope.sha256 }
   process.stdout.write(`${JSON.stringify({
     searchId, plan, scopeSha256: scope.sha256, out: join(timing, `${run}.reuse-context.json`), planHeader, files: scope.value.files ?? [],
+    ...(again ? { alreadyRegistered: true } : {}),
+    // 띄운 작업이 다 끝나야 돌아오는 호스트(작업별 알림 없음)에서는 웨이브가 도는 동안 계획을 쓸 수 없다. 2026-11-10
+    // OpenCode 실행은 첫 웨이브 뒤에 계획을 써 05가 잡히고 두 번째 웨이브가 266초 늦었다. 등록하는 바로 이 자리에서 알린다.
+    ...(!host.perTaskNotification ? {
+      planBeforeDispatch: true,
+      advice: `이 호스트(${host.name})는 띄운 작업이 다 끝나야 돌아온다 — 첫 \`next\`를 부르기 전에 계획을 쓰고 \`check\`·\`search\`까지 띄운다(search는 review-tool --detach로 띄우고 기다리지 않는다). 첫 웨이브 뒤에 쓰면 그동안 05가 잡혀 슬롯이 논다`,
+    } : {}),
   }, null, 2)}\n`)
   process.exit(0)
 }

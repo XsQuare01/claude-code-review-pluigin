@@ -11,6 +11,9 @@
 
 export const MANIFEST_PLACEHOLDER = '{REVIEW_VERDICT_CONTRACT_V1_MANIFEST}'
 
+/** 19-intent 모듈의 규칙 ID(`19-1` 등). 이 리뷰어는 변경 의도 원문을 받고 리뷰한다 — 검증자도 같은 원문을 받는다. */
+const INTENT_RULE = /^19-\d+$/
+
 /**
  * 안쪽 글이 닫을 수 없는 코드 울타리.
  *
@@ -82,7 +85,20 @@ export function planVerifierTasks(prepared) {
     taskId: `bundle-${at + 1}`, kind: 'bundle', anchorPath: bundle.anchorPath, candidateIds: bundle.candidateIds,
   }))
   const promotions = []
+  // 같은 줄을 짚었다는 이유만으로 따로 보던 후보는 자리마다 작업 하나다(`sameLocationGroups`). 경로는 isolated
+  // 그대로라 `needs-context`는 승격 없이 범위 미확정이 된다. 작업은 그 자리의 첫 후보가 나오는 곳에 둔다.
+  const groups = prepared.sameLocationGroups ?? []
+  const groupOf = new Map(groups.flatMap((group, at) => group.candidateIds.map(id => [id, at])))
+  const emitted = new Set()
   for (const candidate of prepared.candidates ?? []) {
+    if (candidate.route === 'isolated' && groupOf.has(candidate.candidateId)) {
+      const at = groupOf.get(candidate.candidateId)
+      if (!emitted.has(at)) {
+        emitted.add(at)
+        tasks.push({ taskId: `isolated-same-${at + 1}`, kind: 'isolated', anchorPath: groups[at].anchorPath, candidateIds: groups[at].candidateIds, sameLocation: true })
+      }
+      continue
+    }
     const task = {
       taskId: isolatedTaskId(candidate.candidateId), anchorPath: candidate.location?.path, candidateIds: [candidate.candidateId],
     }
@@ -144,7 +160,9 @@ export function buildTaskPrompt({ instructions, task, candidatesById, clauses, m
     '',
     '## 이번 작업',
     '',
-    `- 작업: \`${task.taskId}\` · ${KIND_TEXT[task.kind]}`,
+    `- 작업: \`${task.taskId}\` · ${task.sameLocation
+      ? `isolated — 같은 줄을 짚은 다른 규칙의 후보 ${task.candidateIds.length}개를 함께 본다. 후보마다 판정한다 — 합치지 않는다. 규칙이 달라 하나는 맞고 하나는 틀릴 수 있다. 다만 같은 실행 경로·같은 사실을 주장하는 후보는 같은 근거로 판정한다 — 같은 주장에 서로 다른 결론을 내지 않는다. anchor 파일 밖을 봐야 하면 Read로 본다`
+      : KIND_TEXT[task.kind]}`,
     `- 판정할 \`candidateId\`: ${ids} — 이 집합과 정확히 같은 verdict를 돌려준다`,
     ...(task.anchorPath ? [`- anchor 파일: \`${task.anchorPath}\``] : []),
     `- 경로는 저장소 루트 기준이다. \`verified\` 위치는 ${verifiedBasis}, \`deleted\` 위치는 merge-base \`${mergeBase}\` 기준이다`,
@@ -189,9 +207,10 @@ export function buildTaskPrompt({ instructions, task, candidatesById, clauses, m
     }
   }
   const missing = clauseLines(lines, members.map(candidate => candidate.ruleId), clauses)
-  // 조항 없는 지적(CR)은 "변경의 의도와 구현이 어긋난다"는 주장이다. 검증자가 그 주장을 의도의 원문과
-  // 대조할 수 있게, producer가 받은 원문을 그대로 붙인다(PR #90 리뷰). 규칙 지적에는 붙이지 않는다.
-  if (members.some(candidate => typeof clauses.get(candidate.ruleId)?.basis === 'string')) {
+  // 조항 없는 지적(CR)과 19-intent 지적은 "변경의 의도와 구현이 어긋난다"는 주장이다. 검증자가 그 주장을 의도의
+  // 원문과 대조할 수 있게, producer가 받은 원문을 그대로 붙인다(PR #90 리뷰, 19-*는 PR #112 리뷰). 다른 규칙
+  // 지적에는 붙이지 않는다 — 그 판정은 의도가 아니라 규칙 조항과 코드로 한다.
+  if (members.some(candidate => typeof clauses.get(candidate.ruleId)?.basis === 'string' || INTENT_RULE.test(candidate.ruleId ?? ''))) {
     if (lines.at(-1) !== '') lines.push('')
     lines.push(intent?.block ?? '### 변경 의도\n\n변경 의도를 기록하지 않았다(`review-intent.mjs`를 돌리지 않았다) — 지적이 전제한 의도를 원문과 대조할 수 없다. "전제한 의도가 다르다"로 반박하지 말고, 코드 경로로만 판정한다.', '')
   }
@@ -326,13 +345,17 @@ export function instructionsWithManifest(template, manifestBlock) {
  * 오케스트레이터가 쓴 셈이다. 새 작업이 받아야 하는 것은 누군가의 요약이 아니라
  * 원래 지시와 자기 직전 응답 그대로다.
  */
-export function buildRetryPrompt(originalPrompt, problems, previousResponse) {
+export function buildRetryPrompt(originalPrompt, problems, previousResponse, { kind = 'verdict' } = {}) {
+  // 모듈 리뷰어(full의 producer)의 교정도 같은 모양이다 — 계약과 고칠 대상만 다르다
+  const lead = kind === 'result'
+    ? '이 작업의 직전 응답이 JSON으로 읽히지 않았거나 `REVIEW_RESULT_CONTRACT_V1`·언어 규칙을 어겼다. 아래 오류를 고친 raw JSON 객체 하나를 다시 돌려준다. 지적과 근거는 직전 응답의 것을 쓰되, 확인하지 않은 값을 지어내지 않는다 — 위치를 다시 확인해야 하면 저장소에서 읽는다.'
+    : '이 작업의 직전 응답이 `REVIEW_VERDICT_CONTRACT_V1` 또는 요청한 candidateId 집합을 어겼다. 아래 오류를 고친 raw JSON 객체 하나를 다시 돌려준다. 판정과 근거는 직전 응답의 것을 쓰되, 확인하지 않은 값을 지어내지 않는다 — 위치를 다시 확인해야 하면 저장소에서 읽는다.'
   return [
     String(originalPrompt).trimEnd(),
     '',
     '## 직전 응답의 형식 오류',
     '',
-    '이 작업의 직전 응답이 `REVIEW_VERDICT_CONTRACT_V1` 또는 요청한 candidateId 집합을 어겼다. 아래 오류를 고친 raw JSON 객체 하나를 다시 돌려준다. 판정과 근거는 직전 응답의 것을 쓰되, 확인하지 않은 값을 지어내지 않는다 — 위치를 다시 확인해야 하면 저장소에서 읽는다.',
+    lead,
     '',
     ...problems.map(problem => `- ${problem}`),
     '',

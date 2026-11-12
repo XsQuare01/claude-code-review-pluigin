@@ -585,7 +585,7 @@ const SLOTS = [
  * 이어붙이는 방식이면 다음 사람이 실수로 다시 합칠 수 있지만, 배열 + `\n`
  * join은 슬롯을 합칠 방법 자체가 없다.
  */
-export function renderFinding(candidate, { label, vocabulary, related = [], evidence = [], lineage = candidate.lineage, disposition, verifierLocation, rebuttal }) {
+export function renderFinding(candidate, { label, vocabulary, related = [], relatedNote = null, evidence = [], lineage = candidate.lineage, disposition, verifierLocation, rebuttal }) {
   const severity = severityOf(candidate.impact, candidate.confidence)
   // category는 계약상 impact가 high일 때만 존재한다(low는 category 자체를
   // 금지한다) — 그래도 candidate.category를 한 번 더 확인해 방어적으로 둔다.
@@ -615,7 +615,7 @@ export function renderFinding(candidate, { label, vocabulary, related = [], evid
     ...(lineageText ? [lineageText] : []),
     // 같은 자리(겹치는 줄)를 짚은 다른 규칙의 지적. 합치지 않고 잇기만 한다 — 근거가 다른 두
     // 지적이 같은 결함인지는 이 렌더러가 정하지 않는다. 값은 호출자가 이미 code span으로 만든다.
-    ...(related.length ? [`관련 지적: ${related.join(', ')}`] : []),
+    ...(related.length ? [`관련 지적: ${related.join(', ')}${relatedNote ? ` — ${relatedNote}` : ''}`] : []),
     locationLine(candidate),
     // `location-wrong` 반박이 짚은 자리. `undefined`면 그 반박이 아니라 줄이 없고, `null`이면
     // 그 반박인데 위치가 빠진 판정이다 — 그때는 없다는 사실을 적는다.
@@ -1216,9 +1216,18 @@ export function render(candidates, verdictByCandidateId, phaseByImpact, vocabula
   // 그려지지 않은 지적(범위 미확정으로 옮겨졌거나 삭제된 것)은 candidate ID와 그 사실로
   // 적는다 — 이름만 적으면 독자가 상세 지적에서 찾다 실패한다.
   const renderedName = new Map(numbered.map(candidate => [candidate.candidateId, candidate.renderedRuleId ?? candidate.ruleId]))
-  const relatedOf = candidate => (candidate.relatedCandidateIds ?? []).map(id => (renderedName.has(id)
-    ? codeSpan(renderedName.get(id))
-    : `${codeSpan(id)} (상세 지적에 없음)`))
+  // 각 관련 지적의 영향도 함께 적는다. 2026-11-10 full 실행은 같은 원인을 모듈 다섯이 냈는데 영향이 높음 둘·낮음 셋으로
+  // 갈렸고, 이름만 적힌 줄로는 그것이 보이지 않았다. 판정 정책은 그대로다 — 갈린 것을 읽는 사람에게 보일 뿐이다.
+  const impactOfId = new Map((candidates ?? []).map(candidate => [candidate.candidateId, candidate.impact]))
+  const relatedOf = candidate => (candidate.relatedCandidateIds ?? []).map(id => {
+    const impact = IMPACT_WORD[impactOfId.get(id)]
+    return renderedName.has(id)
+      ? `${codeSpan(renderedName.get(id))}${impact ? ` (영향 ${impact})` : ''}`
+      : `${codeSpan(id)} (상세 지적에 없음${impact ? ` · 영향 ${impact}` : ''})`
+  })
+  const relatedNoteOf = candidate => ((candidate.relatedCandidateIds ?? []).some(id => impactOfId.has(id) && impactOfId.get(id) !== candidate.impact)
+    ? `같은 자리 지적과 영향 판정이 갈렸다(이 지적: ${IMPACT_WORD[candidate.impact]}). 같은 결함인지는 읽고 판단한다`
+    : null)
   // 실제로 그린 지적 수. 아래 cardinality 검사가 "라벨을 받았다"가 아니라 "상세 지적이나
   // 특수 패스에 실제로 찍혔다"를 센다 — 라벨을 받고도 어느 절에도 실리지 않는 길이 생기면
   // 그것이 #45가 말하는 조용한 소멸이다.
@@ -1230,7 +1239,7 @@ export function render(candidates, verdictByCandidateId, phaseByImpact, vocabula
       ? dispositionOf(candidate, verdict, verificationState)
       : undefined
     return renderFinding(candidate, {
-      label: labelById.get(candidate.candidateId), vocabulary, related: relatedOf(candidate),
+      label: labelById.get(candidate.candidateId), vocabulary, related: relatedOf(candidate), relatedNote: relatedNoteOf(candidate),
       evidence: evidenceLines(options.evidence?.get(candidate.candidateId)),
       // 이전 리뷰와의 관계(C-13)는 같은 결함인지 물은 판정과 이 지적의 최종 판정을 함께 본다.
       lineage: candidate.lineage ? finalizeCurrent(candidate.lineage, options.rechecks?.get(candidate.lineage.previousRef)) : undefined,
@@ -1287,8 +1296,13 @@ export function render(candidates, verdictByCandidateId, phaseByImpact, vocabula
   if (digest) {
     const ids = moduleSections.map(section => section.id)
     lines.push(`모듈 ${ids[0]}~${ids.at(-1)}은 압축 규칙 \`${digest}\` 하나로 리뷰어 한 번에 봤다 — 모듈마다 따로 띄운 리뷰가 아니다. 지적이 있는 모듈만 싣는다.`, '')
-    // 그릴 모듈 섹션이 없으면 없다고 적는다. 섹션이 하나도 없는 상세 지적은 잘린 것처럼 보인다 — 2026-11-10 PR #255 리포트가 그랬다.
-    if (!numberedModules.length) lines.push(`규칙 모듈(${ids[0]}~${ids.at(-1)})에서 나온 지적 없음.`, '')
+    // 그릴 모듈 섹션이 없으면 그 이유를 적는다. 섹션이 하나도 없는 상세 지적은 잘린 것처럼 보인다 — 2026-11-10 PR #255 리포트가 그랬다.
+    // 0건인지 결과를 모으지 못한 것인지는 다른 섹션과 같은 판정(`emptyText` — 수집 기록 대조)으로 가린다. 리뷰어가 실패한 실행에
+    // "지적 없음"을 적으면, 같은 리뷰어의 결과가 여기서는 0건, 아래 `정확성`에서는 수집 실패로 읽힌다(PR #111 리뷰).
+    if (!numberedModules.length) {
+      const empty = emptyText(moduleSections[0])
+      lines.push(empty === NOT_COLLECTED ? `규칙 모듈(${ids[0]}~${ids.at(-1)}): ${NOT_COLLECTED}` : `규칙 모듈(${ids[0]}~${ids.at(-1)})에서 나온 지적 없음.`, '')
+    }
   }
 
   for (const key of moduleKeys) {

@@ -1922,8 +1922,29 @@ test('같은 자리의 다른 namespace 지적은 관련 지적 줄로 잇는다
   const rule = ok({ candidateId: '04-3#1', ruleId: '04-3', relatedCandidateIds: ['CR-1#1'] })
   const cr = crFinding({ relatedCandidateIds: ['04-3#1', '11-6#1'] })
   const { markdown } = render([rule, cr], new Map(), PHASES_BOTH, VOCAB, WITH_CORRECTNESS, false, { optIn: { correctness: 'on' } })
-  assert.match(markdown, /#### 🔴 `04-3` 제목\n[^\n]*\n관련 지적: `CR-1`\n/)
-  assert.match(markdown, /출처 패스: correctness\n관련 지적: `04-3`, `11-6#1` \(상세 지적에 없음\)\n/)
+  assert.match(markdown, /#### 🔴 `04-3` 제목\n[^\n]*\n관련 지적: `CR-1` \(영향 높음\)\n/)
+  assert.match(markdown, /출처 패스: correctness\n관련 지적: `04-3` \(영향 높음\), `11-6#1` \(상세 지적에 없음\)\n/)
+})
+
+// 2026-11-10 full 실행은 같은 원인(모델 변경 뒤 후보 캐시 미갱신)을 모듈 다섯이 냈는데 영향이 높음 둘·낮음 셋으로
+// 갈렸다. 관련 지적 줄은 이름만 적어, 같은 자리의 지적이 영향 판정에서 갈렸다는 것이 리포트에 보이지 않았다.
+// 판정 정책(반박돼도 높은 영향은 차단 후보)은 그대로 두고, 갈린 것을 읽는 사람에게 보인다.
+test('관련 지적 줄은 각 지적의 영향을 적고, 이 지적과 갈렸으면 그렇다고 적는다', () => {
+  const high = ok({ candidateId: '04-9#1', ruleId: '04-9', relatedCandidateIds: ['16-3#1', '18-6#1'] })
+  const low = ok({ candidateId: '16-3#1', ruleId: '16-3', impact: 'low', category: undefined, relatedCandidateIds: ['04-9#1', '18-6#1'] })
+  const other = ok({ candidateId: '18-6#1', ruleId: '18-6', relatedCandidateIds: ['04-9#1', '16-3#1'] })
+  const { markdown } = render([high, low, other], new Map(), PHASES_BOTH, VOCAB, WITH_CORRECTNESS, false)
+  assert.match(markdown, /관련 지적: `16-3` \(영향 낮음\), `18-6` \(영향 높음\) — 같은 자리 지적과 영향 판정이 갈렸다\(이 지적: 높음\)\. 같은 결함인지는 읽고 판단한다\n/)
+  assert.match(markdown, /관련 지적: `04-9` \(영향 높음\), `18-6` \(영향 높음\) — 같은 자리 지적과 영향 판정이 갈렸다\(이 지적: 낮음\)\. 같은 결함인지는 읽고 판단한다\n/)
+})
+
+test('상세 지적에 없는 관련 지적도 후보 목록에 있으면 영향을 함께 적는다', () => {
+  const rule = ok({ candidateId: '04-3#1', ruleId: '04-3', relatedCandidateIds: ['CR-1#1'] })
+  const hidden = crFinding({ impact: 'low', category: undefined, confidence: 'high', content: { title: '숨은 지적', body: '본문' }, relatedCandidateIds: ['04-3#1'] })
+  // CR-1#1은 범위 미확정(needs-context)으로 상세 지적에서 빠진다
+  const verified = { ...hidden, eligibility: 'VERIFY', route: 'isolated' }
+  const { markdown } = render([rule, verified], new Map([['CR-1#1', { candidateId: 'CR-1#1', disposition: 'needs-context', reason: '경로를 끝까지 못 봤다' }]]), PHASES_BOTH, VOCAB, WITH_CORRECTNESS, 'ran', { optIn: { correctness: 'on' } })
+  assert.match(markdown, /관련 지적: `CR-1#1` \(상세 지적에 없음 · 영향 낮음\) — 같은 자리 지적과 영향 판정이 갈렸다\(이 지적: 높음\)/)
 })
 
 // ------------------------------------------------- 재현 근거 (#88 PR 2)

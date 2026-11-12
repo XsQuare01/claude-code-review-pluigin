@@ -115,13 +115,68 @@ test('경과 시간을 첫 줄 기준으로 센다', t => {
   const dir = freshDir(t)
   const base = new Date('2026-09-01T00:00:00.000Z')
   plant(dir, [{ at: base.toISOString(), seq: 1, sinceStartSec: 0, phase: 'run.start' }])
-  log(dir, 'render.start')
+  log(dir, 'synthesis.start')
   const last = linesOf(dir).at(-1)
   // 지금과 2026-09-01 사이만큼 벌어져야 한다 — 0이면 첫 줄을 안 읽은 것이다.
   assert.ok(last.sinceStartSec > 1000, `sinceStartSec=${last.sinceStartSec}`)
 })
 
 // ── --summary ──────────────────────────────────────────────────────────────
+
+// 2026-11-10 full 리포트의 타임라인 표는 117행으로 리포트에서 가장 길었다. 그중 99행이 모듈·검증의 시작·끝과 작업 연결
+// 줄이었다. 이어진 디스패치 줄은 한 행으로 접고, 줄마다의 값은 사이드카에 맡긴다. 긴 구간은 접힌 행 안에 묻지 않는다.
+test('이어진 디스패치 줄은 한 행으로 접는다 — 긴 구간에서 끊고, 최장 표시는 접힌 행에 남는다', t => {
+  const dir = freshDir(t)
+  const base = Date.parse('2026-11-10T00:00:00.000Z')
+  const at = sec => new Date(base + sec * 1000).toISOString()
+  const modules = ['01-fsd', '02-type', '03-react-rules', '04-state']
+  const events = [
+    { at: at(0), phase: 'run.start' },
+    { at: at(10), phase: 'dispatch.start', modules: 4, inflight: 4 },
+    ...modules.map(module => ({ at: at(10), phase: 'module.start', module, attempt: 1 })),
+    ...modules.flatMap((module, index) => [
+      { at: at(310 + index), phase: 'task.bind', stage: 'module', task: module, attempt: 1, taskId: `ses-${index}` },
+      { at: at(310 + index), phase: 'module.done', module, attempt: 1, status: 'ok', findings: index },
+    ]),
+    { at: at(320), phase: 'render.start', findings: 6 },
+  ].map((event, index) => ({ ...event, seq: index + 1 }))
+  plant(dir, events)
+  const out = summary(dir).stdout
+  assert.match(out, /\| `module\.start` ×4 \| 10s \| 0s \| 01-fsd#1 · 02-type#1 · 03-react-rules#1 · 04-state#1 \|/)
+  assert.match(out, /\| `task\.bind` ×4 · `module\.done` ×4 \*\*←최장\*\* \| 310–313s \| 300s \| 01-fsd#1 ok 0건 · 02-type#1 ok 1건 · 03-react-rules#1 ok 2건 · 04-state#1 ok 3건 \|/)
+  assert.doesNotMatch(out, /\| `module\.done` \| /)
+  assert.match(out, /> 디스패치 줄 12개를 2행으로 접었다 — 줄마다의 값\(작업 ID·해시\)은 사이드카에 있다/)
+  // 접어도 최장 구간의 설명은 그대로다
+  assert.match(out, /`←최장`은 `module\.start`와 `task\.bind` \*\*사이\*\*의 300s다 — 그동안 모듈 4개가 돌고 있었다/)
+})
+
+test('웨이브의 끝과 다음 웨이브의 시작이 한 묶음이면 끝난 시도와 새 시도를 →로 가른다', t => {
+  const dir = freshDir(t)
+  const at = sec => new Date(Date.parse('2026-11-10T00:00:00.000Z') + sec * 1000).toISOString()
+  plant(dir, [
+    { at: at(0), phase: 'run.start' },
+    { at: at(1), phase: 'module.start', module: '01-fsd', attempt: 1 },
+    { at: at(200), phase: 'task.bind', stage: 'module', task: '01-fsd', attempt: 1, taskId: 's1' },
+    { at: at(200), phase: 'module.done', module: '01-fsd', attempt: 1, status: 'failed', failureClass: 'inactivity-timeout' },
+    { at: at(201), phase: 'module.start', module: '01-fsd', attempt: 2 },
+    { at: at(201), phase: 'module.start', module: '02-type', attempt: 1 },
+  ].map((event, index) => ({ ...event, seq: index + 1 })))
+  assert.match(summary(dir).stdout, /\| `task\.bind` ×1 · `module\.done` ×1 · `module\.start` ×2 \*\*←최장\*\* \| 200–201s \| 199s \| 01-fsd#1 failed inactivity-timeout → 01-fsd#2 · 02-type#1 \|/)
+})
+
+test('디스패치 줄이 둘 이하로 이어지면 접지 않는다', t => {
+  const dir = freshDir(t)
+  plant(dir, [
+    { at: '2026-11-10T00:00:00.000Z', seq: 1, phase: 'run.start' },
+    { at: '2026-11-10T00:00:01.000Z', seq: 2, phase: 'module.start', module: 'fast', attempt: 1 },
+    { at: '2026-11-10T00:03:47.000Z', seq: 3, phase: 'task.bind', stage: 'module', task: 'fast', attempt: 1, taskId: 's' },
+    { at: '2026-11-10T00:03:47.000Z', seq: 4, phase: 'module.done', module: 'fast', attempt: 1, status: 'ok', findings: 1 },
+  ])
+  const out = summary(dir).stdout
+  assert.match(out, /\| `module\.start` \| 1s \| 1s \|/)
+  assert.match(out, /\| `module\.done` \| 227s \| 0s \|/)
+  assert.doesNotMatch(out, /접었다/)
+})
 
 test('요약 표를 스크립트가 만든다', t => {
   const dir = freshDir(t)
@@ -291,10 +346,10 @@ test('셋을 함께 주면 --set이 마지막으로 이긴다', t => {
 
 test('--set으로도 측정값은 덮어쓸 수 없다', t => {
   const dir = freshDir(t)
-  spawnSync(process.execPath, [SCRIPT, '--dir', dir, '--run', RUN, '--phase', 'render.start', '--set', 'phase=거짓', '--set', 'seq=99'],
+  spawnSync(process.execPath, [SCRIPT, '--dir', dir, '--run', RUN, '--phase', 'synthesis.start', '--set', 'phase=거짓', '--set', 'seq=99'],
     { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
   const last = linesOf(dir).at(-1)
-  assert.equal(last.phase, 'render.start')
+  assert.equal(last.phase, 'synthesis.start')
   assert.equal(last.seq, 1)
 })
 
@@ -430,6 +485,16 @@ test('타입이 일관되면 짚지 않는다', t => {
   log(dir, 'module.start', { module: '11-styling' })
   log(dir, 'run.end', { verdict: 'WARN' })
 
+  assert.doesNotMatch(summary(dir).stdout, /타입이 섞인/)
+})
+
+// 2026-11-10 full 실행의 요약은 `targets`(object/number)를 섞였다고 짚었다. `reuse.done`의 targets는 상태별 대상 수
+// (중첩 값)이고 `crossverify.start`의 targets는 검증 대상 수다 — 계약이 단계마다 다르게 정한 다른 필드다.
+test('한 단계가 중첩 값으로 정한 필드는 다른 단계의 같은 이름 필드와 견주지 않는다', t => {
+  const dir = freshDir(t)
+  log(dir, 'reuse.done', { searchId: 's1', status: 'complete', targets: { complete: 12 } })
+  log(dir, 'crossverify.start', { targets: 13 })
+  log(dir, 'run.end', { verdict: 'WARN' })
   assert.doesNotMatch(summary(dir).stdout, /타입이 섞인/)
 })
 
@@ -641,6 +706,45 @@ test('run.end에 verdict가 없으면 남기지 않는다 — 그 뒤에는 고�
   const ended = log(dir, 'run.end', { verdict: 'MERGE_BLOCKED' })
   assert.equal(ended.status, 0, ended.stderr)
   assert.equal(linesOf(dir).at(-1).verdict, 'MERGE_BLOCKED')
+})
+
+const plantRouted = (dir, total) => {
+  mkdirSync(join(dir, '.timing'), { recursive: true })
+  writeFileSync(join(dir, '.timing', `${RUN}.routed.json`), JSON.stringify({ candidates: [], counts: { total } }), 'utf8')
+}
+
+test('render.start의 지적 수는 routed 출력에서 센다 — 넘기지 않아도 빠지지 않는다', t => {
+  // 2026-11-10 full 실행은 render.start를 findings 없이 남겼고(full SKILL이 무엇을 넘길지 말하지 않았다),
+  // 경고만 받고 지나가 `--check`가 FAIL이 됐다. 렌더 뒤에는 그 줄을 다시 남길 수 없다.
+  const dir = freshDir(t)
+  log(dir, 'run.start')
+  plantRouted(dir, 24)
+  const out = log(dir, 'render.start')
+  assert.equal(out.status, 0, out.stderr)
+  assert.equal(linesOf(dir).at(-1).findings, 24)
+  assert.doesNotMatch(out.stderr, /findings가 없다/)
+})
+
+test('render.start에 넘긴 지적 수가 routed 출력과 다르면 routed 출력의 수를 남기고 알린다', t => {
+  const dir = freshDir(t)
+  log(dir, 'run.start')
+  plantRouted(dir, 24)
+  const out = log(dir, 'render.start', { findings: 21 })
+  assert.equal(out.status, 0, out.stderr)
+  assert.equal(linesOf(dir).at(-1).findings, 24)
+  assert.match(out.stderr, /findings 21 → routed 출력의 counts\.total 24/)
+})
+
+test('render.start에 지적 수가 없고 routed 출력도 없으면 남기지 않는다', t => {
+  const dir = freshDir(t)
+  log(dir, 'run.start')
+  const refused = log(dir, 'render.start')
+  assert.equal(refused.status, 2)
+  assert.match(refused.stderr, /render\.start.*findings가 없다 — 남기지 않았다/)
+  assert.deepEqual(linesOf(dir).map(line => line.phase), ['run.start'])
+  const given = log(dir, 'render.start', { findings: 3 })
+  assert.equal(given.status, 0, given.stderr)
+  assert.equal(linesOf(dir).at(-1).findings, 3)
 })
 
 test('modules.planned의 applied가 후보 수보다 크면 남기지 않는다 — 번호 모듈만 센다', t => {
@@ -2361,6 +2465,60 @@ test('--check는 검색을 예정했는데 계획·시작·끝이 빠진 실행�
     assert.equal(out.status, 1)
     assert.match(out.stdout, pattern)
   }
+})
+
+// ── 도구 실행(C-6) ─────────────────────────────────────────────────────────
+// 2026-11-10 full 실행 둘 중 하나는 lint·typecheck·test를 돌리지 않았고 사유도 남기지 않았다. SKILL에 "모듈이 도는
+// 동안 함께 돌린다"와 "실행했으면 따로 보고한다"가 함께 있어 돌릴지가 모호했다. 이제 기본은 돌리고, 건너뛴 도구는
+// 닫힌 목록의 이유로 `tool.skipped`에 남긴다. 시작이 그렇게 정한 실행(`toolRun: required`)만 검사한다.
+const toolStart = extra => reuseStart({ reuseSearch: undefined, toolRun: 'required', workflow: 'full', ...extra })
+
+test('tool.skipped는 표에 있고, reasonCode는 닫힌 목록이다', t => {
+  const dir = freshDir(t)
+  assert.equal(log(dir, 'run.start', { host: 'test', rules: 'r', version: 'v', branch: 'b', changedFiles: 1, toolRun: 'required' }).stderr, '')
+  assert.equal(log(dir, 'tool.skipped', { name: 'test', reasonCode: 'no-script', reason: 'apps/web/package.json에 test 스크립트가 없다' }).stderr, '')
+  const odd = log(dir, 'tool.skipped', { name: 'lint', reasonCode: 'slow' })
+  assert.equal(odd.status, 0)
+  assert.match(odd.stderr, /reasonCode "slow"는 C-9의 닫힌 목록에 없다/)
+})
+
+test('--check는 도구를 돌리지도 건너뛴 이유를 남기지도 않은 full 실행을 짚는다', t => {
+  const bare = freshDir(t)
+  plant(bare, numbered([toolStart(), reuseLine(50, 'render.start', { findings: 0 })]))
+  const out = check(bare)
+  assert.equal(out.status, 1)
+  assert.match(out.stdout, /도구 lint·typecheck·test를 돌리지도, 건너뛴 이유\(`tool\.skipped`\)를 남기지도 않았다/)
+
+  const ran = (name, callId, at) => [reuseLine(at, 'tool.start', { name, callId }), reuseLine(at + 1, 'tool.done', { name, exit: 0, treeSha: 'x', callId })]
+  const all = freshDir(t)
+  plant(all, numbered([toolStart(), ...ran('lint', 'c1', 5), ...ran('typecheck', 'c2', 7), reuseLine(9, 'tool.skipped', { name: 'test', reasonCode: 'no-script' }), reuseLine(50, 'render.start', { findings: 0 })]))
+  assert.doesNotMatch(check(all).stdout, /돌리지도, 건너뛴 이유/)
+
+  // PR #112 리뷰: 도구 하나의 기록만 있어도 통과했다. 검사는 도구마다 한다 — 빠진 도구만 이름을 댄다
+  const oneSkip = freshDir(t)
+  plant(oneSkip, numbered([toolStart(), reuseLine(5, 'tool.skipped', { name: 'test', reasonCode: 'no-script' }), reuseLine(50, 'render.start', { findings: 0 })]))
+  const partial = checkWith(oneSkip, '--before-end')
+  assert.equal(partial.status, 1)
+  assert.match(partial.stdout, /도구 lint·typecheck를 돌리지도, 건너뛴 이유/)
+
+  const oneRan = freshDir(t)
+  plant(oneRan, numbered([toolStart(), ...ran('lint', 'c1', 5), reuseLine(50, 'render.start', { findings: 0 })]))
+  assert.match(check(oneRan).stdout, /도구 typecheck·test를 돌리지도, 건너뛴 이유/)
+
+  // 다시 돌린 것(`test-rerun`)은 그 도구를 돌린 것이 아니다 — 먼저 돈 `test`가 있어야 한다
+  const rerunOnly = freshDir(t)
+  plant(rerunOnly, numbered([toolStart(), ...ran('lint', 'c1', 5), ...ran('typecheck', 'c2', 7), ...ran('test-rerun', 'c3', 9), reuseLine(50, 'render.start', { findings: 0 })]))
+  assert.match(check(rerunOnly).stdout, /도구 test를 돌리지도, 건너뛴 이유/)
+
+  // 기존 구현 검색과 재현 명령(C-11)은 같은 스크립트로 돌지만 도구 게이트가 아니다
+  const notGate = freshDir(t)
+  plant(notGate, numbered([toolStart(), reuseLine(5, 'tool.start', { name: 'reuse-search', callId: 'c2' }), reuseLine(6, 'tool.start', { name: 'repro', callId: 'c3', candidateId: '04-1#1' }), reuseLine(50, 'render.start', { findings: 0 })]))
+  assert.match(check(notGate).stdout, /돌리지도, 건너뛴 이유/)
+
+  // 이 필드가 없는 예전 기록은 묻지 않는다
+  const legacy = freshDir(t)
+  plant(legacy, numbered([toolStart({ toolRun: undefined }), reuseLine(50, 'render.start', { findings: 0 })]))
+  assert.doesNotMatch(check(legacy).stdout, /돌리지도, 건너뛴 이유/)
 })
 
 test('--check는 끝을 남기지 못한 검색을 위반이 아니라 미완료로 알린다 — 감싼 review-tool은 끝났다', t => {

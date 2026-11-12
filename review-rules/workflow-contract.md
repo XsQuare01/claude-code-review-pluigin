@@ -141,6 +141,7 @@ node "$RULES_DIR/../scripts/review-base.mjs" --repo .   # 사용자가 base를 �
 `00-rule.md` 00-9 실행 안전 계약을 따른다. 요약하면:
 
 - 리뷰는 기본 read-only. lint/typecheck/test는 수정 옵션 없이 실행
+- **`full`은 lint/typecheck/test를 기본으로 돌린다.** 돌리지 않는 도구는 이유를 닫힌 목록(`user-request`·`no-script`·`deps-missing`·`no-package-root`)에서 골라 `tool.skipped`로 남긴다(C-9). preflight가 `run.start`에 `toolRun: required`를 남기고, `--check`는 렌더에 닿은 실행에서 **도구마다**(`lint`·`typecheck`·`test`, `review-tool.mjs --name` 그대로) 돌린 기록이나 건너뛴 이유가 있는지 보고, 빠진 도구의 이름을 댄다 — 하나의 기록으로 셋을 통과시키면 test만 건너뛴 이유를 남긴 실행도 통과했다(PR #112 리뷰). 다시 돌린 것(`test-rerun` 등)은 그 도구로 세지 않는다. 2026-11-10의 full 실행 둘 중 하나는 도구를 돌리지 않았고 이유도 없었다. `fast`는 돌리지 않는 것이 기본이다
 - **read-only는 프롬프트가 아니라 도구로 강제한다.** 지적을 만드는 sub-agent(producer)는
   파일을 쓸 수 있는 도구 없이 띄운다. 편집 도구뿐 아니라 셸도 제외한다 — 셸이 있으면
   리다이렉션이나 `sed -i`로 쓸 수 있어 편집 도구만 빼는 것은 절반짜리다.
@@ -290,7 +291,7 @@ baseline이 없을 때 `미측정`으로 적는 것으로 끝내지 않는다. p
 
 ### validation
 
-- 오케스트레이터는 producer 응답을 받은 즉시 envelope와 필수 필드를 검증한다
+- 오케스트레이터는 producer 응답을 받은 즉시 envelope와 필수 필드를 검증한다. `/code-review-full`은 작업 대장이 이 검사를 한다(`review-tasks.mjs done`, `scripts/lib/contract-validate.mjs`의 `validateResultPayload` — `validate-rules.mjs`가 계약 fixture에 쓰는 것과 같은 함수) — 어긴 점과 직전 응답을 붙인 교정 프롬프트도 대장이 만든다. 그래서 그 실행에서는 malformed-output을 손으로 기록하지 않는다(PR #112 리뷰: 손으로 남긴 실패에는 교정 파일이 없어 최초 프롬프트가 다시 나갔다)
 - JSON 파싱 실패, 필수 필드 누락, 금지 필드(`severity`) 포함, 허용되지 않은 location/impact/category 값은 **malformed-output**이다
 - 사용자가 다른 언어를 정하지 않은 실행(`run.start.language`가 없거나 `ko`)에서 제목·본문에 한글이 하나도 없는 지적·열린 질문도 **malformed-output**이다. `/code-review-full`의 작업 대장이 결과를 받을 때 검사한다(`scripts/lib/result-language.mjs`) — 언어 지시는 규칙 문서·에이전트·스킬에 있었지만 문장일 뿐이라, 프롬프트에서 빠진 날 영어 지적이 그대로 실렸다
 - malformed-output이든 legacy/prose 출력이든 **교정 재시도는 한 번만** 한다. 재시도 prompt는 잘못된 점만 짧게 지적하고 같은 계약으로 다시 요구한다
@@ -392,7 +393,7 @@ verifier가 반환하는 값과 오케스트레이터가 부여하는 값을 구
 정확성 패스의 지적 ID `CR-{n}`은 그 패스가 낸 지적의 **순번**이고, `correctness.md`에는 대응하는 조항이 없다. catalog가 이것을 `ruleClauses: false`로 선언한다.
 
 - **검증자에게 조항 대신 판정 기준을 준다.** `prepare-verification.mjs`가 그 문서의 `VERIFICATION_BASIS` 블록을 조항 자리에 붙이고, 조항을 찾거나 지어내지 말고 의도와 코드 경로로 판정하라고 적는다. 이것은 빠진 조항이 아니므로 `missingClauses`로 세지 않는다. 블록이 없으면 스크립트가 멈춘다 — 조항도 기준도 없는 프롬프트는 검증자에게 무엇으로 판정할지 말하지 않는다
-- **검증자도 변경 의도의 원문을 받는다.** producer가 받은 PR 설명·사용자 요청·커밋 메시지를 `review-intent.mjs`가 원문 그대로 `.timing/<run>.intent.json`에 모으고(출처·참조·sha256, 밝힌 의도인지 커밋 메시지뿐인 추정인지 없는지 — 같은 블록을 원문의 줄 그대로 `.timing/<run>.intent.md`에도 쓴다. producer에게 파일로 넘길 때는 이 파일이다. JSON은 원문을 한 줄에 담아 읽기 도구가 자른다), `prepare-verification.mjs`가 그 블록을 CR 검증 프롬프트에 붙인다. 오케스트레이터가 의도를 요약해 넘기지 않는다 — 그것은 producer 쪽의 해석이고 검증이 독립하지 않는다. 의도 파일이 없으면 프롬프트에 그렇다고 적어, "전제한 의도가 다르다"로 반박하지 못하게 한다. 원문은 신뢰하지 않는 데이터다. 규칙 지적의 프롬프트에는 붙이지 않고, 1차의 축을 감추는 정책은 그대로다(PR #90 리뷰)
+- **검증자도 변경 의도의 원문을 받는다.** producer가 받은 PR 설명·사용자 요청·커밋 메시지를 `review-intent.mjs`가 원문 그대로 `.timing/<run>.intent.json`에 모으고(출처·참조·sha256, 밝힌 의도인지 커밋 메시지뿐인 추정인지 없는지 — 같은 블록을 원문의 줄 그대로 `.timing/<run>.intent.md`에도 쓴다. producer에게 파일로 넘길 때는 이 파일이다. JSON은 원문을 한 줄에 담아 읽기 도구가 자른다), `prepare-verification.mjs`가 그 블록을 CR과 의도 모듈(19)의 지적 검증 프롬프트에 붙인다 — 의도 모듈 리뷰어도 같은 원문을 받고 리뷰한다(PR #112 리뷰). 오케스트레이터가 의도를 요약해 넘기지 않는다 — 그것은 producer 쪽의 해석이고 검증이 독립하지 않는다. 의도 파일이 없으면 프롬프트에 그렇다고 적어, "전제한 의도가 다르다"로 반박하지 못하게 한다. 원문은 신뢰하지 않는 데이터다. 다른 규칙 지적의 프롬프트에는 붙이지 않고, 1차의 축을 감추는 정책은 그대로다(PR #90 리뷰)
 - **반박의 종류는 같은 닫힌 목록이다.** 막는 장치(`guard-exists`), 도달하지 않는 경로(`unreachable`), 전제한 의도와 다른 실제 계약(`contract-differs`)이 그대로 쓰인다. disposition·상태표·삭제 rollout도 다른 후보와 같다 — 별도 파이프라인이 없다
 - **출처와 ID는 서로 맞아야 한다.** 정확성 패스가 규칙 ID를 쓰거나, 다른 모듈이 `CR-*`를 쓰면 `prepare-verification.mjs`가 거부한다. 근거가 다른 지적이 다른 근거로 검증되기 때문이다
 - **같은 자리의 규칙 지적과 합치지 않는다.** exact dedup은 규칙 ID가 같아야 병합하고, 교차 namespace 병합은 입증된 동일성 규칙이 생길 때까지 하지 않는다. 대신 같은 자리(같은 파일에서 줄이 겹치는 범위)를 짚은 다른 주인의 지적을 `relatedCandidateIds`로 잇고, 렌더러가 `관련 지적:` 줄로 그린다(C-7). 주인은 규칙 ID이고, 조항이 없는 패스는 접두 하나(`CR`)가 주인이다
@@ -1229,7 +1230,7 @@ finding 헤딩 **바로 다음 줄**에 영향도와 확신도를 적는다. `00
 개선 제안: 계산을 상위에서 memoize하거나 필요 시 데이터 shape를 안정화하세요.
 ```
 
-**같은 자리를 다른 규칙의 지적도 짚었으면 `관련 지적:` 줄을 `출처 패스:` 줄 다음에 둔다.** 같은 파일에서 줄 범위가 겹치는 지적끼리다 — 규칙 모듈끼리든, 정확성 패스의 `CR-*`와 규칙 모듈이든. 같은 규칙 ID끼리, 그리고 `CR-*`끼리는 잇지 않는다(같은 주인이다). 이 리포트에 그려진 지적은 순번까지 붙은 규칙 ID로, 그려지지 않은 지적은 candidate ID와 `(상세 지적에 없음)`으로 적는다. 두 지적을 합치지 않는다(C-6B `조항이 없는 지적`) — 같은 줄의 다른 결함도 있다. 2026-10-13 실행은 차집합 재계산 하나를 네 모듈이, 주석 하나를 세 모듈이 따로 냈는데 서로를 가리키는 줄이 없어 읽는 쪽이 지적 수를 그대로 셌다. 잇는 줄은 그것이 같은 결함인지를 읽는 사람이 판단할 재료다.
+**같은 자리를 다른 규칙의 지적도 짚었으면 `관련 지적:` 줄을 `출처 패스:` 줄 다음에 둔다.** 같은 파일에서 줄 범위가 겹치는 지적끼리다 — 규칙 모듈끼리든, 정확성 패스의 `CR-*`와 규칙 모듈이든. 같은 규칙 ID끼리, 그리고 `CR-*`끼리는 잇지 않는다(같은 주인이다). 이 리포트에 그려진 지적은 순번까지 붙은 규칙 ID로, 그려지지 않은 지적은 candidate ID와 `(상세 지적에 없음)`으로 적는다. 각 지적의 영향을 함께 적고(`(영향 높음)`), 이 지적과 영향이 다른 것이 있으면 줄 끝에 `같은 자리 지적과 영향 판정이 갈렸다(이 지적: …)`를 붙인다 — 판정 정책은 바꾸지 않는다. 2026-11-10 실행은 같은 원인을 모듈 다섯이 냈는데 영향이 높음 둘·낮음 셋으로 갈렸고, 이름만 적힌 줄로는 그것이 보이지 않았다. 두 지적을 합치지 않는다(C-6B `조항이 없는 지적`) — 같은 줄의 다른 결함도 있다. 2026-10-13 실행은 차집합 재계산 하나를 네 모듈이, 주석 하나를 세 모듈이 따로 냈는데 서로를 가리키는 줄이 없어 읽는 쪽이 지적 수를 그대로 셌다. 잇는 줄은 그것이 같은 결함인지를 읽는 사람이 판단할 재료다.
 
 **`location-wrong`으로 반박된 지적은 위치 줄 바로 다음에 `검증자가 짚은 위치(대조하지 않음): …` 줄을 둔다(C-6B).** producer의 위치 줄은 그대로 두고, 검증자가 본 결함의 자리를 같은 모양(`` `path:line` — `인용` ``)으로 덧붙인다. 판정에 위치가 없으면 `검증자가 짚은 위치: 판정에 위치가 없다`를 적는다. 렌더러가 그린다 — 직접 쓰지 않는다.
 
@@ -1480,7 +1481,7 @@ UTF-16 파일도 읽는다 — PowerShell 5.1의 `Set-Content -Encoding UTF8`은
 
 | `--phase` | 시점 | `--set`/`--data`에 담는 것 |
 |---|---|---|
-| `run.start` | 가장 먼저 | `host`, `rules`(해석된 RULES_DIR), `version`, `branch`, `changedFiles` · 무엇을 리뷰하는지(C-10): `runId`, `base`, `head`, `worktree`, `dirtyFiles`, `repo`, `repoRoot`, `rulesDigest` · 선택 패스를 켰는지: `correctness`(`on`/`off`, 선택 패스가 있는 워크플로우만) · 한도(C-12): `maxTasks`, `maxDurationSec`(준 것만), `staleAfterSec` · (새 실행으로 이어 받았으면) `continues` · (이전 리뷰와 비교하면, C-13) `previousSnapshot`, `previousRunId`, `previousSha256` · base 앞섬(C-6): `baseAhead`(merge-base 뒤 base의 커밋 수), (같은 파일을 바꿨으면) `baseOverlapCount`, `baseOverlap`(20개까지) · (의존성 매니페스트를 바꿨으면) `dependencyFiles` · `baseHead`(base 끝 SHA — 시작할 때 한 번 해석한다. 없으면 "base 끝 SHA 미기록") · (full이면, C-6C) `reuseSearch`(`planned`) · (사용자가 다른 언어를 정했으면) `language` — preflight가 쓴다 |
+| `run.start` | 가장 먼저 | `host`, `rules`(해석된 RULES_DIR), `version`, `branch`, `changedFiles` · 무엇을 리뷰하는지(C-10): `runId`, `base`, `head`, `worktree`, `dirtyFiles`, `repo`, `repoRoot`, `rulesDigest` · 선택 패스를 켰는지: `correctness`(`on`/`off`, 선택 패스가 있는 워크플로우만) · 한도(C-12): `maxTasks`, `maxDurationSec`(준 것만), `staleAfterSec` · (새 실행으로 이어 받았으면) `continues` · (이전 리뷰와 비교하면, C-13) `previousSnapshot`, `previousRunId`, `previousSha256` · base 앞섬(C-6): `baseAhead`(merge-base 뒤 base의 커밋 수), (같은 파일을 바꿨으면) `baseOverlapCount`, `baseOverlap`(20개까지) · (의존성 매니페스트를 바꿨으면) `dependencyFiles` · `baseHead`(base 끝 SHA — 시작할 때 한 번 해석한다. 없으면 "base 끝 SHA 미기록") · (full이면, C-6C) `reuseSearch`(`planned`) · (full이면, C-6) `toolRun`(`required`) · (사용자가 다른 언어를 정했으면) `language` — preflight가 쓴다 |
 | `run.resume` | 멈춘 실행을 이어 갈 때 (`review-tasks.mjs resume`이 쓴다) | 새 구간의 `maxTasks`·`maxDurationSec`·`staleAfterSec`, 다시 잰 `head`·`worktree` |
 | `scope.done` | 범위 확정(C-4) — `/code-review-full`은 **preflight가 남긴다**(C-5의 이름 규칙으로 센 수) | `files`, `excluded` · React 규칙이 다루지 않는 언어(C-5): `outside`(0이어도 남긴다 — 없으면 가르지 않은 예전 실행), (다른 언어 앱이 있으면) `otherApps`(`{ root, manifest, files }`) |
 | `modules.planned` | 적용 모듈 확정(C-3) | `candidates`, `applied`(적용한 **번호 모듈** 수 — Props·수학·예외·정확성 패스는 세지 않는다. `fast`는 리뷰어 하나(`fast`)라 둘 다 1이다. 후보 수를 넘으면 스크립트가 거부한다. 스냅숏의 `적용 N개`는 패스 전부를 센 수라 다르다) · `skipped`, `unknown`(중첩, `--data-file`) |
@@ -1497,10 +1498,11 @@ UTF-16 파일도 읽는다 — PowerShell 5.1의 `Set-Content -Encoding UTF8`은
 | `reuse.start` | 검색 스크립트 시작 직후, 계획 검사 전 — `review-reuse.mjs search`가 **직접** 남긴다 | `searchId`, `plan` · (읽을 수 있으면) `planSha256` |
 | `reuse.done` | 검색을 마쳤거나 처리할 수 있는 오류로 멈춘 직후 — 검색 스크립트가 **직접** 남긴다. 오케스트레이터가 지어 남기지 않는다 | `searchId`, `status`(`complete`/`partial`/`failed`/`not-applicable`), `targets`(중첩 — 상태별 대상 수) · `reason` · `out`, `outSha256`, `planSha256`, `durationSec` |
 | `tool.start` | **도구 하나를 돌리기 직전** — `review-tool.mjs`가 남긴다 | `name`, `callId`(`review-tool.mjs`, 로그 이름) · (`--detach`로 띄웠으면) `detached` · (재시도면) `attempt` · 재현 명령이면 `candidateId`·`evidenceId`(C-11, `review-evidence.mjs`가 쓴다) |
+| `tool.skipped` | 도구를 돌리지 않기로 정했을 때 — 오케스트레이터가 남긴다(C-6) | `name`, `reasonCode`(`user-request`/`no-script`/`deps-missing`/`no-package-root`) · `reason`(확인한 내용) |
 | `tool.done` | lint/typecheck/test를 돌린 직후 — `review-tool.mjs`가 남긴다 | `name`, `exit`(시간 상한으로 끊었으면 `null`), `treeSha`, `callId` · (실패했으면, C-6) `failureFiles`(중첩 — `inChange`·`outsideChange`·`untracked`, 변경 목록이 없으면 `tracked`·`untracked`) · `failedNow`, `failedBaseline`(재지 못했으면 `null`) · `failing`(중첩, `--data-file`) · (재시도면) `attempt` · 재현 명령이면 `candidateId`·`evidenceId` |
 | `crossverify.start` / `.end` | 교차검증 패스 — 시작은 `prepare-verification.mjs`가 검증 작업을 만든 직후, 끝은 `tally-verdicts.mjs`가 **직접 남긴다** | `targets`, `round`(이 교차검증 라운드의 이름 — C-12) / `upheld`, `rejected`, `needsContext`, `noVerdict`, `countsFrom`, (있으면) `malformedTasksCorrected`·`tokensIn`·`tokensOut` |
 | `synthesis.start` / `.end` | synthesis 패스 | `findings` / `clusters`, (있으면) `tokensIn`·`tokensOut` |
-| `render.start` | **문서를 쓰기 직전** | `findings`(중복 제거 후) |
+| `render.start` | **문서를 쓰기 직전** | `findings`(중복 제거 후 — routed 출력의 `counts.total`. 그 파일이 있으면 스크립트가 세고, 넘긴 값이 다르면 알린다. 셀 재료도 넘긴 값도 없으면 거부한다 — 렌더 뒤에는 이 줄을 다시 남길 수 없다) |
 | `render.wrote` | 파일을 쓴 직후 | `path`, `lines`(`assemble-report.mjs`가 낸 값), (있으면) `tokensIn`·`tokensOut` |
 | `run.end` | 마지막 | `verdict`(없으면 스크립트가 거부한다 — 그 뒤에 고칠 줄을 덧붙일 수 없다), `usageSource`, (있으면) `tokensIn`·`tokensOut`·`tokensCacheRead`·`costUsd` |
 
@@ -1755,6 +1757,11 @@ node "$RULES_DIR/../scripts/review-timeline.mjs" --dir <같은 값> --run <같�
 
 출력한 Markdown 표를 리포트의 `실행 타임라인` 섹션에 그대로 붙인다. 그 섹션은
 C-7 골격 표에 있다 — 붙일 자리가 없다고 만들지 않거나 다른 섹션에 섞지 않는다.
+
+**이어진 디스패치 줄은 한 행으로 접힌다.** 모듈·검증의 시작·끝과 작업 연결(`module.*`·`verify.*`·`task.bind`)이
+셋 이상 이어지면 표가 한 행으로 접고(`` `module.start` ×4 ``, 상세 칸에 시도와 결과), 표 밑에 접은 줄 수를 적는다. 앞 줄과
+5초 넘게 벌어진 줄과 최장 구간의 줄에서는 끊는다 — 긴 구간이 접힌 행 안에 묻히지 않는다. 줄마다의 값은 사이드카가
+정본이다. 2026-11-10 full 리포트의 표는 117행으로 리포트에서 가장 길었고, 그중 99행이 이 줄이었다.
 
 **남길 것이 없어도 섹션을 비우지 않는다.** 사이드카가 없거나 `--summary`가
 실패했으면 그 사실을 이 섹션에 적는다. 실제로 한 실행이 타임라인을 한 줄도 남기지
@@ -2107,6 +2114,11 @@ C-9에서 시작 기록을 모델이 출력을 필요로 하는 자리로 옮긴
 ### 작업과 시도
 
 **작업**은 적용 대상 모듈 하나(모듈 단계) 또는 검증 작업 하나(검증 단계 — bundle·isolated·승격)다.
+같은 줄을 다른 규칙도 짚었다는 이유(owner-collision)**만으로** isolated가 된 후보는 그 자리마다 검증 작업 하나로
+묶인다(`sameLocationGroups`, 작업 이름 `isolated-same-<n>`). 경로는 그대로 isolated다 — 검증자 하나가 그 자리의 후보를
+함께 보고 후보마다 판정하며, `needs-context`는 승격 없이 `scope-open`이다. 다른 이유로도 따로 봐야 하는 후보는
+묶지 않는다. 2026-11-10 full 실행은 검증 대상 13건 중 8건이 이 이유만으로 하나씩 따로 떴고, 같은 원인을 말한
+같은 줄의 다섯이 따로 판정돼 높음 둘은 반박·낮음 셋은 유지로 갈렸다.
 **시도**는 작업을 한 번 띄운 것이다. 재시도와 교정은 같은 작업의 새 시도이고, 시도는 작업마다
 **최대 2**다(처음 한 번과 재시도 한 번 — C-6A의 교정 재시도 1회, SKILL의 fresh retry 1회와 같다).
 취소된 시도는 이 횟수에 세지 않는다 — 작업이 스스로 실패한 것이 아니다.
@@ -2166,6 +2178,15 @@ C-9에서 시작 기록을 모델이 출력을 필요로 하는 자리로 옮긴
 검증 판정은 `REVIEW_VERDICT_CONTRACT_V1`과 요청한 후보 집합에 맞는지를 `tally-verdicts.mjs`와 같은
 함수로 본다. 맞지 않는 응답은 정해진 자리에 쓰지 않고 `malformed-output`으로 끝낸다. 시도가 남았으면
 `next`가 교정 시도를 내준다 — 검증 작업이면 교정 프롬프트(`<taskId>.retry.md`)를 대장이 만든다.
+full의 모듈 시도도 같다(`<모듈>.retry.md`).
+
+**full의 모듈 시도에는 대장이 프롬프트 파일(`prompt`)을 낸다.** preflight가 `run.start.modulePrompts: script`를 남긴
+실행에서, `next`가 띄울 시도마다 `.timing/<run>.prompts/<모듈>.md`를 쓴다 — full SKILL의 `MODULE_PROMPT` 지시에
+결과 manifest 전문, 범위(`scope.json`), diff 파일(`.timing/<run>.diff`, 첫 디스패치 때 merge-base..preflight가 잰 HEAD로
+한 번 뜬다), `modules.planned`의 `profile`, (정확성 패스와 의도 모듈 19면) 변경 의도 원문, (`05`면) 그 순간의 기존 구현
+검색 결과, `00-rule.md`와 담당 규칙 전문을 붙인 것이다. 재료를 못 읽으면 시작을 기록하지 않고 멈춘다 — 프롬프트 없는
+시도를 내주면 오케스트레이터가 다시 손으로 쓴다. 2026-11-10 실행은 웨이브마다 60~90초를 프롬프트를 쓰는 데 썼고,
+그 프롬프트는 규칙 문서와 manifest를 빼고 경로만 줬다.
 교정도 어기면 그 작업은 끝이고, 그 후보는 판정 없음(C-6B `verification-unavailable`)이다.
 `tally-verdicts.mjs --validate`도 대장의 기록을 보고, 시도를 다 쓴 작업(`exhausted`)과 돌고 있는
 작업(`running`)을 남은 작업과 가른다 — 교정까지 어긴 작업이 집계를 영영 막지 않는다.

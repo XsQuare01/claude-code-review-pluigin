@@ -26,12 +26,16 @@
 // 종료 코드: 0 처리함 · 1 받은 결과가 계약에 맞지 않아 실패로 기록함(교정 차례) · 2 사용법·읽기 실패 ·
 // 3 받지 않음(늦은 응답, 이 실행의 작업이 아님, 대상이 바뀜).
 
+import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 import { writeTextAtomic } from './lib/atomic-write.mjs'
+import { markedBlock } from './lib/contract-blocks.mjs'
 import { durationLimitScope, hostCapabilities } from './lib/hosts.mjs'
+import { MODULE_PROMPT_LABEL, buildModulePrompt, moduleInstructions } from './lib/module-prompt.mjs'
 import { moduleScope, plannedModules } from './lib/review-snapshot.mjs'
 import { readJsonFile, readTextFile } from './lib/read-text.mjs'
 import { resultLanguageProblems } from './lib/result-language.mjs'
@@ -43,7 +47,7 @@ import {
   endState, verifyRoundOf, verifyRoundStart,
 } from './lib/task-ledger.mjs'
 import { REUSE_MODULE, reuseState } from './lib/reuse-state.mjs'
-import { checkTaskVerdict, loadVerdictValidator } from './lib/verdicts.mjs'
+import { checkTaskVerdict, loadResultValidator, loadVerdictValidator } from './lib/verdicts.mjs'
 import { buildRetryPrompt } from './lib/verifier-tasks.mjs'
 
 class LedgerError extends Error {
@@ -160,6 +164,100 @@ const modulePlan = (events, start) => {
   return scope.filter(entry => entry.scope === 'applied').map(({ module }) => ({ task: module.name, kind: module.kind }))
 }
 
+// ------------------------------------------------------------------ 모듈 프롬프트 (full)
+//
+// 2026-11-10 full 실행의 웨이브 하나(약 300초) 중 60~90초는 오케스트레이터가 모듈 프롬프트 넷을 쓰는 데 갔고, 그렇게 쓴
+// 프롬프트는 공통 규칙·담당 규칙·manifest를 빼고 경로만 줬다. 검증자 프롬프트처럼 대장이 파일로 만든다. 지시문의 정본은
+// full SKILL의 `MODULE_PROMPT` 블록이다. preflight가 `run.start.modulePrompts: script`를 남긴 실행에만 만든다 — 그 표시가
+// 없는 예전 기록에는 재료(scope.json·merge-base·HEAD)가 다 있다고 가정할 수 없다.
+
+const FULL_SKILL = join(dirname(fileURLToPath(import.meta.url)), '..', 'skills', 'code-review-full', 'SKILL.md')
+const promptPathOf = task => join(timing, `${run}.prompts`, `${task}.md`)
+const diffPath = () => join(timing, `${run}.diff`)
+/** 변경 의도 원문을 붙이는 작업 — 정확성 패스와 "문제를 맞게 잡았는가"를 보는 19 */
+const INTENT_TASKS = new Set(['correctness', '19-intent'])
+
+const readOrFail = (path, what) => {
+  try {
+    return readTextFile(path)
+  } catch (error) {
+    throw new LedgerError(`${what}을(를) 읽지 못했다: ${path} — ${error.message}`)
+  }
+}
+
+/** diff 파일 — 첫 디스패치 때 한 번 쓴다. preflight가 잰 merge-base와 HEAD로 뜬다(C-10). */
+const ensureDiff = start => {
+  const path = diffPath()
+  if (!existsSync(path)) {
+    if (!start.mergeBase || !start.head) throw new LedgerError('run.start에 mergeBase·head가 없다 — diff를 뜰 수 없다. preflight로 시작한 실행인지 본다')
+    const repo = start.repoRoot ?? process.cwd()
+    let bytes
+    try {
+      bytes = execFileSync('git', ['-C', repo, '-c', 'core.quotepath=false', 'diff', '--no-color', '--no-ext-diff', `${start.mergeBase}..${start.head}`], { maxBuffer: 1024 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] })
+    } catch (error) {
+      throw new LedgerError(`diff를 뜨지 못했다(${repo}): ${String(error.stderr || error.message).trim()} — 아무것도 내주지 않는다`)
+    }
+    mkdirSync(timing, { recursive: true })
+    writeFileSync(path, bytes)
+  }
+  const text = readFileSync(path, 'utf8')
+  return { path, lines: text ? text.split('\n').length - (text.endsWith('\n') ? 1 : 0) : 0, sha256: sha256(text) }
+}
+
+/**
+ * 프롬프트의 재료 — 띄우기 **전에** 모으고 프롬프트 글까지 만든다. 하나라도 못 읽으면 시작을 기록하지 않고 멈춘다.
+ * 프롬프트 없는 시도를 내주면 오케스트레이터가 다시 손으로 쓴다.
+ */
+const modulePromptTexts = ({ events, start, dispatch, byTask, reuse }) => {
+  const rulesDir = rulesDirOf(start)
+  const skill = markedBlock(readOrFail(FULL_SKILL, 'full SKILL'), MODULE_PROMPT_LABEL)
+  if (skill.error) throw new LedgerError(`full SKILL: ${skill.error}`)
+  const manifest = markedBlock(readOrFail(join(rulesDir, 'workflow-contract.md'), 'workflow-contract.md'), 'REVIEW_RESULT_CONTRACT_V1')
+  if (manifest.error) throw new LedgerError(`workflow-contract.md: ${manifest.error}`)
+  const instructions = moduleInstructions(skill.value, manifest.value)
+  if (instructions.error) throw new LedgerError(instructions.error)
+  let scope
+  try {
+    scope = readJsonFile(join(timing, `${run}.scope.json`))
+  } catch (error) {
+    throw new LedgerError(`scope.json을 읽지 못했다 — preflight가 쓰는 범위 파일이다: ${error.message}`)
+  }
+  const planned = events.filter(event => event?.phase === 'modules.planned').at(-1)
+  const profile = typeof planned?.profile === 'string' && planned.profile.trim() ? planned.profile.trim() : null
+  const intentPath = join(timing, `${run}.intent.md`)
+  const intent = existsSync(intentPath) ? { text: readOrFail(intentPath, '의도 파일') } : { missing: true }
+  const diff = ensureDiff(start)
+  const commonRule = { name: '00-rule.md', text: readOrFail(join(rulesDir, '00-rule.md'), '00-rule.md') }
+  // 05에 붙일 검색 결과 — 이 순간의 상태다. 결과 파일을 읽지 못하면 근거 없이 리뷰한다고 적는다
+  let contextText = null
+  if (reuse?.done && typeof reuse.done.out === 'string' && existsSync(reuse.done.out)) {
+    try {
+      contextText = readTextFile(reuse.done.out)
+    } catch {
+      contextText = null
+    }
+  }
+  const reuseInfo = reuse?.required ? { state: reuse.state, status: reuse.status ?? null, reason: reuse.reason ?? (reuse.state === 'done' && !contextText && ['complete', 'partial'].includes(reuse.status) ? '결과 파일을 읽지 못했다' : undefined), contextText } : null
+  const texts = new Map()
+  for (const one of dispatch) {
+    // 교정 시도는 `done`이 만든 교정 프롬프트를 쓴다 — 새로 만들지 않는다
+    if (one.retryOf?.failureClass === 'malformed-output' && existsSync(retryPromptOf(promptPathOf(one.task)))) continue
+    const name = `${one.task}.md`
+    texts.set(one.task, buildModulePrompt({
+      instructions: instructions.value, task: one.task, label: `${one.task}#${one.attempt}`, kind: byTask.get(one.task)?.kind, moduleId: one.task.slice(0, 2),
+      ruleDoc: { name, text: readOrFail(join(rulesDir, name), name) }, commonRule,
+      run: { runId: start.runId ?? run, mergeBase: start.mergeBase, head: start.head }, scope, diff, profile,
+      intent: INTENT_TASKS.has(one.task) ? intent : null,
+      reuse: one.task === REUSE_MODULE ? reuseInfo : null,
+      language: start.language,
+    }))
+  }
+  const advice = []
+  if (!profile) advice.push('modules.planned에 profile이 없다 — 프롬프트에 프로젝트 프로파일이 "기록되지 않았다"로 나갔다. 3a(1)의 판정을 한 줄로 남긴다')
+  if (intent.missing && dispatch.some(one => INTENT_TASKS.has(one.task))) advice.push('의도 파일이 없다(.timing/<run>.intent.md) — 정확성 패스·19-intent 프롬프트에 "모으지 않았다"로 나갔다. review-intent.mjs를 먼저 돌린다(3a(1b))')
+  return { texts, advice }
+}
+
 const routedPath = () => flag('targets') ?? join(timing, `${run}.routed.json`)
 
 const readRouted = ({ required }) => {
@@ -182,6 +280,20 @@ const validatorFor = start => {
     throw new LedgerError(error.message)
   }
 }
+
+const resultValidatorFor = start => {
+  try {
+    return loadResultValidator(rulesDirOf(start))
+  } catch (error) {
+    throw new LedgerError(error.message)
+  }
+}
+
+/**
+ * 이 시도의 프롬프트를 대장이 만드는가 — full의 모듈(`run.start.modulePrompts: script`)과 모든 검증 작업이다. 그 시도의
+ * 교정 프롬프트도 대장이 만들고, 그러려면 받은 응답과 그 오류가 있어야 한다.
+ */
+const scriptOwnsPrompt = (start, stage) => stage === 'verify' || (stage === 'module' && start.modulePrompts === 'script')
 
 /** routed 출력에서 검증 작업 하나를 찾는다 — 승격 작업까지. */
 const verifyEntryOf = (routed, task) => {
@@ -321,6 +433,10 @@ const next = () => {
     const host = hostCapabilities(start.host)
     const byTask = new Map(plan.map(entry => [entry.task, entry]))
     const runId = start.runId ?? run
+    // full의 모듈 프롬프트는 기록하기 전에 만든다 — 재료를 못 읽으면 시작을 남기지 않고 멈춘다
+    const prompts = stage === 'module' && start.workflow === 'full' && start.modulePrompts === 'script' && decision.dispatch.length
+      ? modulePromptTexts({ events, start, dispatch: decision.dispatch, byTask, reuse })
+      : null
 
     // 죽은 시도·취소·멈춤·디스패치의 시작과 끝·시도마다의 시작을 결정한 순서대로 남긴다. 디스패치의
     // 시작과 끝을 오케스트레이터가 남기던 때 끝이 빠진 실행이 있었고, 그 수치는 리포트에 손으로
@@ -340,6 +456,13 @@ const next = () => {
         claim: claimOf(runId, stage, one.task, one.attempt, round),
         resultPath: attemptPath(one.task, one.attempt, round),
         ...(stage === 'verify' ? { prompt: correction && existsSync(retryPromptOf(entry.prompt)) ? retryPromptOf(entry.prompt) : entry.prompt } : {}),
+        ...(prompts ? { prompt: (() => {
+          const path = promptPathOf(one.task)
+          if (!prompts.texts.has(one.task)) return retryPromptOf(path)
+          mkdirSync(dirname(path), { recursive: true })
+          writeTextAtomic(path, prompts.texts.get(one.task))
+          return path
+        })() } : {}),
         ...(one.retryOf ? { retryOf: one.retryOf } : {}),
         ...(correction ? { correction: true } : {}),
         // 05에 넘길 검색 근거. 끝났으면 결과 파일, 실패·유실·시간 초과면 그 사유 — producer에게 검색이 미완료였다고 알린다
@@ -352,7 +475,7 @@ const next = () => {
       }
     })
 
-    const advice = []
+    const advice = [...(prompts?.advice ?? [])]
     if (claims.length && !host.perTaskNotification) {
       advice.push('이 호스트는 작업 하나가 끝나도 깨우지 않는다 — dispatch를 전부 한 번에 foreground 병렬로 부른다')
     }
@@ -446,6 +569,19 @@ const done = () => {
     const stage = owner?.stage ?? (task === undefined ? undefined : inferStage(fold, task))
     const attempt = givenAttempt ?? owner?.attempt
 
+    // 손으로 남긴 malformed-output에는 응답도 오류도 없어, 대장이 교정 프롬프트를 만들지 못하고 next가 최초 프롬프트를 다시
+    // 냈다(PR #112 리뷰). 프롬프트를 대장이 만드는 시도는 응답을 받아 done이 직접 검사한다 — 그 경로가 교정 프롬프트를 만든다
+    if (status === 'failed' && failureClass === 'malformed-output' && scriptOwnsPrompt(start, stage)) {
+      return {
+        code: 3,
+        out: {
+          outcome: 'refused', task, attempt,
+          reason: '이 시도의 프롬프트는 대장이 만든다 — malformed-output을 손으로 남기지 않는다. 받은 응답을 한 글자도 고치지 않고 resultPath에 쓰고 --status ok로 넘기면, done이 계약(C-6A)과 언어를 검사해 어긴 점과 직전 응답을 붙인 교정 프롬프트를 만든다',
+          note: '받지 않았다 — 기록을 남기지 않았다',
+        },
+      }
+    }
+
     let text
     if (status === 'ok') {
       const round = stage === 'verify' ? verifyRoundOf(events) : null
@@ -494,10 +630,22 @@ const done = () => {
       } catch (error) {
         problems = [`JSON으로 읽지 못했다: ${error.message} — 코드펜스나 서문 없이 JSON 객체 하나만 돌려준다`]
       }
-      // 한국어가 아닌 지적은 받지 않는다 — 교정 시도로 다시 받는다(00-rule, run.start.language)
+      // 계약(C-6A)을 어긴 결과는 받지 않는다 — 프롬프트를 대장이 만드는 실행만 본다. 그 실행의 오케스트레이터는 교정
+      // 프롬프트를 쓰지 않으므로, 어긴 점을 찾는 것도 여기서 한다(PR #112 리뷰). 한국어가 아닌 지적도 받지 않는다(00-rule,
+      // run.start.language). 둘 다 교정 시도로 다시 받고, 한 번에 고치게 함께 알린다
       if (!problems) {
+        const contract = start.modulePrompts === 'script'
+          ? resultValidatorFor(start)(parsed).map(error => `${error.code}: ${error.message}`)
+          : []
         const language = resultLanguageProblems(parsed, { language: start.language })
-        if (language.length) problems = language
+        if (contract.length || language.length) problems = [...contract, ...language]
+      }
+      // 대장이 프롬프트를 만든 실행(full)이면 교정 프롬프트도 만든다 — 원래 지시에 오류와 직전 응답을 붙인 것이다.
+      // 오케스트레이터가 교정을 쓰면 지시를 다시 쓰는 자리가 돌아온다
+      const original = promptPathOf(target.task)
+      if (problems && retryLeft && start.modulePrompts === 'script' && existsSync(original)) {
+        retryPrompt = retryPromptOf(original)
+        writeFileSync(retryPrompt, buildRetryPrompt(readFileSync(original, 'utf8'), problems, text, { kind: 'result' }), 'utf8')
       }
     } else {
       const routed = readRouted({ required: true })

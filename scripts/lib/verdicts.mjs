@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 import { markedJson } from './contract-blocks.mjs'
-import { validateVerdictPayload } from './contract-validate.mjs'
+import { validateResultPayload, validateVerdictPayload } from './contract-validate.mjs'
 
 // 판정 파일을 읽는 유일한 자리.
 //
@@ -91,4 +91,20 @@ export function loadVerdictValidator(rulesDir) {
   if (verdict.error) throw new Error(`workflow-contract.md: ${verdict.error}`)
   if (result.error) throw new Error(`workflow-contract.md: ${result.error}`)
   return payload => validateVerdictPayload(payload, verdict.value, result.value)
+}
+
+/**
+ * 모듈 결과(`REVIEW_RESULT_CONTRACT_V1`, C-6A) 검사기를 규칙 디렉터리에서 만든다. 판정 검사기와 같은 이유로
+ * producer가 받은 그 디렉터리의 manifest를 쓴다. `validate-rules.mjs`가 계약 fixture를 보는 검사와 같은 함수다.
+ */
+export function loadResultValidator(rulesDir) {
+  let contract
+  try {
+    contract = readFileSync(join(rulesDir, 'workflow-contract.md'), 'utf8')
+  } catch (error) {
+    throw new Error(`workflow-contract.md를 읽지 못했다: ${rulesDir} — ${error.message}`)
+  }
+  const result = markedJson(contract, 'REVIEW_RESULT_CONTRACT_V1')
+  if (result.error) throw new Error(`workflow-contract.md: ${result.error}`)
+  return payload => validateResultPayload(payload, result.value)
 }

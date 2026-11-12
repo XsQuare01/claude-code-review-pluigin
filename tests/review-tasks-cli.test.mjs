@@ -575,3 +575,181 @@ test('제목·본문에 한글이 없는 결과는 받지 않고 교정 시도�
   writeFileSync(claimEn.resultPath, english, 'utf8')
   assert.equal(receive(other, '01-fsd', 1).status, 0)
 })
+
+// ── 모듈 프롬프트 파일(full) ───────────────────────────────────────────────
+// 2026-11-10 full 실행의 웨이브 하나(약 300초) 중 60~90초는 오케스트레이터가 모듈 프롬프트 넷을 쓰는 데 갔고, 그렇게 쓴
+// 프롬프트는 규칙 문서와 manifest를 빼고 경로만 줬다. 대장이 띄울 시도마다 프롬프트 파일을 만든다(SKILL `MODULE_PROMPT`).
+
+/** base와 HEAD 두 커밋이 있는 저장소 — 대장이 그 사이의 diff를 뜬다. */
+const promptRepo = t => {
+  const repo = mkdtempSync(join(tmpdir(), 'review-tasks-prompt-'))
+  t.after(() => rmSync(repo, { recursive: true, force: true }))
+  const git = (...args) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.com', '-c', 'commit.gpgsign=false', '-c', 'core.autocrlf=false', ...args], { cwd: repo, encoding: 'utf8' }).trim()
+  git('init', '-q')
+  mkdirSync(join(repo, 'src'), { recursive: true })
+  writeFileSync(join(repo, 'src', 'a.ts'), 'export const a = 1\n', 'utf8')
+  git('add', '.')
+  git('commit', '-qm', 'base')
+  const mergeBase = git('rev-parse', 'HEAD')
+  writeFileSync(join(repo, 'src', 'a.ts'), 'export const a = 2\nexport const b = a + 1\n', 'utf8')
+  git('commit', '-qam', 'head')
+  return { repo, mergeBase, head: git('rev-parse', 'HEAD'), diff: execFileSync('git', ['-C', repo, 'diff', '--no-color', `${mergeBase}..HEAD`], { encoding: 'utf8' }) }
+}
+
+const promptRun = (t, { keep, correctness = 'off', profile = 'FSD · React 18.3 · TypeScript 5.6', intent = true, extra = [], start = {} } = {}) => {
+  const dir = fresh(t)
+  const repo = promptRepo(t)
+  writeFileSync(join(dir, '.timing', `${RUN}.scope.json`), JSON.stringify({ schemaVersion: 1, runId: 'run-cli', files: ['src/a.ts'], excluded: [], outside: [], otherApps: [], packageRoots: [] }), 'utf8')
+  if (intent) writeFileSync(join(dir, '.timing', `${RUN}.intent.md`), '## 변경 의도\n\n```text\nPR 설명 원문 — a를 2로 바꾼다\n```\n', 'utf8')
+  plant(dir, [
+    startEvent({ modulePrompts: 'script', mergeBase: repo.mergeBase, head: repo.head, repoRoot: repo.repo, correctness, ...start }),
+    { ...planned(keep), ...(profile ? { profile } : {}) },
+    ...extra,
+  ])
+  return { dir, repo }
+}
+
+test('full 실행의 next는 시도마다 프롬프트 파일을 만든다 — 지시·manifest·범위·diff 파일·프로파일·규칙 전문', t => {
+  const { dir, repo } = promptRun(t, { keep: ['04-state', 'props'] })
+  const out = json(next(dir))
+  assert.deepEqual(out.dispatch.map(one => one.label), ['04-state#1', 'props#1'])
+  const [state, props] = out.dispatch
+  assert.match(state.prompt, /\.prompts[\\/]04-state\.md$/)
+  const text = readFileSync(state.prompt, 'utf8')
+  assert.match(text, /^# 규칙 모듈 리뷰/)
+  assert.match(text, /"contractName": "REVIEW_RESULT_CONTRACT_V1"/)
+  assert.doesNotMatch(text, /\{REVIEW_RESULT_CONTRACT_V1_MANIFEST\}/)
+  assert.match(text, /- 작업: `04-state#1` — 담당 규칙 `04-state\.md`/)
+  assert.match(text, /변경 파일 1개:\n  - `src\/a\.ts`/)
+  assert.match(text, /## 프로젝트 프로파일\nFSD · React 18\.3/)
+  assert.ok(text.includes(readFileSync(join(RULES, '00-rule.md'), 'utf8').trimEnd()))
+  assert.ok(text.includes(readFileSync(join(RULES, '04-state.md'), 'utf8').trimEnd()))
+  assert.doesNotMatch(text, /## 변경 의도/)
+  // diff는 대장이 한 번 뜬다 — preflight가 잰 merge-base..HEAD
+  const diffPath = join(dir, '.timing', `${RUN}.diff`)
+  assert.equal(readFileSync(diffPath, 'utf8'), repo.diff)
+  assert.ok(text.includes(diffPath))
+  assert.match(readFileSync(props.prompt, 'utf8'), /`P-\{n\}`/)
+})
+
+test('정확성 패스와 19-intent의 프롬프트에는 의도 원문을, 의도 파일이 없으면 없다고 붙인다', t => {
+  const { dir } = promptRun(t, { keep: ['19-intent', '04-state'], correctness: 'on' })
+  const byTask = new Map(json(next(dir)).dispatch.map(one => [one.task, readFileSync(one.prompt, 'utf8')]))
+  assert.deepEqual([...byTask.keys()].sort(), ['04-state', '19-intent', 'correctness'])
+  for (const task of ['19-intent', 'correctness']) assert.match(byTask.get(task), /## 변경 의도\n\n## 변경 의도\n\n```text\nPR 설명 원문 — a를 2로 바꾼다/)
+  assert.doesNotMatch(byTask.get('04-state'), /## 변경 의도/)
+
+  const { dir: bare } = promptRun(t, { keep: ['19-intent'], intent: false, profile: null })
+  const out = json(next(bare))
+  const text = readFileSync(out.dispatch[0].prompt, 'utf8')
+  assert.match(text, /## 변경 의도\n모으지 않았다/)
+  assert.match(text, /## 프로젝트 프로파일\n기록되지 않았다/)
+  assert.ok(out.advice.some(line => /의도 파일이 없다/.test(line)))
+  assert.ok(out.advice.some(line => /profile/.test(line)))
+})
+
+test('05의 프롬프트에는 띄우는 순간의 기존 구현 검색 결과를 고치지 않고 싣는다', t => {
+  const contextPath = join(tmpdir(), `reuse-context-${process.pid}-${Date.now()}.json`)
+  t.after(() => rmSync(contextPath, { force: true }))
+  const context = `${JSON.stringify({ kind: 'reuse-context', status: 'complete', targets: [{ targetId: 't1', candidates: [] }] }, null, 2)}\n`
+  writeFileSync(contextPath, context, 'utf8')
+  const { dir } = promptRun(t, {
+    keep: ['05-structure'],
+    start: { reuseSearch: 'planned' },
+    extra: [
+      { phase: 'reuse.planned', searchId: 's1', scopeSha256: 'h', plan: 'p' },
+      { phase: 'reuse.start', searchId: 's1', plan: 'p' },
+      { phase: 'reuse.done', searchId: 's1', status: 'complete', out: contextPath },
+    ],
+  })
+  const [claim] = json(next(dir)).dispatch
+  assert.equal(claim.task, '05-structure')
+  const text = readFileSync(claim.prompt, 'utf8')
+  assert.ok(text.includes('## 기존 구현 검색 결과\n'))
+  assert.ok(text.includes(`\`\`\`json\n${context.trimEnd()}\n\`\`\``))
+})
+
+test('계약에 맞지 않은 응답의 교정 시도는 원래 프롬프트에 오류와 직전 응답을 붙인 파일을 낸다', t => {
+  const { dir } = promptRun(t, { keep: ['04-state'] })
+  const [claim] = json(next(dir)).dispatch
+  writeFileSync(claim.resultPath, 'Here is the review: not json', 'utf8')
+  const rejected = receive(dir, '04-state', 1)
+  assert.equal(rejected.status, 1)
+  const retryPath = json(rejected).retryPrompt
+  assert.match(retryPath, /\.prompts[\\/]04-state\.retry\.md$/)
+  const [correction] = json(next(dir)).dispatch
+  assert.equal(correction.correction, true)
+  assert.equal(correction.prompt, retryPath)
+  const text = readFileSync(retryPath, 'utf8')
+  assert.ok(text.startsWith(readFileSync(claim.prompt, 'utf8').trimEnd()))
+  assert.match(text, /## 직전 응답의 형식 오류[\s\S]*REVIEW_RESULT_CONTRACT_V1[\s\S]*JSON으로 읽지 못했다[\s\S]*Here is the review: not json/)
+})
+
+// PR #112 리뷰: JSON으로는 읽히지만 계약 필드가 빠진 응답(openQuestions 없음)은 done이 받았고, 오케스트레이터가 SKILL대로
+// `--status failed --failure-class malformed-output`을 남기면 교정 파일이 없어 next가 최초 프롬프트를 다시 냈다 — 무엇을 고칠지도,
+// 직전 응답도 없었다. 2.29.0부터 오케스트레이터는 교정 프롬프트를 쓰지 않으므로 계약 검사와 교정 파일을 done이 맡는다.
+test('JSON이지만 계약 필드가 빠진 응답도 done이 거부하고, 교정 파일에 오류와 직전 응답을 싣는다', t => {
+  const { dir } = promptRun(t, { keep: ['04-state'] })
+  const [claim] = json(next(dir)).dispatch
+  const partial = JSON.stringify({ schemaVersion: 1, findings: [] })
+  writeFileSync(claim.resultPath, partial, 'utf8')
+  const rejected = receive(dir, '04-state', 1)
+  assert.equal(rejected.status, 1)
+  const out = json(rejected)
+  assert.equal(out.outcome, 'rejected')
+  assert.ok(out.problems.some(line => /E_TOPLEVEL_MISSING_OPEN_QUESTIONS/.test(line)), JSON.stringify(out.problems))
+  assert.equal(existsSync(join(dir, '.timing', `${RUN}.04-state.json`)), false)
+  const [correction] = json(next(dir)).dispatch
+  assert.equal(correction.correction, true)
+  assert.equal(correction.prompt, out.retryPrompt)
+  const text = readFileSync(out.retryPrompt, 'utf8')
+  assert.match(text, /## 직전 응답의 형식 오류[\s\S]*E_TOPLEVEL_MISSING_OPEN_QUESTIONS/)
+  assert.ok(text.includes(partial))
+})
+
+test('프롬프트를 대장이 만드는 실행에서는 malformed-output을 손으로 남기지 못한다 — 응답을 넘기면 done이 검사한다', t => {
+  const { dir } = promptRun(t, { keep: ['04-state', '05-structure'] })
+  json(next(dir))
+  const before = eventsOf(dir).length
+  const refused = tasks(dir, 'done', '--task', '04-state', '--attempt', '1', '--status', 'failed', '--failure-class', 'malformed-output')
+  assert.equal(refused.status, 3)
+  assert.match(json(refused).reason, /--status ok/)
+  assert.equal(eventsOf(dir).length, before, '거부한 호출은 아무것도 기록하지 않는다')
+  // 응답이 없는 실패는 그대로 받는다 — 교정이 아니라 새 시도라서 교정 파일이 필요 없다
+  assert.equal(tasks(dir, 'done', '--task', '05-structure', '--attempt', '1', '--status', 'failed', '--failure-class', 'inactivity-timeout').status, 0)
+})
+
+test('검증 작업도 malformed-output을 손으로 남기지 못한다 — 판정 검사와 교정 프롬프트는 done이 맡는다', t => {
+  const { dir } = verifySetup(t)
+  json(next(dir, 'verify'))
+  const before = eventsOf(dir).length
+  const refused = tasks(dir, 'done', '--task', 'bundle-1', '--attempt', '1', '--status', 'failed', '--failure-class', 'malformed-output')
+  assert.equal(refused.status, 3)
+  assert.equal(json(refused).outcome, 'refused')
+  assert.equal(eventsOf(dir).length, before)
+})
+
+test('프롬프트를 대장이 만들지 않는 예전 기록은 malformed-output을 손으로 남길 수 있다', t => {
+  const dir = fresh(t)
+  plant(dir, [startEvent(), planned(['04-state'])])
+  json(next(dir))
+  assert.equal(tasks(dir, 'done', '--task', '04-state', '--attempt', '1', '--status', 'failed', '--failure-class', 'malformed-output').status, 0)
+})
+
+test('범위 파일이 없으면 아무것도 기록하지 않고 멈춘다 — 프롬프트 없는 시도를 내주지 않는다', t => {
+  const { dir } = promptRun(t, { keep: ['04-state'] })
+  rmSync(join(dir, '.timing', `${RUN}.scope.json`))
+  const before = eventsOf(dir).length
+  const refused = next(dir)
+  assert.equal(refused.status, 2)
+  assert.match(refused.stderr, /scope\.json/)
+  assert.equal(eventsOf(dir).length, before)
+})
+
+test('modulePrompts 표시가 없는 예전 기록은 프롬프트를 만들지 않는다', t => {
+  const dir = fresh(t)
+  plant(dir, [startEvent(), planned(['04-state'])])
+  const [claim] = json(next(dir)).dispatch
+  assert.equal('prompt' in claim, false)
+  assert.equal(existsSync(join(dir, '.timing', `${RUN}.prompts`)), false)
+})

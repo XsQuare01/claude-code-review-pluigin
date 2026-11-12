@@ -152,7 +152,9 @@ const PHASES = new Map([
       'maxTasks', 'maxDurationSec', 'staleAfterSec', 'continues', 'previousSnapshot', 'previousRunId', 'previousSha256', 'baseAhead', 'baseOverlapCount',
       // `baseHead`: 기준 ref의 끝 commit(정한 순간). `reuseSearch`: full이 기존 구현 검색을 예정했는지(C-6C).
       // `language`: 사용자가 정한 리뷰 언어(정하지 않으면 없다 — 한국어)
-      'baseHead', 'reuseSearch', 'language', 'resultBinding'],
+      // `toolRun`: full이 lint·typecheck·test를 기본으로 돌리는지(C-6) — 있으면 `--check`가 돌린 도구나 건너뛴 이유를 묻는다
+      // `modulePrompts`: full의 모듈 프롬프트를 작업 대장이 파일로 만드는지(`script`)
+      'baseHead', 'reuseSearch', 'language', 'resultBinding', 'toolRun', 'modulePrompts'],
   }],
   // 한도에 닿아 멈춘 실행을 이어 갈 때 새 한도 구간을 연다(C-12). 대상이 그대로인지 확인한 값을 함께 남긴다.
   ['run.resume', { required: [], structured: [], allowed: ['maxTasks', 'maxDurationSec', 'staleAfterSec', 'head', 'worktree'] }],
@@ -165,7 +167,8 @@ const PHASES = new Map([
   ['reuse.planned', { required: ['searchId', 'scopeSha256', 'plan'], structured: [], allowed: ['runId', 'head', 'baseHead', 'waitSec'] }],
   ['reuse.start', { required: ['searchId', 'plan'], structured: [], allowed: ['planSha256'] }],
   ['reuse.done', { required: ['searchId', 'status'], structured: ['targets'], allowed: ['reason', 'out', 'outSha256', 'planSha256', 'durationSec'] }],
-  ['modules.planned', { required: ['candidates', 'applied'], structured: ['skipped', 'unknown'], allowed: [] }],
+  // `profile`: 3a(1)의 프로젝트 프로파일 한 줄 — 작업 대장이 모든 모듈 프롬프트에 붙인다
+  ['modules.planned', { required: ['candidates', 'applied'], structured: ['skipped', 'unknown'], allowed: ['profile'] }],
   ['dispatch.start', { required: ['modules', 'inflight'], structured: [], allowed: [] }],
   ['module.start', { required: ['module', 'attempt'], structured: [], allowed: ['taskId', 'retryOf', 'claim'] }],
   ['module.done', { required: ['module', 'attempt', 'status'], structured: [], allowed: ['findings', 'failureClass', 'taskId', 'resultSha256', 'cancelReason'] }],
@@ -184,6 +187,8 @@ const PHASES = new Map([
   // `detached`: 띄워 두고 돌아온 도구(review-tool --detach) — 끝은 띄운 프로세스가 남긴다.
   ['tool.start', { required: ['name'], structured: [], allowed: ['attempt', 'callId', 'candidateId', 'evidenceId', 'detached'] }],
   // `failureFiles`: 실패한 자리가 이 변경의 파일·바꾸지 않은 파일·추적하지 않는 파일에 몇 개씩인지(C-6).
+  // 돌리지 않은 도구와 그 이유(C-6). `reasonCode`는 닫힌 목록(`TOOL_SKIP_REASONS`), `reason`은 확인한 내용이다.
+  ['tool.skipped', { required: ['name', 'reasonCode'], structured: [], allowed: ['reason'] }],
   ['tool.done', { required: ['name', 'exit', 'treeSha'], structured: ['failing', 'failureFiles'], allowed: ['failedNow', 'failedBaseline', 'attempt', 'callId', 'candidateId', 'evidenceId'] }],
   ['crossverify.start', { required: ['targets'], structured: [], allowed: ['round'] }],
   ['crossverify.end', { required: ['upheld', 'rejected'], structured: [], allowed: ['needsContext', 'noVerdict', 'malformedTasksCorrected', 'countsFrom'] }],
@@ -243,8 +248,22 @@ const undeclaredKeys = (phase, data) => {
  *
  * `failureClass`와 같은 이유로 줄은 거부하지 않는다. 경고하고 `--check`가 짚는다.
  */
+/**
+ * 도구(lint·typecheck·test)를 돌리지 않은 이유 — 닫힌 목록이다(C-6).
+ *
+ * - `user-request`: 사용자가 돌리지 말라고 했다
+ * - `no-script`: 패키지 루트의 package.json에 그 스크립트가 없다
+ * - `deps-missing`: 의존성이 설치되지 않았고 설치하지 못했다
+ * - `no-package-root`: 리뷰 범위에 도구를 돌릴 패키지 루트가 없다
+ */
+const TOOL_SKIP_REASONS = ['user-request', 'no-script', 'deps-missing', 'no-package-root']
+
+/** full이 기본으로 돌리는 도구(C-6). 도구마다 `tool.start`나 `tool.skipped`가 있어야 한다 — 이름은 `review-tool.mjs --name` 그대로다. */
+const GATE_TOOLS = ['lint', 'typecheck', 'test']
+
 const CLOSED_VALUES = new Map([
-  ['run.start', { reuseSearch: ['planned'] }],
+  ['run.start', { reuseSearch: ['planned'], toolRun: ['required'], modulePrompts: ['script'] }],
+  ['tool.skipped', { reasonCode: TOOL_SKIP_REASONS }],
   ['module.done', { status: ['ok', 'failed'], cancelReason: CANCEL_REASONS }],
   ['verify.done', { status: ['ok', 'failed'], cancelReason: CANCEL_REASONS }],
   ['task.bind', { stage: STAGES }],
@@ -945,6 +964,23 @@ if (has('check')) {
     if (doubled.size) problems.push(`같은 검증 작업·시도가 두 번 끝났다: ${[...doubled].join(', ')}`)
   }
 
+  // 도구 실행(C-6). 시작이 도구를 기본으로 돌린다고 정한 실행(`toolRun: required`)만 본다 — 예전 기록에 묻지 않는다.
+  // 기존 구현 검색(`reuse-search`)과 재현 명령(`candidateId`, C-11)은 같은 스크립트로 돌지만 도구 게이트가 아니다.
+  // 렌더에 닿기 전에는 아직 띄울 수 있으므로 묻지 않는다. 2026-11-10 full 실행 하나는 도구를 돌리지 않았고 이유도 없었다.
+  {
+    const startLine = events.find(event => event?.phase === 'run.start')
+    const rendered = events.some(event => event?.phase === 'render.start' || event?.phase === 'run.end')
+    // 도구마다 본다 — 하나의 기록으로 셋을 통과시키면 test만 건너뛴 이유를 남긴 실행도 통과했다(PR #112 리뷰). 이름은 SKILL이
+    // 정한 `--name` 그대로다. 다시 돌린 것(`test-rerun` 등)은 먼저 돈 그 도구가 있어야 뜻이 있으므로 그 도구로 세지 않는다
+    if (startLine?.toolRun === 'required' && rendered && !stoppedWithoutReview) {
+      const accounted = new Set(events
+        .filter(event => (event?.phase === 'tool.start' && event.candidateId === undefined && event.evidenceId === undefined) || event?.phase === 'tool.skipped')
+        .map(event => event.name))
+      const missing = GATE_TOOLS.filter(name => !accounted.has(name))
+      if (missing.length) problems.push(`full 실행인데 도구 ${missing.join('·')}를 돌리지도, 건너뛴 이유(\`tool.skipped\`)를 남기지도 않았다 — 기본은 lint·typecheck·test를 모두 돌린다. 돌리지 않은 도구는 도구마다 이유를 닫힌 목록에서 골라 남긴다(C-6)`)
+    }
+  }
+
   // 기존 구현 검색(C-6C). 시작이 검색을 예정한 실행만 본다 — 그 필드가 없는 예전 기록에 미실행을 묻지 않는다.
   // 상태는 작업 대장과 같은 정의(`reuseState`)로 읽는다.
   {
@@ -1043,11 +1079,55 @@ if (has('summary')) {
   // 리포트에 "체감"으로 들어간다.
   const slowest = rows.reduce((worst, row) => (row.step > worst.step ? row : worst), rows[0])
 
+  // 이어진 디스패치 줄(모듈·검증의 시작·끝, 작업 연결)은 한 행으로 접는다. 2026-11-10 full 리포트의 표는 117행 중
+  // 99행이 이 줄이었고 리포트에서 가장 길었다. 앞 줄과 FOLD_GAP_SEC보다 벌어진 줄과 최장 구간의 줄에서는 끊는다 — 긴
+  // 구간이 접힌 행 안에 묻히지 않게 한다. 셋 이상 이어질 때만 접는다. 줄마다의 값(작업 ID·해시)은 사이드카에 있다.
+  const FOLDABLE = new Set(['module.start', 'module.done', 'task.bind', 'verify.start', 'verify.done'])
+  const FOLD_GAP_SEC = 5
+  const groups = []
+  for (const [at, row] of rows.entries()) {
+    const last = groups.at(-1)
+    const joins = last && FOLDABLE.has(row.phase) && FOLDABLE.has(last[0].row.phase) && row.step <= FOLD_GAP_SEC && row !== slowest
+    if (joins) last.push({ row, event: events[at] })
+    else groups.push([{ row, event: events[at] }])
+  }
+  const briefOf = event => {
+    const name = `${event.module ?? event.task}#${event.attempt ?? '?'}`
+    if (event.phase === 'module.done' || event.phase === 'verify.done') {
+      return [name, event.status, Number.isInteger(event.findings) ? `${event.findings}건` : null, event.failureClass ?? null].filter(value => value !== null && value !== undefined).join(' ')
+    }
+    return event.phase === 'task.bind' ? null : name
+  }
+  let folded = 0
+  const lineOf = group => {
+    const [{ row: first }] = group
+    const mark = group.some(entry => entry.row === slowest) && slowest.step > 0 ? ' **←최장**' : ''
+    if (group.length < 3) return group.map(({ row }) => `| \`${row.phase}\`${row === slowest && row.step > 0 ? ' **←최장**' : ''} | ${row.elapsed}s | ${row.step}s | ${row.detail} |`)
+    folded += group.length
+    const counts = new Map()
+    for (const { row } of group) counts.set(row.phase, (counts.get(row.phase) ?? 0) + 1)
+    const label = [...counts].map(([phase, count]) => `\`${phase}\` ×${count}`).join(' · ')
+    const last = group.at(-1).row
+    const elapsed = first.elapsed === last.elapsed ? `${first.elapsed}s` : `${first.elapsed}–${last.elapsed}s`
+    // 끝난 시도와 새로 띄운 시도가 한 묶음에 섞이면(웨이브의 끝과 다음 웨이브의 시작) `→`로 가른다
+    const segments = []
+    for (const { event } of group) {
+      const brief = briefOf(event)
+      if (!brief) continue
+      const kind = /\.start$/.test(event.phase) ? 'start' : 'end'
+      if (segments.at(-1)?.kind !== kind) segments.push({ kind, items: [] })
+      segments.at(-1).items.push(brief)
+    }
+    return [`| ${label}${mark} | ${elapsed} | ${first.step}s | ${segments.map(segment => segment.items.join(' · ')).join(' → ')} |`]
+  }
+  const tableRows = groups.flatMap(lineOf)
+
   const out = [
     '| 단계 | 경과 | 구간 | 상세 |',
     '|---|---:|---:|---|',
-    ...rows.map(row => `| \`${row.phase}\`${row === slowest && row.step > 0 ? ' **←최장**' : ''} | ${row.elapsed}s | ${row.step}s | ${row.detail} |`),
+    ...tableRows,
   ]
+  if (folded) out.push('', `> 디스패치 줄 ${folded}개를 ${groups.filter(group => group.length >= 3).length}행으로 접었다 — 줄마다의 값(작업 ID·해시)은 사이드카에 있다. 구간은 그 묶음의 첫 줄과 앞 줄 사이다.`)
   // 끝 표시를 **마지막 자리에서** 찾는다. 있기만 하면 통과시키면, 종료 뒤에
   // 줄이 더 붙은 실행을 정상 종료로 읽는다 — 실제로 기록 실패 때문에 순서가
   // 밀려 그런 타임라인이 만들어진 적이 있다. 없는 것과 자리에 없는 것은 다르다.
@@ -1260,13 +1340,19 @@ if (has('summary')) {
   // `module=11`은 숫자가 된다. 그러면 모듈별로 묶거나 두 실행을 비교할 때
   // `"11"`과 `11`이 서로 다른 것으로 읽힌다. 계약은 이름을 적으라고 하지만
   // 지시는 지켜지지 않을 수 있어서, 섞인 결과를 여기서 보이게 한다.
+  //
+  // 한 단계가 중첩 값(`structured`)으로 정한 필드는 그 단계 안에서만 견준다. 같은 이름이어도 계약이 단계마다 다르게 정한
+  // 다른 필드다 — 2026-11-10 실행의 요약은 `reuse.done`의 targets(상태별 대상 수)와 `crossverify.start`의 targets(검증
+  // 대상 수)를 섞였다고 짚었다.
   {
     const types = new Map()
     for (const event of events) {
+      const structured = new Set(PHASES.get(event.phase)?.structured ?? [])
       for (const [key, value] of Object.entries(event)) {
         if (value === null) continue
-        if (!types.has(key)) types.set(key, new Set())
-        types.get(key).add(typeof value)
+        const group = structured.has(key) ? `${event.phase}의 ${key}` : key
+        if (!types.has(group)) types.set(group, new Set())
+        types.get(group).add(typeof value)
       }
     }
     const mixed = [...types].filter(([, kinds]) => kinds.size > 1).map(([key, kinds]) => `\`${key}\`(${[...kinds].join('/')})`)
@@ -1396,6 +1482,29 @@ const data = (() => {
   const flattened = spec.structured.filter(key => key in data && (data[key] === null || typeof data[key] !== 'object'))
   if (flattened.length) {
     die(`\`${phase}\`의 ${flattened.join(', ')}는 중첩 값이다. \`--set\`은 첫 =에서만 자르므로 값이 문자열 하나로 남는다 — \`--data-file <경로>\`로 넘겨라`)
+  }
+  // `render.start`의 지적 수는 routed 출력(`prepare-verification.mjs --out`)의 `counts.total`이다 — 중복 제거 뒤의
+  // 후보 수. 그 파일이 있으면 여기서 센다(`dispatch.end`의 수치와 같다). 2026-11-10 full 실행은 findings 없이 남겼고
+  // (full SKILL이 무엇을 넘길지 말하지 않았다) 경고만 받고 지나가 `--check`가 FAIL이 됐다. 렌더 뒤에는 이 줄을 다시
+  // 남길 수 없으므로(C-9), 셀 재료도 넘긴 값도 없으면 `run.end`처럼 거부한다 — 다시 부르면 된다.
+  if (phase === 'render.start') {
+    const routedPath = join(timingDir, `${run}.routed.json`)
+    let total
+    if (existsSync(routedPath)) {
+      try {
+        total = readJsonFile(routedPath).counts?.total
+      } catch {
+        total = undefined
+      }
+    }
+    if (Number.isInteger(total)) {
+      if (data.findings !== undefined && data.findings !== total) {
+        process.stderr.write(`경고: \`render.start\`에 넘긴 findings ${data.findings} → routed 출력의 counts.total ${total}. 기록으로 센 값을 남긴다(${routedPath})\n`)
+      }
+      data.findings = total
+    } else if (data.findings === undefined) {
+      die(`\`render.start\`에 findings가 없다 — 남기지 않았다. 렌더 뒤에는 이 줄을 다시 남길 수 없다. routed 출력(${routedPath})을 읽지 못했으니 \`--set findings=<routed 출력의 counts.total>\`을 붙여 다시 부른다`)
+    }
   }
   // 빠진 필수 필드는 경고만 한다. 줄을 거부하면 그 단계가 통째로 사라지는데,
   // 필드 하나 빠진 기록이 없는 기록보다 낫다. `--check`가 종료 전에 다시 짚는다.

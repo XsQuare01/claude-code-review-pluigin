@@ -155,6 +155,33 @@ test('fast 실행의 지적이 없으면 정확성은 "지적 없음."이고 모
   assert.doesNotMatch(run.findings, /결과 없음/)
 })
 
+test('fast 리뷰어가 실패해 결과를 모으지 못했으면 규칙 모듈도 "결과 없음"이다 — 지적 0건으로 그리지 않는다', t => {
+  // PR #111 리뷰: "지적 없음" 줄이 수집 여부를 보지 않아, 같은 리뷰어의 결과가 규칙 모듈에서는 0건, 정확성에서는
+  // 수집 실패로 읽혔다
+  const env = scratch(t)
+  ok(call(env, 'review-preflight.mjs', ['--rules', RULES, '--workflow', 'fast', '--base', 'main', '--host', 'test']), 'preflight')
+  ok(call(env, 'review-timeline.mjs', ['--phase', 'modules.planned', '--set', 'candidates=1', '--set', 'applied=1']), 'modules.planned')
+  for (let round = 0; round < 5; round += 1) {
+    const next = JSON.parse(ok(call(env, 'review-tasks.mjs', ['next', '--stage', 'module', '--rules', RULES]), 'next').stdout)
+    if (next.complete) break
+    for (const claim of next.dispatch) {
+      ok(call(env, 'review-tasks.mjs', ['bind', '--task', claim.task, '--attempt', String(claim.attempt), '--host-task', `h${round}`]), 'bind')
+      ok(call(env, 'review-tasks.mjs', ['done', '--task', claim.task, '--attempt', String(claim.attempt), '--status', 'failed', '--failure-class', 'empty-result']), 'done failed')
+    }
+  }
+  ok(call(env, 'prepare-verification.mjs', ['--merge-base', 'main', '--rules', RULES, '--collect', '--verify', 'off', '--out', timing(env, 'routed.json')]), 'prepare')
+  assert.deepEqual(JSON.parse(readFileSync(timing(env, 'routed.json'), 'utf8')).collected.sources, [])
+  ok(call(env, 'review-timeline.mjs', ['--phase', 'render.start', '--set', 'findings=0']), 'render.start')
+  ok(call(env, 'render-findings.mjs', [
+    '--input', timing(env, 'routed.json'), '--phase-high', 'rollout-shadow', '--phase-low', 'rollout-shadow',
+    '--verification-state', 'disabled', '--rules', RULES, '--workflow', 'fast', '--out', timing(env, 'findings.md'),
+  ]), 'render-findings')
+  const findings = readFileSync(timing(env, 'findings.md'), 'utf8')
+  assert.doesNotMatch(findings, /지적 없음/)
+  assert.match(findings, /^규칙 모듈\(01~21\): 결과 없음 — 수집된 결과 파일이 없다/m)
+  assert.match(findings, /^### 정확성\n\n결과 없음 — 수집된 결과 파일이 없다/m)
+})
+
 test('fast 실행도 full과 같은 세 조각(실행 계획·상세 지적·타임라인)으로 조립하고, 기록 검사를 통과한다', t => {
   const run = runFast(t, { schemaVersion: 1, findings: [HIGH_CR], openQuestions: [] })
   const { env } = run

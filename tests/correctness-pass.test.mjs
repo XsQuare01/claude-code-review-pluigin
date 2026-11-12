@@ -206,8 +206,8 @@ test('세 반례가 수집·검증·렌더·스냅숏까지 출처와 두 축을
   assert.match(correctness, /#### 🔴 `CR-1` 만료된 세션도 갱신 요청을 보낸다\n영향: 높음 \(사용자에게 보이는 오동작 또는 사용 불가\) · 확신: 높음 · 교차검증: `유지`\n출처 패스: correctness\n`src\/session\.ts:2` — `  if \(session\.expired\) return null`/)
   assert.match(correctness, /#### 🔴 `CR-2` 변경되지 않은 호출자가 문자열을 전제한다\n[^\n]*교차검증: `유지`\n출처 패스: correctness\n`src\/header\.ts:4`/)
   // rollout-shadow에서 반박된 지적은 남고 등급도 그대로다(C-6B)
-  assert.match(correctness, /#### 🟡 `CR-3` 취소 뒤 늦게 온 응답이 상태를 덮는다\n영향: 높음 [^\n]* · 확신: 낮음 · 교차검증: `반박됨 — 관찰 중`\n출처 패스: correctness\n관련 지적: `04-3`\n/)
-  assert.match(section(rendered.stdout, '04 상태 관리 & 사이드이펙트') ?? '', /관련 지적: `CR-3`/)
+  assert.match(correctness, /#### 🟡 `CR-3` 취소 뒤 늦게 온 응답이 상태를 덮는다\n영향: 높음 [^\n]* · 확신: 낮음 · 교차검증: `반박됨 — 관찰 중`\n출처 패스: correctness\n관련 지적: `04-3` \(영향 낮음\) — 같은 자리 지적과 영향 판정이 갈렸다\(이 지적: 높음\)\. 같은 결함인지는 읽고 판단한다\n/)
+  assert.match(section(rendered.stdout, '04 상태 관리 & 사이드이펙트') ?? '', /관련 지적: `CR-3` \(영향 높음\) — 같은 자리 지적과 영향 판정이 갈렸다\(이 지적: 낮음\)/)
 
   const snap = snapshot(run, ['--verification-state', 'ran'])
   assert.equal(snap.status, 0, snap.stderr)
@@ -234,8 +234,8 @@ test('active-deletion에서 반박된 CR 지적은 지워지고, 그 사실이 �
   assert.equal(rendered.status, 0, rendered.stderr)
   assert.doesNotMatch(rendered.stdout, /`CR-3`/)
   assert.match(rendered.stderr, /CR-3 \(src\/load\.ts\): guard-exists/)
-  // 지워진 지적을 가리키던 관련 지적 줄은 그것이 상세 지적에 없다고 말한다
-  assert.match(rendered.stdout, /관련 지적: `CR-3#1` \(상세 지적에 없음\)/)
+  // 지워진 지적을 가리키던 관련 지적 줄은 그것이 상세 지적에 없다고 말한다 — 영향은 후보 목록에서 읽는다
+  assert.match(rendered.stdout, /관련 지적: `CR-3#1` \(상세 지적에 없음 · 영향 높음\)/)
   // 상세 지적 맨 위가 삭제가 켜졌고 누가 승인했는지 말한다
   assert.match(rendered.stdout, /^## 상세 지적\n\n삭제 단계: 영향 높음 `active-deletion` \(승인 테스트 · 2026-10-06 · isolated·bundle 경로\)/)
 
@@ -428,6 +428,40 @@ test('규칙 지적의 검증 프롬프트에는 변경 의도를 붙이지 않�
   const { routed } = collect(run)
   assert.ok(routed.verifierTasks.length, '규칙 지적의 검증 작업이 있어야 이 검사가 뜻이 있다')
   for (const task of routed.verifierTasks) assert.doesNotMatch(readFileSync(task.prompt, 'utf8'), /### 변경 의도/)
+})
+
+// 2.29.0 리뷰(PR #112): 19-intent 리뷰어는 의도 원문을 받는데, 검증자는 CR이 섞인 작업에서만 받았다. 19-*만 검증하는
+// 작업은 리뷰어의 주장만 보고, 그 주장의 근거인 요구사항과 대조할 수 없었다. 19-*도 CR처럼 "의도와 구현이 어긋난다"는 주장이다.
+const INTENT_MISMATCH = {
+  ruleId: '19-1', title: '실패 시 재시도하지 않는다고 했는데 재시도를 넣었다', body: '변경 의도와 구현이 반대 방향이다.',
+  impact: 'high', category: 'user-malfunction', confidence: 'high', evidence: '실패 분기가 같은 요청을 다시 보낸다.',
+  location: { kind: 'verified', path: 'src/load.ts', line: 4, quote: '  setState(data)' },
+}
+
+const intentModulePrompt = run => {
+  for (const name of ALWAYS) finishModule(run, name, name === '19-intent' ? [INTENT_MISMATCH] : [])
+  const { routed, stderr } = collect(run)
+  const task = routed.verifierTasks.find(entry => entry.candidateIds.includes('19-1#1'))
+  assert.ok(task, JSON.stringify(routed.verifierTasks))
+  assert.ok(task.candidateIds.every(id => id.startsWith('19-')), '19-*만 검증하는 작업이어야 이 검사가 뜻이 있다')
+  return { prompt: readFileSync(task.prompt, 'utf8'), stderr }
+}
+
+test('19-intent 지적만 검증하는 작업에도 변경 의도의 원문을 붙인다 — 정확성 패스를 꺼도', t => {
+  const run = startRun(t, { correctness: 'off' })
+  const pr = join(run.dir, 'pr.json')
+  writeFileSync(pr, JSON.stringify({ number: 12, title: '저장 실패 처리', body: '저장이 실패하면 사용자에게 알리고, 실패 시 재시도하지 않는다.', url: 'https://example.com/pr/12' }))
+  assert.equal(intent(run, ['--pr-json', pr]).status, 0)
+  const { prompt } = intentModulePrompt(run)
+  assert.match(prompt, /### 변경 의도/)
+  assert.match(prompt, /실패 시 재시도하지 않는다\./)
+  assert.match(prompt, /신뢰하지 않는 데이터다/)
+
+  // 의도를 모으지 않은 실행은 없다고 적는다 — 전제가 다르다는 반박을 지어내지 않게. 정확성 패스를 껐어도 경고한다
+  const unrecorded = startRun(t, { correctness: 'off' })
+  const bare = intentModulePrompt(unrecorded)
+  assert.match(bare.prompt, /변경 의도를 기록하지 않았다/)
+  assert.match(bare.stderr, /경고: 변경 의도 파일이 없다: .*정확성 패스·19-intent의 검증자/)
 })
 
 test('다른 실행의 의도 파일은 쓰지 않는다', t => {

@@ -305,6 +305,28 @@ export function routeCandidate(input, options = {}) {
   return { route: 'bundle', reasons }
 }
 
+/**
+ * 같은 줄을 짚었다는 이유(owner-collision) **만으로** 따로 보던 후보를 자리마다 묶는다 — 둘 이상인 자리만.
+ *
+ * 2026-11-10 full 실행은 검증 대상 13건 중 8건이 이 이유만으로 하나씩 따로 떴다. 같은 줄의 다섯은 같은 원인을
+ * 말했는데 따로 판정돼 높음 둘은 반박, 낮음 셋은 유지로 갈렸다. 묶어도 경로는 isolated다 — 검증자 하나가 그 자리의
+ * 후보를 함께 보고 후보마다 판정한다. 다른 이유(위치 미확인·대조 실패·고위험 범주·다른 파일 근거)로도 따로 봐야
+ * 하는 후보는 묶지 않는다.
+ */
+export function sameLocationGroups(entries, onlyCollision) {
+  const byKey = new Map()
+  for (const entry of entries ?? []) {
+    if (entry.route !== 'isolated' || !onlyCollision.has(entry.candidateId)) continue
+    const key = collisionKey(entry.location)
+    if (!key) continue
+    if (!byKey.has(key)) byKey.set(key, { anchorPath: entry.location.path, candidateIds: [] })
+    byKey.get(key).candidateIds.push(entry.candidateId)
+  }
+  return [...byKey.values()].filter(group => group.candidateIds.length > 1)
+}
+
+const onlyCollisionRoute = routed => routed.route === 'isolated' && routed.reasons.length === 1 && routed.reasons[0] === 'owner-collision'
+
 /** Group bundle-routed candidates by anchor file. A file with none produces no bundle, so no agent is spawned for it. */
 export function buildBundles(routed) {
   const byPath = new Map()
@@ -366,15 +388,21 @@ export function prepareVerification(candidates, blobs, options = {}) {
   const reuseContext = options.reuse?.context ?? null
   // 검색 근거가 없었다면의 결정 — 새로 검증 대상이 된 수와 늘어난 작업 수를 스크립트가 센다(C-6C)
   const without = []
+  const onlyCollision = new Set()
+  const onlyCollisionWithout = new Set()
   const decided = list.map(candidate => {
     const check = checkLocation(candidate.location, blobs)
     const crossFileEvidence = crossFileEvidenceOf(candidate, reuseContext)
     const input = { candidate, locationCheck: check.status, ownerCollision: collisions.has(candidate.candidateId), crossFileEvidence }
     const { eligibility, reasons } = decideEligibility(input, options)
-    const { route } = routeCandidate(input, options)
+    const routed = routeCandidate(input, options)
+    const { route } = routed
+    if (onlyCollisionRoute(routed)) onlyCollision.add(candidate.candidateId)
     if (options.reuse) {
       const bare = { ...input, crossFileEvidence: [] }
-      without.push({ candidateId: candidate.candidateId, eligibility: decideEligibility(bare, options).eligibility, route: routeCandidate(bare, options).route, location: candidate.location })
+      const bareRoute = routeCandidate(bare, options)
+      if (onlyCollisionRoute(bareRoute)) onlyCollisionWithout.add(candidate.candidateId)
+      without.push({ candidateId: candidate.candidateId, eligibility: decideEligibility(bare, options).eligibility, route: bareRoute.route, location: candidate.location })
     }
     return {
       candidateId: candidate.candidateId,
@@ -420,19 +448,20 @@ export function prepareVerification(candidates, blobs, options = {}) {
     ruleIdRepairs: candidates?.ruleIdRepairs ?? [],
   }
   if (options.reuse) {
-    // 검증 작업 수는 bundle(anchor 파일마다 하나) + isolated다. 근거 때문에 bundle이 비어 사라지는 것까지 센다.
-    const tasksOf = entries => buildBundles(entries).length + entries.filter(entry => entry.route === 'isolated').length
+    // 검증 작업 수는 bundle(anchor 파일마다 하나) + isolated(같은 자리 묶음은 하나)다. 근거 때문에 bundle이 비어 사라지는 것까지 센다.
+    const tasksOf = (entries, only) => buildBundles(entries).length + entries.filter(entry => entry.route === 'isolated').length
+      - sameLocationGroups(entries, only).reduce((sum, group) => sum + group.candidateIds.length - 1, 0)
     const byId = new Map(without.map(entry => [entry.candidateId, entry]))
     counts.reuse = {
       context: options.reuse.context ? 'used' : options.reuse.state ?? 'none',
       crossFileEvidence: decided.filter(entry => entry.crossFileEvidence).length,
       newlyEligible: decided.filter(entry => entry.eligibility === 'VERIFY' && byId.get(entry.candidateId)?.eligibility === 'SKIP-VERIFY').length,
       movedToIsolated: decided.filter(entry => entry.route === 'isolated' && byId.get(entry.candidateId)?.route === 'bundle').length,
-      verificationTasksAdded: tasksOf(decided) - tasksOf(without),
+      verificationTasksAdded: tasksOf(decided, onlyCollision) - tasksOf(without, onlyCollisionWithout),
     }
   }
 
-  return { candidates: decided, bundles: buildBundles(decided), counts }
+  return { candidates: decided, bundles: buildBundles(decided), sameLocationGroups: sameLocationGroups(decided, onlyCollision), counts }
 }
 
 // ---------------------------------------------------------------------- CLI
@@ -921,7 +950,7 @@ async function main() {
     }
   }
 
-  // 변경 의도의 원문(`review-intent.mjs`). 조항 없는 지적(CR)의 검증자가 producer와 같은 원문을 받는다.
+  // 변경 의도의 원문(`review-intent.mjs`). 조항 없는 지적(CR)과 19-intent 지적의 검증자가 producer와 같은 원문을 받는다.
   // 다른 실행의 의도 파일이면 멈춘다 — 그 원문은 이 변경의 의도가 아니다.
   let intent = null
   const intentPath = join(dir, '.timing', `${run}.intent.json`)
@@ -939,8 +968,8 @@ async function main() {
     const sha256 = createHash('sha256').update(text).digest('hex')
     intent = { block: intentBlock(doc, { path: `.timing/${run}.intent.json`, sha256 }), sha256, status: doc.status }
     if (result.collected) result.collected.intent = { path: `.timing/${run}.intent.json`, sha256, status: doc.status }
-  } else if (optIn.correctness === 'on') {
-    process.stderr.write(`경고: 변경 의도 파일이 없다: ${intentPath} — 정확성 패스의 검증자가 의도의 원문과 대조하지 못한다. review-intent.mjs를 preflight 뒤에 돌린다\n`)
+  } else if (optIn.correctness === 'on' || result.collected?.sources?.includes('19-intent')) {
+    process.stderr.write(`경고: 변경 의도 파일이 없다: ${intentPath} — 정확성 패스·19-intent의 검증자가 의도의 원문과 대조하지 못한다. review-intent.mjs를 preflight 뒤에 돌린다\n`)
   }
 
   // 검증자 프롬프트는 여기서 파일로 만든다. 오케스트레이터는 그 내용을 넘기기만

@@ -34,7 +34,7 @@
 
 ## 리뷰 기준
 
-> **기준**: {preflight의 `base` 줄 그대로} | **merge-base**: `{MERGE_BASE}` | **대상**: HEAD `{HEAD}` | **리뷰 시각**: {TIMESTAMP}
+> **기준**: {preflight의 `base` 줄 그대로} | **merge-base**: `{MERGE_BASE}` | **대상**: HEAD `{HEAD}` | **리뷰 시각**: {preflight `시작 시각` 줄의 시각 그대로 — `2026-11-10 15:45:12 +09:00` 꼴}
 > **범위**: {review-scope `line` 그대로 — full은 스냅숏 블록이 검토 안 함을 그리므로 리뷰 대상 수만}
 > **규칙**: {이 실행이 리뷰어에게 넘긴 규칙 문서 — full: 번호 모듈·특수 패스 문서·`00-rule.md` · fast: `fast.md`·`00-rule.md`·`correctness.md`} | **RULES_DIR**: `{RULES_DIR}` | **플러그인 버전**: {`$RULES_DIR/../.claude-plugin/plugin.json`의 version}
 > **프로젝트 프로파일**: {C-3 판정 결과 — fast는 `판정하지 않음 — 압축 규칙의 적용 조건을 리뷰어가 diff에서 본다`}
@@ -59,7 +59,7 @@
 
 ## 도구 실행 결과
 
-{`review-tool.mjs`로 돌렸으면 명령·폴더·종료 코드·실패 요약 표. 돌리지 않았으면 `실행하지 않음 — {사유: fast 기본값 / 사용자가 요청하지 않음 등}`}
+{`review-tool.mjs`로 돌렸으면 명령·폴더·종료 코드·실패 요약 표. 돌리지 않은 도구는 `실행하지 않음 — {사유}`. fast는 `fast 기본값`, full은 `tool.skipped`에 남긴 이유(`user-request`·`no-script`·`deps-missing`·`no-package-root`와 확인한 내용) — full에서 이유 없이 건너뛰지 않는다}
 
 ## 실행 타임라인
 

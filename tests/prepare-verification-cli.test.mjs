@@ -638,6 +638,24 @@ test('규칙 지적끼리도 줄이 겹치면 관련 지적으로 잇고, 같은
   assert.deepEqual([related.get('CR-1#1'), related.get('CR-2#1')], [['07-8#1'], ['07-8#1']])
 })
 
+// 2026-11-10 full 실행은 같은 줄을 짚었다는 이유만으로 검증 대상이 돼 하나씩 따로 뜬 지적이 13건 중 8건이었다. 같은 자리끼리는 검증자
+// 하나가 함께 보고 후보마다 판정한다 — 작업 이름과 판정 자리를 스크립트가 정하고, 프롬프트에 그 자리의 후보가 다 실린다.
+test('같은 줄을 짚었다는 이유만으로 검증 대상이 된 후보는 자리마다 검증 작업 하나로 나간다', t => {
+  const out = prepare(t, { results: [
+    { source: '01-fsd', result: { ...RESULT, findings: [FINDING] } },
+    { source: '07-naming', result: { ...RESULT, findings: [{ ...FINDING, ruleId: '07-8', title: '이름' }] } },
+    { source: '13-dx', result: { ...RESULT, findings: [{ ...FINDING, ruleId: '13-4', title: '주석' }] } },
+  ] })
+  assert.equal(out.status, 0, out.stderr)
+  const routed = JSON.parse(out.stdout)
+  assert.deepEqual(routed.candidates.map(candidate => [candidate.candidateId, candidate.route]), [['01-1#1', 'isolated'], ['07-8#1', 'isolated'], ['13-4#1', 'isolated']])
+  assert.deepEqual(routed.sameLocationGroups, [{ anchorPath: 'README.md', candidateIds: ['01-1#1', '07-8#1', '13-4#1'] }])
+  assert.deepEqual(routed.verifierTasks.map(task => [task.taskId, task.route, task.candidateIds]), [['isolated-same-1', 'isolated', ['01-1#1', '07-8#1', '13-4#1']]])
+  const prompt = readFileSync(routed.verifierTasks[0].prompt, 'utf8')
+  assert.match(prompt, /- 판정할 `candidateId`: `01-1#1`, `07-8#1`, `13-4#1`/)
+  assert.match(prompt, /같은 줄을 짚은 다른 규칙의 후보 3개를 함께 본다/)
+})
+
 // full 실행의 run.start — 선택 패스를 켰는지가 여기 있다.
 const startedFull = (t, correctness, events) => {
   const dir = mkdtempSync(join(tmpdir(), 'prep-full-'))

@@ -351,6 +351,10 @@ const logged = (() => {
     // full은 diff 밖의 기존 구현을 찾아 05에 넘긴다(05-7). 예정이라는 사실을 시작에 남겨, 계획했는데 돌리지 않은
     // 검색을 기록 검사가 짚게 한다 — 이 필드가 없는 예전 기록은 그 검사를 받지 않는다.
     ...(workflow === 'full' ? { reuseSearch: 'planned', resultBinding: 'required' } : {}),
+    // full은 lint·typecheck·test를 기본으로 돌린다(C-6). 시작에 남겨, 돌리지도 이유를 남기지도 않은 실행을 기록 검사가 짚게 한다.
+    ...(workflow === 'full' ? { toolRun: 'required' } : {}),
+    // full의 모듈 프롬프트는 작업 대장이 파일로 만든다(SKILL `MODULE_PROMPT`). 이 표시가 없는 예전 기록에는 만들지 않는다.
+    ...(workflow === 'full' ? { modulePrompts: 'script' } : {}),
     // 원격이 없으면 필드를 비워 둔다. 없는 값을 지어 넣지 않는다.
     ...(identity.remote ? { repo: identity.remote } : {}),
     repoRoot: identity.root,
@@ -399,6 +403,27 @@ function baseMovedLine(moved) {
   return `${base}이 merge-base 뒤로 ${moved.ahead}커밋 앞서 있고, 이 브랜치와 같은 파일 ${moved.overlap.length}개를 바꿨다: ${shown}${moved.overlap.length > 5 ? ` 외 ${moved.overlap.length - 5}개` : ''} — lint·typecheck·test는 base를 따라잡지 않은 HEAD에서 돈다. 실패가 그 때문인지는 이 브랜치를 base에 합친 트리에서 다시 재 가린다. 파일이 겹친다는 것만으로 이 변경의 실패가 아니라고 하지 않는다(C-6)`
 }
 
+const capabilities = hostCapabilities(host)
+// 시작 시각 — run.start가 남긴 시각을 이 기계의 현지 시간과 시차로 낸다. 리포트의 `리뷰 시각`이 이 줄을 옮긴다.
+// 2026-11-10 리포트 셋은 날짜만, UTC ISO 문자열로 제각각이었다. 기록하지 않은 실행(--dry-run)은 지금 시각이다.
+const startedAt = (() => {
+  if (logged.ok && !logged.skipped) {
+    try {
+      const first = readFileSync(sidecar, 'utf8').split('\n').find(Boolean)
+      const at = first ? JSON.parse(first).at : undefined
+      if (typeof at === 'string' && Number.isFinite(Date.parse(at))) return new Date(at)
+    } catch {
+      // 읽지 못하면 지금 시각으로 낸다 — 기록 실패는 아래 타임라인 줄이 따로 알린다
+    }
+  }
+  return new Date()
+})()
+const localStamp = date => {
+  const offset = -date.getTimezoneOffset()
+  const pad = value => String(Math.abs(value)).padStart(2, '0')
+  const local = new Date(date.getTime() + offset * 60_000).toISOString().slice(0, 19).replace('T', ' ')
+  return `${local} ${offset < 0 ? '-' : '+'}${pad(Math.trunc(offset / 60))}:${pad(offset % 60)}`
+}
 const out = [
   `플러그인      ${version}`,
   `규칙 경로     ${rules}`,
@@ -410,12 +435,18 @@ const out = [
   `HEAD          ${identity.head}`,
   `작업 트리     ${identity.worktree === 'clean' ? 'clean' : `커밋하지 않은 변경 ${identity.dirtyFiles}개 (${identity.worktree})`}`,
   `실행 ID       ${identity.runId}`,
+  `시작 시각     ${localStamp(startedAt)} — 리포트의 리뷰 시각에 그대로 옮긴다`,
   `변경 파일     ${changed.length}개`,
   `리뷰 파일     ${scope.files.length}개 (제외 ${scope.excluded.length}개 — 테스트·mock, C-5)${logged.ok && !logged.skipped ? ` · 목록 .timing/${run}.scope.json` : ''}`,
   ...(scope.outside.length ? [`검토 안 함    ${scope.outside.length}개 — React 규칙이 다루지 않는 언어: ${outsideSummary({ outside: scope.outside.length, otherApps: scope.otherApps })}. 지적 대상이 아니고 리포트에 검토 안 함으로 남는다(C-5)`] : []),
   ...(scope.packageRoots.length ? [`패키지 루트   ${scope.packageRoots.map(entry => `${entry.root}(${entry.files}개)`).join(', ')} — 프로필은 저장소 루트가 아니라 이 폴더에서 판정한다(C-3)`] : []),
   ...(dependencyFiles.length ? [`의존성 변경   ${dependencyFiles.join(', ')} — baseline은 그 트리에 그 트리의 의존성을 설치해 잰다. 지금 트리의 의존성을 같이 쓰면 baseline도 같은 실패를 내 "신규 0"으로 잘못 나온다(C-6)`] : []),
-  ...(workflow === 'full' ? [`기존 구현 검색 예정 — 05를 뺀 모듈을 먼저 띄우고, 그동안 검색 계획을 써 review-reuse.mjs로 후보를 모은다. 05는 검색이 끝난 뒤 띄운다(C-6C)`] : []),
+  // 계획을 언제 쓰는지는 호스트가 정한다. 띄운 작업이 다 끝나야 돌아오는 호스트에서는 웨이브가 도는 동안 오케스트레이터가
+  // 아무것도 못 한다 — 2026-11-10 OpenCode 실행은 첫 웨이브 뒤에 계획을 써 05가 잡히고 두 번째 웨이브가 266초 늦었다.
+  ...(workflow === 'full' ? [capabilities.perTaskNotification
+    ? `기존 구현 검색 예정 — 05를 뺀 모듈을 먼저 띄우고, 그동안 검색 계획을 써 review-reuse.mjs로 후보를 모은다. 05는 검색이 끝난 뒤 띄운다(C-6C)`
+    : `기존 구현 검색 예정 — 이 호스트는 띄운 작업이 다 끝나야 돌아온다. 첫 디스패치 전에 검색 계획을 써 review-reuse.mjs로 띄우고(기다리지 않는다), 그 뒤 05를 뺀 모듈을 띄운다. 05는 검색이 끝난 뒤 띄운다(C-6C)`] : []),
+  ...(workflow === 'full' ? [`도구 실행     lint·typecheck·test를 기본으로 돌린다 — 패키지 루트 폴더에서 review-tool.mjs --detach로 띄우고 리포트 직전 --wait로 받는다. 돌리지 않는 도구는 이유(user-request·no-script·deps-missing·no-package-root)를 review-timeline.mjs --phase tool.skipped로 남긴다(C-6)`] : []),
   `리뷰 에이전트  첫 디스패치 전에 작업 도구의 에이전트 목록에서 react-code-review-plugin:rule-module-reviewer를 찾는다. 없으면 리뷰하지 않고 review-tasks.mjs cancel --all --reason agent-unavailable로 멈춘다 — 직접 리뷰하거나 다른 에이전트로 대신하지 않는다(C-6)`,
   '',
   `후보 모듈     ${candidates.length}개  ${candidates.map(module => module.id).join(' ')}`,
@@ -437,7 +468,6 @@ for (const module of optional) {
   out.push(`선택 패스     ${module.id} ${state === 'on' ? '켜짐' : `꺼짐 — --${module.id} on일 때만 돈다`}`)
 }
 {
-  const capabilities = hostCapabilities(host)
   const minutes = sec => (sec % 60 === 0 ? `${sec / 60}분` : `${sec}초`)
   out.push('')
   out.push(`한도          ${maxTasks === null && maxDurationSec === null ? '없음' : [maxTasks !== null ? `호출 ${maxTasks}개` : null, maxDurationSec !== null ? `시간 ${minutes(maxDurationSec)}` : null].filter(Boolean).join(' · ')} — 응답 없이 ${minutes(staleAfterSec)}이 지난 시도는 죽은 것으로 본다`)
