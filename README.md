@@ -573,6 +573,14 @@ Two `/code-review-full` runs on 2.28.0 (OpenCode, 2026-11-10) collected every mo
 
 This is MINOR: prompts move from the orchestrator to the ledger, and full runs tools by default.
 
+## Review fixes for 2.29.0 (2.29.1)
+
+The review of PR #112 found three gaps in 2.29.0.
+
+- **The `19-intent` verifier did not get the intent.** 2.29.0 gave the intent to the `19-intent` reviewer, but verifier prompts still attached it only when a `CR-*` finding was in the task. A task with only `19-*` findings saw the reviewer's claim and not the requirement it was judged against. Verifier tasks with `19-*` findings now get the same intent block; other rule findings still do not. The missing-intent warning also fires when `19-intent` ran with correctness off.
+- **A hand-recorded `malformed-output` produced no correction prompt.** The ledger checked only JSON parsing and language; the skill told the orchestrator to find other contract errors (such as a missing `openQuestions`) and record `done --status failed --failure-class malformed-output`. That call carries no response and no errors, so no `.retry.md` was written and `next` sent the original prompt again. In full runs, `done` now checks the result contract itself, with the same function `validate-rules.mjs` uses for the contract fixtures (moved to `scripts/lib/contract-validate.mjs`), and reports contract and language problems together in the correction prompt. A hand-recorded `malformed-output` for a full module or any verifier task is refused (exit 3, nothing recorded). Older records and fast are unchanged.
+- **One tool record passed the check for all three.** `--check` accepted a run once any tool ran or any `tool.skipped` was recorded, so `test: no-script` alone hid lint and typecheck. It now checks `lint`, `typecheck` and `test` one by one and names the missing ones. A rerun (`test-rerun`) does not count as the tool.
+
 ## Applicability metadata
 
 `review-rules/catalog.json` records **when** a module applies — required profile (FSD, Tailwind, RSC, Electron, TanStack Query, server code, contract provider), minimum React version, which workflows load it, and which individual rules carry a narrower gate than their module. The Markdown modules stay canonical for **what** a rule says; the catalog never generates documentation and never restates rule text.
