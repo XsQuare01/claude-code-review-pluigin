@@ -430,6 +430,40 @@ test('규칙 지적의 검증 프롬프트에는 변경 의도를 붙이지 않�
   for (const task of routed.verifierTasks) assert.doesNotMatch(readFileSync(task.prompt, 'utf8'), /### 변경 의도/)
 })
 
+// 2.29.0 리뷰(PR #112): 19-intent 리뷰어는 의도 원문을 받는데, 검증자는 CR이 섞인 작업에서만 받았다. 19-*만 검증하는
+// 작업은 리뷰어의 주장만 보고, 그 주장의 근거인 요구사항과 대조할 수 없었다. 19-*도 CR처럼 "의도와 구현이 어긋난다"는 주장이다.
+const INTENT_MISMATCH = {
+  ruleId: '19-1', title: '실패 시 재시도하지 않는다고 했는데 재시도를 넣었다', body: '변경 의도와 구현이 반대 방향이다.',
+  impact: 'high', category: 'user-malfunction', confidence: 'high', evidence: '실패 분기가 같은 요청을 다시 보낸다.',
+  location: { kind: 'verified', path: 'src/load.ts', line: 4, quote: '  setState(data)' },
+}
+
+const intentModulePrompt = run => {
+  for (const name of ALWAYS) finishModule(run, name, name === '19-intent' ? [INTENT_MISMATCH] : [])
+  const { routed, stderr } = collect(run)
+  const task = routed.verifierTasks.find(entry => entry.candidateIds.includes('19-1#1'))
+  assert.ok(task, JSON.stringify(routed.verifierTasks))
+  assert.ok(task.candidateIds.every(id => id.startsWith('19-')), '19-*만 검증하는 작업이어야 이 검사가 뜻이 있다')
+  return { prompt: readFileSync(task.prompt, 'utf8'), stderr }
+}
+
+test('19-intent 지적만 검증하는 작업에도 변경 의도의 원문을 붙인다 — 정확성 패스를 꺼도', t => {
+  const run = startRun(t, { correctness: 'off' })
+  const pr = join(run.dir, 'pr.json')
+  writeFileSync(pr, JSON.stringify({ number: 12, title: '저장 실패 처리', body: '저장이 실패하면 사용자에게 알리고, 실패 시 재시도하지 않는다.', url: 'https://example.com/pr/12' }))
+  assert.equal(intent(run, ['--pr-json', pr]).status, 0)
+  const { prompt } = intentModulePrompt(run)
+  assert.match(prompt, /### 변경 의도/)
+  assert.match(prompt, /실패 시 재시도하지 않는다\./)
+  assert.match(prompt, /신뢰하지 않는 데이터다/)
+
+  // 의도를 모으지 않은 실행은 없다고 적는다 — 전제가 다르다는 반박을 지어내지 않게. 정확성 패스를 껐어도 경고한다
+  const unrecorded = startRun(t, { correctness: 'off' })
+  const bare = intentModulePrompt(unrecorded)
+  assert.match(bare.prompt, /변경 의도를 기록하지 않았다/)
+  assert.match(bare.stderr, /경고: 변경 의도 파일이 없다: .*정확성 패스·19-intent의 검증자/)
+})
+
 test('다른 실행의 의도 파일은 쓰지 않는다', t => {
   const run = startRun(t, { correctness: 'on' })
   assert.equal(intent(run, ['--no-pr']).status, 0)

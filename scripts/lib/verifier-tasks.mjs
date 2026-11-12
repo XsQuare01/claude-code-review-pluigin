@@ -11,6 +11,9 @@
 
 export const MANIFEST_PLACEHOLDER = '{REVIEW_VERDICT_CONTRACT_V1_MANIFEST}'
 
+/** 19-intent 모듈의 규칙 ID(`19-1` 등). 이 리뷰어는 변경 의도 원문을 받고 리뷰한다 — 검증자도 같은 원문을 받는다. */
+const INTENT_RULE = /^19-\d+$/
+
 /**
  * 안쪽 글이 닫을 수 없는 코드 울타리.
  *
@@ -204,9 +207,10 @@ export function buildTaskPrompt({ instructions, task, candidatesById, clauses, m
     }
   }
   const missing = clauseLines(lines, members.map(candidate => candidate.ruleId), clauses)
-  // 조항 없는 지적(CR)은 "변경의 의도와 구현이 어긋난다"는 주장이다. 검증자가 그 주장을 의도의 원문과
-  // 대조할 수 있게, producer가 받은 원문을 그대로 붙인다(PR #90 리뷰). 규칙 지적에는 붙이지 않는다.
-  if (members.some(candidate => typeof clauses.get(candidate.ruleId)?.basis === 'string')) {
+  // 조항 없는 지적(CR)과 19-intent 지적은 "변경의 의도와 구현이 어긋난다"는 주장이다. 검증자가 그 주장을 의도의
+  // 원문과 대조할 수 있게, producer가 받은 원문을 그대로 붙인다(PR #90 리뷰, 19-*는 PR #112 리뷰). 다른 규칙
+  // 지적에는 붙이지 않는다 — 그 판정은 의도가 아니라 규칙 조항과 코드로 한다.
+  if (members.some(candidate => typeof clauses.get(candidate.ruleId)?.basis === 'string' || INTENT_RULE.test(candidate.ruleId ?? ''))) {
     if (lines.at(-1) !== '') lines.push('')
     lines.push(intent?.block ?? '### 변경 의도\n\n변경 의도를 기록하지 않았다(`review-intent.mjs`를 돌리지 않았다) — 지적이 전제한 의도를 원문과 대조할 수 없다. "전제한 의도가 다르다"로 반박하지 말고, 코드 경로로만 판정한다.', '')
   }

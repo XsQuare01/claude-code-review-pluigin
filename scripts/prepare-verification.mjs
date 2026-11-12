@@ -950,7 +950,7 @@ async function main() {
     }
   }
 
-  // 변경 의도의 원문(`review-intent.mjs`). 조항 없는 지적(CR)의 검증자가 producer와 같은 원문을 받는다.
+  // 변경 의도의 원문(`review-intent.mjs`). 조항 없는 지적(CR)과 19-intent 지적의 검증자가 producer와 같은 원문을 받는다.
   // 다른 실행의 의도 파일이면 멈춘다 — 그 원문은 이 변경의 의도가 아니다.
   let intent = null
   const intentPath = join(dir, '.timing', `${run}.intent.json`)
@@ -968,8 +968,8 @@ async function main() {
     const sha256 = createHash('sha256').update(text).digest('hex')
     intent = { block: intentBlock(doc, { path: `.timing/${run}.intent.json`, sha256 }), sha256, status: doc.status }
     if (result.collected) result.collected.intent = { path: `.timing/${run}.intent.json`, sha256, status: doc.status }
-  } else if (optIn.correctness === 'on') {
-    process.stderr.write(`경고: 변경 의도 파일이 없다: ${intentPath} — 정확성 패스의 검증자가 의도의 원문과 대조하지 못한다. review-intent.mjs를 preflight 뒤에 돌린다\n`)
+  } else if (optIn.correctness === 'on' || result.collected?.sources?.includes('19-intent')) {
+    process.stderr.write(`경고: 변경 의도 파일이 없다: ${intentPath} — 정확성 패스·19-intent의 검증자가 의도의 원문과 대조하지 못한다. review-intent.mjs를 preflight 뒤에 돌린다\n`)
   }
 
   // 검증자 프롬프트는 여기서 파일로 만든다. 오케스트레이터는 그 내용을 넘기기만
