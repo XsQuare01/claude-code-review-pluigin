@@ -170,3 +170,75 @@ export function validateVerdictPayload(value, verdictManifest, resultManifest) {
   value.verdicts.forEach((item, index) => validateVerdictItem(item, verdictManifest, resultManifest, errors, `result.verdicts[${index}]`))
   return errors
 }
+
+/**
+ * `REVIEW_RESULT_CONTRACT_V1` manifest에서 결과 검사에 쓰는 허용 목록을 뽑는다.
+ * manifest가 없으면 `null`이다 — 그때 검사는 모든 키를 모르는 키로 본다.
+ */
+export function resultSchemaOf(manifest) {
+  if (!manifest) return null
+  return {
+    manifest,
+    topLevelAllowed: manifestAllowedSet(manifest.topLevel?.allowed),
+    findingAllowed: manifestAllowedSet(manifest.findingsItem?.allowed),
+    openQuestionAllowed: manifestAllowedSet(manifest.openQuestionsItem?.allowed),
+    locationAllowed: {
+      verified: manifestAllowedSet(manifest.location?.variants?.verified?.allowed),
+      deleted: manifestAllowedSet(manifest.location?.variants?.deleted?.allowed),
+      unverified: manifestAllowedSet(manifest.location?.variants?.unverified?.allowed),
+    },
+    categoryIds: Array.isArray(manifest.impact?.categoryEnum) ? manifest.impact.categoryEnum : [],
+    categoryLabels: manifest.impact?.categoryLabels ?? {},
+  }
+}
+
+function validateFinding(item, schema, errors, where) {
+  if (!validatePlainObject(item, errors, 'E_FINDING_NOT_OBJECT', where)) return
+  validateUnknownKeys(item, schema?.findingAllowed ?? new Set(), errors, 'E_FINDING_UNKNOWN_KEY', where)
+  for (const key of ['ruleId', 'title', 'body']) validateRequiredString(item, key, errors, `E_FINDING_REQUIRES_${key.toUpperCase()}`, where)
+  if (!['high', 'low'].includes(item.impact)) addError(errors, 'E_FINDING_INVALID_IMPACT', `${where}.impact must be high or low`)
+  if (!['high', 'low'].includes(item.confidence)) addError(errors, 'E_FINDING_INVALID_CONFIDENCE', `${where}.confidence must be high or low`)
+  validateLocationAgainst(schema?.manifest ?? null, item.location, errors, `${where}.location`)
+  if (item.impact === 'high') {
+    if (!hasOwn(item, 'category')) addError(errors, 'E_FINDING_HIGH_REQUIRES_CATEGORY', `${where}.category is required when impact is high`)
+    else if (!(schema?.categoryIds ?? []).includes(item.category)) addError(errors, 'E_FINDING_INVALID_CATEGORY', `${where}.category must be one of the five approved IDs`)
+    if (!hasOwn(item, 'evidence') || typeof item.evidence !== 'string' || item.evidence.trim() === '') {
+      addError(errors, 'E_FINDING_HIGH_REQUIRES_EVIDENCE', `${where}.evidence is required when impact is high`)
+    }
+  }
+  if (item.impact === 'low' && hasOwn(item, 'category')) addError(errors, 'E_FINDING_LOW_FORBIDS_CATEGORY', `${where}.category is forbidden when impact is low`)
+  if (item.confidence === 'low' && (!hasOwn(item, 'reason') || typeof item.reason !== 'string' || item.reason.trim() === '')) {
+    addError(errors, 'E_FINDING_LOW_CONFIDENCE_REQUIRES_REASON', `${where}.reason is required when confidence is low`)
+  }
+}
+
+function validateOpenQuestion(item, schema, errors, where) {
+  if (!validatePlainObject(item, errors, 'E_OPEN_QUESTION_NOT_OBJECT', where)) return
+  validateUnknownKeys(item, schema?.openQuestionAllowed ?? new Set(), errors, 'E_OPEN_QUESTION_UNKNOWN_KEY', where)
+  for (const key of ['title', 'body', 'reason']) validateRequiredString(item, key, errors, `E_OPEN_QUESTION_REQUIRES_${key.toUpperCase()}`, where)
+  validateLocationAgainst(schema?.manifest ?? null, item.location, errors, `${where}.location`)
+}
+
+/**
+ * producer 결과 payload 하나를 `REVIEW_RESULT_CONTRACT_V1`(C-6A)로 검사한다. 오류가 없으면 빈 배열이다.
+ *
+ * `validate-rules.mjs`는 계약 fixture를, 작업 대장(`review-tasks.mjs done`)은 실행 중 받은 모듈 결과를
+ * 이것으로 본다. 대장이 검사하지 않던 때는 오케스트레이터가 계약 위반을 찾아 실패를 손으로 남겼고, 그
+ * 경로에는 교정 프롬프트가 만들어지지 않았다(PR #112 리뷰).
+ */
+export function validateResultPayload(value, manifest) {
+  const schema = resultSchemaOf(manifest)
+  const errors = []
+  if (!validatePlainObject(value, errors, 'E_TOPLEVEL_NOT_OBJECT', 'result')) return errors
+  scanForbiddenSeverity(value, errors, 'result')
+  validateUnknownKeys(value, schema?.topLevelAllowed ?? new Set(), errors, 'E_TOPLEVEL_UNKNOWN_KEY', 'result')
+  if (!hasOwn(value, 'schemaVersion')) addError(errors, 'E_TOPLEVEL_MISSING_SCHEMA_VERSION', 'result.schemaVersion is required')
+  else if (value.schemaVersion !== 1) addError(errors, 'E_TOPLEVEL_INVALID_SCHEMA_VERSION', 'result.schemaVersion must be 1')
+  if (!hasOwn(value, 'findings')) addError(errors, 'E_TOPLEVEL_MISSING_FINDINGS', 'result.findings is required')
+  else if (!Array.isArray(value.findings)) addError(errors, 'E_TOPLEVEL_FINDINGS_NOT_ARRAY', 'result.findings must be an array')
+  if (!hasOwn(value, 'openQuestions')) addError(errors, 'E_TOPLEVEL_MISSING_OPEN_QUESTIONS', 'result.openQuestions is required')
+  else if (!Array.isArray(value.openQuestions)) addError(errors, 'E_TOPLEVEL_OPEN_QUESTIONS_NOT_ARRAY', 'result.openQuestions must be an array')
+  if (Array.isArray(value.findings)) value.findings.forEach((item, index) => validateFinding(item, schema, errors, `result.findings[${index}]`))
+  if (Array.isArray(value.openQuestions)) value.openQuestions.forEach((item, index) => validateOpenQuestion(item, schema, errors, `result.openQuestions[${index}]`))
+  return errors
+}

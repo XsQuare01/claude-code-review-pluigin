@@ -16,10 +16,7 @@ import { fileURLToPath } from 'node:url'
 import { validateEffectiveCommonContext } from './lib/effective-common-context-validator.mjs'
 import { markedBlock, CROSS_VERIFICATION_TOKEN_KEYS } from './lib/contract-blocks.mjs'
 import { NON_RESOLVING_KINDS } from './lib/review-compare.mjs'
-import {
-  addError, hasOwn, manifestAllowedSet, scanForbiddenSeverity, validateLocationAgainst, validatePlainObject,
-  validateRequiredString, validateUnknownKeys, validateVerdictPayload,
-} from './lib/contract-validate.mjs'
+import { addError, hasOwn, resultSchemaOf, validateResultPayload, validateVerdictPayload } from './lib/contract-validate.mjs'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 const RULES = join(ROOT, 'review-rules')
@@ -102,23 +99,7 @@ function getContractManifest() {
 }
 
 function getManifestDerivedSchema() {
-  const manifest = getContractManifest()
-  if (!manifest) return null
-  const categoryIds = Array.isArray(manifest.impact?.categoryEnum) ? manifest.impact.categoryEnum : []
-  const categoryLabels = manifest.impact?.categoryLabels ?? {}
-  return {
-    manifest,
-    topLevelAllowed: manifestAllowedSet(manifest.topLevel?.allowed),
-    findingAllowed: manifestAllowedSet(manifest.findingsItem?.allowed),
-    openQuestionAllowed: manifestAllowedSet(manifest.openQuestionsItem?.allowed),
-    locationAllowed: {
-      verified: manifestAllowedSet(manifest.location?.variants?.verified?.allowed),
-      deleted: manifestAllowedSet(manifest.location?.variants?.deleted?.allowed),
-      unverified: manifestAllowedSet(manifest.location?.variants?.unverified?.allowed),
-    },
-    categoryIds,
-    categoryLabels,
-  }
+  return resultSchemaOf(getContractManifest())
 }
 
 function sameMembers(actual, expected) {
@@ -164,54 +145,8 @@ function validateMarkdownBlocks(relativePath, text, check) {
   }
 }
 
-function validateLocation(location, errors, where) {
-  validateLocationAgainst(getContractManifest(), location, errors, where)
-}
-
-function validateFinding(item, errors, where) {
-  const schema = getManifestDerivedSchema()
-  if (!validatePlainObject(item, errors, 'E_FINDING_NOT_OBJECT', where)) return
-  validateUnknownKeys(item, schema?.findingAllowed ?? new Set(), errors, 'E_FINDING_UNKNOWN_KEY', where)
-  for (const key of ['ruleId', 'title', 'body']) validateRequiredString(item, key, errors, `E_FINDING_REQUIRES_${key.toUpperCase()}`, where)
-  if (!['high', 'low'].includes(item.impact)) addError(errors, 'E_FINDING_INVALID_IMPACT', `${where}.impact must be high or low`)
-  if (!['high', 'low'].includes(item.confidence)) addError(errors, 'E_FINDING_INVALID_CONFIDENCE', `${where}.confidence must be high or low`)
-  validateLocation(item.location, errors, `${where}.location`)
-  if (item.impact === 'high') {
-    if (!hasOwn(item, 'category')) addError(errors, 'E_FINDING_HIGH_REQUIRES_CATEGORY', `${where}.category is required when impact is high`)
-    else if (!(schema?.categoryIds ?? []).includes(item.category)) addError(errors, 'E_FINDING_INVALID_CATEGORY', `${where}.category must be one of the five approved IDs`)
-    if (!hasOwn(item, 'evidence') || typeof item.evidence !== 'string' || item.evidence.trim() === '') {
-      addError(errors, 'E_FINDING_HIGH_REQUIRES_EVIDENCE', `${where}.evidence is required when impact is high`)
-    }
-  }
-  if (item.impact === 'low' && hasOwn(item, 'category')) addError(errors, 'E_FINDING_LOW_FORBIDS_CATEGORY', `${where}.category is forbidden when impact is low`)
-  if (item.confidence === 'low' && (!hasOwn(item, 'reason') || typeof item.reason !== 'string' || item.reason.trim() === '')) {
-    addError(errors, 'E_FINDING_LOW_CONFIDENCE_REQUIRES_REASON', `${where}.reason is required when confidence is low`)
-  }
-}
-
-function validateOpenQuestion(item, errors, where) {
-  const schema = getManifestDerivedSchema()
-  if (!validatePlainObject(item, errors, 'E_OPEN_QUESTION_NOT_OBJECT', where)) return
-  validateUnknownKeys(item, schema?.openQuestionAllowed ?? new Set(), errors, 'E_OPEN_QUESTION_UNKNOWN_KEY', where)
-  for (const key of ['title', 'body', 'reason']) validateRequiredString(item, key, errors, `E_OPEN_QUESTION_REQUIRES_${key.toUpperCase()}`, where)
-  validateLocation(item.location, errors, `${where}.location`)
-}
-
 function validateReviewResultContract(value) {
-  const schema = getManifestDerivedSchema()
-  const errors = []
-  if (!validatePlainObject(value, errors, 'E_TOPLEVEL_NOT_OBJECT', 'result')) return errors
-  scanForbiddenSeverity(value, errors, 'result')
-  validateUnknownKeys(value, schema?.topLevelAllowed ?? new Set(), errors, 'E_TOPLEVEL_UNKNOWN_KEY', 'result')
-  if (!hasOwn(value, 'schemaVersion')) addError(errors, 'E_TOPLEVEL_MISSING_SCHEMA_VERSION', 'result.schemaVersion is required')
-  else if (value.schemaVersion !== 1) addError(errors, 'E_TOPLEVEL_INVALID_SCHEMA_VERSION', 'result.schemaVersion must be 1')
-  if (!hasOwn(value, 'findings')) addError(errors, 'E_TOPLEVEL_MISSING_FINDINGS', 'result.findings is required')
-  else if (!Array.isArray(value.findings)) addError(errors, 'E_TOPLEVEL_FINDINGS_NOT_ARRAY', 'result.findings must be an array')
-  if (!hasOwn(value, 'openQuestions')) addError(errors, 'E_TOPLEVEL_MISSING_OPEN_QUESTIONS', 'result.openQuestions is required')
-  else if (!Array.isArray(value.openQuestions)) addError(errors, 'E_TOPLEVEL_OPEN_QUESTIONS_NOT_ARRAY', 'result.openQuestions must be an array')
-  if (Array.isArray(value.findings)) value.findings.forEach((item, index) => validateFinding(item, errors, `result.findings[${index}]`))
-  if (Array.isArray(value.openQuestions)) value.openQuestions.forEach((item, index) => validateOpenQuestion(item, errors, `result.openQuestions[${index}]`))
-  return errors
+  return validateResultPayload(value, getContractManifest())
 }
 
 function nearestHeadingSlice(text, anchor) {
