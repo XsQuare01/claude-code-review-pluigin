@@ -31,6 +31,20 @@ export function ruleIdGuide({ kind, moduleId, task }) {
   return PASS_IDS[task] ?? `지적 ID는 \`${task}.md\`의 조항 번호다`
 }
 
+// OpenCode의 읽기 도구는 한 번에 50KB까지만 돌려준다("Output capped at 50 KB. Showing lines 1-819. Use offset=820 to
+// continue."). 규칙 전문을 붙인 프롬프트는 38~54KB라 `02-type`·`03-react-rules`는 첫 읽기에서 담당 규칙의 끝 조항이
+// 잘린다. 전체 줄 수를 첫 줄에 적어, 리뷰어가 받은 줄 번호와 견줘 이어 읽게 한다. 교정 프롬프트는 원래 프롬프트에
+// 오류와 직전 응답을 더 붙이므로, 다시 붙일 때는 앞의 안내를 떼고 새로 센다.
+const READ_NOTICE = /^> 이 파일은 \d+줄이다\.[^\n]*\n\n/
+const lineCount = text => (text ? text.split('\n').length - (text.endsWith('\n') ? 1 : 0) : 0)
+const readNotice = total => `> 이 파일은 ${total}줄이다. 읽기 도구가 한 번에 다 보여 주지 않으면 offset을 늘려 가며 ${total}번째 줄까지 이어 읽는다. 담당 규칙 전문이 뒤쪽에 있으니, 끝 줄까지 읽기 전에는 리뷰를 시작하지 않는다.`
+
+/** 첫 줄에 전체 줄 수와 이어 읽기 지시를 붙인다. 이미 붙어 있으면 떼고 다시 센다. */
+export function withReadNotice(text) {
+  const body = String(text).replace(READ_NOTICE, '')
+  return `${readNotice(lineCount(body) + 2)}\n\n${body}`
+}
+
 const code = value => `\`${value}\``
 const list = items => items.map(item => `  - ${item}`).join('\n')
 
@@ -110,5 +124,5 @@ export function buildModulePrompt(input) {
     String(ruleDoc.text).trimEnd(),
     '',
   )
-  return sections.join('\n')
+  return withReadNotice(sections.join('\n'))
 }

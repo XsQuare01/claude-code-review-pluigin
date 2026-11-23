@@ -34,7 +34,7 @@ const KIND = 'review-snapshot'
 
 const STATUSES = ['complete', 'partial', 'failed']
 const MODULE_STATES = ['ok', 'failed', 'missing', 'skipped', 'unknown']
-const MISSING_REASONS = ['no-record', 'status-outside-list', 'not-collected', 'halted']
+const MISSING_REASONS = ['no-record', 'unfinished', 'status-outside-list', 'not-collected', 'halted']
 const DISPOSITIONS = ['upheld', 'rejected', 'scope-open', 'not-eligible', 'verification-disabled', 'verification-unavailable']
 const DRIFT_FIELDS = ['head', 'worktree', 'rulesDigest']
 const INPUT_ROLES = ['timeline', 'routed', 'verdicts', 'result', 'evidence', 'execution', 'previous', 'rechecks', 'intent', 'reuse-context']
@@ -140,6 +140,8 @@ function moduleStates({ modules, events, collected, notes, start }) {
   // 띄우지 않았다"다. 둘 다 미검토 범위지만 고칠 곳이 다르다 — 앞의 것은 오케스트레이터가 빠뜨린
   // 것이고, 뒤의 것은 한도나 사용자가 정한 것이다.
   const halt = haltOf(events)
+  // 띄운 기록이 있는데 끝 기록이 없으면 도중에 끊겼거나 결과를 받지 못한 것이다 — 띄우지 않은 것과 고칠 곳이 다르다
+  const started = new Set(events.filter(event => event?.phase === 'module.start' && event.module !== undefined).map(event => String(event.module)))
   const states = scope.map(({ module, scope: where, entry }) => {
     const base = { name: module.name, kind: module.kind }
     if (where === 'not-requested') {
@@ -161,6 +163,7 @@ function moduleStates({ modules, events, collected, notes, start }) {
     }
     const outcome = outcomes.get(module.name)
     if (!outcome) {
+      if (started.has(module.name)) return { ...base, state: 'missing', reason: 'unfinished' }
       return halt
         ? { ...base, state: 'missing', reason: 'halted', haltReason: String(halt.reason) }
         : { ...base, state: 'missing', reason: 'no-record' }
@@ -694,7 +697,8 @@ const STATUS_TEXT = {
   failed: '실패 — `FAILED orchestration`, 수집한 모듈 결과가 없다',
 }
 const MISSING_TEXT = {
-  'no-record': '결과 없음 — `module.done`이 없다',
+  'no-record': '결과 없음 — 띄운 기록(`module.start`)도 끝 기록(`module.done`)도 없다',
+  unfinished: '결과 없음 — 띄웠지만 끝 기록(`module.done`)이 없다 — 도중에 끊겼거나 결과를 받지 못했다',
   'status-outside-list': '결과 없음 — `module.done`의 status가 ok도 failed도 아니다',
   'not-collected': '결과 없음 — 성공으로 기록됐지만 수집되지 않았다',
   halted: '결과 없음 — 디스패치를 멈춰 띄우지 않았다',

@@ -147,7 +147,7 @@ const reviewOnce = ({
   const rendered = node(repo, 'render-findings.mjs', [
     '--input', routedPath, ...(tallied ? ['--verdicts', join(timing, `${run}.verdicts.json`)] : []), '--phase-high', 'rollout-shadow', '--phase-low', 'rollout-shadow',
     ...(existsSync(rechecksPath) ? ['--rechecks', rechecksPath] : []),
-    '--verification-state', 'ran', '--rules', rules, '--workflow', 'full',
+    '--verification-state', 'ran', '--rules', rules, '--workflow', 'full', '--dir', dir, '--run', run,
   ])
   assert.equal(rendered.status, 0, rendered.stderr)
   const snap = node(repo, 'review-snapshot.mjs', ['--dir', dir, '--run', run, '--rules', rules, '--repo', repo, '--verification-state', 'ran'])

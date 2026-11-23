@@ -35,7 +35,7 @@ import { fileURLToPath } from 'node:url'
 import { writeTextAtomic } from './lib/atomic-write.mjs'
 import { markedBlock } from './lib/contract-blocks.mjs'
 import { durationLimitScope, hostCapabilities } from './lib/hosts.mjs'
-import { MODULE_PROMPT_LABEL, buildModulePrompt, moduleInstructions } from './lib/module-prompt.mjs'
+import { MODULE_PROMPT_LABEL, buildModulePrompt, moduleInstructions, withReadNotice } from './lib/module-prompt.mjs'
 import { moduleScope, plannedModules } from './lib/review-snapshot.mjs'
 import { readJsonFile, readTextFile } from './lib/read-text.mjs'
 import { resultLanguageProblems } from './lib/result-language.mjs'
@@ -645,7 +645,8 @@ const done = () => {
       const original = promptPathOf(target.task)
       if (problems && retryLeft && start.modulePrompts === 'script' && existsSync(original)) {
         retryPrompt = retryPromptOf(original)
-        writeFileSync(retryPrompt, buildRetryPrompt(readFileSync(original, 'utf8'), problems, text, { kind: 'result' }), 'utf8')
+        // 원래 프롬프트 뒤에 더 붙으므로 첫 줄의 줄 수를 다시 센다
+        writeFileSync(retryPrompt, withReadNotice(buildRetryPrompt(readFileSync(original, 'utf8'), problems, text, { kind: 'result' })), 'utf8')
       }
     } else {
       const routed = readRouted({ required: true })

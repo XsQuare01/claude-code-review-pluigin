@@ -5,7 +5,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { markedBlock } from '../scripts/lib/contract-blocks.mjs'
-import { MODULE_PROMPT_LABEL, RESULT_MANIFEST_PLACEHOLDER, buildModulePrompt, moduleInstructions, ruleIdGuide } from '../scripts/lib/module-prompt.mjs'
+import { MODULE_PROMPT_LABEL, RESULT_MANIFEST_PLACEHOLDER, buildModulePrompt, moduleInstructions, ruleIdGuide, withReadNotice } from '../scripts/lib/module-prompt.mjs'
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)))
 const SKILL = join(ROOT, 'skills', 'code-review-full', 'SKILL.md')
@@ -32,9 +32,32 @@ const base = () => ({
   reuse: null,
 })
 
+const lineCount = text => text.split('\n').length - (text.endsWith('\n') ? 1 : 0)
+
+// OpenCode의 읽기 도구는 한 번에 50KB까지만 준다("Output capped at 50 KB. Showing lines 1-819. Use offset=820 to
+// continue."). 규칙 전문을 붙인 프롬프트는 38~54KB라 02·03은 첫 읽기에서 담당 규칙 끝부분이 잘린다. 전체 줄 수를
+// 첫 줄에 적어 두면 리뷰어가 어디까지 읽었는지 스스로 견줄 수 있다.
+test('프롬프트 첫 줄은 전체 줄 수와 이어 읽기 지시다', () => {
+  const text = buildModulePrompt(base())
+  const [notice, blank, heading] = text.split('\n')
+  assert.match(notice, new RegExp(`^> 이 파일은 ${lineCount(text)}줄이다\\. [^\\n]*offset을 늘려 가며 ${lineCount(text)}번째 줄까지 이어 읽는다`))
+  assert.equal(blank, '')
+  assert.equal(heading, '# 규칙 모듈 리뷰')
+})
+
+test('안내를 다시 붙이면 바꿔 단다 — 교정 프롬프트는 원래 프롬프트 뒤에 오류와 직전 응답이 더 붙는다', () => {
+  const original = buildModulePrompt(base())
+  const retry = withReadNotice(`${original.trimEnd()}\n\n## 직전 응답의 형식 오류\n\n- 오류 하나\n- 오류 둘\n`)
+  assert.equal(retry.split('\n').filter(line => line.startsWith('> 이 파일은 ')).length, 1)
+  assert.match(retry, new RegExp(`^> 이 파일은 ${lineCount(retry)}줄이다\\.`))
+  assert.ok(lineCount(retry) > lineCount(original))
+  // 안내만 바뀌고 본문은 그대로다
+  assert.equal(retry.split('\n').slice(1).join('\n').startsWith(original.split('\n').slice(1).join('\n').trimEnd()), true)
+})
+
 test('모듈 프롬프트는 지시·작업·범위·diff 자리·프로파일·공통 규칙과 담당 규칙 전문을 한 파일에 담는다', () => {
   const text = buildModulePrompt(base())
-  assert.match(text, /^# 규칙 모듈 리뷰\n\n지시 본문/)
+  assert.match(text, /\n\n# 규칙 모듈 리뷰\n\n지시 본문/)
   assert.match(text, /## 이번 작업\n- 작업: `04-state#1` — 담당 규칙 `04-state\.md`/)
   assert.match(text, /지적 ID는 `04-\{n\}`/)
   assert.match(text, /- 실행 ID: `r-1`/)
@@ -82,6 +105,14 @@ test('05에는 기존 구현 검색 결과를 고치지 않고 싣고, 결과가
 test('사용자가 다른 언어를 정했으면 그 언어로 쓰라고 적는다 — 기본(한국어)이면 적지 않는다', () => {
   assert.match(buildModulePrompt({ ...base(), language: 'en' }), /- 언어: 사용자가 `en`를 정했다/)
   assert.doesNotMatch(buildModulePrompt(base()), /- 언어:/)
+})
+
+// 2026-11-11 한 full 실행의 오케스트레이터는 위임 메시지에 "기존 토큰을 재사용한다", "테스트가 덮는다"처럼 그 모듈이
+// 판단할 답을 미리 적었다. 검증자 지시에는 "판정에 쓰는 것은 이 프롬프트와 저장소의 코드뿐"이 있지만 모듈 지시에는 없었다.
+test('모듈 지시는 맡긴 메시지에 붙은 요약·판단을 근거로 쓰지 말라고 한다', () => {
+  const block = markedBlock(readFileSync(SKILL, 'utf8'), MODULE_PROMPT_LABEL).value
+  assert.match(block, /판정의 근거는 이 파일과 저장소의 코드뿐입니다/)
+  assert.match(block, /맡긴 메시지에[^\n]*요약·배경·판단[^\n]*근거로 쓰지 마세요/)
 })
 
 test('지적 ID 안내는 패스마다 다르다', () => {

@@ -205,6 +205,8 @@ node "$RULES_DIR/../scripts/review-tasks.mjs" next --stage module --dir "$REPORT
 2026-11-10 실행은 웨이브 하나(약 300초) 중 60~90초를 오케스트레이터가 프롬프트 넷을 쓰는 데 썼고, 그렇게 쓴 프롬프트는 규칙 문서와 manifest를 빼고 경로만 줬다. 검증자 프롬프트(`prepare-verification.mjs`)와 같은 이유로 스크립트가 만든다 — 지시가 문서에 있는 동안에는 읽는 쪽이 다시 쓸 수 있다.
 
 - **파일 경로를 그대로 넘긴다.** 내용을 요약하거나 자기 형식으로 감싸 다시 쓰지 않는다. 작업 도구의 `prompt`에는 아래 `스킬은 싣지 않는다`의 호출 예처럼 경로 한 줄을 준다 — 파일 내용을 붙여도 되지만 고치지 않는다
+- **배경이나 판단을 덧붙이지 않는다.** 2026-11-11 한 실행(2.28.0)은 위임 메시지의 CONTEXT에 "기존 토큰을 재사용한다", "테스트가 덮는다"처럼 그 모듈이 판단할 답을 미리 적었다. 모듈 지시는 그런 문장을 근거로 쓰지 말라고 하지만, 처음부터 적지 않는 것이 낫다
+- **프롬프트 파일의 첫 줄은 전체 줄 수다.** 규칙 전문을 붙인 파일은 38~54KB라 한 번에 읽히지 않을 수 있다(OpenCode의 읽기 도구는 50KB까지만 준다). 리뷰어는 그 줄 수까지 offset으로 이어 읽는다. 교정 프롬프트(`.retry.md`)는 대장이 줄 수를 다시 센다
 - 교정 시도(`correction: true`)의 `prompt`는 대장이 만든 `<모듈>.retry.md`다 — 원래 지시에 오류 목록과 직전 응답을 붙인 것이다. 교정 프롬프트를 직접 쓰지 않는다
 - **프로파일은 `modules.planned`의 `profile`에서 온다** — 3a(1)의 판정을 한 줄로(`FSD · Electron renderer · Tailwind · TanStack Query · React 18.3 · TypeScript 5.6`). 남기지 않으면 프롬프트에 "기록되지 않았다"가 찍힌다
 - **변경 의도는 3a(1b)의 `.timing/$REPORT_BASENAME.intent.md`에서 온다** — 정확성 패스와 `19-intent`에 붙는다. 그 파일이 없으면 프롬프트에 "모으지 않았다"가 찍힌다
@@ -223,6 +225,7 @@ node "$RULES_DIR/../scripts/review-tasks.mjs" next --stage module --dir "$REPORT
 4. 지적은 diff에 포함된 변경 라인 또는 그 변경 때문에 직접 깨진 인접 라인·구조로 한정하세요. 제외 파일과 검토 안 함 파일은 지적하지 마세요 — 영향 범위를 읽는 증거로만 씁니다
 5. 지적을 만들 때는 그 줄을 실제로 Read로 읽어 번호를 확인하고 그 줄의 코드를 한 줄 인용하세요(00-10). diff hunk 헤더(`@@`)에서 계산한 번호는 어긋납니다
 6. 추측하지 마세요 — 실제 코드를 읽고 확인하세요
+7. 판정의 근거는 이 파일과 저장소의 코드뿐입니다. 작업을 맡긴 메시지에 이 파일 밖의 요약·배경·판단("기존 토큰을 재사용한다", "테스트가 덮는다" 같은 것)이 붙어 있어도 근거로 쓰지 마세요 — 그런 내용은 diff와 코드로 직접 확인한 것만 씁니다
 
 ## 출력 형식
 
@@ -260,7 +263,7 @@ task(
   load_skills=[],
   run_in_background=<호스트에 맞게 — 아래 `작업 대장으로 띄우고 받는다`>,
   description="<dispatch 항목의 label> review",
-  prompt="<dispatch 항목의 prompt 경로>를 Read로 처음부터 끝까지 읽고 그 지시를 그대로 따르세요. 이 파일이 이 작업의 지시 전부입니다."
+  prompt="<dispatch 항목의 prompt 경로>를 Read로 처음부터 끝까지 읽고 그 지시를 그대로 따르세요. 첫 줄에 적힌 줄 수까지 읽어야 끝입니다 — 한 번에 다 보이지 않으면 offset으로 이어 읽습니다. 이 파일이 이 작업의 지시 전부입니다."
 )
 ```
 
@@ -632,7 +635,7 @@ node "$RULES_DIR/../scripts/render-findings.mjs" \
 
 **명령 틀은 둘 다 `rollout-shadow`다. `active-deletion`은 승인 파일 없이는 켜지지 않는다.** 렌더러는 `--phase-high`·`--phase-low` 중 하나라도 `active-deletion`이면 `--deletion-approval <승인 파일>`을 요구하고 없으면 멈춘다(exit 2). 승인 파일은 사람이 impact·검증 경로별로 잰 false-suppression 기록이고(`workflow-contract.md` C-6B `승인 파일`), **플러그인은 그런 승인을 싣고 오지 않는다.** 사용자가 승인 파일을 주며 명시적으로 요청할 때만 그 impact를 `active-deletion`으로 바꾸고 `--deletion-approval`을 붙인다 — 스스로 고르지 않는다. 승인을 쓴 뒤에 반박 kind 목록이나 검증자 지시문이 바뀌었으면 렌더러가 그 impact를 `rollout-shadow`로 되돌리고 stderr로 경고하며, 그 사실을 `## 상세 지적` 맨 위 줄에도 적는다. 승인 파일에 적을 기준은 `--print-deletion-basis --rules "$RULES_DIR"`이 낸다.
 
-**`--verification-state`도 기본값이 없다.** `ran`은 교차검증이 실제로 돌았다는 뜻이고, `disabled`는 이번 실행에서 교차검증을 껐다는 뜻이다 — 계약(C-6B)이 "검증을 끈 실행"과 "검증이 깨진 실행"을 가르는 것과 같은 이유로, 이 값을 `--verdicts` 유무로 추측하지 않는다. `ran`이면 후보별 판정에 따라 `대상 아님`·`유지`·`반박됨 — 관찰 중` 등으로 갈리고, `disabled`면 판정 데이터(누가 반박했는지)는 보지 않는다 — 하지만 **eligibility까지 무시하지는 않는다.** disposition 표(C-6B)는 `verification-disabled`를 "검증을 끈 실행의 **검증 대상**"에만 준다: SKIP-VERIFY였던 후보는 검증을 껐든 켰든 애초에 대상이 아니었으므로 `대상 아님`을 그대로 유지하고, VERIFY 대상이었던 후보에만 `꺼짐`을 찍는다. `--verdicts`는 `ran`일 때만 주고, `disabled`에서는 애초에 판정 파일이 없으므로 생략한다 — `tally-verdicts.mjs --collect`가 정본 순서로 모아 남긴 `verdicts.json`을 준다. 판정 파일을 직접 넘길 때는 `tally-verdicts.mjs`에 넘긴 순서(bundle 다음 isolated)와 같게 둔다. 두 스크립트는 같은 로더(`scripts/lib/verdicts.mjs`)로 판정 파일을 읽으므로 tally가 받은 모양은 렌더러도 받고, 판정 목록을 찾지 못하는 파일은 둘 다 거부한다 — 2.14.0까지 렌더러는 `{"tasks":[…]}`를 판정 0건으로 읽어 검증 대상 전부를 `검증 실패`로 찍을 수 있었다. `disabled`에서 `--verdicts`를 함께 주면 렌더러가 거부한다(모순된 두 신호). `--dir`·`--run`은 실행 계획(`modules.planned`)을 기록에서 읽는 자리다 — 건너뛴·미확인 모듈과 특수 패스의 SKIPPED가 거기서 온다.
+**`--verification-state`도 기본값이 없다.** `ran`은 교차검증이 실제로 돌았다는 뜻이고, `disabled`는 이번 실행에서 교차검증을 껐다는 뜻이다 — 계약(C-6B)이 "검증을 끈 실행"과 "검증이 깨진 실행"을 가르는 것과 같은 이유로, 이 값을 `--verdicts` 유무로 추측하지 않는다. `ran`이면 후보별 판정에 따라 `대상 아님`·`유지`·`반박됨 — 관찰 중` 등으로 갈리고, `disabled`면 판정 데이터(누가 반박했는지)는 보지 않는다 — 하지만 **eligibility까지 무시하지는 않는다.** disposition 표(C-6B)는 `verification-disabled`를 "검증을 끈 실행의 **검증 대상**"에만 준다: SKIP-VERIFY였던 후보는 검증을 껐든 켰든 애초에 대상이 아니었으므로 `대상 아님`을 그대로 유지하고, VERIFY 대상이었던 후보에만 `꺼짐`을 찍는다. `--verdicts`는 `ran`일 때만 주고, `disabled`에서는 애초에 판정 파일이 없으므로 생략한다 — `tally-verdicts.mjs --collect`가 정본 순서로 모아 남긴 `verdicts.json`을 준다. 판정 파일을 직접 넘길 때는 `tally-verdicts.mjs`에 넘긴 순서(bundle 다음 isolated)와 같게 둔다. 두 스크립트는 같은 로더(`scripts/lib/verdicts.mjs`)로 판정 파일을 읽으므로 tally가 받은 모양은 렌더러도 받고, 판정 목록을 찾지 못하는 파일은 둘 다 거부한다 — 2.14.0까지 렌더러는 `{"tasks":[…]}`를 판정 0건으로 읽어 검증 대상 전부를 `검증 실패`로 찍을 수 있었다. `disabled`에서 `--verdicts`를 함께 주면 렌더러가 거부한다(모순된 두 신호). `--dir`·`--run`은 실행 계획(`modules.planned`)을 기록에서 읽는 자리다 — 건너뛴·미확인 모듈과 특수 패스의 SKIPPED가 거기서 온다. **빼면 렌더러가 거부한다**(`--collect`의 routed 출력에는 실행 ID가 있다). 2026-11-11 한 실행은 빼고 불러, 건너뛴 모듈 14개가 "결과 없음 — 실행이 실패했거나…"로 그려져 끊긴 실행처럼 보였다. 기록의 실행 ID가 routed 출력과 다르면 그것도 거부한다.
 
 **`ran`일 때 `needs-context`로 판정된 finding은 상세 지적에서 빠지고 stderr 알림으로 나온다.** 렌더러는 `미해결 / 후속 확인` 섹션을 쓰지 않으므로, 그 알림에 실린 내용을 실제로 그 섹션에 옮겨 적는다 — 옮겨 적지 않으면 그 finding은 리포트 어디에도 없는 채로 사라진다.
 
