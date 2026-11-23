@@ -56,6 +56,7 @@ const json = out => {
   return JSON.parse(out.stdout)
 }
 const next = (dir, stage = 'module', extra = []) => tasks(dir, 'next', '--stage', stage, '--rules', RULES, ...extra)
+const lineCountOf = text => text.split('\n').length - (text.endsWith('\n') ? 1 : 0)
 // 응답을 내는 가짜 호스트도 작업 ID를 먼저 연결한다. 미연결 거부 테스트는 tasks를 직접 호출한다.
 const receive = (dir, task, attempt, ...extra) => {
   assert.equal(tasks(dir, 'bind', '--task', task, '--attempt', String(attempt), '--host-task', `host-${task}-${attempt}`).status, 0)
@@ -616,7 +617,8 @@ test('full 실행의 next는 시도마다 프롬프트 파일을 만든다 — �
   const [state, props] = out.dispatch
   assert.match(state.prompt, /\.prompts[\\/]04-state\.md$/)
   const text = readFileSync(state.prompt, 'utf8')
-  assert.match(text, /^# 규칙 모듈 리뷰/)
+  // 첫 줄은 전체 줄 수와 이어 읽기 지시다 — 규칙 전문을 붙인 프롬프트는 OpenCode 읽기 한도(50KB)를 넘을 수 있다
+  assert.match(text, new RegExp(`^> 이 파일은 ${lineCountOf(text)}줄이다\\.[^\\n]*\\n\\n# 규칙 모듈 리뷰`))
   assert.match(text, /"contractName": "REVIEW_RESULT_CONTRACT_V1"/)
   assert.doesNotMatch(text, /\{REVIEW_RESULT_CONTRACT_V1_MANIFEST\}/)
   assert.match(text, /- 작업: `04-state#1` — 담당 규칙 `04-state\.md`/)
@@ -681,7 +683,11 @@ test('계약에 맞지 않은 응답의 교정 시도는 원래 프롬프트에 
   assert.equal(correction.correction, true)
   assert.equal(correction.prompt, retryPath)
   const text = readFileSync(retryPath, 'utf8')
-  assert.ok(text.startsWith(readFileSync(claim.prompt, 'utf8').trimEnd()))
+  // 원래 프롬프트에 더 붙였으니 첫 줄의 줄 수도 다시 센다 — 원래 안내를 그대로 두면 리뷰어가 오류 목록 앞에서 멈춘다
+  const withoutNotice = value => value.split('\n').slice(2).join('\n')
+  assert.match(text, new RegExp(`^> 이 파일은 ${lineCountOf(text)}줄이다\\.`))
+  assert.equal(text.split('\n').filter(line => line.startsWith('> 이 파일은 ')).length, 1)
+  assert.ok(withoutNotice(text).startsWith(withoutNotice(readFileSync(claim.prompt, 'utf8')).trimEnd()))
   assert.match(text, /## 직전 응답의 형식 오류[\s\S]*REVIEW_RESULT_CONTRACT_V1[\s\S]*JSON으로 읽지 못했다[\s\S]*Here is the review: not json/)
 })
 

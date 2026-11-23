@@ -205,6 +205,7 @@ node "$RULES_DIR/../scripts/review-tasks.mjs" next --stage module --dir "$REPORT
 2026-11-10 실행은 웨이브 하나(약 300초) 중 60~90초를 오케스트레이터가 프롬프트 넷을 쓰는 데 썼고, 그렇게 쓴 프롬프트는 규칙 문서와 manifest를 빼고 경로만 줬다. 검증자 프롬프트(`prepare-verification.mjs`)와 같은 이유로 스크립트가 만든다 — 지시가 문서에 있는 동안에는 읽는 쪽이 다시 쓸 수 있다.
 
 - **파일 경로를 그대로 넘긴다.** 내용을 요약하거나 자기 형식으로 감싸 다시 쓰지 않는다. 작업 도구의 `prompt`에는 아래 `스킬은 싣지 않는다`의 호출 예처럼 경로 한 줄을 준다 — 파일 내용을 붙여도 되지만 고치지 않는다
+- **프롬프트 파일의 첫 줄은 전체 줄 수다.** 규칙 전문을 붙인 파일은 38~54KB라 한 번에 읽히지 않을 수 있다(OpenCode의 읽기 도구는 50KB까지만 준다). 리뷰어는 그 줄 수까지 offset으로 이어 읽는다. 교정 프롬프트(`.retry.md`)는 대장이 줄 수를 다시 센다
 - 교정 시도(`correction: true`)의 `prompt`는 대장이 만든 `<모듈>.retry.md`다 — 원래 지시에 오류 목록과 직전 응답을 붙인 것이다. 교정 프롬프트를 직접 쓰지 않는다
 - **프로파일은 `modules.planned`의 `profile`에서 온다** — 3a(1)의 판정을 한 줄로(`FSD · Electron renderer · Tailwind · TanStack Query · React 18.3 · TypeScript 5.6`). 남기지 않으면 프롬프트에 "기록되지 않았다"가 찍힌다
 - **변경 의도는 3a(1b)의 `.timing/$REPORT_BASENAME.intent.md`에서 온다** — 정확성 패스와 `19-intent`에 붙는다. 그 파일이 없으면 프롬프트에 "모으지 않았다"가 찍힌다
@@ -260,7 +261,7 @@ task(
   load_skills=[],
   run_in_background=<호스트에 맞게 — 아래 `작업 대장으로 띄우고 받는다`>,
   description="<dispatch 항목의 label> review",
-  prompt="<dispatch 항목의 prompt 경로>를 Read로 처음부터 끝까지 읽고 그 지시를 그대로 따르세요. 이 파일이 이 작업의 지시 전부입니다."
+  prompt="<dispatch 항목의 prompt 경로>를 Read로 처음부터 끝까지 읽고 그 지시를 그대로 따르세요. 첫 줄에 적힌 줄 수까지 읽어야 끝입니다 — 한 번에 다 보이지 않으면 offset으로 이어 읽습니다. 이 파일이 이 작업의 지시 전부입니다."
 )
 ```
 
