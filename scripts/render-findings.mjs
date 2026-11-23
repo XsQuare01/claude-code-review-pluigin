@@ -1506,13 +1506,25 @@ if (process.argv[1] && process.argv[1].endsWith('render-findings.mjs')) {
 
   // 실행 계획은 기록이 정본이다(`--dir`·`--run`이면 마지막 `modules.planned`). 같은 내용을 파일로도 받으면 두 벌
   // 중 어느 것을 그렸는지 알 수 없으므로 함께 받지 않는다. `--planned`만 주는 길은 기록이 없는 호출을 위해 남긴다.
+  //
+  // 실행 ID가 있는 routed 출력(`--collect`)은 기록이 있는 실행의 것이다 — 그 기록 없이 그리지 않는다. 2026-11-11 한
+  // 실행이 `--dir`·`--run` 없이 불러 계획 없이 그렸고, 건너뛴 모듈 14개가 "결과 없음 — 실행이 실패했거나…"로 나와
+  // 끊긴 실행처럼 보였다. 같은 실행의 기록인지도 본다 — 두 실행을 겹쳐 돌린 날이 있었다.
+  const routedRunId = typeof payload.collected?.runId === 'string' && payload.collected.runId ? payload.collected.runId : null
   const planned = (() => {
     const dirFlag = flag('dir')
     const runFlag = flag('run')
     if ((dirFlag === undefined) !== (runFlag === undefined)) die('--dir와 --run은 함께 준다 — 실행 계획(modules.planned)을 그 실행의 기록에서 읽는다')
-    if (dirFlag === undefined) return flag('planned')
+    if (dirFlag === undefined) {
+      if (routedRunId) die(`실행 ${routedRunId}의 routed 출력이다 — --dir·--run으로 그 실행의 기록을 준다. 실행 계획(modules.planned)을 기록에서 읽어야 건너뛴 모듈을 "결과 없음"으로 그리지 않는다`)
+      return flag('planned')
+    }
     if (flag('planned') !== undefined) die('--dir·--run을 주면 실행 계획은 기록의 modules.planned에서 읽는다 — --planned를 함께 주지 않는다(두 벌이 갈린 실행이 있었다)')
     const recordedEvents = readEvents(requireStartedTimeline(dirFlag, runFlag))
+    const recordedRunId = recordedEvents.find(event => event?.phase === 'run.start')?.runId
+    if (routedRunId && typeof recordedRunId === 'string' && recordedRunId !== routedRunId) {
+      die(`--dir·--run의 기록은 실행 ${recordedRunId}의 것이다 — 이 routed 출력은 ${routedRunId}다. 같은 실행의 기록으로 그린다`)
+    }
     // 워크플로우도 기록이 정본이다 — preflight가 run.start에 남긴 값과 다르면 다른 모듈 목록으로 그리게 된다
     const recordedWorkflow = recordedEvents.find(event => event?.phase === 'run.start')?.workflow
     if (typeof recordedWorkflow === 'string' && recordedWorkflow !== workflow) {

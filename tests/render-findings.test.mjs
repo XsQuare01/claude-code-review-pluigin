@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -2011,6 +2011,16 @@ test('근거가 없는 지적은 예전 그대로다', () => {
   assert.doesNotMatch(plain, /재현 근거/)
 })
 
+/** `dir` 아래에 실행 ID가 `runId`인 기록(run.start 한 줄)을 남기고 그 실행 이름을 돌려준다. */
+const startedRun = (dir, runId) => {
+  const run = `code-review-full-${runId}`
+  if (existsSync(join(dir, '.timing', `${run}.jsonl`))) return run
+  const started = spawnSync(process.execPath, [join(ROOT, 'scripts', 'review-timeline.mjs'), '--dir', dir, '--run', run, '--phase', 'run.start', '--data',
+    JSON.stringify({ host: 'test', rules: 'r', version: 'x', branch: 'feat/x', changedFiles: 1, workflow: 'full', runId })], { encoding: 'utf8' })
+  assert.equal(started.status, 0, started.stderr)
+  return run
+}
+
 test('CLI는 --collect 출력이 아니거나 다른 실행의 근거 파일이면 거부한다', () => {
   const dir = mkdtempSync(join(tmpdir(), 'render-evidence-'))
   const evidence = join(dir, 'run.evidence.json')
@@ -2018,9 +2028,11 @@ test('CLI는 --collect 출력이 아니거나 다른 실행의 근거 파일이�
   const withRouted = collected => {
     const input = join(dir, 'targets.json')
     writeFileSync(input, JSON.stringify({ candidates: [ok()], ...(collected ? { collected } : {}) }), 'utf8')
+    // 실행 ID가 있는 routed 출력은 그 실행의 기록과 함께 그린다
+    const record = collected?.runId ? ['--dir', dir, '--run', startedRun(dir, collected.runId)] : []
     return spawnSync(process.execPath, [
       SCRIPT, '--input', input, '--rules', RULES, '--phase-high', 'rollout-shadow', '--phase-low', 'rollout-shadow',
-      '--workflow', 'full', '--verification-state', 'disabled', '--evidence', evidence,
+      '--workflow', 'full', '--verification-state', 'disabled', '--evidence', evidence, ...record,
     ], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
   }
   const legacy = withRouted(null)
@@ -2069,9 +2081,10 @@ test('--collect 출력을 그리면 맨 끝에 실행 ID를 적은 출처 줄을
   const renderOf = collected => {
     const input = join(dir, 'code-review-full-feat-x-2026-10-13.routed.json')
     writeFileSync(input, JSON.stringify({ candidates: [ok()], ...(collected ? { collected } : {}) }), 'utf8')
+    const record = collected?.runId ? ['--dir', dir, '--run', startedRun(dir, collected.runId)] : []
     return spawnSync(process.execPath, [
       SCRIPT, '--input', input, '--rules', RULES, '--phase-high', 'rollout-shadow', '--phase-low', 'rollout-shadow',
-      '--workflow', 'full', '--verification-state', 'disabled',
+      '--workflow', 'full', '--verification-state', 'disabled', ...record,
     ], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
   }
   const collected = renderOf({ sources: ['04-state'], runId: 'run-20261013-feat-x' })
@@ -2095,6 +2108,41 @@ test('catalog에 없는 워크플로우 이름은 섹션을 만들지 않고 거
   assert.match(wrong.error, /code-review-full.*catalog에 없다/)
   assert.match(wrong.error, /full/)
   assert.ok(loadModuleSections(RULES, 'full', null).value.length > 0)
+})
+
+// 2026-11-11 한 full 실행이 렌더러를 `--dir`·`--run` 없이 불렀다. 실행 계획이 없으니 건너뛴 모듈 14개까지 섹션이 됐고,
+// 수집 목록에 없다는 이유로 "결과 없음 — 실행이 실패했거나…"로 그려졌다. 건너뛴 것이 끊긴 것처럼 보였다.
+test('실행 ID가 있는 routed 출력은 그 실행의 기록(--dir·--run) 없이 그리지 않는다', t => {
+  const dir = mkdtempSync(join(tmpdir(), 'render-plan-'))
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const run = 'code-review-full-feat-x-2026-11-11'
+  const started = spawnSync(process.execPath, [join(ROOT, 'scripts', 'review-timeline.mjs'), '--dir', dir, '--run', run, '--phase', 'run.start', '--data',
+    JSON.stringify({ host: 'test', rules: 'r', version: 'x', branch: 'feat/x', changedFiles: 1, workflow: 'full', runId: 'r-1' })], { encoding: 'utf8' })
+  assert.equal(started.status, 0, started.stderr)
+  const renderOf = (collected, extra = []) => {
+    const input = join(dir, 'targets.json')
+    writeFileSync(input, JSON.stringify({ candidates: [ok()], ...(collected ? { collected } : {}) }), 'utf8')
+    return spawnSync(process.execPath, [
+      SCRIPT, '--input', input, '--rules', RULES, '--phase-high', 'rollout-shadow', '--phase-low', 'rollout-shadow',
+      '--workflow', 'full', '--verification-state', 'disabled', ...extra,
+    ], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+  }
+  const bare = renderOf({ sources: ['04-state'], runId: 'r-1' })
+  assert.equal(bare.status, 2)
+  assert.match(bare.stderr, /실행 r-1의 routed 출력이다 — --dir·--run/)
+  assert.equal(bare.stdout, '')
+  // 파일로 받은 계획도 받지 않는다 — 기록이 있는 실행의 계획은 기록이 정본이다
+  const plannedFile = join(dir, 'planned.json')
+  writeFileSync(plannedFile, JSON.stringify({ phase: 'modules.planned', candidates: 1, applied: 1, skipped: [], unknown: [] }), 'utf8')
+  assert.equal(renderOf({ sources: ['04-state'], runId: 'r-1' }, ['--planned', plannedFile]).status, 2)
+  // 다른 실행의 기록과 섞지 않는다
+  const foreign = renderOf({ sources: ['04-state'], runId: 'r-2' }, ['--dir', dir, '--run', run])
+  assert.equal(foreign.status, 2)
+  assert.match(foreign.stderr, /기록은 실행 r-1의 것이다 — 이 routed 출력은 r-2/)
+  assert.equal(renderOf({ sources: ['04-state'], runId: 'r-1' }, ['--dir', dir, '--run', run]).status, 0)
+  // 실행 ID가 없는 입력(--collect가 아닌 것)은 예전처럼 그린다
+  assert.equal(renderOf({ sources: ['04-state'] }).status, 0)
+  assert.equal(renderOf(null).status, 0)
 })
 
 test('--dir·--run이면 기록의 워크플로우와 다른 --workflow를 거부한다', t => {

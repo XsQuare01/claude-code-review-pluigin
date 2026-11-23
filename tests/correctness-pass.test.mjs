@@ -143,7 +143,7 @@ const answerVerifiers = (routed, log) => {
 // active-deletion은 승인 파일이 있어야 켜진다(C-6B, #47).
 const render = (run, routedPath, { phase = 'rollout-shadow', verdicts = true, approval } = {}) => node(run.repo, 'render-findings.mjs', [
   '--input', routedPath, ...(verdicts ? ['--verdicts', join(run.timing, `${RUN}.verdicts.json`)] : []),
-  '--phase-high', phase, '--phase-low', phase, '--verification-state', 'ran', '--rules', RULES, '--workflow', 'full',
+  '--phase-high', phase, '--phase-low', phase, '--verification-state', 'ran', '--rules', RULES, '--workflow', 'full', '--dir', run.dir, '--run', RUN,
   ...(approval ? ['--deletion-approval', approval] : []),
 ])
 
@@ -286,7 +286,7 @@ test('켜지 않은 실행은 정확성을 SKIPPED로 그리고, 돌린 결과�
   assert.match(stderr, /켜지 않은 선택 패스/)
   const rendered = node(run.repo, 'render-findings.mjs', [
     '--input', routedPath, '--phase-high', 'rollout-shadow', '--phase-low', 'rollout-shadow',
-    '--verification-state', 'ran', '--rules', RULES, '--workflow', 'full',
+    '--verification-state', 'ran', '--rules', RULES, '--workflow', 'full', '--dir', run.dir, '--run', RUN,
   ])
   assert.equal(rendered.status, 0, rendered.stderr)
   assert.match(section(rendered.stdout, '정확성'), /`SKIPPED` — 선택 패스, 이 실행에서 켜지 않았다\(`--correctness on` 없음\) · 비차단 기록이나 결과 파일이 있었지만/)
@@ -323,7 +323,7 @@ test('재현 근거가 수집·렌더·스냅숏까지 이어지고, 지적의 �
 
   const rendered = node(run.repo, 'render-findings.mjs', [
     '--input', routedPath, '--verdicts', join(run.timing, `${RUN}.verdicts.json`), '--evidence', join(run.timing, `${RUN}.evidence.json`),
-    '--phase-high', 'rollout-shadow', '--phase-low', 'rollout-shadow', '--verification-state', 'ran', '--rules', RULES, '--workflow', 'full',
+    '--phase-high', 'rollout-shadow', '--phase-low', 'rollout-shadow', '--verification-state', 'ran', '--rules', RULES, '--workflow', 'full', '--dir', run.dir, '--run', RUN,
   ])
   assert.equal(rendered.status, 0, rendered.stderr)
   const correctness = section(rendered.stdout, '정확성')
