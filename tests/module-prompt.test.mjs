@@ -107,6 +107,14 @@ test('사용자가 다른 언어를 정했으면 그 언어로 쓰라고 적는�
   assert.doesNotMatch(buildModulePrompt(base()), /- 언어:/)
 })
 
+// 2026-11-11 한 full 실행의 오케스트레이터는 위임 메시지에 "기존 토큰을 재사용한다", "테스트가 덮는다"처럼 그 모듈이
+// 판단할 답을 미리 적었다. 검증자 지시에는 "판정에 쓰는 것은 이 프롬프트와 저장소의 코드뿐"이 있지만 모듈 지시에는 없었다.
+test('모듈 지시는 맡긴 메시지에 붙은 요약·판단을 근거로 쓰지 말라고 한다', () => {
+  const block = markedBlock(readFileSync(SKILL, 'utf8'), MODULE_PROMPT_LABEL).value
+  assert.match(block, /판정의 근거는 이 파일과 저장소의 코드뿐입니다/)
+  assert.match(block, /맡긴 메시지에[^\n]*요약·배경·판단[^\n]*근거로 쓰지 마세요/)
+})
+
 test('지적 ID 안내는 패스마다 다르다', () => {
   assert.equal(ruleIdGuide({ kind: 'module', moduleId: '12', task: '12-accessibility' }), '지적 ID는 `12-{n}` — 담당 규칙의 조항 번호다. 다른 모듈의 ID를 쓰지 마세요')
   assert.match(ruleIdGuide({ kind: 'pass', task: 'props' }), /`P-\{n\}`/)
