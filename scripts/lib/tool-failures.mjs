@@ -1,4 +1,5 @@
 import { execFileSync } from 'node:child_process'
+import { existsSync } from 'node:fs'
 import { isAbsolute, relative, resolve } from 'node:path'
 
 // 도구가 실패한 **자리**를 출력에서 읽고, 그 자리가 이 변경의 파일인지·저장소가 추적하는 파일인지 가른다(C-6).
@@ -63,15 +64,37 @@ export function failureLocations(text) {
 const posix = path => path.replace(/\\/g, '/')
 
 /**
+ * 출력에 적힌 경로가 가리키는 파일을 찾는다. 찾은 절대 경로, 또는 하나로 정하지 못했으면 `null`을 돌려준다.
+ *
+ * 도구는 제 폴더 기준으로 경로를 찍는다. `npm --prefix apps/web test`를 저장소 루트에서 부르면 vitest는 `apps/web`
+ * 기준(`src/…`)으로 찍는다 — 부른 폴더만 보고 풀면 없는 자리를 가리킨다. 그래서 상대 경로는 도구를 부른 폴더와
+ * 패키지 루트(preflight의 `packageRoots`)마다 풀어 보고, **실제로 있는 파일이 하나일 때만** 그 자리로 정한다.
+ * 둘 이상에 있으면 출력만으로는 어느 쪽인지 모르고, 어디에도 없으면 자리를 모르는 것이다.
+ */
+function locate(shown, { repo, root, packageRoots }) {
+  if (isAbsolute(shown)) return existsSync(shown) ? shown : null
+  const sameFile = process.platform === 'win32' ? path => path.toLowerCase() : path => path
+  const candidates = new Map()
+  for (const base of [repo, ...packageRoots.map(packageRoot => resolve(root, packageRoot))]) {
+    const absolute = resolve(base, shown)
+    if (existsSync(absolute)) candidates.set(sameFile(absolute), absolute)
+  }
+  return candidates.size === 1 ? [...candidates.values()][0] : null
+}
+
+/**
  * 실패 자리를 저장소 기준 경로로 바꾸고 가른다.
  *
  * - `inChange`: 이 변경이 바꾼 파일(`changed` — 리뷰 대상과, 테스트·mock처럼 대상에서 뺀 파일 모두)
  * - `outsideChange`: 저장소가 추적하지만 이 변경이 바꾸지 않은 파일
  * - `untracked`: 저장소가 추적하지 않는 파일(.gitignore에 든 것, 커밋하지 않은 새 파일, 저장소 밖)
+ * - `unlocated`(있을 때만): 출력의 경로를 파일 하나로 정하지 못했다 — 도구를 부른 폴더·패키지 루트 어디에도 없거나
+ *   둘 이상에 있다. 추적하지 않는 파일이 아니다. 출력의 경로를 그대로 둔다
  *
  * `changed`가 `null`이면 변경 목록을 모르는 것이고, 추적하는 파일은 모두 `outsideChange`가 아니라 `tracked`로 낸다.
+ * `packageRoots`는 저장소 루트 기준 폴더 목록이다(preflight `scope.json`의 `packageRoots[].root`).
  */
-export function classifyFailures(files, { repo, changed, limit = 20 }) {
+export function classifyFailures(files, { repo, changed, packageRoots = [], limit = 20 }) {
   // 아는 모양의 자리가 하나도 없다 — 출력을 직접 읽어야 한다
   if (!files.size) return { parsed: false }
   let root
@@ -81,8 +104,13 @@ export function classifyFailures(files, { repo, changed, limit = 20 }) {
     return { parsed: true, error: '저장소 루트를 읽지 못했다' }
   }
   const located = []
+  const unlocated = []
   for (const [shown, counts] of files) {
-    const absolute = isAbsolute(shown) ? shown : resolve(repo, shown)
+    const absolute = locate(shown, { repo, root, packageRoots })
+    if (absolute === null) {
+      unlocated.push({ path: posix(shown), counts })
+      continue
+    }
     const rel = posix(relative(root, absolute))
     located.push({ path: rel.startsWith('../') || isAbsolute(rel) ? posix(absolute) : rel, inside: !rel.startsWith('../') && !isAbsolute(rel), counts })
   }
@@ -108,13 +136,16 @@ export function classifyFailures(files, { repo, changed, limit = 20 }) {
     else if (changedSet.has(sameFile(one.path))) groups.inChange.push(one.path)
     else groups.outsideChange.push(one.path)
   }
-  const result = { parsed: located.length > 0, files: located.length }
+  if (unlocated.length) groups.unlocated = unlocated.map(one => one.path)
+  for (const one of unlocated) timeouts += one.counts.timeouts
+  const all = [...located, ...unlocated]
+  const result = { parsed: all.length > 0, files: all.length }
   for (const [name, paths] of Object.entries(groups)) {
     result[name] = paths.sort().slice(0, limit)
     if (paths.length > limit) result[`${name}Count`] = paths.length
   }
   if (timeouts) result.timeouts = timeouts
-  result.timedOutFiles = located.filter(one => one.counts.timeouts > 0).map(one => one.path).sort().slice(0, limit)
+  result.timedOutFiles = all.filter(one => one.counts.timeouts > 0).map(one => one.path).sort().slice(0, limit)
   if (!result.timedOutFiles.length) delete result.timedOutFiles
   return result
 }
@@ -123,5 +154,5 @@ export function classifyFailures(files, { repo, changed, limit = 20 }) {
 export function failureCounts(classified) {
   if (!classified?.parsed || classified.error) return null
   const size = name => classified[`${name}Count`] ?? classified[name]?.length ?? 0
-  return Object.fromEntries(['inChange', 'outsideChange', 'tracked', 'untracked'].filter(name => name in classified).map(name => [name, size(name)]))
+  return Object.fromEntries(['inChange', 'outsideChange', 'tracked', 'untracked', 'unlocated'].filter(name => name in classified).map(name => [name, size(name)]))
 }

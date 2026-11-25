@@ -305,6 +305,29 @@ test('검토 안 함(outside)으로 가른 파일도 이 변경이 바꾼 파일
   assert.deepEqual(JSON.parse(out.stdout).failures, { parsed: true, files: 1, inChange: ['backend/static/x.js'], outsideChange: [], untracked: [] })
 })
 
+// 2026-11-25 실행은 `npm --prefix apps/frontend test`를 저장소 루트에서 돌렸고, 앱 폴더 기준으로 찍힌 실패 경로
+// 셋을 저장소 루트 기준으로 풀어 모두 `untracked`로 셌다. preflight가 남긴 패키지 루트에서도 찾아야 한다.
+test('실패 경로가 패키지 루트 기준이면 scope.json의 packageRoots에서 찾아 가른다', t => {
+  const ctx = setup(t)
+  const git = (...args) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.com', '-c', 'commit.gpgsign=false', ...args], { cwd: ctx.repo, encoding: 'utf8' })
+  mkdirSync(join(ctx.repo, 'apps', 'web', 'src'), { recursive: true })
+  writeFileSync(join(ctx.repo, 'apps', 'web', 'src', 'changed.test.ts'), 'c\n')
+  writeFileSync(join(ctx.repo, 'apps', 'web', 'src', 'other.test.ts'), 'o\n')
+  git('add', 'apps')
+  git('commit', '-qm', 'files')
+  writeFileSync(join(ctx.dir, '.timing', `${RUN}.scope.json`), JSON.stringify({
+    schemaVersion: 1, files: ['apps/web/src/changed.test.ts'], excluded: [], outside: [], packageRoots: [{ root: 'apps/web', files: 1 }],
+  }), 'utf8')
+  const report = [' FAIL  src/changed.test.ts > c', ' FAIL  src/other.test.ts > o', 'Error: Test timed out in 5000ms.'].join('\n')
+  const out = tool(ctx, '--name', 'test', '--', process.execPath, '-e', `console.log(${JSON.stringify(report)}); process.exit(1)`)
+  assert.equal(out.status, 0, out.stderr)
+  assert.deepEqual(JSON.parse(out.stdout).failures, {
+    parsed: true, files: 2, inChange: ['apps/web/src/changed.test.ts'], outsideChange: ['apps/web/src/other.test.ts'], untracked: [],
+    timeouts: 1, timedOutFiles: ['apps/web/src/other.test.ts'],
+  })
+  assert.deepEqual(linesOf(ctx).find(line => line.phase === 'tool.done').failureFiles, { inChange: 1, outsideChange: 1, untracked: 0 })
+})
+
 // 기존 구현 검색(C-6C)도 review-tool --detach --name reuse-search로 띄우지만 lint·test 같은 도구가 아니다. 그 상태는
 // 검색 스크립트가 남기는 reuse.* 기록이 말한다 — `--wait`가 그것까지 기다리면 05 하나 때문에 모든 도구를 기다리게 되고,
 // 유실된 검색을 "--detach 없이 다시 돌린다"고 안내하면 05가 이미 돈 뒤에 검색을 다시 돌린다. 검색이 남긴 오류 문장의

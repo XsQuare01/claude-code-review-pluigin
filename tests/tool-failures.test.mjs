@@ -91,3 +91,51 @@ test('저장소 기준으로 이 변경의 파일·바꾸지 않은 파일·추�
   assert.deepEqual(classifyFailures(failureLocations('segfault'), { repo, changed: [] }), { parsed: false })
   assert.equal(failureCounts({ parsed: false }), null)
 })
+
+// 2026-11-25 실행은 `npm --prefix apps/frontend test`를 저장소 루트에서 돌렸다. vitest는 경로를 앱 폴더 기준
+// (`src/…`)으로 찍는데, 그 경로를 저장소 루트 기준으로 풀어 세 파일이 모두 `untracked`가 됐다. 모두 추적되는 테스트
+// 파일이었다. SKILL은 `untracked`만의 실패를 "이 변경·저장소와 무관"으로 적고 차단 사유에서 빼라고 하므로, 이
+// 변경이 깨뜨린 테스트도 그렇게 빠질 수 있었다.
+test('출력 경로가 저장소 루트가 아니라 패키지 루트 기준이면 그 폴더에서 찾고, 하나로 정해지지 않으면 untracked로 세지 않는다', t => {
+  const repo = mkdtempSync(join(tmpdir(), 'tool-failures-mono-'))
+  t.after(() => rmSync(repo, { recursive: true, force: true }))
+  const git = (...args) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.com', '-c', 'commit.gpgsign=false', ...args], { cwd: repo, encoding: 'utf8' })
+  git('init', '-q')
+  mkdirSync(join(repo, 'apps', 'web', 'src'), { recursive: true })
+  mkdirSync(join(repo, 'apps', 'admin', 'src'), { recursive: true })
+  mkdirSync(join(repo, 'src'))
+  writeFileSync(join(repo, 'apps', 'web', 'src', 'a.test.ts'), 'a\n')
+  writeFileSync(join(repo, 'apps', 'web', 'src', 'b.test.ts'), 'b\n')
+  // 두 패키지 루트에 같은 경로가 있다 — 어느 쪽인지 출력만으로는 모른다
+  writeFileSync(join(repo, 'apps', 'web', 'src', 'same.test.ts'), 's\n')
+  writeFileSync(join(repo, 'apps', 'admin', 'src', 'same.test.ts'), 's\n')
+  // 저장소 루트 기준으로 바로 풀리는 파일은 지금처럼 그 자리다
+  writeFileSync(join(repo, 'src', 'root.test.ts'), 'r\n')
+  git('add', '-A')
+  git('commit', '-qm', 'base')
+  const text = [
+    ' FAIL  src/a.test.ts > a',
+    'Error: Test timed out in 5000ms.',
+    ' FAIL  src/b.test.ts > b',
+    ' FAIL  src/same.test.ts > s',
+    ' FAIL  src/gone.test.ts > g',
+    ' FAIL  src/root.test.ts > r',
+  ].join('\n')
+  const classified = classifyFailures(failureLocations(text), {
+    repo, changed: ['apps/web/src/a.test.ts'], packageRoots: ['apps/web', 'apps/admin', '.'],
+  })
+  assert.deepEqual(classified, {
+    parsed: true, files: 5,
+    // 패키지 루트 한 곳에만 있으면 그 자리다
+    inChange: ['apps/web/src/a.test.ts'],
+    outsideChange: ['apps/web/src/b.test.ts', 'src/root.test.ts'],
+    untracked: [],
+    // 두 곳에 있거나(same) 어디에도 없으면(gone) 자리를 정하지 못한 것이다 — 추적하지 않는 파일이 아니다
+    unlocated: ['src/gone.test.ts', 'src/same.test.ts'],
+    timeouts: 1, timedOutFiles: ['apps/web/src/a.test.ts'],
+  })
+  assert.deepEqual(failureCounts(classified), { inChange: 1, outsideChange: 2, untracked: 0, unlocated: 2 })
+  // 패키지 루트를 모르면 저장소 루트에서만 찾는다 — 없는 파일을 untracked로 세지 않는다
+  const rootOnly = classifyFailures(failureLocations(text), { repo, changed: ['apps/web/src/a.test.ts'] })
+  assert.deepEqual([rootOnly.untracked, rootOnly.unlocated], [[], ['src/a.test.ts', 'src/b.test.ts', 'src/gone.test.ts', 'src/same.test.ts']])
+})

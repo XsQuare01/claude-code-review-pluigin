@@ -186,7 +186,7 @@ const PHASES = new Map([
   // `callId`는 `review-tool.mjs`가 호출마다 시작·끝 양쪽에 적는다 — 그 호출의 로그 이름이고, 짝을 맞추는 값이다.
   // `detached`: 띄워 두고 돌아온 도구(review-tool --detach) — 끝은 띄운 프로세스가 남긴다.
   ['tool.start', { required: ['name'], structured: [], allowed: ['attempt', 'callId', 'candidateId', 'evidenceId', 'detached'] }],
-  // `failureFiles`: 실패한 자리가 이 변경의 파일·바꾸지 않은 파일·추적하지 않는 파일에 몇 개씩인지(C-6).
+  // `failureFiles`: 실패한 자리가 이 변경의 파일·바꾸지 않은 파일·추적하지 않는 파일·자리를 정하지 못한 파일에 몇 개씩인지(C-6).
   // 돌리지 않은 도구와 그 이유(C-6). `reasonCode`는 닫힌 목록(`TOOL_SKIP_REASONS`), `reason`은 확인한 내용이다.
   ['tool.skipped', { required: ['name', 'reasonCode'], structured: [], allowed: ['reason'] }],
   ['tool.done', { required: ['name', 'exit', 'treeSha'], structured: ['failing', 'failureFiles'], allowed: ['failedNow', 'failedBaseline', 'attempt', 'callId', 'candidateId', 'evidenceId'] }],

@@ -331,13 +331,16 @@ let failures = null
 // 기존 구현 검색의 실패는 검색 스크립트가 reuse.done에 남긴다 — 그 오류 문장의 `경로:줄`은 도구가 실패한 자리가 아니다(C-6C)
 if (exit !== 0 && name !== REUSE_TOOL_NAME) {
   let changed = null
+  // 패키지 루트에서도 실패 경로를 찾는다 — `npm --prefix <앱>`처럼 다른 폴더에서 돈 도구는 그 폴더 기준으로 찍는다
+  let packageRoots = []
   try {
     const scope = readJsonFile(join(dir, '.timing', `${run}.scope.json`))
     changed = [...(scope.files ?? []), ...(scope.outside ?? []), ...(scope.excluded ?? []).map(entry => (typeof entry === 'string' ? entry : entry?.path)).filter(Boolean)]
+    packageRoots = (scope.packageRoots ?? []).map(entry => entry?.root).filter(root => typeof root === 'string')
   } catch {
     // 변경 목록이 없으면 추적 여부만 가른다
   }
-  failures = classifyFailures(failureLocations(`${stdout.toString('utf8')}\n${stderr.toString('utf8')}`), { repo, changed })
+  failures = classifyFailures(failureLocations(`${stdout.toString('utf8')}\n${stderr.toString('utf8')}`), { repo, changed, packageRoots })
 }
 const failureFiles = failureCounts(failures)
 logPhase(dir, run, 'tool.done', { name, exit, treeSha, callId, ...extra, ...(failureFiles ? { failureFiles } : {}) })
