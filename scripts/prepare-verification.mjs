@@ -558,6 +558,26 @@ export function resolveWithinRoot(candidatePath, root) {
   return resolved.startsWith(prefix) ? resolved : null
 }
 
+/**
+ * 지금 작업 폴더가 위치를 대조할 저장소인지 본다. 문제가 없으면 `null`, 있으면 사람에게 보일 문장을 돌려준다.
+ *
+ * - git 저장소 밖: 파일·merge-base를 하나도 읽지 못한다
+ * - merge-base가 이 저장소에 없다: 다른 저장소에서 불렀거나 merge-base를 잘못 줬다 — 삭제된 줄을 읽지 못한다
+ */
+function reviewedRepoProblem(mergeBase, cwd = process.cwd()) {
+  try {
+    execFileSync('git', ['rev-parse', '--show-toplevel'], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })
+  } catch {
+    return `작업 폴더 ${cwd}는 git 저장소가 아니다 — 리뷰한 저장소의 루트에서 부른다. 저장소 밖에서는 파일을 읽지 못해 모든 후보가 위치 대조 불가로 나온다`
+  }
+  try {
+    execFileSync('git', ['cat-file', '-e', `${mergeBase}^{commit}`], { cwd, stdio: 'ignore' })
+  } catch {
+    return `merge-base ${mergeBase}가 이 저장소에 없다(작업 폴더 ${cwd}) — 리뷰한 저장소에서 preflight가 낸 merge-base로 부른다`
+  }
+  return null
+}
+
 let REPO_ROOT_CACHE = null
 
 function repoRoot() {
@@ -816,6 +836,16 @@ async function main() {
   // 않았다. 디스패치 이후라 부팅을 강제할 수는 없지만, 타임라인 없이 검증까지
   // 가는 경로는 여기서 닫힌다. 시작 자체를 강제하는 것은 `review-preflight.mjs`의 몫이다.
   const sidecar = requireStartedTimeline(dir, run)
+
+  // 리뷰한 저장소에서 불렀는지 본다. 이 스크립트는 지금 작업 폴더의 저장소에서 파일과 merge-base를 읽는다.
+  // 저장소 밖에서 부르면 읽기가 모두 실패하는데, 읽지 못한 파일은 "위치 대조 불가"라는 정상 결과가 되어 오류 없이
+  // 끝난다 — 2026-11-25 실행은 작업 폴더를 임시 폴더로 준 호출에서 후보 5건을 모두 대조 불가로 받았고, 그 결과로
+  // 검증 라운드가 시작됐다. 인자 오류처럼 기록에 남기기 전에 멈춘다.
+  const repoProblem = reviewedRepoProblem(mergeBase)
+  if (repoProblem) {
+    process.stderr.write(`${repoProblem}\n`)
+    process.exit(2)
+  }
 
   // 부른 사실을 먼저 남긴다. `script.start`만 있고 `script.done`이 없는 기록은
   // "불렀고 끝내지 못했다"는 뜻이고, 아무 줄도 없는 것은 "부르지 않았다"는 뜻이다.
