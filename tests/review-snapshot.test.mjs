@@ -101,13 +101,15 @@ test('실패·기록 없음·수집되지 않음이 하나라도 있으면 부�
   assert.deepEqual(snapshot.scope.counts, { applied: ALL.length, ok: ALL.length - 3, failed: 1, missing: 2, skipped: 1, unknown: 0 })
 })
 
-// 끝 기록이 없는 모듈은 둘로 갈린다. 띄운 기록(`module.start`)이 있으면 도중에 끊겼거나 결과를 받지 못한 것이고,
-// 없으면 띄우지 않은 것이다. 같은 문구로 그리면 리포트를 읽는 사람이 어디를 고쳐야 하는지 가를 수 없다.
-test('띄웠는데 끝 기록이 없는 모듈과 띄운 기록도 없는 모듈을 다른 사유로 남긴다', () => {
+// 끝 기록이 없는 모듈은 둘로 갈린다. 작업 대장이 내준 기록(`module.start`)이 있으면 오케스트레이터가 받아 간 것이고,
+// 없으면 받아 가지도 않은 것이다. 같은 문구로 그리면 리포트를 읽는 사람이 어디를 고쳐야 하는지 가를 수 없다.
+// `module.start`는 작업 대장이 모듈을 **내줄 때** 적는다 — 리뷰어가 실제로 뜬 시각이 아니다. 2026-11-25 실행은 내준
+// 지 24분 뒤에야 리뷰어가 떴다. 그래서 "띄웠다"고 쓰지 않는다 — 그 사이에 끊겼으면 한 번도 뜨지 않은 모듈이다.
+test('작업 대장이 내줬는데 끝 기록이 없는 모듈과 내준 기록도 없는 모듈을 다른 사유로 남긴다', () => {
   const start = (module, attempt = 1) => ({ phase: 'module.start', module, attempt })
   const events = [runStart(), planned(),
     ...ALL.filter(name => !['04-state', '12-accessibility'].includes(name)).map(name => done(name)),
-    // 04는 띄웠지만 끝 기록이 없다. 12는 띄운 기록도 없다
+    // 04는 내줬지만 끝 기록이 없다. 12는 내준 기록도 없다
     start('04-state'),
   ]
   const collected = ALL.filter(name => !['04-state', '12-accessibility'].includes(name))
@@ -118,8 +120,9 @@ test('띄웠는데 끝 기록이 없는 모듈과 띄운 기록도 없는 모듈
   assert.deepEqual(byName.get('12-accessibility'), { name: '12-accessibility', kind: 'module', state: 'missing', reason: 'no-record' })
   assert.equal(snapshot.status, 'partial')
   const markdown = renderSnapshotMarkdown(snapshot)
-  assert.match(markdown, /\| `04-state` \| 결과 없음 \| 띄웠지만 끝 기록\(`module\.done`\)이 없다 — 도중에 끊겼거나 결과를 받지 못했다 \|/)
-  assert.match(markdown, /\| `12-accessibility` \| 결과 없음 \| 띄운 기록\(`module\.start`\)도 끝 기록\(`module\.done`\)도 없다 \|/)
+  assert.match(markdown, /\| `04-state` \| 결과 없음 \| 작업 대장이 내줬지만 끝 기록\(`module\.done`\)이 없다 — 리뷰어를 띄우기 전에 멈췄거나, 도중에 끊겼거나, 결과를 받지 못했다 \|/)
+  assert.match(markdown, /\| `12-accessibility` \| 결과 없음 \| 작업 대장이 내준 기록\(`module\.start`\)도 끝 기록\(`module\.done`\)도 없다 \|/)
+  assert.doesNotMatch(markdown, /띄웠지만|띄운 기록/)
 })
 
 test('성공한 모듈이 하나도 없으면 실패다', () => {

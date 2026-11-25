@@ -1960,8 +1960,9 @@ node <RULES_DIR>/../scripts/review-snapshot.mjs --dir <리포트 디렉터리> -
 - `ok`는 **기록과 수집이 둘 다** 성공을 말할 때뿐이다. 기록의 최종 상태는 가장 큰
   `attempt`의 `module.done`이다 — 파일의 마지막 줄이 아니다. 앞 시도를 나중에 정정한
   줄이 뒤 시도의 성공을 덮지 않는다
-- `missing`은 적용 대상인데 결과가 없는 것이다 — 띄운 기록(`module.start`)도 `module.done`도
-  없다(`no-record`), 띄웠지만 `module.done`이 없다(`unfinished` — 도중에 끊겼거나 결과를 받지 못했다),
+- `missing`은 적용 대상인데 결과가 없는 것이다 — 작업 대장이 내준 기록(`module.start`)도 `module.done`도
+  없다(`no-record`), 작업 대장이 내줬지만 `module.done`이 없다(`unfinished` — 리뷰어를 띄우기 전에 멈췄거나,
+  도중에 끊겼거나, 결과를 받지 못했다. `module.start`는 내줄 때 적히므로 리뷰어가 뜬 시각이 아니다),
   status가 `ok`도 `failed`도 아니다(`status-outside-list`), 성공으로 기록됐지만 수집되지
   않았다(`not-collected`), 작업 대장이 디스패치를 멈춰 띄우지 못했다(`halted`, `haltReason`과 함께
   — C-12). 한도에 닿아 취소된 모듈은 `failed`(`cancelled`)이고 `cancelReason`을 함께 남긴다
