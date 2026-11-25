@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { execFileSync, spawnSync } from 'node:child_process'
+import { execFileSync, spawn, spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -203,6 +203,39 @@ test('--detach는 띄우고 바로 돌아오고, 끝·로그·결과는 띄운 �
   assert.deepEqual(tools.map(line => [line.phase, line.callId]), [['tool.start', launched.callId], ['tool.done', launched.callId]])
   // 띄운 프로세스가 잰 시간이다 — 돌아온 시각이 아니다
   assert.ok((Date.parse(tools[1].at) - Date.parse(tools[0].at)) / 1000 >= 2.5)
+})
+
+// 2026-11-25 실행(OpenCode, Windows)은 도구 셋을 `--detach`로 띄운 셸 호출이 24분 뒤, 가장 긴 도구(test)가 끝난
+// 1초 뒤에야 돌아왔다. 그동안 모듈 리뷰어를 하나도 띄우지 못했다. 떼어 띄운 프로세스가 셸(PowerShell)에게서 물려받은
+// 출력 통로를 쥐고 있어, 그 통로가 닫히기를 기다리는 호스트가 도구가 끝날 때까지 돌아오지 못한 것이다. 위 테스트처럼
+// Node가 직접 부르면 일어나지 않는다 — 호스트처럼 PowerShell을 거쳐 부른다.
+test('Windows: --detach로 띄운 도구는 부른 셸의 출력 통로를 쥐지 않는다 — 통로를 기다리는 호스트가 바로 돌아온다', {
+  skip: process.platform !== 'win32' && 'PowerShell이 물려준 출력 통로 문제는 Windows에서만 일어난다',
+}, async t => {
+  const ctx = setup(t)
+  const sleeper = join(ctx.repo, 'sleep.cjs')
+  writeFileSync(sleeper, 'setTimeout(() => process.exit(0), 8000)\n')
+  const started = Date.now()
+  const host = spawn('powershell.exe', [
+    '-NoProfile', '-NonInteractive', '-Command',
+    '& $env:RT_NODE $env:RT_SCRIPT --dir $env:RT_DIR --run $env:RT_RUN --repo $env:RT_REPO --name test --detach -- $env:RT_NODE $env:RT_SLEEP',
+  ], {
+    env: { ...process.env, RT_NODE: process.execPath, RT_SCRIPT: SCRIPT, RT_DIR: ctx.dir, RT_RUN: RUN, RT_REPO: ctx.repo, RT_SLEEP: sleeper },
+    stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true,
+  })
+  let stdout = ''
+  let stderr = ''
+  host.stdout.on('data', chunk => { stdout += chunk })
+  host.stderr.on('data', chunk => { stderr += chunk })
+  const closedAfter = await new Promise(resolve => host.on('close', () => resolve(Date.now() - started)))
+  assert.ok(closedAfter < 6000, `출력 통로가 도구(8초)가 끝나기 전에 닫혀야 한다 — ${closedAfter}ms 뒤 닫힘. ${stderr}`)
+  const launched = JSON.parse(stdout)
+  assert.equal(launched.detached, true)
+  // 떼어 띄운 도구는 그대로 끝까지 돌고 끝을 남긴다
+  const waited = spawnSync(process.execPath, [SCRIPT, '--dir', ctx.dir, '--run', RUN, '--wait', '--timeout', '60'], { encoding: 'utf8' })
+  assert.equal(waited.status, 0, waited.stderr)
+  const outcome = JSON.parse(waited.stdout)
+  assert.deepEqual(outcome.done.map(call => [call.callId, call.exit]), [[launched.callId, 0]])
 })
 
 test('--wait는 끝을 남기지 못하고 사라진 도구를 기다리지 않고 lost로 낸다', t => {
