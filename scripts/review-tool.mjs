@@ -41,6 +41,7 @@ import { readJsonFile } from './lib/read-text.mjs'
 import { REUSE_TOOL_NAME } from './lib/reuse-state.mjs'
 import { logPhase, readEvents, requireStartedTimeline } from './lib/run-record.mjs'
 import { classifyFailures, failureCounts, failureLocations } from './lib/tool-failures.mjs'
+import { windowsCommandLine } from './lib/windows-arg.mjs'
 
 const die = message => {
   process.stderr.write(`${message}\n`)
@@ -268,21 +269,49 @@ const { callId, logPath } = (() => {
 const extra = attempt > 1 ? { attempt } : {}
 const resultPath = resultPathOf(name, callId)
 
+// 떼어 띄우고 그 pid를 돌려준다(띄우지 못했으면 undefined).
+//
+// Windows에서는 Node로 바로 띄우지 않는다. Node는 자식을 띄울 때 상속 가능한 핸들을 모두 물려주는데, 이 스크립트를
+// PowerShell이 불렀으면 이 스크립트의 표준 출력은 PowerShell이 물려준 호스트의 출력 통로다. `stdio: 'ignore'`로
+// 띄워도 그 통로가 자식에게 넘어가, 통로가 닫히기를 기다리는 호스트(OpenCode의 셸 도구)는 도구가 끝날 때까지
+// 돌아오지 못한다. 2026-11-25 실행은 그렇게 셸 호출 하나가 24분을 쥐었다. 그래서 PowerShell의 `Start-Process`로
+// 띄운다 — 셸 실행(ShellExecute)으로 띄운 프로세스는 핸들을 물려받지 않는다. 중간의 PowerShell은 띄우고 바로
+// 끝나므로 통로를 쥐는 것은 그 짧은 동안뿐이다. 인자·작업 폴더는 환경 변수로 넘긴다 — PowerShell 명령 문자열에
+// 경로를 넣으면 공백·따옴표·한글을 다시 감싸야 한다. 환경은 Start-Process가 그대로 물려준다.
+function launchDetached(args, cwd) {
+  if (!WINDOWS) {
+    const child = spawn(process.execPath, args, { cwd, detached: true, stdio: 'ignore', windowsHide: true })
+    if (child.pid === undefined) return undefined
+    child.unref()
+    return child.pid
+  }
+  const launcher = spawnSync('powershell.exe', [
+    '-NoProfile', '-NonInteractive', '-Command',
+    '$p = Start-Process -FilePath $env:REVIEW_TOOL_NODE -ArgumentList $env:REVIEW_TOOL_ARGS -WorkingDirectory $env:REVIEW_TOOL_CWD -WindowStyle Hidden -PassThru; [Console]::Out.Write($p.Id)',
+  ], {
+    env: { ...process.env, REVIEW_TOOL_NODE: process.execPath, REVIEW_TOOL_ARGS: windowsCommandLine(args), REVIEW_TOOL_CWD: cwd },
+    encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, timeout: 60000,
+  })
+  const pid = Number(String(launcher.stdout ?? '').trim())
+  if (launcher.status !== 0 || !Number.isInteger(pid) || pid <= 0) {
+    process.stderr.write(`Start-Process로 띄우지 못했다(종료 ${launcher.status}): ${String(launcher.stderr || launcher.error?.message || '').trim()}\n`)
+    return undefined
+  }
+  return pid
+}
+
 // 띄우고 돌아온다. `tool.start`는 띄우기 전에 여기서 남긴다 — 띄운 프로세스가 아주 빨리 끝나도 끝이 시작보다
 // 앞에 오지 않는다. 끝(`tool.done`)과 로그·결과 파일은 띄운 프로세스가 남긴다.
 if (values.get('detach') === true) {
   if (childCall !== undefined) die('--detach와 --call-id는 함께 쓰지 않는다')
   logPhase(dir, run, 'tool.start', { name, callId, detached: true, ...extra })
   const forwarded = flags.filter(arg => arg !== '--detach')
-  const child = spawn(process.execPath, [fileURLToPath(import.meta.url), ...forwarded, '--call-id', callId, '--', ...command], {
-    cwd: process.cwd(), detached: true, stdio: 'ignore', windowsHide: true,
-  })
-  if (child.pid === undefined) {
+  const pid = launchDetached([fileURLToPath(import.meta.url), ...forwarded, '--call-id', callId, '--', ...command], process.cwd())
+  if (pid === undefined) {
     logPhase(dir, run, 'tool.done', { name, exit: null, treeSha, callId, ...extra })
-    die(`${name}을 띄우지 못했다`)
+    die(`${name}을 띄우지 못했다 — --detach 없이 다시 돌린다`)
   }
-  child.unref()
-  process.stdout.write(`${JSON.stringify({ name, callId, detached: true, pid: child.pid, log: logPath, result: resultPath }, null, 2)}\n`)
+  process.stdout.write(`${JSON.stringify({ name, callId, detached: true, pid, log: logPath, result: resultPath }, null, 2)}\n`)
   process.exit(0)
 }
 
@@ -302,13 +331,16 @@ let failures = null
 // 기존 구현 검색의 실패는 검색 스크립트가 reuse.done에 남긴다 — 그 오류 문장의 `경로:줄`은 도구가 실패한 자리가 아니다(C-6C)
 if (exit !== 0 && name !== REUSE_TOOL_NAME) {
   let changed = null
+  // 패키지 루트에서도 실패 경로를 찾는다 — `npm --prefix <앱>`처럼 다른 폴더에서 돈 도구는 그 폴더 기준으로 찍는다
+  let packageRoots = []
   try {
     const scope = readJsonFile(join(dir, '.timing', `${run}.scope.json`))
     changed = [...(scope.files ?? []), ...(scope.outside ?? []), ...(scope.excluded ?? []).map(entry => (typeof entry === 'string' ? entry : entry?.path)).filter(Boolean)]
+    packageRoots = (scope.packageRoots ?? []).map(entry => entry?.root).filter(root => typeof root === 'string')
   } catch {
     // 변경 목록이 없으면 추적 여부만 가른다
   }
-  failures = classifyFailures(failureLocations(`${stdout.toString('utf8')}\n${stderr.toString('utf8')}`), { repo, changed })
+  failures = classifyFailures(failureLocations(`${stdout.toString('utf8')}\n${stderr.toString('utf8')}`), { repo, changed, packageRoots })
 }
 const failureFiles = failureCounts(failures)
 logPhase(dir, run, 'tool.done', { name, exit, treeSha, callId, ...extra, ...(failureFiles ? { failureFiles } : {}) })

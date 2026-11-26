@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { execFileSync, spawnSync } from 'node:child_process'
+import { execFileSync, spawn, spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -205,6 +205,39 @@ test('--detach는 띄우고 바로 돌아오고, 끝·로그·결과는 띄운 �
   assert.ok((Date.parse(tools[1].at) - Date.parse(tools[0].at)) / 1000 >= 2.5)
 })
 
+// 2026-11-25 실행(OpenCode, Windows)은 도구 셋을 `--detach`로 띄운 셸 호출이 24분 뒤, 가장 긴 도구(test)가 끝난
+// 1초 뒤에야 돌아왔다. 그동안 모듈 리뷰어를 하나도 띄우지 못했다. 떼어 띄운 프로세스가 셸(PowerShell)에게서 물려받은
+// 출력 통로를 쥐고 있어, 그 통로가 닫히기를 기다리는 호스트가 도구가 끝날 때까지 돌아오지 못한 것이다. 위 테스트처럼
+// Node가 직접 부르면 일어나지 않는다 — 호스트처럼 PowerShell을 거쳐 부른다.
+test('Windows: --detach로 띄운 도구는 부른 셸의 출력 통로를 쥐지 않는다 — 통로를 기다리는 호스트가 바로 돌아온다', {
+  skip: process.platform !== 'win32' && 'PowerShell이 물려준 출력 통로 문제는 Windows에서만 일어난다',
+}, async t => {
+  const ctx = setup(t)
+  const sleeper = join(ctx.repo, 'sleep.cjs')
+  writeFileSync(sleeper, 'setTimeout(() => process.exit(0), 8000)\n')
+  const started = Date.now()
+  const host = spawn('powershell.exe', [
+    '-NoProfile', '-NonInteractive', '-Command',
+    '& $env:RT_NODE $env:RT_SCRIPT --dir $env:RT_DIR --run $env:RT_RUN --repo $env:RT_REPO --name test --detach -- $env:RT_NODE $env:RT_SLEEP',
+  ], {
+    env: { ...process.env, RT_NODE: process.execPath, RT_SCRIPT: SCRIPT, RT_DIR: ctx.dir, RT_RUN: RUN, RT_REPO: ctx.repo, RT_SLEEP: sleeper },
+    stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true,
+  })
+  let stdout = ''
+  let stderr = ''
+  host.stdout.on('data', chunk => { stdout += chunk })
+  host.stderr.on('data', chunk => { stderr += chunk })
+  const closedAfter = await new Promise(resolve => host.on('close', () => resolve(Date.now() - started)))
+  assert.ok(closedAfter < 6000, `출력 통로가 도구(8초)가 끝나기 전에 닫혀야 한다 — ${closedAfter}ms 뒤 닫힘. ${stderr}`)
+  const launched = JSON.parse(stdout)
+  assert.equal(launched.detached, true)
+  // 떼어 띄운 도구는 그대로 끝까지 돌고 끝을 남긴다
+  const waited = spawnSync(process.execPath, [SCRIPT, '--dir', ctx.dir, '--run', RUN, '--wait', '--timeout', '60'], { encoding: 'utf8' })
+  assert.equal(waited.status, 0, waited.stderr)
+  const outcome = JSON.parse(waited.stdout)
+  assert.deepEqual(outcome.done.map(call => [call.callId, call.exit]), [[launched.callId, 0]])
+})
+
 test('--wait는 끝을 남기지 못하고 사라진 도구를 기다리지 않고 lost로 낸다', t => {
   const ctx = setup(t)
   const sidecar = join(ctx.dir, '.timing', `${RUN}.jsonl`)
@@ -270,6 +303,29 @@ test('검토 안 함(outside)으로 가른 파일도 이 변경이 바꾼 파일
   const out = tool(ctx, '--name', 'lint', '--', process.execPath, '-e', `console.log(${JSON.stringify(report)}); process.exit(1)`)
   assert.equal(out.status, 0, out.stderr)
   assert.deepEqual(JSON.parse(out.stdout).failures, { parsed: true, files: 1, inChange: ['backend/static/x.js'], outsideChange: [], untracked: [] })
+})
+
+// 2026-11-25 실행은 `npm --prefix apps/frontend test`를 저장소 루트에서 돌렸고, 앱 폴더 기준으로 찍힌 실패 경로
+// 셋을 저장소 루트 기준으로 풀어 모두 `untracked`로 셌다. preflight가 남긴 패키지 루트에서도 찾아야 한다.
+test('실패 경로가 패키지 루트 기준이면 scope.json의 packageRoots에서 찾아 가른다', t => {
+  const ctx = setup(t)
+  const git = (...args) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.com', '-c', 'commit.gpgsign=false', ...args], { cwd: ctx.repo, encoding: 'utf8' })
+  mkdirSync(join(ctx.repo, 'apps', 'web', 'src'), { recursive: true })
+  writeFileSync(join(ctx.repo, 'apps', 'web', 'src', 'changed.test.ts'), 'c\n')
+  writeFileSync(join(ctx.repo, 'apps', 'web', 'src', 'other.test.ts'), 'o\n')
+  git('add', 'apps')
+  git('commit', '-qm', 'files')
+  writeFileSync(join(ctx.dir, '.timing', `${RUN}.scope.json`), JSON.stringify({
+    schemaVersion: 1, files: ['apps/web/src/changed.test.ts'], excluded: [], outside: [], packageRoots: [{ root: 'apps/web', files: 1 }],
+  }), 'utf8')
+  const report = [' FAIL  src/changed.test.ts > c', ' FAIL  src/other.test.ts > o', 'Error: Test timed out in 5000ms.'].join('\n')
+  const out = tool(ctx, '--name', 'test', '--', process.execPath, '-e', `console.log(${JSON.stringify(report)}); process.exit(1)`)
+  assert.equal(out.status, 0, out.stderr)
+  assert.deepEqual(JSON.parse(out.stdout).failures, {
+    parsed: true, files: 2, inChange: ['apps/web/src/changed.test.ts'], outsideChange: ['apps/web/src/other.test.ts'], untracked: [],
+    timeouts: 1, timedOutFiles: ['apps/web/src/other.test.ts'],
+  })
+  assert.deepEqual(linesOf(ctx).find(line => line.phase === 'tool.done').failureFiles, { inChange: 1, outsideChange: 1, untracked: 0 })
 })
 
 // 기존 구현 검색(C-6C)도 review-tool --detach --name reuse-search로 띄우지만 lint·test 같은 도구가 아니다. 그 상태는

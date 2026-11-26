@@ -594,6 +594,17 @@ Not covered: a reviewer that stops reading the diff partway and returns a valid 
 
 This is PATCH. No review was run with these changes.
 
+## Detached tools and failure paths (2.29.3)
+
+The first full run on 2.29.2 (OpenCode on Windows) read everything: all 21 reviewers read their prompt and the diff to the last line, including the four prompts over 50 KB. The same run showed four problems.
+
+- **`--detach` did not return on Windows.** The orchestrator started lint, typecheck and test with `review-tool.mjs --detach`. The shell call came back 24 minutes later, one second after the test finished, and no module reviewer started in between. Node hands every inheritable handle to a child it spawns, even with `stdio: 'ignore'`. When PowerShell runs the script, the script's standard output is the host's output pipe, so the detached tool held that pipe and the host waited for it to close. On Windows the tool is now started with PowerShell's `Start-Process`, which passes no handles; the arguments and working folder go through environment variables. A new test runs `--detach` under PowerShell and checks that the pipe closes before an 8-second tool ends.
+- **Failure paths were resolved from the wrong folder.** `npm --prefix apps/frontend test`, run from the repository root, prints paths relative to the app folder. They were resolved from the root, matched no file, and all three — tracked test files — were counted as `untracked`. The skill says to report `untracked`-only failures as unrelated and to leave them out of the blocking reasons. Paths are now looked up from the calling folder and from each package root in `scope.json`, and a path is placed only when exactly one existing file matches. Otherwise it goes to a new group, `unlocated`, which the skill says not to call unrelated.
+- **Verification prep ran outside the repository without an error.** One call to `prepare-verification.mjs` ran in a temp folder. It could read no file, so all five candidates came back as "location unresolvable", and a verification round started from that result. The script now stops before recording anything when the working folder is not a git repository or does not contain the merge base.
+- **`unfinished` said the module was dispatched.** The ledger writes `module.start` when it hands a module out, before the reviewer starts — in this run, 24 minutes before. The snapshot text now says the ledger handed the module out, and lists stopping before the reviewer started as one possible cause.
+
+This is PATCH. No review was run with these changes.
+
 ## Applicability metadata
 
 `review-rules/catalog.json` records **when** a module applies — required profile (FSD, Tailwind, RSC, Electron, TanStack Query, server code, contract provider), minimum React version, which workflows load it, and which individual rules carry a narrower gate than their module. The Markdown modules stay canonical for **what** a rule says; the catalog never generates documentation and never restates rule text.

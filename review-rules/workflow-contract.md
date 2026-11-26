@@ -197,18 +197,27 @@ SDK 드리프트로 원래부터 그만큼 실패하고 있었고, 그 브랜치
   실행이 442초를 그렇게 남겼고, 그 시간이 어느 도구의 것인지 알 수 없었다
 - 모듈 리뷰와 함께 돌리는 도구는 띄워 두고(`review-tool.mjs --detach`) 끝은 띄운 프로세스가 남긴다.
   `도구 실행 결과`를 쓰기 전에 `--wait`로 받는다. 한 차례의 호출이 전부 끝나야 넘어가는 호스트에서 도구를
-  모듈과 같은 차례에 부르면, 가장 긴 도구가 다음 모듈을 막는다 — 2026-10-13의 두 실행이 4분과 6.5분을 잃었다
+  모듈과 같은 차례에 부르면, 가장 긴 도구가 다음 모듈을 막는다 — 2026-10-13의 두 실행이 4분과 6.5분을 잃었다.
+  띄운 프로세스는 부른 셸의 출력 통로를 물려받지 않아야 한다. 통로를 쥐고 있으면 그 통로가 닫히기를 기다리는
+  호스트가 결국 도구가 끝날 때까지 돌아오지 못한다 — 2026-11-25 실행(Windows)은 `--detach`로 띄운 셸 호출 하나가
+  24분을 쥐어, 그동안 리뷰어를 하나도 띄우지 못했다. Windows에서는 `Start-Process`로 띄워 핸들을 물려주지 않는다
 
 ### 실패한 자리를 먼저 가른다
 
 baseline을 재기 전에, 도구가 **어디서** 실패했는지부터 본다. `review-tool.mjs`가 출력에서 실패한 파일을 읽어
 (`failures`) 이 변경이 바꾼 파일(`inChange`), 저장소가 추적하지만 바꾸지 않은 파일(`outsideChange`), 저장소가
-추적하지 않는 파일(`untracked`)로 가르고, `tool.done`에 그 수(`failureFiles`)를 남긴다.
+추적하지 않는 파일(`untracked`)로 가르고, `tool.done`에 그 수(`failureFiles`)를 남긴다. 출력의 경로는 도구를 부른
+폴더와 preflight의 패키지 루트에서 찾는다 — `npm --prefix <앱>`으로 돈 도구는 앱 폴더 기준으로 찍기 때문이다.
+실제로 있는 파일이 하나로 정해지지 않으면(어디에도 없거나 둘 이상에 있으면) `unlocated`로 따로 낸다.
 
 **왜.** baseline을 잰 실행은 지금까지 없다 — 모든 실행이 "baseline 미측정"으로 남겼다. 2026-10-13 실행의 lint
 실패(오류 12·경고 25)는 전부 .gitignore에 든 `tmp/` 아래였고, 테스트 실패 3건은 이 변경이 바꾸지 않은 파일이었다
 (둘은 시간 초과). 비싼 측정이 없어도 낼 수 있는 사실을 리포트가 내지 않았다.
 
+- `unlocated`는 추적하지 않는 파일이 아니라 자리를 모르는 파일이다. 무관하다고 하지 않고, 로그에서 도구가 돈
+  폴더를 확인해 그 파일의 실제 경로를 찾는다. 찾으면 그 파일이 속하는 무리(`inChange`·`outsideChange`·
+  `untracked`)처럼 다루고, 찾지 못하면 그 사실을 적고 무관한 실패로 빼지 않는다. 2026-11-25 실행은 앱 폴더 기준
+  경로를 저장소 루트 기준으로 풀어, 추적되는 테스트 파일 셋을 모두 `untracked`로 셌다
 - `untracked`만의 실패는 저장소의 상태가 아니라 작업 트리에 남은 파일의 것이다. 그 사실을 적고 차단 사유와
   baseline 비교에 넣지 않는다
 - 시간 초과는 그 파일만 다시 돌려 본다. 혼자 돌려 통과하면 부하로 난 시간 초과로 적고 실패로 세지 않는다
@@ -1499,7 +1508,7 @@ UTF-16 파일도 읽는다 — PowerShell 5.1의 `Set-Content -Encoding UTF8`은
 | `reuse.done` | 검색을 마쳤거나 처리할 수 있는 오류로 멈춘 직후 — 검색 스크립트가 **직접** 남긴다. 오케스트레이터가 지어 남기지 않는다 | `searchId`, `status`(`complete`/`partial`/`failed`/`not-applicable`), `targets`(중첩 — 상태별 대상 수) · `reason` · `out`, `outSha256`, `planSha256`, `durationSec` |
 | `tool.start` | **도구 하나를 돌리기 직전** — `review-tool.mjs`가 남긴다 | `name`, `callId`(`review-tool.mjs`, 로그 이름) · (`--detach`로 띄웠으면) `detached` · (재시도면) `attempt` · 재현 명령이면 `candidateId`·`evidenceId`(C-11, `review-evidence.mjs`가 쓴다) |
 | `tool.skipped` | 도구를 돌리지 않기로 정했을 때 — 오케스트레이터가 남긴다(C-6) | `name`, `reasonCode`(`user-request`/`no-script`/`deps-missing`/`no-package-root`) · `reason`(확인한 내용) |
-| `tool.done` | lint/typecheck/test를 돌린 직후 — `review-tool.mjs`가 남긴다 | `name`, `exit`(시간 상한으로 끊었으면 `null`), `treeSha`, `callId` · (실패했으면, C-6) `failureFiles`(중첩 — `inChange`·`outsideChange`·`untracked`, 변경 목록이 없으면 `tracked`·`untracked`) · `failedNow`, `failedBaseline`(재지 못했으면 `null`) · `failing`(중첩, `--data-file`) · (재시도면) `attempt` · 재현 명령이면 `candidateId`·`evidenceId` |
+| `tool.done` | lint/typecheck/test를 돌린 직후 — `review-tool.mjs`가 남긴다 | `name`, `exit`(시간 상한으로 끊었으면 `null`), `treeSha`, `callId` · (실패했으면, C-6) `failureFiles`(중첩 — `inChange`·`outsideChange`·`untracked`, 변경 목록이 없으면 `tracked`·`untracked`, 자리를 정하지 못한 파일이 있으면 `unlocated`) · `failedNow`, `failedBaseline`(재지 못했으면 `null`) · `failing`(중첩, `--data-file`) · (재시도면) `attempt` · 재현 명령이면 `candidateId`·`evidenceId` |
 | `crossverify.start` / `.end` | 교차검증 패스 — 시작은 `prepare-verification.mjs`가 검증 작업을 만든 직후, 끝은 `tally-verdicts.mjs`가 **직접 남긴다** | `targets`, `round`(이 교차검증 라운드의 이름 — C-12) / `upheld`, `rejected`, `needsContext`, `noVerdict`, `countsFrom`, (있으면) `malformedTasksCorrected`·`tokensIn`·`tokensOut` |
 | `synthesis.start` / `.end` | synthesis 패스 | `findings` / `clusters`, (있으면) `tokensIn`·`tokensOut` |
 | `render.start` | **문서를 쓰기 직전** | `findings`(중복 제거 후 — routed 출력의 `counts.total`. 그 파일이 있으면 스크립트가 세고, 넘긴 값이 다르면 알린다. 셀 재료도 넘긴 값도 없으면 거부한다 — 렌더 뒤에는 이 줄을 다시 남길 수 없다) |
@@ -1952,8 +1961,9 @@ node <RULES_DIR>/../scripts/review-snapshot.mjs --dir <리포트 디렉터리> -
 - `ok`는 **기록과 수집이 둘 다** 성공을 말할 때뿐이다. 기록의 최종 상태는 가장 큰
   `attempt`의 `module.done`이다 — 파일의 마지막 줄이 아니다. 앞 시도를 나중에 정정한
   줄이 뒤 시도의 성공을 덮지 않는다
-- `missing`은 적용 대상인데 결과가 없는 것이다 — 띄운 기록(`module.start`)도 `module.done`도
-  없다(`no-record`), 띄웠지만 `module.done`이 없다(`unfinished` — 도중에 끊겼거나 결과를 받지 못했다),
+- `missing`은 적용 대상인데 결과가 없는 것이다 — 작업 대장이 내준 기록(`module.start`)도 `module.done`도
+  없다(`no-record`), 작업 대장이 내줬지만 `module.done`이 없다(`unfinished` — 리뷰어를 띄우기 전에 멈췄거나,
+  도중에 끊겼거나, 결과를 받지 못했다. `module.start`는 내줄 때 적히므로 리뷰어가 뜬 시각이 아니다),
   status가 `ok`도 `failed`도 아니다(`status-outside-list`), 성공으로 기록됐지만 수집되지
   않았다(`not-collected`), 작업 대장이 디스패치를 멈춰 띄우지 못했다(`halted`, `haltReason`과 함께
   — C-12). 한도에 닿아 취소된 모듈은 `failed`(`cancelled`)이고 `cancelReason`을 함께 남긴다

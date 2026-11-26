@@ -784,6 +784,29 @@ const promptOf = result => readFileSync(result.verifierTasks[0].prompt, 'utf8')
 const FIXED_LINE = '  return <div className="row" role="status" data-testid="robot-row">'
 const fixInPlace = repo => writeFileSync(join(repo, 'status.tsx'), `export function Row() {\n${FIXED_LINE}\n}\n`)
 
+// 2026-11-25 실행은 셸의 작업 폴더를 임시 폴더로 준 채 이 스크립트를 불렀다. 저장소 밖이라 파일을 하나도 읽지
+// 못해 후보 5건이 모두 "위치 대조 불가"가 됐는데, 오류 없이 끝나 그 결과로 검증 라운드가 시작됐다.
+// 오케스트레이터가 알아채 저장소에서 다시 불렀지만, 알아채지 못했으면 검증 대상 선별이 그 결과로 정해진다.
+test('리뷰한 저장소 밖이나 merge-base가 없는 저장소에서 부르면 대조하지 않고 멈춘다', t => {
+  const { repo, head } = driftRepo(t)
+  const dir = startedOn(t, { head, worktree: 'clean' })
+  const outside = mkdtempSync(join(tmpdir(), 'not-a-repo-'))
+  t.after(() => rmSync(outside, { recursive: true, force: true }))
+  const notRepo = prepareIn(outside, dir)
+  assert.equal(notRepo.status, 2)
+  assert.match(notRepo.stderr, /git 저장소가 아니다/)
+  assert.equal(notRepo.stdout, '')
+  // 시작 기록만 남고 멈춘 호출로 읽히지 않게, 인자를 거부할 때처럼 기록에 아무것도 남기지 않는다
+  assert.deepEqual(timelineOf(dir).map(event => event.phase), ['run.start'])
+
+  const other = driftRepo(t)
+  const missing = spawnSync('node', [SCRIPT, '--merge-base', head.replace(/./, ch => (ch === 'a' ? 'b' : 'a')), '--dir', dir, '--run', RUN, '--input', withInput(dir, withHigh([ROW]))],
+    { cwd: other.repo, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+  assert.equal(missing.status, 2)
+  assert.match(missing.stderr, /merge-base .* 이 저장소에 없다/)
+  assert.equal(prepareIn(repo, dir).status, 0)
+})
+
 test('리뷰 도중 커밋이 들어와도, 시작 때 작업 트리가 깨끗했으면 위치 대조는 시작한 HEAD를 읽는다', t => {
   const { repo, git, head } = driftRepo(t)
   const dir = startedOn(t, { head, worktree: 'clean' })
